@@ -459,30 +459,16 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it.each(["full", "minimal"] as const)(
-    "protects reusable secrets while allowing authorized sign-in in %s prompts",
+    "does not impose a blanket credential-entry policy in %s prompts",
     (promptMode) => {
       const prompt = buildAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",
         promptMode,
       });
-      expect(prompt).toContain("using existing access or the service's supported credential flow");
-      expect(prompt).toContain("their request already authorizes the handoff");
-      expect(prompt).toContain(
-        "first select a private conversation with the requesting user from trusted conversation context",
-      );
-      expect(prompt).toContain("recovery/backup codes, and hidden device tokens");
-      expect(prompt).toContain(
-        "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
-      );
-      expect(prompt).toContain("host-owned masked credential entry");
-      expect(prompt).toContain(
-        "trusted flow's short-lived user-facing code and verification URL only there",
-      );
-      expect(prompt).toContain("user-provided short-lived one-time codes or OAuth callbacks");
-      expect(prompt).toContain("same pending flow");
-      expect(prompt).toContain(
-        "Keep messages intact unless the user requests deletion. Confirm completion from the login result.",
-      );
+      expect(prompt).toContain("Safety/oversight > completion");
+      expect(prompt).not.toContain("Use host-owned masked credential entry");
+      expect(prompt).not.toContain("Keep these secrets out of chat, tool arguments");
+      expect(prompt).not.toContain("first select a private conversation");
     },
   );
 
@@ -496,6 +482,7 @@ describe("buildAgentSystemPrompt", () => {
     },
   ])("teaches protected credential requests for $name tools", (surface) => {
     const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", ...surface });
+    expect(prompt).not.toContain("Use host-owned masked credential entry");
     expect(prompt).toContain("`secrets`: list metadata first");
     expect(prompt).toContain("request only missing task-needed credentials: name + reason");
     expect(prompt).toContain("exact allowedHosts for egress");
@@ -521,8 +508,8 @@ describe("buildAgentSystemPrompt", () => {
       codeModeActive: true,
     });
     expect(prompt).not.toContain("`secrets`");
-    expect(prompt).toContain("host-owned masked credential entry");
-    expect(prompt).toContain("safe external setup");
+    expect(prompt).not.toContain("host-owned masked credential entry");
+    expect(prompt).not.toContain("safe external setup");
   });
 
   it("includes voice hint when provided", () => {

@@ -136,7 +136,10 @@ describe("buildCopilotPromptGuidance", () => {
   ])("gates credential guidance on the $name tool surface", ({ tools, disabled, discoverable }) => {
     const guidance = buildGuidance({ disableTools: disabled }, tools);
     expect(guidance?.includes("`secrets`: list metadata first")).toBe(discoverable);
-    expect(guidance).toContain("host-owned masked credential entry");
+    expect(guidance).not.toContain("Use host-owned masked credential entry");
+    expect(guidance?.includes("Gateway egress needs enabled proxy + allowed hosts")).toBe(
+      discoverable,
+    );
   });
 
   it("wraps conversation and subagent context without adding workspace prompt sections", () => {

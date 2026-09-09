@@ -288,24 +288,10 @@ function requireCreateSessionConfig(sdk: FakeSdk): Record<string, unknown> {
   return expectDefined(sdk.createSession.mock.calls[0]?.[0], "Copilot createSession config");
 }
 
-function expectTranscriptCredentialSafety(instructions: string): void {
-  expect(instructions).toContain("their request already authorizes the handoff");
-  expect(instructions).toContain(
-    "first select a private conversation with the requesting user from trusted conversation context",
-  );
-  expect(instructions).toContain("recovery/backup codes, and hidden device tokens");
-  expect(instructions).toContain(
-    "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
-  );
-  expect(instructions).toContain("host-owned masked credential entry");
-  expect(instructions).toContain(
-    "trusted flow's short-lived user-facing code and verification URL only there",
-  );
-  expect(instructions).toContain("user-provided short-lived one-time codes or OAuth callbacks");
-  expect(instructions).toContain("same pending flow");
-  expect(instructions).toContain(
-    "Keep messages intact unless the user requests deletion. Confirm completion from the login result.",
-  );
+function expectNoBlanketCredentialPolicy(instructions: string): void {
+  expect(instructions).toContain("You are a personal agent running inside OpenClaw.");
+  expect(instructions).not.toContain("Use host-owned masked credential entry");
+  expect(instructions).not.toContain("Keep these secrets out of chat, tool arguments");
 }
 
 function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
@@ -2495,7 +2481,7 @@ describe("runCopilotAttempt", () => {
       expect(cfg.systemMessage?.content).toContain(rendered);
     });
 
-    it("adds transcript credential safety when the loader returns no instructions", async () => {
+    it("omits the blanket credential policy when the loader returns no instructions", async () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
 
@@ -2504,7 +2490,7 @@ describe("runCopilotAttempt", () => {
       const cfg = requireCreateSessionConfig(sdk) as {
         systemMessage?: { content?: string };
       };
-      expectTranscriptCredentialSafety(cfg.systemMessage?.content ?? "");
+      expectNoBlanketCredentialPolicy(cfg.systemMessage?.content ?? "");
     });
 
     it("sends the final appended developer instructions to the SDK and llm_input", async () => {
@@ -2698,7 +2684,7 @@ describe("runCopilotAttempt", () => {
       expect(cfg.systemMessage).toBeDefined();
       expect(cfg.systemMessage?.mode).toBe("append");
       expect(cfg.systemMessage?.content).toContain(rendered);
-      expectTranscriptCredentialSafety(cfg.systemMessage?.content ?? "");
+      expectNoBlanketCredentialPolicy(cfg.systemMessage?.content ?? "");
     });
   });
 

@@ -25,8 +25,9 @@ When the tool is callable, the agent's prompt tells it to list metadata first,
 then request only a missing credential needed for the task, with a name and
 reason. For egress use, it proposes the exact destination hosts too. This
 instruction also covers deferred tools and Code Mode; it is omitted when tool
-policy removes `secrets`. Without a safe entry surface, the agent should direct
-you to safe external setup, never ask for the value in chat.
+policy removes `secrets`. This describes the protected-store workflow; it is not
+a blanket requirement for every login or credential workflow. Removing the tool
+does not make protected-store values readable or bypass egress restrictions.
 
 ## Actions
 
@@ -96,8 +97,9 @@ arguments, URLs, logs, or chat.
 </Warning>
 
 Skipping the prompt, or letting it expire, tells the agent that no credential
-arrived (`no_answer`). It should state the blocker or continue with best judgment,
-never ask you to paste the credential into chat.
+arrived (`no_answer`). It should continue independent work and explain any
+remaining blocker. A chat reply cannot complete this protected-store request;
+use the trusted prompt, settings page, or CLI if you still want to store it.
 
 iOS, macOS, and Android render the same card with a masked secret field.
 Control UI and native app cards arrive through the existing Gateway connection

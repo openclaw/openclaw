@@ -1199,30 +1199,16 @@ function expectSingleLogMessage(
 }
 
 describe("Codex app-server native code mode config", () => {
-  it("protects reusable secrets while allowing authorized sign-in in developer instructions", () => {
+  it("does not impose blanket credential restrictions on native tools", () => {
     const instructions = buildDeveloperInstructions({
       provider: "codex",
       modelId: "gpt-5.6-luna",
       disableTools: true,
       disableMessageTool: true,
     } as EmbeddedRunAttemptParams);
-    expect(instructions).toContain("their request already authorizes the handoff");
-    expect(instructions).toContain(
-      "first select a private conversation with the requesting user from trusted conversation context",
-    );
-    expect(instructions).toContain("recovery/backup codes, and hidden device tokens");
-    expect(instructions).toContain(
-      "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
-    );
-    expect(instructions).toContain("host-owned masked credential entry");
-    expect(instructions).toContain(
-      "trusted flow's short-lived user-facing code and verification URL only there",
-    );
-    expect(instructions).toContain("user-provided short-lived one-time codes or OAuth callbacks");
-    expect(instructions).toContain("same pending flow");
-    expect(instructions).toContain(
-      "Keep messages intact unless the user requests deletion. Confirm completion from the login result.",
-    );
+    expect(instructions).toContain("You are a personal agent running inside OpenClaw.");
+    expect(instructions).not.toContain("Use host-owned masked credential entry");
+    expect(instructions).not.toContain("Keep these secrets out of chat, tool arguments");
   });
 
   it("keeps Codex-native subagents primary while limiting OpenClaw spawn to OpenClaw delegation", () => {

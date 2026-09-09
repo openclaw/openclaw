@@ -9,11 +9,16 @@ title: "Browser login"
 ## Manual login (recommended)
 
 When a site requires login, sign in manually in the host browser's `openclaw`
-profile. Keep passwords and reusable credentials out of chat: automated logins often
-trigger anti-bot defenses and can lock the account.
+profile when practical. Automated logins can trigger anti-bot defenses and lock
+the account.
 
-The shared [credential guidance](/concepts/system-prompt) also applies to browser
-sign-in, including short-lived codes and supported callback handoffs.
+For owner-authorized automation, OpenClaw does not add a blanket requirement to
+use masked credential entry. The available tools, provider policies, and the
+site's authentication flow determine what the agent can complete. The optional
+[secrets tool](/tools/secrets) keeps stored values out of model context, but does
+not provide browser autofill. Prefer an existing signed-in session or protected
+entry when available; values supplied through chat or ordinary tool arguments
+can enter transcripts and logs.
 
 Use the host browser (manual login) for both reading (search/threads) and
 posting on X/Twitter and other bot-sensitive sites. Sandboxed browser sessions

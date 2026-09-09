@@ -123,6 +123,7 @@ describe("buildDeveloperInstructions credential guidance", () => {
     "teaches the actual $name credential route",
     ({ dynamicTools, toolName }) => {
       const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
+      expect(instructions).not.toContain("Use host-owned masked credential entry");
       expect(instructions).toContain(`\`${toolName}\`: list metadata first`);
       expect(instructions).toContain("request only missing task-needed credentials: name + reason");
       expect(instructions).toContain("exact allowedHosts for egress");
@@ -149,12 +150,12 @@ describe("buildDeveloperInstructions credential guidance", () => {
       options: { dynamicTools: [secretTool] },
       overrides: { disableTools: true },
     },
-  ])("keeps safety but hides the named credential route when $name", ({ options, overrides }) => {
+  ])("omits credential guidance when the tool is $name", ({ options, overrides }) => {
     const instructions = buildDeveloperInstructions(createParams(overrides), options);
     expect(instructions).not.toContain("`secrets`");
     expect(instructions).not.toContain("SecretRef");
-    expect(instructions).toContain("host-owned masked credential entry");
-    expect(instructions).toContain("safe external setup");
+    expect(instructions).not.toContain("host-owned masked credential entry");
+    expect(instructions).not.toContain("safe external setup");
   });
 });
 
