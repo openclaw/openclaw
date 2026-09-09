@@ -332,6 +332,34 @@
     "target": "Feishu"
   },
   {
+    "source": "Feishu setup",
+    "target": "Feishu 设置"
+  },
+  {
+    "source": "Feishu access control",
+    "target": "Feishu 访问控制"
+  },
+  {
+    "source": "Feishu advanced configuration",
+    "target": "Feishu 高级配置"
+  },
+  {
+    "source": "Feishu dynamic agents",
+    "target": "Feishu 动态智能体"
+  },
+  {
+    "source": "Feishu message types",
+    "target": "Feishu 消息类型"
+  },
+  {
+    "source": "Feishu configuration reference",
+    "target": "Feishu 配置参考"
+  },
+  {
+    "source": "Feishu troubleshooting",
+    "target": "Feishu 故障排查"
+  },
+  {
     "source": "ClickClack",
     "target": "ClickClack"
   },

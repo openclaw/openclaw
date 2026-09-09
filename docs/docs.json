@@ -1613,7 +1613,19 @@
               {
                 "group": "Regional platforms",
                 "pages": [
-                  "channels/feishu",
+                  {
+                    "group": "Feishu",
+                    "pages": [
+                      "channels/feishu",
+                      "channels/feishu/setup",
+                      "channels/feishu/access-control",
+                      "channels/feishu/advanced-configuration",
+                      "channels/feishu/dynamic-agents",
+                      "channels/feishu/messaging",
+                      "channels/feishu/configuration-reference",
+                      "channels/feishu/troubleshooting"
+                    ]
+                  },
                   "channels/line",
                   "channels/qqbot",
                   "channels/wechat",
