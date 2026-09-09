@@ -2502,6 +2502,16 @@
                       "cli/daemon",
                       "cli/fleet",
                       "cli/gateway",
+                      {
+                        "group": "Gateway",
+                        "pages": [
+                          "cli/gateway/running",
+                          "cli/gateway/restart-and-supervision",
+                          "cli/gateway/query",
+                          "cli/gateway/service",
+                          "cli/gateway/discovery"
+                        ]
+                      },
                       "cli/health",
                       "cli/logs",
                       "cli/status"

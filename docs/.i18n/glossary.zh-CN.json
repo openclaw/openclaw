@@ -3256,6 +3256,26 @@
     "target": "配置 — 聊天命令"
   },
   {
+    "source": "Run the Gateway",
+    "target": "运行 Gateway 网关"
+  },
+  {
+    "source": "Restart and supervision",
+    "target": "重启与进程监管"
+  },
+  {
+    "source": "Query a running Gateway",
+    "target": "查询运行中的 Gateway 网关"
+  },
+  {
+    "source": "Manage the Gateway service",
+    "target": "管理 Gateway 网关服务"
+  },
+  {
+    "source": "Discover gateways (Bonjour)",
+    "target": "发现 Gateway 网关（Bonjour）"
+  },
+  {
     "source": "Microsoft Teams setup",
     "target": "Microsoft Teams 设置"
   },
