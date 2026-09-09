@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { setTimeout: delay } = require("node:timers/promises");
 const { DatabaseSync } = require("node:sqlite");
 const { resolvePluginProviders } = require("openclaw/plugin-sdk/provider-catalog-runtime");
 
@@ -21,19 +22,13 @@ module.exports = {
       "CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY, phase TEXT NOT NULL)",
     );
     const record = (phase) => database.prepare("INSERT INTO events (phase) VALUES (?)").run(phase);
-    const waitForGate = (name) =>
-      new Promise((resolve, reject) => {
-        const target = path.join(gateDir, name);
-        const done = () => {
-          if (fs.existsSync(target)) {
-            watcher.close();
-            resolve();
-          }
-        };
-        const watcher = fs.watch(gateDir, done);
-        watcher.once("error", reject);
-        done();
-      });
+    const waitForGate = async (name) => {
+      const target = path.join(gateDir, name);
+      // Observe the durable gate itself; file-watch notifications can be missed.
+      while (!fs.existsSync(target)) {
+        await delay(50);
+      }
+    };
     const provider = {
       id: ID,
       label: "Native MCP provider fixture",

@@ -22,13 +22,14 @@ class ToolsMcpServer extends Server {
   #work = new AsyncWorkScope();
   #closing: Promise<void> | undefined;
 
-  runRequest<T>(run: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  runRequest<T>(run: (work: AsyncWorkScope) => Promise<T>, signal: AbortSignal): Promise<T> {
     // SDK request callbacks are queued in microtasks and may enter after transport closure.
     if (this.#closing || !this.transport) {
       return Promise.reject(McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed"));
     }
     signal.throwIfAborted();
-    return this.#work.track(run);
+    const work = this.#work;
+    return work.track(() => run(work));
   }
 
   override close(): Promise<void> {
@@ -73,23 +74,38 @@ export function createToolsMcpServer(params: {
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     // Restore serving authority before runRequest installs the accepted-work scope.
     return await runInServingContext(() =>
-      server.runRequest(async () => {
+      server.runRequest(async (parentWork) => {
         if (!params.sdkResourceHost) {
           return await handlers.callTool(request.params, extra.signal);
         }
+        const work = new AsyncWorkScope();
         const controller = new AbortController();
-        const requestContext = AsyncLocalStorage.snapshot();
+        const requestContext = work.run(() => AsyncLocalStorage.snapshot());
         // Protocol cancellation can arrive under another request or process event's context.
         const abort = () => requestContext(() => controller.abort(extra.signal.reason));
+        const closeWork = () => requestContext(() => work.beginClose(parentWork.signal.reason));
         extra.signal.addEventListener("abort", abort, { once: true });
-        try {
-          if (extra.signal.aborted) {
-            abort();
-          }
-          return await handlers.callTool(request.params, controller.signal);
-        } finally {
-          extra.signal.removeEventListener("abort", abort);
+        parentWork.signal.addEventListener("abort", closeWork, { once: true });
+        if (extra.signal.aborted) {
+          abort();
         }
+        if (parentWork.signal.aborted) {
+          closeWork();
+        }
+        const result = work.track(() => handlers.callTool(request.params, controller.signal));
+        // The result stays early; only the server parent owns this descendant-cleanup tail.
+        void parentWork.track(async () => {
+          try {
+            await AsyncWorkScope.runWhenAllIdle(
+              () => [work],
+              () => requestContext(() => work.drain()),
+            );
+          } finally {
+            extra.signal.removeEventListener("abort", abort);
+            parentWork.signal.removeEventListener("abort", closeWork);
+          }
+        });
+        return await result;
       }, extra.signal),
     );
   });
