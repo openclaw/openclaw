@@ -2,12 +2,42 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
-import { AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH, type createAuthRateLimiter } from "../auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
+  type createAuthRateLimiter,
+  normalizeRateLimitClientIp,
+} from "../auth-rate-limit.js";
 import { resolveHookPathSignature, verifyStandardWebhooksSignature } from "../hooks-signature.js";
 import { type HooksConfigResolved, readHookRequestBody, readJsonBody } from "../hooks.js";
 import { sendJson } from "../http-common.js";
+import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
+import { resolveRequestClientIpFromHeaders } from "../net.js";
 
 type HookAuthLimiter = ReturnType<typeof createAuthRateLimiter>;
+
+export type HookClientIpConfig = {
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+};
+
+/** Rate-limit subject for a hook request: prepared ingress attribution, else the resolved client IP. */
+export function resolveHookClientKeyFor(
+  req: IncomingMessage,
+  getClientIpConfig?: () => HookClientIpConfig,
+): string {
+  const attribution = readPreparedGatewayIngressAttribution(req);
+  if (attribution && attribution.kind !== "unattributable-proxy") {
+    return normalizeRateLimitClientIp(attribution.rateLimit.subject.key);
+  }
+  const clientIpConfig = getClientIpConfig?.();
+  const clientIp =
+    resolveRequestClientIpFromHeaders(
+      req,
+      clientIpConfig?.trustedProxies,
+      clientIpConfig?.allowRealIpFallback === true,
+    ) ?? req.socket?.remoteAddress;
+  return normalizeRateLimitClientIp(clientIp);
+}
 
 export type HookRequestAdmission =
   | {
@@ -22,6 +52,11 @@ export type HookRequestAdmission =
       signedToleranceSeconds?: number;
       /** Configuration current at verification time; the handler continues with it. */
       hooksConfig?: HooksConfigResolved;
+      /**
+       * Re-checks signing authority against the live configuration after later
+       * asynchronous work (transforms); answers 401 and returns false when stale.
+       */
+      reverify?: () => boolean;
     }
   | { ok: false };
 
@@ -100,6 +135,12 @@ export async function admitHookRequest(params: {
       return { ok: false };
     }
     limiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+    if (!subPath) {
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Not Found");
+      return { ok: false };
+    }
     const parsed = await readJsonBody(req, params.bodyLimit);
     if (!parsed.ok) {
       await sendHookBodyError(req, res, parsed.error);
@@ -139,13 +180,26 @@ export async function admitHookRequest(params: {
     return { ok: false };
   }
   limiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+  const mappingId = currentOwner.mappingId;
   return {
     ok: true,
     body: body.value,
     signedDeliveryId: verification.deliveryId,
-    signedMappingId: currentOwner.mappingId,
+    signedMappingId: mappingId,
     signedToleranceSeconds: currentSignature.toleranceSeconds,
     hooksConfig: current,
+    reverify: () =>
+      ensureSignedAuthorityCurrent({
+        mappingId,
+        rawBody: body.value.raw,
+        resolveHooksConfig: params.resolveHooksConfig,
+        subPath,
+        headers: params.headers,
+        res,
+        clientKey,
+        limiter,
+        warn: params.warn,
+      }),
   };
 }
 
@@ -180,14 +234,18 @@ export function createSignedWakeDeliveryLedger(maxEntries: number) {
 }
 
 export type SignedReplayScope = {
+  mappingId: string;
+  deliveryId: string;
+  /** Exact bytes the signature covers; re-verified whenever authority is re-checked. */
+  rawBody: string;
   /** Replaces the bearer token in replay keys: signed admission never validated one. */
   authority: string;
   /** Replay path scope tied to the mapping, so URL aliases share one identity. */
   pathKey: string;
   /** Ledger key for wake dedupe: mapping id plus verified delivery id. */
   wakeKey: string;
-  /** Wake dedupe TTL: at least the cache floor, never shorter than the replay window. */
-  wakeTtlMs: number;
+  /** How long replay records for this delivery must live: never shorter than the replay window. */
+  retentionMs: number;
 };
 
 /** Replay identity for an admitted signed delivery, or undefined for token-admitted requests. */
@@ -199,9 +257,64 @@ export function describeSignedAdmission(
     return undefined;
   }
   return {
+    mappingId: admission.signedMappingId,
+    deliveryId: admission.signedDeliveryId,
+    rawBody: admission.body.raw ?? "",
     authority: `signature:${admission.signedMappingId}`,
     pathKey: `signed:${admission.signedMappingId}`,
     wakeKey: `${admission.signedMappingId}:${admission.signedDeliveryId}`,
-    wakeTtlMs: Math.max(minTtlMs, (admission.signedToleranceSeconds ?? 0) * 1000),
+    retentionMs: Math.max(minTtlMs, (admission.signedToleranceSeconds ?? 0) * 1000),
   };
+}
+
+/**
+ * Replay scope for a signed dispatch: only signed facts (mapping, delivery, and
+ * the item's position in the signed payload). Rendered action values can embed
+ * unsigned inputs such as request headers, which must not mint a new identity.
+ */
+export function signedDispatchScope(
+  signed: SignedReplayScope,
+  item: number,
+): Record<string, unknown> {
+  return { mappingId: signed.mappingId, deliveryId: signed.deliveryId, item };
+}
+
+/**
+ * Re-check signing authority against the live configuration after asynchronous
+ * work (transforms) ran between admission and dispatch. Answers 401 and returns
+ * false when the mapping or its secret no longer verifies the signed bytes.
+ */
+export function ensureSignedAuthorityCurrent(params: {
+  mappingId: string;
+  rawBody: string;
+  resolveHooksConfig: () => HooksConfigResolved | null | undefined;
+  subPath: string;
+  headers: Record<string, string>;
+  res: ServerResponse;
+  clientKey: string;
+  limiter: HookAuthLimiter;
+  warn: (message: string) => void;
+}): boolean {
+  const current = params.resolveHooksConfig() ?? undefined;
+  const owner = current ? resolveHookPathSignature(current.mappings, params.subPath) : undefined;
+  const verified =
+    owner?.signature !== undefined &&
+    owner.mappingId === params.mappingId &&
+    verifyStandardWebhooksSignature({
+      headers: params.headers,
+      rawBody: params.rawBody,
+      secrets: owner.signature.secrets,
+      toleranceSeconds: owner.signature.toleranceSeconds,
+    }).ok;
+  if (verified) {
+    return true;
+  }
+  params.warn(`hook ${params.subPath} rejected: signing authority changed before dispatch`);
+  sendHookUnauthorized({
+    res: params.res,
+    clientKey: params.clientKey,
+    limiter: params.limiter,
+    warn: params.warn,
+  });
+  return false;
 }

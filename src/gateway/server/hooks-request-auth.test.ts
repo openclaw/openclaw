@@ -4,7 +4,13 @@ import { Readable } from "node:stream";
 import { describe, expect, test, vi } from "vitest";
 import { resolveHookMappings } from "../hooks-mapping.js";
 import type { HooksConfigResolved } from "../hooks.js";
-import { admitHookRequest, createSignedWakeDeliveryLedger } from "./hooks-request-auth.js";
+import {
+  admitHookRequest,
+  createSignedWakeDeliveryLedger,
+  describeSignedAdmission,
+  ensureSignedAuthorityCurrent,
+  signedDispatchScope,
+} from "./hooks-request-auth.js";
 
 const SECRET_A = `whsec_${randomBytes(32).toString("base64")}`;
 const SECRET_B = `whsec_${randomBytes(32).toString("base64")}`;
@@ -92,6 +98,7 @@ describe("admitHookRequest signing authority", () => {
       signedMappingId: "mapping-1",
       signedToleranceSeconds: 300,
     });
+    expect(admission.ok && admission.reverify?.()).toBe(true);
   });
 
   test("rejects a request whose secret was rotated while the body was uploading", async () => {
@@ -132,5 +139,76 @@ describe("createSignedWakeDeliveryLedger", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("ensureSignedAuthorityCurrent", () => {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const headers = {
+    "webhook-id": "msg_fence",
+    "webhook-timestamp": timestamp,
+    "webhook-signature": sign(SECRET_A, "msg_fence", timestamp, BODY),
+  };
+  const signed = describeSignedAdmission(
+    {
+      ok: true,
+      body: { value: {}, raw: BODY },
+      signedDeliveryId: "msg_fence",
+      signedMappingId: "mapping-1",
+      signedToleranceSeconds: 300,
+    },
+    1_000,
+  );
+  if (!signed) {
+    throw new Error("expected a signed scope");
+  }
+
+  test("passes while the live mapping still verifies the signed bytes", () => {
+    const res = response();
+    expect(
+      ensureSignedAuthorityCurrent({
+        mappingId: signed.mappingId,
+        rawBody: signed.rawBody,
+        resolveHooksConfig: () => hooksConfig(SECRET_A),
+        subPath: "ambush",
+        headers,
+        res,
+        clientKey: "test",
+        limiter,
+        warn: vi.fn(),
+      }),
+    ).toBe(true);
+    expect(res.end).not.toHaveBeenCalled();
+  });
+
+  test("answers 401 when the secret rotated or the mapping vanished during async work", () => {
+    for (const live of [hooksConfig(SECRET_B), null]) {
+      const res = response();
+      const warn = vi.fn();
+      expect(
+        ensureSignedAuthorityCurrent({
+          mappingId: signed.mappingId,
+          rawBody: signed.rawBody,
+          resolveHooksConfig: () => live,
+          subPath: "ambush",
+          headers,
+          res,
+          clientKey: "test",
+          limiter,
+          warn,
+        }),
+      ).toBe(false);
+      expect(res.statusCode).toBe(401);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("signing authority changed"));
+    }
+  });
+
+  test("signed dispatch scope carries only signed facts", () => {
+    expect(signedDispatchScope(signed, 2)).toEqual({
+      mappingId: "mapping-1",
+      deliveryId: "msg_fence",
+      item: 2,
+    });
+    expect(signed.retentionMs).toBe(300_000);
   });
 });

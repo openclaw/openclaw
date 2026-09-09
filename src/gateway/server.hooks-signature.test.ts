@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   cronIsolatedRun,
   installGatewayTestHooks,
@@ -186,6 +187,75 @@ describe("gateway hook sender signatures", () => {
       });
       expect(fresh.status).toBe(200);
       await expect(fresh.json()).resolves.toMatchObject({ ok: true, eventOutcome: "queued" });
+    });
+  });
+
+  test("unsigned template inputs cannot mint a new replay identity for signed bytes", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "ambush" },
+          action: "agent",
+          messageTemplate: "Ambush: {{payload.data.headline}} via {{headers.x-variant}}",
+          signature: { scheme: "standard-webhooks", secret: SECRET },
+        },
+      ],
+    };
+    testState.agentsConfig = { entries: { main: { default: true } } };
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+      const first = await post(port, "/hooks/ambush", BODY, {
+        headers: { ...signedHeaders("msg_t1"), "x-variant": "a" },
+      });
+      expect(first.status).toBe(200);
+      await waitForCronRuns(1);
+      const variant = await post(port, "/hooks/ambush", BODY, {
+        headers: { ...signedHeaders("msg_t1"), "x-variant": "b" },
+      });
+      expect(variant.status).toBe(200);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("keeps signed replay records for the whole signature window", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "ambush" },
+          action: "agent",
+          messageTemplate: "Ambush: {{payload.data.headline}}",
+          signature: { scheme: "standard-webhooks", secret: SECRET, toleranceSeconds: 900 },
+        },
+      ],
+    };
+    testState.agentsConfig = { entries: { main: { default: true } } };
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+      const startMs = 1_800_000_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(startMs);
+      try {
+        const headers = signedHeaders("msg_long", {
+          timestamp: String(Math.floor(startMs / 1000)),
+        });
+        const first = await post(port, "/hooks/ambush", BODY, { headers });
+        expect(first.status).toBe(200);
+        await waitForCronRuns(1);
+        // Past the generic 5-minute dedupe floor but inside the 900s signature window.
+        nowSpy.mockReturnValue(startMs + DEDUPE_TTL_MS + 60_000);
+        const late = await post(port, "/hooks/ambush", BODY, { headers });
+        expect(late.status).toBe(200);
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 });
