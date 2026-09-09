@@ -3,20 +3,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
+import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const { runCliAgentMock } = vi.hoisted(() => ({
+const { runCliAgentMock, authStoreProfiles } = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(async (_params: { preparedRunAdmission?: PreparedAgentRunAdmission }) => ({
     meta: {
       durationMs: 1,
       agentMeta: { sessionId: "native-session", provider: "claude-cli", model: "opus" },
     },
   })),
+  authStoreProfiles: {} as Record<string, AuthProfileCredential>,
 }));
 
 vi.mock("../cli-runner.js", () => ({ runCliAgent: runCliAgentMock }));
+
+vi.mock("../auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auth-profiles/store-runtime.js")>()),
+  loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: authStoreProfiles }),
+}));
 
 const { testing } = await import("./compact.js");
 
@@ -87,6 +94,9 @@ function compactParams(overrides: Record<string, unknown> = {}) {
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   runCliAgentMock.mockClear();
+  for (const profileId of Object.keys(authStoreProfiles)) {
+    delete authStoreProfiles[profileId];
+  }
 });
 
 describe("native CLI manual compaction", () => {
@@ -160,6 +170,70 @@ describe("native CLI manual compaction", () => {
         compactParams: compactParams(),
       }),
     ).resolves.toBeUndefined();
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("drops an auto session pin that names a model-provider credential", async () => {
+    // A native-login CLI session records no binding credential, so manual
+    // compaction falls back to the session pin. That pin names the model
+    // provider's stored API key; dispatching it to the CLI child would bill
+    // the stored key instead of the backend's own login.
+    registerBackend();
+    authStoreProfiles["anthropic:default"] = {
+      type: "api_key",
+      provider: "anthropic",
+      key: "test-anthropic-key",
+    };
+
+    await testing.compactNativeCliSession({
+      runtime: "claude-cli",
+      compactParams: compactParams({
+        cliSessionBinding: { sessionId: "native-session" },
+        authProfileId: "anthropic:default",
+        authProfileIdSource: "auto",
+      }),
+    });
+
+    const forwarded = runCliAgentMock.mock.calls[0]?.[0] as { authProfileId?: string } | undefined;
+    expect(forwarded).toMatchObject({ provider: "claude-cli", controlOperation: "compact" });
+    expect(forwarded?.authProfileId).toBeUndefined();
+  });
+
+  it("keeps an explicitly selected model-provider credential for compaction", async () => {
+    registerBackend();
+    authStoreProfiles["anthropic:default"] = {
+      type: "api_key",
+      provider: "anthropic",
+      key: "test-anthropic-key",
+    };
+
+    await testing.compactNativeCliSession({
+      runtime: "claude-cli",
+      compactParams: compactParams({
+        cliSessionBinding: { sessionId: "native-session" },
+        authProfileId: "anthropic:default",
+        authProfileIdSource: "user",
+      }),
+    });
+
+    expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      authProfileId: "anthropic:default",
+    });
+  });
+
+  it("fails closed when an explicitly selected session pin has no stored credential", async () => {
+    registerBackend();
+
+    await expect(
+      testing.compactNativeCliSession({
+        runtime: "claude-cli",
+        compactParams: compactParams({
+          cliSessionBinding: { sessionId: "native-session" },
+          authProfileId: "anthropic:missing",
+          authProfileIdSource: "user",
+        }),
+      }),
+    ).rejects.toThrow(/No credentials found for profile "anthropic:missing"/);
     expect(runCliAgentMock).not.toHaveBeenCalled();
   });
 });

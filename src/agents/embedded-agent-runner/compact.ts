@@ -18,6 +18,7 @@ import {
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
+import { resolveCliExecutionAuthProfileId } from "../cli-execution-auth.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { coerceToFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -115,6 +116,26 @@ export async function compactNativeCliSession(params: {
     config: params.compactParams.config,
     agentId: params.compactParams.agentId,
   }).sessionAgentId;
+  // The session pin names the model provider's credential (for example
+  // "anthropic:default"); forwarding it unchecked would bill the stored API key
+  // instead of the CLI child's own login. The binding pin records the credential
+  // this session's CLI runs last consumed, so it keeps resuming the native
+  // session under the identity that produced it.
+  const sessionAuthProfileId = params.compactParams.authProfileId?.trim() || undefined;
+  const cliForwardedAuthProfileId = sessionAuthProfileId
+    ? resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: runtime,
+        authProfileProvider: params.compactParams.provider ?? DEFAULT_PROVIDER,
+        config: params.compactParams.config ?? {},
+        agentDir:
+          params.compactParams.agentDir ??
+          resolveAgentDir(params.compactParams.config ?? {}, sessionAgentId),
+        selected: {
+          authProfileId: sessionAuthProfileId,
+          authProfileIdSource: params.compactParams.authProfileIdSource,
+        },
+      })
+    : undefined;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
     params.compactParams.config ?? {},
     runId,
@@ -144,8 +165,8 @@ export async function compactNativeCliSession(params: {
         ...(cliSessionBinding ? { cliSessionBinding } : {}),
         ...(cliSessionBinding?.authProfileId
           ? { authProfileId: cliSessionBinding.authProfileId }
-          : params.compactParams.authProfileId
-            ? { authProfileId: params.compactParams.authProfileId }
+          : cliForwardedAuthProfileId
+            ? { authProfileId: cliForwardedAuthProfileId }
             : {}),
         ...(params.compactParams.sessionEntry
           ? { sessionEntry: params.compactParams.sessionEntry }
