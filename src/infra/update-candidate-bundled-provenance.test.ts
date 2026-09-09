@@ -281,3 +281,133 @@ it.each(["source", "candidate"])("does not enumerate an outside %s fallback", as
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+it.each([false, true])(
+  "redirects multi-entry bundles with missing candidate entry=%s",
+  async (missing) => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "candidate-entries-")));
+    const sourceHost = path.join(root, "source-host");
+    const candidateHost = path.join(root, "candidate-host");
+    const sourcePlugin = path.join(sourceHost, "extensions", "demo");
+    const candidatePlugin = path.join(candidateHost, "dist", "extensions", "demo");
+    const stateDir = path.join(root, "state");
+    const entries = ["first", "second", "third"];
+    const candidateEntries = missing ? entries.slice(0, 2) : entries;
+    let cleanup: (() => Promise<void>) | undefined;
+    try {
+      for (const host of [sourceHost, candidateHost]) {
+        await fs.mkdir(host, { recursive: true });
+        await fs.writeFile(
+          path.join(host, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
+        );
+      }
+      await fs.mkdir(path.join(sourceHost, "src"));
+      await fs.writeFile(path.join(sourceHost, "pnpm-workspace.yaml"), "packages: []\n");
+      for (const [directory, names, generation] of [
+        [sourcePlugin, entries, "live"],
+        [candidatePlugin, candidateEntries, "candidate"],
+      ] as const) {
+        await writePlugin(directory, "demo", generation);
+        await fs.writeFile(
+          path.join(directory, "package.json"),
+          JSON.stringify({
+            name: "@openclaw/different-package-name",
+            version: "2026.9.3",
+            type: "module",
+            openclaw: { extensions: names.map((name) => `./${name}.js`) },
+          }),
+        );
+        for (const name of names) {
+          await fs.writeFile(
+            path.join(directory, `${name}.js`),
+            `export default ${JSON.stringify(`${generation}-${name}`)};`,
+          );
+        }
+      }
+      const installRecords: Record<string, PluginInstallRecord> = missing
+        ? Object.fromEntries(
+            entries.map((name) => [
+              `demo/${name}`,
+              {
+                source: "path",
+                installPath: path.join(sourcePlugin, `${name}.js`),
+              },
+            ]),
+          )
+        : { demo: { source: "path", installPath: sourcePlugin } };
+      const config: OpenClawConfig = {
+        plugins: {
+          installs: installRecords,
+          ...(!missing
+            ? { load: { paths: entries.map((name) => path.join(sourcePlugin, `${name}.js`)) } }
+            : {}),
+        },
+      };
+      const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } }).db;
+      registry
+        .prepare(
+          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+        )
+        .run(
+          "plugins.installedIndex",
+          JSON.stringify({ revision: 1, index: { installRecords } }),
+          1,
+        );
+      closeOpenClawStateDatabaseByPath(path.join(stateDir, "state", "openclaw.sqlite"));
+      const rehearsal = await prepareUpdateCandidateRehearsal({
+        config,
+        stateDir,
+        candidateRoot: candidateHost,
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(sourcePlugin),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        },
+      });
+      cleanup = rehearsal.cleanup;
+      const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+      const projectedPaths = entries.map((name, index) =>
+        missing
+          ? copied.plugins?.installs?.[`demo/${name}`]?.installPath
+          : copied.plugins?.load?.paths?.[index],
+      );
+      for (const [index, name] of candidateEntries.entries()) {
+        expect(projectedPaths[index]).toBe(path.join(candidatePlugin, `${name}.js`));
+      }
+      if (!missing) {
+        expect(copied.plugins?.installs?.demo?.installPath).toBe(candidatePlugin);
+      }
+      const discovered = withPluginCache(createPluginCache(), () =>
+        loadPluginManifestRegistryCore({
+          config: copied,
+          env: {
+            OPENCLAW_STATE_DIR: rehearsal.stateDir,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(candidatePlugin),
+            OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          },
+        }),
+      ).plugins;
+      for (const name of candidateEntries) {
+        expect(discovered.find((plugin) => plugin.id === `demo/${name}`)).toMatchObject({
+          origin: "bundled",
+          source: path.join(candidatePlugin, `${name}.js`),
+          trust: { reason: "bundled" },
+        });
+      }
+      if (missing) {
+        const retained = projectedPaths[2] ?? "";
+        expect(retained.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
+        expect(await fs.readFile(retained, "utf8")).toBe('export default "live-third";');
+        expect(discovered.find((plugin) => plugin.source === retained)).toMatchObject({
+          origin: "global",
+          trust: { reason: "origin-path" },
+        });
+      }
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await cleanup?.();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);

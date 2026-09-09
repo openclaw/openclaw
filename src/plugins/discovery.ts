@@ -42,7 +42,7 @@ import {
 } from "./manifest.js";
 import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import {
-  resolvePackageRuntimeExtensionSources,
+  resolvePackageRuntimeExtensions,
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
 import { formatPosixMode, isPathInside } from "./path-safety.js";
@@ -560,6 +560,47 @@ function derivePackagePluginIdHint(packageName: unknown): string | undefined {
   return normalizeOptionalString(unscoped);
 }
 
+export function resolvePluginPackageEntries(
+  params: Parameters<typeof resolvePackageRuntimeExtensions>[0] & { manifestId?: string },
+): Array<{ idHint: string; entryPath: string; source: string }> {
+  const entryIdSources = new Map<string, Array<{ entryPath: string; source: string }>>();
+  for (const entry of resolvePackageRuntimeExtensions(params)) {
+    const idHint = deriveIdHint({
+      filePath: entry.source,
+      manifestId: params.manifestId,
+      packageName: params.manifest?.name,
+      fallbackId: path.basename(params.packageDir),
+      hasMultipleExtensions: params.extensions.length > 1,
+    });
+    const sources = entryIdSources.get(idHint);
+    if (sources) {
+      sources.push(entry);
+    } else {
+      entryIdSources.set(idHint, [entry]);
+    }
+  }
+  const entries: Array<{ idHint: string; entryPath: string; source: string }> = [];
+  for (const [idHint, sources] of entryIdSources) {
+    // Entry ids derive from basenames; colliding entries must not silently vanish in the registry.
+    if (params.extensions.length > 1 && sources.length > 1) {
+      params.diagnostics.push({
+        level: "error",
+        pluginId: idHint,
+        source: params.sourceLabel,
+        message:
+          `plugin package entries collide on derived id "${idHint}" ` +
+          `(${sources.map((entry) => path.relative(params.packageDir, entry.source)).join(", ")}); ` +
+          "rename the entry files to unique basenames",
+      });
+      continue;
+    }
+    for (const entry of sources) {
+      entries.push({ ...entry, idHint });
+    }
+  }
+  return entries;
+}
+
 function pushInvalidPackageExtensionDiagnostic(params: {
   resolution: PackageExtensionResolution;
   source: string;
@@ -982,11 +1023,12 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     };
 
     if (extensions.length > 0) {
-      const resolvedRuntimeSources = resolvePackageRuntimeExtensionSources({
+      const entries = resolvePluginPackageEntries({
         packageDir: dir,
         ...(rootRealPath !== undefined ? { packageRootRealPath: rootRealPath } : {}),
         manifest,
         extensions,
+        manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
         origin: params.origin,
         pluginIdHint,
         requireBuiltRuntimeEntry,
@@ -994,41 +1036,12 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         diagnostics,
         rejectHardlinks,
       });
-      // Entry ids derive from basenames, so ./a/index.js and ./b/index.js would
-      // both become <pack>/index and one entry would silently vanish in the
-      // registry's same-id dedupe. Reject the colliding entries loudly instead.
-      const entryIdSources = new Map<string, string[]>();
-      for (const source of resolvedRuntimeSources) {
-        const idHint = deriveIdHint({
-          filePath: source,
-          manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
-          packageName: manifest?.name,
-          fallbackId: path.basename(dir),
-          hasMultipleExtensions: extensions.length > 1,
-        });
-        const sources = entryIdSources.get(idHint);
-        if (sources) {
-          sources.push(source);
-        } else {
-          entryIdSources.set(idHint, [source]);
-        }
-      }
-      for (const [idHint, sources] of entryIdSources) {
-        if (extensions.length > 1 && sources.length > 1) {
-          diagnostics.push({
-            level: "error",
-            pluginId: idHint,
-            source: dir,
-            message:
-              `plugin package entries collide on derived id "${idHint}" ` +
-              `(${sources.map((s) => path.relative(dir, s)).join(", ")}); ` +
-              "rename the entry files to unique basenames",
-          });
-          continue;
-        }
-        for (const source of sources) {
-          addPackageCandidate(source, idHint, extensions.length > 1 ? idHint : undefined);
-        }
+      for (const entry of entries) {
+        addPackageCandidate(
+          entry.source,
+          entry.idHint,
+          extensions.length > 1 ? entry.idHint : undefined,
+        );
       }
       return true;
     }

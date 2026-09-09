@@ -10,9 +10,13 @@ import {
   resolveBundledPluginsDir,
 } from "../plugins/bundled-dir.js";
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
-import { resolveBundledSourceCheckoutExtensionsDir } from "../plugins/discovery.js";
+import {
+  resolveBundledSourceCheckoutExtensionsDir,
+  resolvePluginPackageEntries,
+} from "../plugins/discovery.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/installed-plugin-index-row.js";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { resolvePackageExtensionEntries } from "../plugins/manifest.js";
 import { pluginCacheRealpathSync } from "../plugins/plugin-cache-files.js";
 import type { ConfigMachineStateDatabase } from "../state/config-machine-state.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -67,26 +71,59 @@ function bundledPluginRedirects(
       scanDir: directory,
       includeChannelConfigs: false,
     })) {
-      const candidate = candidates.get(source.manifest.id);
       const sourceRoot = pluginCacheRealpathSync(path.join(directory, source.dirName), true);
-      if (!candidate || !sourceRoot || !isPathInside(sourceReal, sourceRoot)) {
+      if (!sourceRoot || !isPathInside(sourceReal, sourceRoot)) {
         continue;
       }
-      // Only physically bundled aliases with the same staged manifest ID retain bundled identity.
-      for (const [sourcePath, candidatePath] of [
-        [sourceRoot, candidate.rootDir],
-        [path.resolve(sourceRoot, source.source.source), candidate.source],
-      ] as const) {
-        const from = pluginCacheRealpathSync(sourcePath, true);
-        const to = pluginCacheRealpathSync(candidatePath, true);
-        if (
-          from &&
-          to &&
-          isPathInside(sourceRoot, from) &&
-          isPluginInPackageBundledRoots({ rootDir: to, packageRoot: candidateRoot })
-        ) {
-          redirects.set(from, to);
+      const manifest = { name: source.packageName, openclaw: source.packageManifest };
+      const extensions = resolvePackageExtensionEntries(manifest);
+      if (extensions.status !== "ok") {
+        continue;
+      }
+      const entries = resolvePluginPackageEntries({
+        packageDir: sourceRoot,
+        packageRootRealPath: sourceRoot,
+        manifest,
+        manifestId: source.manifest.id,
+        extensions: extensions.entries,
+        origin: "bundled",
+        sourceLabel: sourceRoot,
+        diagnostics: [],
+        rejectHardlinks: false,
+      });
+      let allEntriesMatched = entries.length === extensions.entries.length;
+      const candidateRoots = new Set<string>();
+      for (const entry of entries) {
+        const candidate = candidates.get(entry.idHint);
+        if (!candidate || path.parse(entry.source).name !== path.parse(candidate.source).name) {
+          allEntriesMatched = false;
+          continue;
         }
+        const from = pluginCacheRealpathSync(entry.source, true);
+        const to = pluginCacheRealpathSync(candidate.source, true);
+        const targetRoot = pluginCacheRealpathSync(candidate.rootDir, true);
+        if (
+          !from ||
+          !to ||
+          !targetRoot ||
+          !isPathInside(sourceRoot, from) ||
+          !isPathInside(targetRoot, to) ||
+          !isPluginInPackageBundledRoots({ rootDir: targetRoot, packageRoot: candidateRoot })
+        ) {
+          allEntriesMatched = false;
+          continue;
+        }
+        redirects.set(from, to);
+        const declared = pluginCacheRealpathSync(path.resolve(sourceRoot, entry.entryPath), true);
+        if (declared && isPathInside(sourceRoot, declared)) {
+          redirects.set(declared, to);
+        }
+        candidateRoots.add(targetRoot);
+      }
+      // A package alias moves only when all its entries move together to one candidate package.
+      const [targetRoot] = candidateRoots;
+      if (allEntriesMatched && candidateRoots.size === 1 && targetRoot) {
+        redirects.set(sourceRoot, targetRoot);
       }
     }
   }
