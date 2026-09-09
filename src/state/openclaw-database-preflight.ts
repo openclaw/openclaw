@@ -43,7 +43,10 @@ import {
   openClawStateMigrationAssertions,
 } from "./openclaw-state-db-maintenance.js";
 import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
-import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
+import {
+  readStateSchemaContentVersion,
+  readStateSchemaMigrationVersion,
+} from "./openclaw-state-db-schema-version.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawRegisteredAgentDatabasePath,
@@ -381,7 +384,7 @@ export async function preflightOpenClawStateDatabasePath(
       return result("incompatible");
     }
     ownership = inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
-    if (contentVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (readStateSchemaMigrationVersion(database) < OPENCLAW_STATE_SCHEMA_VERSION) {
       return result("migration-required", { requiresWrite: true });
     }
     if (foundVersion < contentVersion) {
@@ -467,7 +470,11 @@ export async function preflightOpenClawDatabaseSchemas(options: {
         stateVersion > options.supportedVersions.state
           ? stateVersion
           : readStateSchemaContentVersion(stateDatabase);
-      if (contentVersion < options.supportedVersions.state) {
+      const migrationVersion =
+        contentVersion > options.supportedVersions.state
+          ? contentVersion
+          : readStateSchemaMigrationVersion(stateDatabase);
+      if (migrationVersion < options.supportedVersions.state) {
         (result.pendingMigrations ??= []).push({
           kind: "state",
           path: statePath,
@@ -485,7 +492,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
           ...(writerAppVersion ? { writerAppVersion } : {}),
         });
       }
-      if (stateVersion < contentVersion) {
+      if (stateVersion < contentVersion && migrationVersion === contentVersion) {
         (result.deferredSchemaPublications ??= []).push(
           describeDeferredStateSchemaPublication(
             stateDatabase,
@@ -501,7 +508,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       ) {
         assertSqliteIntegrity(stateDatabase, statePath);
         assertCanonicalStateSchemaShape(stateDatabase, statePath);
-        if (contentVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+        if (migrationVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           const { blockingIssues } = inspectCurrentStateStartupSchema(
             stateDatabase,
             statePath,
@@ -513,13 +520,13 @@ export async function preflightOpenClawDatabaseSchemas(options: {
             );
           }
         } else {
-          openClawStateMigrationAssertions.get(contentVersion)?.(stateDatabase, {
+          openClawStateMigrationAssertions.get(migrationVersion)?.(stateDatabase, {
             pathname: statePath,
           });
         }
       } else if (
         options.verifyCurrentSchemaShape === true &&
-        contentVersion === OPENCLAW_STATE_SCHEMA_VERSION
+        migrationVersion === OPENCLAW_STATE_SCHEMA_VERSION
       ) {
         try {
           assertOpenClawStateDatabaseForMaintenance(stateDatabase, { pathname: statePath });

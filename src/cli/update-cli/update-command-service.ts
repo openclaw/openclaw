@@ -195,6 +195,7 @@ export async function maybeRestartService(params: {
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
   refreshServiceEnv: boolean;
+  serviceRuntimeRefreshRequired?: boolean;
   serviceEnv?: NodeJS.ProcessEnv;
   serviceInstallEnv?: NodeJS.ProcessEnv | null;
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
@@ -317,7 +318,7 @@ export async function maybeRestartService(params: {
 
   if (activation.shouldRestart) {
     if (
-      requiresInstallRootRefresh &&
+      (requiresInstallRootRefresh || activation.serviceRuntimeRefreshRequired) &&
       (!activation.refreshServiceEnv || activation.serviceInstallEnv === null)
     ) {
       defaultRuntime.error(
@@ -367,6 +368,10 @@ export async function maybeRestartService(params: {
           defaultRuntime.error(
             `Failed to refresh gateway service environment from updated install: ${String(err)}`,
           );
+          if (activation.serviceRuntimeRefreshRequired) {
+            params.onVerificationFailure?.("service-runtime-refresh-failed");
+            throw err;
+          }
           if (DEFINITION_DENIAL.test(String(err))) {
             // A writer denial is not a lifecycle grant: revalidate the retained
             // command and manager before using native activation without repair.

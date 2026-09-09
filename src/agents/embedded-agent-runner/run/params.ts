@@ -409,6 +409,7 @@ export type RunEmbeddedAgentParams = {
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
+  gitCoauthorPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
@@ -533,6 +534,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "forceHeartbeatTool"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
+  | "gitCoauthorPrompt"
   | "sourceReplyDeliveryMode"
   | "taskSuggestionDeliveryMode"
   | "silentReplyPromptMode"

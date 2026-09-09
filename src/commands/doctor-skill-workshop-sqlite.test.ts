@@ -99,6 +99,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
       inspectLegacySkillWorkshopMigration({ config: {}, env: testState.env }),
     ).resolves.toEqual({
       externalProposalCount: 1,
+      externalProposalDetails: [expect.stringContaining(proposalId)],
       externalProposalCountsByAgent: { main: 1 },
       legacyBackupRootCount: 0,
       preservedLegacyBackupRootCount: 0,

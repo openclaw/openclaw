@@ -1572,6 +1572,9 @@ jobs:
           if [[ "$credentials" == *",anthropic,"* ]]; then
             require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
           fi
+          if [[ "$credentials" == *",anthropic-api-key,"* ]]; then
+            require_any "Anthropic API key" ANTHROPIC_API_KEY
+          fi
           if [[ "$credentials" == *",factory,"* ]]; then
             require_any Factory FACTORY_API_KEY
           fi
@@ -1958,6 +1961,9 @@ jobs:
           fi
           if [[ "$credentials" == *",anthropic,"* ]]; then
             require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
+          fi
+          if [[ "$credentials" == *",anthropic-api-key,"* ]]; then
+            require_any "Anthropic API key" ANTHROPIC_API_KEY
           fi
           if [[ "$credentials" == *",factory,"* ]]; then
             require_any Factory FACTORY_API_KEY

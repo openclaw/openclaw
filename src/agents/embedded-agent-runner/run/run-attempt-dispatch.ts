@@ -9,6 +9,7 @@ import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
+import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/selection.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
@@ -339,6 +340,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     sessionKey: params.sessionKey,
     toolsAllow: params.toolsAllow,
   });
+  const gitCoauthorPrompt = resolveSessionGitCoauthorPrompt({
+    config: params.config,
+    agentId: workspaceResolution.agentId,
+    sessionKey: params.sessionKey,
+    storePath: params.sessionTarget?.storePath,
+  });
   let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
   let skillReferencePaths = pluginSandbox?.readOnlyResourceMounts?.map((mount) => ({
     skillFile: path.join(mount.hostPath, "SKILL.md"),
@@ -578,6 +585,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
+    gitCoauthorPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,

@@ -1,0 +1,36 @@
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
+import type { UpdateChannel } from "../../infra/update-channels.js";
+import type { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import type { UpdateCommandOptions } from "./shared.js";
+import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import type { UpdateRestartParams } from "./update-command-restart-context.js";
+
+export type FinishUpdateParams = UpdateRestartParams & {
+  coreAlreadyCurrent?: boolean;
+  failure?: { cause: unknown; detail: string };
+  mutationStarted: boolean;
+  expectedVersion?: string;
+  previousInstallRoot?: string;
+  installKindChanged: boolean;
+  configSnapshot: ConfigFileSnapshot;
+  requestedChannel: UpdateChannel | null;
+  storedChannel: UpdateChannel | null;
+  channel: UpdateChannel;
+  downgradeRisk: boolean;
+  opts: UpdateCommandOptions;
+  controlPlaneUpdateSentinelMeta: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
+  preUpdatePluginInstallRecords: Record<string, PluginInstallRecord>;
+  startedAt: number;
+  packageUpdateNodeRunner?: string;
+  packageTransaction?: PackageUpdateTransaction;
+  schemaVersions?: UpdateStateSchemaVersion[];
+  candidateSchemaVersions?: OpenClawSchemaVersions;
+  previousSchemaVersions?: OpenClawSchemaVersions;
+  previousVerified?: boolean;
+  activationConfig?: UpdateConfigSnapshot;
+  rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
+};

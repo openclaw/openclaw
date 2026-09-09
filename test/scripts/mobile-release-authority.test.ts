@@ -117,6 +117,15 @@ function emptyCommit(repository: string, message: string): string {
   return git(repository, "rev-parse", "HEAD");
 }
 
+function extractKvmFunction(source: string): string {
+  const start = source.indexOf("verify_kvm_acceleration() {");
+  const end = source.indexOf('\n\ntest "$RUNNER_OS/$RUNNER_ARCH"', start);
+  if (start < 0 || end <= start) {
+    throw new Error("missing bounded KVM acceleration function");
+  }
+  return source.slice(start, end);
+}
+
 function writeBaseReleaseFiles(repository: string): void {
   writeFile(repository, "apps/mobile/version.json", '{\n  "version": "2026.9.1"\n}\n');
   writeFile(
@@ -1828,6 +1837,10 @@ describe("mobile release authority", () => {
       (step) => step.name === "Checkout trusted Android tooling",
     );
     const setupIndex = steps.findIndex((step) => step.name === "Setup Android toolchain");
+    const toolingIndex = steps.findIndex(
+      (step) => step.name === "Prepare trusted Linux Android tooling",
+    );
+    const kvmIndex = steps.findIndex((step) => step.name === "Verify Linux KVM acceleration");
     const diagnosticIndex = steps.findIndex(
       (step) => step.name === "Run phone emulator diagnostic",
     );
@@ -1852,7 +1865,7 @@ describe("mobile release authority", () => {
     expect(validationJob["timeout-minutes"]).toBe(5);
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job.needs).toBe("validate-target");
-    expect(job["runs-on"]).toBe("macos-26-intel");
+    expect(job["runs-on"]).toBe("ubuntu-24.04");
     expect(job["timeout-minutes"]).toBe(25);
     expect(job.env).toEqual({
       ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS: "180",
@@ -1869,7 +1882,9 @@ describe("mobile release authority", () => {
     expect(initializeIndex).toBe(0);
     expect(trustedCheckoutIndex).toBe(initializeIndex + 1);
     expect(setupIndex).toBe(trustedCheckoutIndex + 1);
-    expect(diagnosticIndex).toBe(setupIndex + 1);
+    expect(toolingIndex).toBe(setupIndex + 1);
+    expect(kvmIndex).toBe(toolingIndex + 1);
+    expect(diagnosticIndex).toBe(kvmIndex + 1);
     expect(artifactIndex).toBe(diagnosticIndex + 1);
     expect(validationSteps[validateIndex]?.env).toEqual({
       TARGET_SHA: "${{ inputs.target_sha }}",
@@ -1887,14 +1902,15 @@ describe("mobile release authority", () => {
       'echo "DIAGNOSTIC_DIR=$DIAGNOSTIC_DIR" >>"$GITHUB_ENV"',
     );
     expect(steps[initializeIndex]?.run).toContain(
-      "printf 'host_cpu=%s\\n' \"$(sysctl -n machdep.cpu.brand_string)\"",
+      "printf 'host_cpu=%s\\n' \"$(awk -F: '/^model name/",
     );
     expect(steps[initializeIndex]?.run).toContain(
-      "printf 'host_logical_cpus=%s\\n' \"$(sysctl -n hw.logicalcpu)\"",
+      "printf 'host_logical_cpus=%s\\n' \"$(getconf _NPROCESSORS_ONLN)\"",
     );
     expect(steps[initializeIndex]?.run).toContain(
-      "printf 'host_memory_bytes=%s\\n' \"$(sysctl -n hw.memsize)\"",
+      "printf 'host_memory_bytes=%s\\n' \"$(awk '/^MemTotal:/",
     );
+    expect(steps[initializeIndex]?.run).toContain("cat /etc/os-release");
     expect(validationSteps[validationTrustedCheckoutIndex]).toMatchObject({
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
       with: {
@@ -1926,7 +1942,8 @@ describe("mobile release authority", () => {
         ref: "${{ github.workflow_sha }}",
         "fetch-depth": 1,
         "persist-credentials": false,
-        "sparse-checkout": ".github/actions/setup-android-toolchain",
+        "sparse-checkout":
+          ".github/actions/setup-android-toolchain\nscripts/android-sips-linux.sh\n",
         path: ".mobile-release-tooling",
       },
     });
@@ -1938,6 +1955,108 @@ describe("mobile release authority", () => {
       },
     });
     expect(JSON.stringify(steps)).not.toContain("candidate/");
+
+    const tooling = steps[toolingIndex]?.run ?? "";
+    expect(tooling).toContain(
+      "/usr/bin/apt-get install -y --no-install-recommends acl imagemagick",
+    );
+    expect(tooling).toContain(
+      'test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"',
+    );
+    expect(tooling).toContain('adapter_path="scripts/android-sips-linux.sh"');
+    expect(tooling).toContain('git -C "$trusted_root" cat-file blob "$adapter_oid" >"$adapter"');
+    expect(tooling).toContain('cmp -s "$trusted_root/$adapter_path" "$adapter"');
+    expect(tooling).toContain('"$adapter" -s format jpeg -s formatOptions best');
+    expect(tooling).toContain("for dimensions in 1440x2560 454x454; do");
+    expect(tooling).toContain(
+      '"$smoke_dir/input-${dimensions}.png" --out "$smoke_dir/output-${dimensions}.jpg"',
+    );
+    expect(tooling).not.toContain("candidate/");
+
+    const kvm = steps[kvmIndex]?.run ?? "";
+    expect(kvm).toContain("verify_kvm_acceleration() {");
+    expect(kvm).toMatch(
+      /\/usr\/bin\/timeout --signal=TERM --kill-after=2s 15s \\\n\s+emulator -accel-check/u,
+    );
+    expect(kvm).not.toContain("--foreground");
+    expect(kvm).toContain("test -c /dev/kvm");
+    expect(kvm).toContain('/usr/bin/sudo /usr/bin/setfacl -m "u:${current_user}:rw" /dev/kvm');
+    expect(kvm).toContain(
+      '\'test -c "$KVM_DEVICE" && test -r "$KVM_DEVICE" && test -w "$KVM_DEVICE"\'',
+    );
+    expect(kvm).toContain("grep -Eiq '\\bKVM\\b.*\\b(available|usable)\\b'");
+    expect(kvm).not.toContain("chmod 666");
+    expect(kvm).not.toContain("-accel off");
+
+    const runKvmFixture = (emulatorSource: string, timeoutMode = "run") => {
+      const root = tempRoots.make("openclaw-android-kvm-");
+      const bin = path.join(root, "bin");
+      const output = path.join(root, "kvm.txt");
+      const sentinel = path.join(root, "sentinel");
+      fs.mkdirSync(bin);
+      const timeout = path.join(bin, "timeout");
+      fs.writeFileSync(
+        timeout,
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'if [[ "${KVM_TIMEOUT_MODE:-run}" == "timeout" ]]; then exit 124; fi',
+          "shift 3",
+          'exec "$@"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      fs.writeFileSync(path.join(bin, "emulator"), emulatorSource, { mode: 0o755 });
+      const kvmFunction = extractKvmFunction(kvm).replace(
+        "/usr/bin/timeout",
+        '"$TEST_TIMEOUT_BIN"',
+      );
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            kvmFunction,
+            'verify_kvm_acceleration "$KVM_OUTPUT"',
+            'printf "boot-or-signing\\n" >"$KVM_SENTINEL"',
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            KVM_OUTPUT: output,
+            KVM_SENTINEL: sentinel,
+            KVM_TIMEOUT_MODE: timeoutMode,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+            TEST_TIMEOUT_BIN: timeout,
+          },
+          timeout: 5_000,
+        },
+      );
+      return { output: fs.readFileSync(output, "utf8"), result, sentinel };
+    };
+
+    const usableKvm = runKvmFixture(
+      "#!/bin/bash\nprintf 'KVM (version 12) is installed and usable.\\n'\n",
+    );
+    expect(usableKvm.result.status, usableKvm.result.stderr).toBe(0);
+    expect(fs.readFileSync(usableKvm.sentinel, "utf8")).toBe("boot-or-signing\n");
+
+    const unavailableKvm = runKvmFixture(
+      "#!/bin/bash\nprintf 'acceleration unavailable\\n'\nexit 7\n",
+    );
+    expect(unavailableKvm.result.status).not.toBe(0);
+    expect(unavailableKvm.output).toContain("exit_status=7");
+    expect(fs.existsSync(unavailableKvm.sentinel)).toBe(false);
+
+    const timedOutKvm = runKvmFixture("#!/bin/bash\nexit 99\n", "timeout");
+    expect(timedOutKvm.result.status).not.toBe(0);
+    expect(timedOutKvm.output).toContain("exit_status=124");
+    expect(timedOutKvm.output).toContain("timed_out=true");
+    expect(fs.existsSync(timedOutKvm.sentinel)).toBe(false);
 
     const parityScript = validationSteps[parityIndex]?.run ?? "";
     expect(parityScript).toContain("git -C .mobile-release-tooling ls-tree");
@@ -2501,7 +2620,7 @@ fi
         file: ".github/workflows/android-beta-release.yml",
         name: "Android Beta Release",
         platform: "android",
-        releaseRunner: "macos-26-intel",
+        releaseRunner: "ubuntu-24.04",
         signingCheckoutName: "Checkout encrypted Android signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before Android signing checkout",
@@ -2511,6 +2630,8 @@ fi
         setupBeforeSigning: [
           "Setup Node environment",
           "Setup Android toolchain",
+          "Prepare trusted Linux Android tooling",
+          "Verify Linux KVM acceleration",
           "Setup Ruby",
           "Install locked Fastlane bundle",
         ],
@@ -2700,22 +2821,65 @@ fi
       expect(release.steps[recordIndex]?.with?.operation).toBe("record");
 
       if (platform === "android") {
+        const nodeEnvironmentIndex = release.steps.findIndex(
+          (step) => step.name === "Setup Node environment",
+        );
         const androidSetupIndex = release.steps.findIndex(
           (step) => step.name === "Setup Android toolchain",
         );
-        const accelerationCheckIndex = release.steps.findIndex(
-          (step) => step.name === "Verify Android emulator acceleration",
+        const toolingIndex = release.steps.findIndex(
+          (step) => step.name === "Prepare trusted Linux Android tooling",
         );
+        const accelerationCheckIndex = release.steps.findIndex(
+          (step) => step.name === "Verify Linux KVM acceleration",
+        );
+        const toolingStep = release.steps[toolingIndex];
+        const accelerationStep = release.steps[accelerationCheckIndex];
         const rubyStep = release.steps.find((step) => step.name === "Setup Ruby");
         const bundleStep = release.steps.find(
           (step) => step.name === "Install locked Fastlane bundle",
         );
+        const uploadStep = release.steps.find((step) => step.name === "Upload Android beta");
+        expect(toolingIndex).toBeGreaterThanOrEqual(0);
+        expect(toolingIndex).toBeLessThan(nodeEnvironmentIndex);
+        expect(androidSetupIndex).toBe(nodeEnvironmentIndex + 1);
         expect(androidSetupIndex).toBeGreaterThanOrEqual(0);
         expect(accelerationCheckIndex).toBe(androidSetupIndex + 1);
         expect(accelerationCheckIndex).toBeLessThan(signingRevalidateIndex);
-        expect(release.steps[accelerationCheckIndex]?.run?.trim()).toBe("emulator -accel-check");
-        expect(release.steps[accelerationCheckIndex]?.if).toBeUndefined();
-        expect(release.steps[accelerationCheckIndex]?.["continue-on-error"]).toBeUndefined();
+        expect(toolingStep?.run).toContain(
+          "/usr/bin/apt-get install -y --no-install-recommends acl imagemagick",
+        );
+        expect(toolingStep?.run).toContain(
+          'trusted_root="apps/android/build/mobile-release-ci/authority"',
+        );
+        expect(toolingStep?.run).toContain(
+          'test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"',
+        );
+        expect(toolingStep?.run).toContain(
+          'git -C "$trusted_root" cat-file blob "$adapter_oid" >"$adapter"',
+        );
+        expect(toolingStep?.run).toContain('cmp -s "$trusted_root/$adapter_path" "$adapter"');
+        expect(toolingStep?.run).not.toContain("$GITHUB_ENV");
+        expect(accelerationStep?.run).toContain("verify_kvm_acceleration() {");
+        expect(extractKvmFunction(accelerationStep?.run ?? "")).toBe(
+          extractKvmFunction(
+            (
+              parse(
+                fs.readFileSync(".github/workflows/android-emulator-diagnostic.yml", "utf8"),
+              ) as {
+                jobs: { diagnose: { steps: Array<{ name: string; run?: string }> } };
+              }
+            ).jobs.diagnose.steps.find((step) => step.name === "Verify Linux KVM acceleration")
+              ?.run ?? "",
+          ),
+        );
+        expect(accelerationStep?.if).toBeUndefined();
+        expect(accelerationStep?.["continue-on-error"]).toBeUndefined();
+        expect(uploadStep?.env).toMatchObject({
+          SIPS: "${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh",
+        });
+        expect(uploadStep?.env).not.toHaveProperty("OPENCLAW_ANDROID_IMAGEMAGICK_CONVERT");
+        expect(uploadStep?.env).not.toHaveProperty("OPENCLAW_ANDROID_IMAGEMAGICK_IDENTIFY");
         expect(rubyStep?.with).toMatchObject({
           "bundler-cache": false,
           "ruby-version": "3.4.10",

@@ -22,6 +22,7 @@ const targets = [
   "test",
   "skills",
   "config",
+  "node-runtime-update.mjs",
   "node-version.mjs",
   "openclaw.mjs",
   "tsdown.ai.config.ts",

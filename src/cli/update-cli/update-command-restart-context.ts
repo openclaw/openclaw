@@ -30,6 +30,7 @@ export type UpdateRestartParams = {
   invocationCwd?: string;
   shouldRestart: boolean;
   updateStepTimeoutMs: number;
+  serviceRuntimeRefreshRequired?: boolean;
 };
 
 export async function prepareUpdateRestart(
@@ -144,6 +145,15 @@ export async function prepareUpdateRestart(
         "Code update completed; gateway service management skipped because its current ownership could not be inspected. " +
         "Run `openclaw gateway status --deep` before restarting it manually.";
     }
+  }
+  if (
+    params.serviceRuntimeRefreshRequired &&
+    (!serviceMutationAllowed || !refreshGatewayServiceEnv || gatewayServiceInstallEnv === null)
+  ) {
+    throw new GatewayServiceUpdateOwnershipError(
+      "Replacing the unsupported Gateway Node requires a writable service definition and a reproducible service environment. Ask its deployment owner to refresh the service before retrying.",
+      undefined,
+    );
   }
   return {
     restartScriptPath,

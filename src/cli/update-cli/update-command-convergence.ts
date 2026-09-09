@@ -21,6 +21,7 @@ import {
 } from "./update-command-post-core.js";
 
 export async function convergeUpdatePlugins(params: {
+  coreAlreadyCurrent?: boolean;
   result: UpdateRunResult;
   root: string;
   installKindChanged: boolean;
@@ -168,7 +169,7 @@ export async function convergeUpdatePlugins(params: {
         postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
       }
 
-      const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
+      let resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
         ? {
             ...params.result,
             status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
@@ -179,6 +180,15 @@ export async function convergeUpdatePlugins(params: {
             },
           }
         : params.result;
+      if (
+        params.coreAlreadyCurrent &&
+        resultWithPostUpdate.status !== "error" &&
+        (postCorePluginUpdate?.changed ||
+          (params.requestedChannel !== null && params.requestedChannel !== params.storedChannel))
+      ) {
+        resultWithPostUpdate = { ...resultWithPostUpdate, status: "ok" };
+        delete resultWithPostUpdate.reason;
+      }
       if (params.opts.run) {
         recordUpdateRunStep(
           params.opts.run.runId,

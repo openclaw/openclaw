@@ -49,9 +49,10 @@ export function normalizeRouteBindingChannelId(raw?: string | null): string | nu
 }
 
 // Convert a binding match into the same canonical ids used by session routing.
-// Wildcards are not concrete; an omitted account is the canonical default account.
+// Diagnostics include implicit defaults; outbound account selection requires explicit bindings.
 export function resolveNormalizedRouteBindingMatch(
   binding: AgentRouteBinding,
+  options?: { includeImplicitDefaultAccount?: boolean },
 ): NormalizedRouteBindingMatch | null {
   if (!binding || typeof binding !== "object") {
     return null;
@@ -64,8 +65,11 @@ export function resolveNormalizedRouteBindingMatch(
   if (!channelId) {
     return null;
   }
-  const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-  if (accountId === "*") {
+  if (match.accountId !== undefined && typeof match.accountId !== "string") {
+    return null;
+  }
+  const accountId = match.accountId?.trim();
+  if (accountId === "*" || (!accountId && !options?.includeImplicitDefaultAccount)) {
     return null;
   }
   return {

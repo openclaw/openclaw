@@ -31,6 +31,7 @@ export type CodexThreadPromptContext = Pick<
   | "sourceReplyDeliveryMode"
   | "promptMode"
   | "extraSystemPrompt"
+  | "gitCoauthorPrompt"
 >;
 
 export function buildDeveloperInstructions(
@@ -140,6 +141,7 @@ export function buildDeveloperInstructions(
       : undefined,
     buildCredentialSafetyPrompt(secretsToolName),
     nativeCommandGuidance,
+    params.gitCoauthorPrompt,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");

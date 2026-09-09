@@ -93,8 +93,9 @@ catalog is not ready. Retry after startup or an in-progress refresh finishes.
 Use an explicit Refresh action or `openclaw models list --refresh` to acquire
 provider inventory. Model selection, subagent capability checks, and hook-model
 validation also use the published inventory. Missing capability facts do not
-start another provider discovery. Native runtime observations keep their separate
-owner and authentication requirements.
+start another provider discovery. Without a published owner, turn-path thinking
+and input checks leave catalog facts absent instead of loading provider plugins.
+Native runtime observations keep their separate owner and authentication requirements.
 
 Internal catalog loads default to passive reads. Without a published owner they
 use existing read-only facts. The public SDK's `loadPreparedModelCatalog` and legacy

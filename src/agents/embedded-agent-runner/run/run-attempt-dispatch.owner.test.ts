@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
@@ -7,6 +7,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { registerSandboxBackend } from "../../sandbox/backend.js";
@@ -14,6 +15,14 @@ import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
+
+vi.mock("../../git-coauthor-prompt.js", () => ({
+  resolveSessionGitCoauthorPrompt: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.mocked(resolveSessionGitCoauthorPrompt).mockReset();
+});
 
 vi.mock("../../runtime-plan/build.js", () => ({
   buildAgentRuntimePlan: ({
@@ -42,6 +51,10 @@ it.each([
 ])(
   "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, remote skills $remoteSkills, and one-shot $oneShotCliRun",
   async ({ agentId, sandboxSessionKey, remoteSkills, oneShotCliRun }) => {
+    const gitCoauthorPrompt =
+      "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+      "Co-authored-by: ada <20+ada@users.noreply.github.com>";
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue(gitCoauthorPrompt);
     await withOpenClawTestState({ label: "harness-owner" }, async (state) => {
       const config = {
         agents: {
@@ -242,8 +255,19 @@ it.each([
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
         expect(runAttempt).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ agentId, sessionKey: "global", sandboxSessionKey }),
+          expect.objectContaining({
+            agentId,
+            sessionKey: "global",
+            sandboxSessionKey,
+            gitCoauthorPrompt,
+          }),
         );
+        expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
+          config,
+          agentId,
+          sessionKey: "global",
+          storePath: undefined,
+        });
         expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
         expect
           .soft(runAttempt.mock.calls[0]?.[0].runtimePluginToolGrant)
