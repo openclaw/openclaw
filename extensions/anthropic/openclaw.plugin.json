@@ -1,6 +1,6 @@
 {
   "id": "anthropic",
-  "categories": ["models", "media", "developer-tools"],
+  "categories": ["models"],
   "doctorContract": {},
   "sessionRouteStateOwners": [
     {

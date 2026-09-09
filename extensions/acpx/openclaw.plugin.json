@@ -1,6 +1,6 @@
 {
   "id": "acpx",
-  "categories": ["developer-tools", "agent-orchestration"],
+  "categories": ["developer-tools"],
   "backupResources": [
     {
       "disposition": "regenerable",

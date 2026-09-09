@@ -1,6 +1,6 @@
 {
   "id": "canvas",
-  "categories": ["productivity"],
+  "categories": ["documents-files"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [{ "id": "canvas-custom-root-documents-to-core" }]

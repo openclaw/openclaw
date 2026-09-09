@@ -1,6 +1,6 @@
 {
   "id": "googlechat",
-  "categories": ["channels", "inbox-collaboration"],
+  "categories": ["channels"],
   "doctorContract": {
     "configRepair": true
   },

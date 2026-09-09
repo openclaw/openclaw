@@ -1,6 +1,6 @@
 {
   "id": "codex",
-  "categories": ["developer-tools", "agent-orchestration", "web"],
+  "categories": ["developer-tools"],
   "providers": ["codex"],
   "syntheticAuthRefs": ["codex"],
   "providerCatalogEntry": "./provider-discovery.ts",

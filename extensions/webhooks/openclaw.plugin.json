@@ -1,6 +1,6 @@
 {
   "id": "webhooks",
-  "categories": ["integrations", "agent-orchestration"],
+  "categories": ["integrations"],
   "activation": {
     "onStartup": true
   },

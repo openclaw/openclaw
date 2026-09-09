@@ -2,7 +2,7 @@
   "id": "team-reports",
   "name": "Team Reports",
   "description": "Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, served in the Control UI.",
-  "categories": ["data-analytics", "productivity", "inbox-collaboration"],
+  "categories": ["data-analytics"],
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,

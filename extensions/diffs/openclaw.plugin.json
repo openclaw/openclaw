@@ -1,6 +1,6 @@
 {
   "id": "diffs",
-  "categories": ["developer-tools", "documents-files"],
+  "categories": ["developer-tools"],
   "activation": {
     "onStartup": true
   },

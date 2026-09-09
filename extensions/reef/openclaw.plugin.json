@@ -1,6 +1,6 @@
 {
   "id": "reef",
-  "categories": ["channels", "agent-orchestration"],
+  "categories": ["agent-orchestration"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [

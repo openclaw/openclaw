@@ -1,6 +1,6 @@
 {
   "id": "whatsapp",
-  "categories": ["channels", "voice"],
+  "categories": ["channels"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [{ "id": "whatsapp-legacy-state" }]

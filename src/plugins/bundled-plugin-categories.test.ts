@@ -7,9 +7,8 @@ import { pluginTestRepoRoot as repoRoot } from "./generated-plugin-test-helpers.
 import { loadPluginManifest } from "./manifest.js";
 
 describe("bundled plugin categories", () => {
-  it("assigns active categories to every bundled plugin", () => {
+  it("assigns exactly one active purpose category to every bundled plugin", () => {
     const extensionsRoot = path.join(repoRoot, "extensions");
-    const missing: string[] = [];
     const invalid: string[] = [];
     let manifestCount = 0;
 
@@ -27,8 +26,8 @@ describe("bundled plugin categories", () => {
         invalid.push(`${entry.name}: ${result.error}`);
         continue;
       }
-      if (!result.manifest.categories?.length) {
-        missing.push(entry.name);
+      if (result.manifest.categories?.length !== 1) {
+        invalid.push(`${entry.name}: expected exactly one purpose category`);
       }
       for (const category of result.manifest.categories ?? []) {
         if (!PLUGIN_CATEGORY_SLUGS.some((activeCategory) => activeCategory === category)) {
@@ -39,6 +38,23 @@ describe("bundled plugin categories", () => {
 
     expect(manifestCount).toBeGreaterThan(0);
     expect(invalid).toEqual([]);
-    expect(missing).toEqual([]);
+  });
+
+  it.each([
+    { pluginId: "codex", category: "developer-tools", purpose: "coding harness" },
+    { pluginId: "a2a", category: "agent-orchestration", purpose: "agent-to-agent delegation" },
+    {
+      pluginId: "feishu",
+      category: "channels",
+      purpose: "human-agent messaging despite workspace tools",
+    },
+    { pluginId: "document-extract", category: "documents-files", purpose: "document extraction" },
+    { pluginId: "google-meet", category: "voice", purpose: "live spoken participation" },
+    { pluginId: "tokenjuice", category: "context", purpose: "active-context compaction" },
+    { pluginId: "team-reports", category: "data-analytics", purpose: "team activity reporting" },
+    { pluginId: "diagnostics-otel", category: "infrastructure", purpose: "operational telemetry" },
+  ])("classifies $pluginId by its $purpose", ({ pluginId, category }) => {
+    const result = loadPluginManifest(path.join(repoRoot, "extensions", pluginId), false);
+    expect(result).toMatchObject({ ok: true, manifest: { categories: [category] } });
   });
 });

@@ -1,6 +1,6 @@
 {
   "id": "zoom-meetings",
-  "categories": ["voice", "inbox-collaboration"],
+  "categories": ["voice"],
   "name": "Zoom meetings",
   "description": "Join Zoom meetings as a Chrome browser guest.",
   "cliCommands": [

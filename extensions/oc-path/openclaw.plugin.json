@@ -1,6 +1,6 @@
 {
   "id": "oc-path",
-  "categories": ["documents-files", "developer-tools"],
+  "categories": ["documents-files"],
   "name": "OC Path",
   "description": "Adds the openclaw path CLI for oc:// workspace file addressing.",
   "cliCommands": [

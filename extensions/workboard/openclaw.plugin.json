@@ -1,6 +1,8 @@
 {
   "id": "workboard",
-  "categories": ["productivity", "agent-orchestration"],
+  "categories": [
+    "productivity"
+  ],
   "cliCommands": [
     {
       "name": "workboard",
