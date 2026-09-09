@@ -370,6 +370,7 @@ jobs:
           install-bun: "false"
 
       - name: Install trusted plugin tooling dependencies
+        if: inputs.prepared_artifact == ''
         working-directory: .release-tooling
         env:
           CI: "true"

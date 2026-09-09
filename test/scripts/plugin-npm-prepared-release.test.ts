@@ -99,12 +99,21 @@ function expectations() {
   };
 }
 
-function preparation() {
-  const matrix = [plugin("demo"), plugin("existing", true)] as const;
+function preparation(
+  packageFields: Partial<
+    Pick<ReturnType<typeof plugin>, "version" | "channel" | "publishTag">
+  > = {},
+  route = "npm-oidc",
+  npmDistTag = "default",
+) {
+  const matrix = [
+    { ...plugin("demo"), ...packageFields },
+    { ...plugin("existing", true), ...packageFields },
+  ] as const;
   const artifact = (entry: ReturnType<typeof plugin>, id: number) =>
     metadata(
       id,
-      `plugin-npm-package-${entry.extensionId}-${entry.version}-npm-oidc-${producer.runId}-${producer.runAttempt}`,
+      `plugin-npm-package-${entry.extensionId}-${entry.version}-${route}-${producer.runId}-${producer.runAttempt}`,
     );
   const artifacts = [artifact(matrix[0], 1), artifact(matrix[1], 2)] satisfies [
     ReturnType<typeof metadata>,
@@ -127,6 +136,7 @@ function preparation() {
   };
   return {
     ...expectations(),
+    npmDistTag,
     producer,
     matrix,
     artifacts,
@@ -227,6 +237,70 @@ describe("prepared plugin npm publication", () => {
       artifactId: 2,
     });
   });
+
+  it.each([
+    ["beta bootstrap", version, "beta", "beta", "default", "npm-token-bootstrap"],
+    ["regular stable bootstrap", "2026.9.32", "stable", "latest", "default", "npm-token-bootstrap"],
+    [
+      "regular stable correction bootstrap",
+      "2026.9.32-1",
+      "stable",
+      "latest",
+      "default",
+      "npm-token-bootstrap",
+    ],
+    ["alpha OIDC", "2026.9.3-alpha.1", "alpha", "alpha", "default", "npm-oidc"],
+    [
+      "extended-stable OIDC",
+      "2026.9.33",
+      "stable",
+      "extended-stable",
+      "extended-stable",
+      "npm-oidc",
+    ],
+    ["stable readback", "2026.9.32", "stable", "latest", "default", "npm-readback"],
+  ])(
+    "seals %s without granting publication authority",
+    (_name, packageVersion, channel, publishTag, npmDistTag, route) => {
+      const input = preparation(
+        { version: packageVersion, channel, publishTag },
+        route,
+        npmDistTag,
+      );
+      const manifest = createPreparedNpmRelease(input);
+      expect(manifest.packages).toHaveLength(input.matrix.length);
+      for (const entry of manifest.packages) {
+        expect(entry).toMatchObject({ version: packageVersion, channel, publishTag, route });
+      }
+      expect(
+        validatePreparedNpmRelease(manifest, { ...expectations(), npmDistTag }).packages,
+      ).toEqual(manifest.packages);
+    },
+  );
+
+  it.each([
+    ["first extended-stable patch on latest", "2026.9.33", "stable", "latest", "default"],
+    ["later extended-stable patch on latest", "2026.9.34", "stable", "latest", "default"],
+    ["extended-stable correction on latest", "2026.9.33-1", "stable", "latest", "default"],
+    ["alpha", "2026.9.3-alpha.1", "alpha", "alpha", "default"],
+    ["explicit extended-stable", "2026.9.33", "stable", "extended-stable", "extended-stable"],
+  ])(
+    "rejects bootstrap preparation for %s",
+    (_name, packageVersion, channel, publishTag, npmDistTag) => {
+      const packageFields = { version: packageVersion, channel, publishTag };
+      expect(() =>
+        createPreparedNpmRelease(preparation(packageFields, "npm-token-bootstrap", npmDistTag)),
+      ).toThrow("Prepared npm token bootstrap");
+      const manifest = createPreparedNpmRelease(preparation(packageFields, "npm-oidc", npmDistTag));
+      for (const entry of manifest.packages) {
+        entry.route = "npm-token-bootstrap";
+        entry.artifact.artifactName = `plugin-npm-package-${entry.extensionId}-${entry.version}-npm-token-bootstrap-${producer.runId}-${producer.runAttempt}`;
+      }
+      expect(() => validatePreparedNpmRelease(manifest, { ...expectations(), npmDistTag })).toThrow(
+        "Prepared npm token bootstrap",
+      );
+    },
+  );
 
   it.each(["missing-artifact", "prior-attempt", "failed-job", "conflicting-artifact"])(
     "refuses to seal %s instead of falling back to an older success",

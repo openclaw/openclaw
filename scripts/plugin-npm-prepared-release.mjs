@@ -19,6 +19,7 @@ import {
 } from "./lib/npm-publish-plan.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { verifyPluginPublicationArtifact } from "./plugin-publication-artifact.mjs";
 
 export const PREPARED_NPM_MANIFEST = "plugin-npm-prepared.json";
@@ -196,10 +197,17 @@ export function validatePreparedNpmRelease(manifest, expected) {
       ROUTES.has(value.route),
       "Prepared npm route requires separately authorized repair tooling.",
     );
-    requireValue(
-      value.route !== "npm-token-bootstrap" || entry.channel === "beta",
-      "Prepared npm token bootstrap requires an approved beta package.",
-    );
+    if (value.route === "npm-token-bootstrap") {
+      const parsed = parseReleaseVersion(entry.version);
+      requireValue(
+        entry.channel === "beta" ||
+          (parsed?.channel === "stable" &&
+            parsed.patch < 33 &&
+            manifest.npmDistTag === "default" &&
+            entry.publishTag === "latest"),
+        "Prepared npm token bootstrap requires beta or regular stable/latest qualification.",
+      );
+    }
     requireValue(
       JSON.stringify(normalizeProducer(tuple)) === JSON.stringify(producer),
       "Prepared npm package producer differs from the sealed release.",
