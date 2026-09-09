@@ -3884,6 +3884,26 @@
     "target": "会话管理深入解析"
   },
   {
+    "source": "Session state on disk",
+    "target": "磁盘上的会话状态"
+  },
+  {
+    "source": "Store maintenance and retention",
+    "target": "存储维护与保留"
+  },
+  {
+    "source": "Session keys, ids, and transcript events",
+    "target": "会话键、会话 ID 与转录事件"
+  },
+  {
+    "source": "Compaction behavior and settings",
+    "target": "压缩行为与设置"
+  },
+  {
+    "source": "Silent turns and the memory flush",
+    "target": "静默轮次与记忆刷写"
+  },
+  {
     "source": "Personal agent benchmark pack",
     "target": "个人智能体基准包"
   },

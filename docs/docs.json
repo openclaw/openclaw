@@ -2980,6 +2980,16 @@
                   "reference/memory-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",
+                  {
+                    "group": "Session management deep dive",
+                    "pages": [
+                      "reference/session-management-compaction/store",
+                      "reference/session-management-compaction/maintenance",
+                      "reference/session-management-compaction/schema",
+                      "reference/session-management-compaction/compaction",
+                      "reference/session-management-compaction/housekeeping"
+                    ]
+                  },
                   "date-time"
                 ]
               },
