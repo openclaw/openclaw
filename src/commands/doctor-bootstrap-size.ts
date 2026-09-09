@@ -14,6 +14,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../agents/embedded-agent-helpers.js";
+import { USER_BOOTSTRAP_MAX_CHARS } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Every warning uses the same locale; silent checks never need a formatter.
@@ -110,14 +111,28 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       `Total bootstrap raw chars (before truncation): ${formatInt(analysis.totals.rawChars)}.`,
     );
 
+    const isFixedUserCap = (file: (typeof analysis.truncatedFiles)[number]) =>
+      file.name?.toLowerCase() === "user.md" &&
+      file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS &&
+      file.causes.includes("per-file-limit");
+    const fixedUserCapApplied = analysis.truncatedFiles.some(isFixedUserCap);
     const needsPerFileTip =
-      analysis.truncatedFiles.some((file) => file.causes.includes("per-file-limit")) ||
-      analysis.nearLimitFiles.length > 0;
+      analysis.truncatedFiles.some(
+        (file) =>
+          file.causes.includes("per-file-limit") &&
+          (file.name?.toLowerCase() !== "user.md" ||
+            file.effectiveFileLimit < USER_BOOTSTRAP_MAX_CHARS),
+      ) || analysis.nearLimitFiles.some((file) => file.name?.toLowerCase() !== "user.md");
     const needsTotalTip =
       analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
       analysis.totalNearLimit;
-    if (needsPerFileTip || needsTotalTip) {
+    if (fixedUserCapApplied || needsPerFileTip || needsTotalTip) {
       lines.push("");
+    }
+    if (fixedUserCapApplied) {
+      lines.push(
+        `- Tip: USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS}-character bootstrap cap; keep it compact.`,
+      );
     }
     if (needsPerFileTip) {
       lines.push(

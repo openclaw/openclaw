@@ -120,6 +120,27 @@ describe("noteBootstrapFileSize", () => {
     );
   });
 
+  it("does not recommend bootstrapMaxChars when USER.md hits its fixed cap", async () => {
+    resolveBootstrapMaxChars.mockReturnValueOnce(20_000);
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
+      bootstrapFiles: [
+        {
+          name: "USER.md",
+          path: "/tmp/workspace/USER.md",
+          content: "u".repeat(5_000),
+          missing: false,
+        },
+      ],
+      contextFiles: [{ path: "/tmp/workspace/USER.md", content: "u".repeat(4_000) }],
+    });
+    await noteBootstrapFileSize({} as OpenClawConfig);
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0]);
+    expect(message).toContain("USER.md: 5,000 raw / 4,000 injected");
+    expect(message).toContain("USER.md has a fixed 4000-character bootstrap cap; keep it compact.");
+    expect(message).not.toContain("bootstrapMaxChars");
+  });
+
   it("stays silent when files are comfortably within limits", async () => {
     resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [
