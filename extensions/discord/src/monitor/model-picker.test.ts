@@ -7,6 +7,7 @@ import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   buildDiscordModelPickerCustomId,
   createDiscordModelPickerModelToken,
+  createDiscordModelPickerRuntimeToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
   findProviderBucketId,
@@ -14,7 +15,7 @@ import {
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
 } from "./model-picker.state.js";
-import { createModelsProviderData } from "./model-picker.test-utils.js";
+import { createModelsProviderData, setFixtureRuntimeChoices } from "./model-picker.test-utils.js";
 import {
   renderDiscordModelPickerModelsView,
   renderDiscordModelPickerProvidersView,
@@ -36,12 +37,15 @@ function parseDiscordModelPickerCustomId(customId: string) {
 
 const buildPreparedModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
   buildPreparedModelsProviderData: buildPreparedModelsProviderDataMock,
 }));
 
 type SerializedComponent = {
   type: number;
+  label?: string;
+  disabled?: boolean;
   custom_id?: string;
   options?: Array<{ label?: string; value: string; default?: boolean }>;
   components?: SerializedComponent[];
@@ -100,7 +104,7 @@ describe("loadDiscordModelPickerData", () => {
     const result = await loadDiscordModelPickerData(cfg, "support");
 
     expect(buildPreparedModelsProviderDataMock).toHaveBeenCalledTimes(1);
-    expect(buildPreparedModelsProviderDataMock).toHaveBeenCalledWith(cfg, "support");
+    expect(buildPreparedModelsProviderDataMock).toHaveBeenCalledWith(cfg, "support", undefined);
     expect(result).toBe(expected);
   });
 });
@@ -641,24 +645,27 @@ describe("Discord model picker rendering", () => {
   it("runtime select preserves bucket state without exceeding Discord's customId limit", () => {
     const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
     const data = createModelsProviderData({ google: models });
-    data.runtimeChoicesByProvider = new Map([
-      [
-        "google",
+    setFixtureRuntimeChoices(
+      data,
+      new Map([
         [
-          {
-            id: "google-gemini-cli",
-            label: "Google Gemini CLI",
-            description:
-              "Use the Google Gemini CLI runtime selected by the effective harness policy.",
-          },
-          {
-            id: "openclaw",
-            label: "OpenClaw Default",
-            description: "Use the built-in OpenClaw runtime.",
-          },
+          "google",
+          [
+            {
+              id: "google-gemini-cli",
+              label: "Google Gemini CLI",
+              description:
+                "Use the Google Gemini CLI runtime selected by the effective harness policy.",
+            },
+            {
+              id: "openclaw",
+              label: "OpenClaw Default",
+              description: "Use the built-in OpenClaw runtime.",
+            },
+          ],
         ],
-      ],
-    ]);
+      ]),
+    );
 
     const rows = renderModelsViewRows({
       command: "models",
@@ -694,24 +701,27 @@ describe("Discord model picker rendering", () => {
   it("model bucket select keeps long runtime state compact", () => {
     const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
     const data = createModelsProviderData({ "google-gemini-cli": models });
-    data.runtimeChoicesByProvider = new Map([
-      [
-        "google-gemini-cli",
+    setFixtureRuntimeChoices(
+      data,
+      new Map([
         [
-          {
-            id: "google-gemini-cli",
-            label: "Google Gemini CLI",
-            description:
-              "Use the Google Gemini CLI runtime selected by the effective harness policy.",
-          },
-          {
-            id: "openclaw",
-            label: "OpenClaw Default",
-            description: "Use the built-in OpenClaw runtime.",
-          },
+          "google-gemini-cli",
+          [
+            {
+              id: "google-gemini-cli",
+              label: "Google Gemini CLI",
+              description:
+                "Use the Google Gemini CLI runtime selected by the effective harness policy.",
+            },
+            {
+              id: "openclaw",
+              label: "OpenClaw Default",
+              description: "Use the built-in OpenClaw runtime.",
+            },
+          ],
         ],
-      ],
-    ]);
+      ]),
+    );
 
     const rows = renderModelsViewRows({
       command: "models",
@@ -741,7 +751,8 @@ describe("Discord model picker rendering", () => {
 
     expect(bucketCustomId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
     expect(parsed.runtime).toBeUndefined();
-    expect(parsed.runtimeIndex).toBe(1);
+    expect(parsed.runtimeIndex).toBeUndefined();
+    expect(parsed.runtimeToken).toBe(createDiscordModelPickerRuntimeToken("google-gemini-cli"));
   });
 
   it("model pagination derives provider buckets to stay under Discord's customId limit", () => {
@@ -1031,23 +1042,26 @@ describe("Discord model picker rendering", () => {
       openai: ["gpt-4.1", "gpt-4o", "o3"],
       anthropic: ["claude-sonnet-4-5"],
     });
-    data.runtimeChoicesByProvider = new Map([
-      [
-        "openai",
+    setFixtureRuntimeChoices(
+      data,
+      new Map([
         [
-          {
-            id: "codex",
-            label: "OpenAI Codex",
-            description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
-          },
-          {
-            id: "openclaw",
-            label: "OpenClaw Default",
-            description: "Use the built-in OpenClaw runtime.",
-          },
+          "openai",
+          [
+            {
+              id: "codex",
+              label: "OpenAI Codex",
+              description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
+            },
+            {
+              id: "openclaw",
+              label: "OpenClaw Default",
+              description: "Use the built-in OpenClaw runtime.",
+            },
+          ],
         ],
-      ],
-    ]);
+      ]),
+    );
 
     const rows = renderModelsViewRows({
       command: "models",
@@ -1091,23 +1105,26 @@ describe("Discord model picker rendering", () => {
     const data = createModelsProviderData({
       openai: ["gpt-4.1", "gpt-4o"],
     });
-    data.runtimeChoicesByProvider = new Map([
-      [
-        "openai",
+    setFixtureRuntimeChoices(
+      data,
+      new Map([
         [
-          {
-            id: "codex",
-            label: "OpenAI Codex",
-            description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
-          },
-          {
-            id: "openclaw",
-            label: "OpenClaw Default",
-            description: "Use the built-in OpenClaw runtime.",
-          },
+          "openai",
+          [
+            {
+              id: "codex",
+              label: "OpenAI Codex",
+              description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
+            },
+            {
+              id: "openclaw",
+              label: "OpenClaw Default",
+              description: "Use the built-in OpenClaw runtime.",
+            },
+          ],
         ],
-      ],
-    ]);
+      ]),
+    );
 
     const rows = renderModelsViewRows({
       command: "models",
@@ -1125,16 +1142,19 @@ describe("Discord model picker rendering", () => {
     );
     const modelSelectState = parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "");
     expect(modelSelectState?.runtime).toBeUndefined();
-    expect(modelSelectState?.runtimeIndex).toBe(2);
+    expect(modelSelectState?.runtimeIndex).toBeUndefined();
+    expect(modelSelectState?.runtimeToken).toBe("lqS8JgJl");
     const submitState = parseDiscordModelPickerCustomId(
       rows[3]?.components?.at(-1)?.custom_id ?? "",
     );
     expect(submitState?.runtime).toBeUndefined();
-    expect(submitState?.runtimeIndex).toBe(2);
+    expect(submitState?.runtimeIndex).toBeUndefined();
+    expect(submitState?.runtimeToken).toBe("lqS8JgJl");
     const resetState = parseDiscordModelPickerCustomId(rows[3]?.components?.[2]?.custom_id ?? "");
     expect(resetState?.action).toBe("reset");
     expect(resetState?.runtime).toBeUndefined();
-    expect(resetState?.runtimeIndex).toBe(2);
+    expect(resetState?.runtimeIndex).toBeUndefined();
+    expect(resetState?.runtimeToken).toBe("lqS8JgJl");
   });
 
   it("renders not-found model view with a back button", () => {
@@ -1400,7 +1420,7 @@ describe("Discord model picker recents view", () => {
       quickModels: ["google-gemini-cli/qwen3-02"],
       currentModel: "google-gemini-cli/qwen3-02",
       provider: "google-gemini-cli",
-      runtimeIndex: 1,
+      runtimeToken: "runtime1",
     });
 
     const states = rows.map((row) => {
@@ -1411,9 +1431,9 @@ describe("Discord model picker recents view", () => {
         "recents custom id should parse",
       );
     });
-    expect(states[0]?.runtimeIndex).toBe(1);
-    expect(states[1]?.runtimeIndex).toBe(1);
-    expect(states[2]?.runtimeIndex).toBe(1);
+    expect(states[0]?.runtimeToken).toBe("runtime1");
+    expect(states[1]?.runtimeToken).toBe("runtime1");
+    expect(states[2]?.runtimeToken).toBe("runtime1");
   });
 
   it("includes (default) suffix on default model button label", () => {
@@ -1466,3 +1486,67 @@ describe("Discord model picker recents view", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("model-specific runtime view", () => {
+  const builtin = { id: "openclaw", label: "OpenClaw", description: "Built-in runtime" };
+  const native = { id: "codex", label: "Codex", description: "Native runtime" };
+  it("renders the selected model's choices instead of the provider union", () => {
+    const data = {
+      ...createModelsProviderData({ openai: ["gpt-4o", "gpt-4.1"] }),
+      runtimeChoicesByProvider: new Map([["openai", [native, builtin]]]),
+      runtimeChoicesByModel: new Map([
+        ["openai/gpt-4o", [builtin]],
+        ["openai/gpt-4.1", [native]],
+      ]),
+      isCurrent: () => true,
+    };
+    const rows = renderModelsViewRows({
+      command: "model",
+      userId: "owner",
+      data,
+      provider: "openai",
+      currentModel: "openai/gpt-4o",
+      pendingModel: "openai/gpt-4o",
+      pendingModelIndex: 2,
+    });
+    const runtime = rows
+      .flatMap((row) => row.components ?? [])
+      .find((c) => parseDiscordModelPickerCustomId(c.custom_id ?? "")?.action === "runtime");
+    expect(runtime?.options?.map((o) => o.value) ?? ["openclaw"]).not.toContain("codex");
+    const payload = JSON.stringify(
+      renderDiscordModelPickerModelsView({
+        command: "model",
+        userId: "owner",
+        data,
+        provider: "openai",
+        pendingModel: "openai/gpt-4o",
+        pendingModelIndex: 2,
+      }),
+    );
+    expect(payload).toContain("runtime openclaw");
+  });
+  it.each(["unknown", "empty", "retired"])(
+    "disables Submit for %s model runtime choices",
+    (mode) => {
+      const data = {
+        ...createModelsProviderData({ openai: ["gpt-4o"] }),
+        runtimeChoicesByProvider: new Map([["openai", [builtin]]]),
+        runtimeChoicesByModel: new Map(
+          mode === "unknown" ? [] : [["openai/gpt-4o", mode === "empty" ? [] : [builtin]]],
+        ),
+        isCurrent: () => mode !== "retired",
+      };
+      const rows = renderModelsViewRows({
+        command: "model",
+        userId: "owner",
+        data,
+        provider: "openai",
+        pendingModel: "openai/gpt-4o",
+        pendingModelIndex: 1,
+      });
+      expect(
+        rows.flatMap((row) => row.components ?? []).find((c) => c.label === "Submit")?.disabled,
+      ).toBe(true);
+    },
+  );
+});
