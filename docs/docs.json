@@ -1709,6 +1709,16 @@
                     "pages": [
                       "plugins/meeting-plugins",
                       "plugins/google-meet",
+                      {
+                        "group": "Google Meet",
+                        "pages": [
+                          "plugins/google-meet/transports",
+                          "plugins/google-meet/oauth-and-artifacts",
+                          "plugins/google-meet/config",
+                          "plugins/google-meet/tool-and-modes",
+                          "plugins/google-meet/troubleshooting"
+                        ]
+                      },
                       "plugins/teams-meetings",
                       "plugins/voice-call",
                       "plugins/zoom-meetings"

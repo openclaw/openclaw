@@ -940,6 +940,26 @@
     "target": "Google Meet 插件"
   },
   {
+    "source": "Google Meet transports and hosts",
+    "target": "Google Meet 传输方式与主机"
+  },
+  {
+    "source": "Google Meet OAuth and artifacts",
+    "target": "Google Meet OAuth 与会议产物"
+  },
+  {
+    "source": "Google Meet configuration",
+    "target": "Google Meet 配置"
+  },
+  {
+    "source": "Google Meet tool and modes",
+    "target": "Google Meet 工具与模式"
+  },
+  {
+    "source": "Google Meet troubleshooting",
+    "target": "Google Meet 故障排查"
+  },
+  {
     "source": "Meeting plugins",
     "target": "会议插件"
   },
