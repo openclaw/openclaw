@@ -1,5 +1,4 @@
 import {
-  buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
   buildSkillWorkshopPromptSection,
@@ -56,9 +55,6 @@ export function buildCopilotPromptGuidance(params: {
       messageToolAvailable: callableTools.has("message"),
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     }),
-    buildCredentialSafetyPrompt(
-      params.attempt.disableTools !== true && callableTools.has("secrets") ? "secrets" : undefined,
-    ),
     params.workspaceBootstrapInstructions?.trim(),
     extraSystemPrompt
       ? `${isMinimal ? "## Subagent Context" : "## Conversation Context"}\n${extraSystemPrompt}`

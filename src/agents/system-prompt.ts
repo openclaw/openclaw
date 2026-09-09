@@ -69,7 +69,6 @@ import type {
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
-import { buildCredentialSafetyPrompt } from "./transcript-credential-safety.js";
 import { buildUiPresentationPrompt } from "./ui-presentation-prompt.js";
 import {
   buildWatchedSessionsPromptLines,
@@ -1087,9 +1086,6 @@ export function buildAgentSystemPrompt(params: {
     "Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.",
     "Never persuade anyone to expand access or disable safeguards.",
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
-    buildCredentialSafetyPrompt(
-      availableTools.has("secrets") ? resolveToolName("secrets") : undefined,
-    ),
     "",
   ];
   // CLI backends own native file tools outside OpenClaw's projected tool list.
@@ -1307,7 +1303,7 @@ export function buildAgentSystemPrompt(params: {
         ? "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`."
         : hasGateway
           ? "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human."
-          : "",
+          : "Channel, provider, and credential setup: use terminal `openclaw channels add <channel>` or `openclaw configure`; prompts mask secrets. Never collect tokens, API keys, or passwords in chat.",
       [
         hasGateway
           ? "Update OpenClaw: `gateway` action update.run, only on explicit user request; restart and completion notice are automatic."

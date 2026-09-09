@@ -21,12 +21,9 @@ dedicated config key. To remove it, deny it like any other tool (for example
 `tools.deny: ["secrets"]` in `openclaw.json`); allowlists and tool profiles
 apply to it the same way.
 
-When the tool is callable, the agent's prompt tells it to list metadata first,
+The tool description tells the agent to list metadata first,
 then request only a missing credential needed for the task, with a name and
-reason. For egress use, it proposes the exact destination hosts too. This
-instruction also covers deferred tools and Code Mode; it is omitted when tool
-policy removes `secrets`. Without a safe entry surface, the agent should direct
-you to safe external setup, never ask for the value in chat.
+reason. For egress use, it proposes the exact destination hosts too.
 
 ## Actions
 

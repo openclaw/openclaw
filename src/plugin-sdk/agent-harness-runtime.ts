@@ -300,7 +300,6 @@ export {
 export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
 export { buildUiPresentationPrompt } from "../agents/ui-presentation-prompt.js";
 export { normalizeQuestionTimeoutSeconds } from "../agents/tools/ask-user-tool-normalization.js";
-export { buildCredentialSafetyPrompt } from "../agents/transcript-credential-safety.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt-thread-helpers.js";
 export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt-tool-run-context.js";

@@ -125,67 +125,6 @@ describe("buildDeveloperInstructions delegation guidance", () => {
   });
 });
 
-describe("buildDeveloperInstructions credential guidance", () => {
-  const secretTool: CodexDynamicToolSpec = {
-    type: "function",
-    name: "secrets",
-    description: "Request protected credentials",
-    inputSchema: { type: "object" },
-  };
-
-  it.each([
-    { name: "direct", dynamicTools: [secretTool], toolName: "secrets" },
-    {
-      name: "deferred",
-      dynamicTools: [{ ...secretTool, deferLoading: true }],
-      toolName: "secrets",
-    },
-    {
-      name: "namespaced",
-      dynamicTools: [
-        { type: "namespace", name: "openclaw", description: "Tools", tools: [secretTool] },
-      ],
-      toolName: "openclaw.secrets",
-    },
-  ] satisfies { name: string; dynamicTools: CodexDynamicToolSpec[]; toolName: string }[])(
-    "teaches the actual $name credential route",
-    ({ dynamicTools, toolName }) => {
-      const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
-      expect(instructions).toContain(`\`${toolName}\`: list metadata first`);
-      expect(instructions).toContain("request only missing task-needed credentials: name + reason");
-      expect(instructions).toContain("exact allowedHosts for egress");
-      expect(instructions).toContain("Human masked entry -> protected shared store");
-      expect(instructions).toContain("metadata/ref only");
-      expect(instructions).toContain("returned store SecretRef on supported config fields");
-      expect(instructions).toContain("Gateway egress needs enabled proxy + allowed hosts");
-      expect(instructions).toContain("no plaintext fallback");
-      expect(instructions).toContain("auto-injected opaque env sentinel under stored name");
-      expect(instructions).toContain("No secret templates; never override/print that variable");
-      expect(instructions).toContain("Native shell/sandbox/node: no protected injection");
-      expect(instructions).toContain("late saves need next turn");
-      expect(instructions).toContain(
-        "no_answer: continue independent work; if the credential blocks progress, explain the missing setup",
-      );
-    },
-  );
-
-  it.each([
-    { name: "absent", options: { dynamicTools: [] }, overrides: {} },
-    { name: "unsupplied", options: {}, overrides: {} },
-    {
-      name: "disabled",
-      options: { dynamicTools: [secretTool] },
-      overrides: { disableTools: true },
-    },
-  ])("keeps safety but hides the named credential route when $name", ({ options, overrides }) => {
-    const instructions = buildDeveloperInstructions(createParams(overrides), options);
-    expect(instructions).not.toContain("`secrets`");
-    expect(instructions).not.toContain("SecretRef");
-    expect(instructions).toContain("host-owned masked credential entry");
-    expect(instructions).toContain("safe external setup");
-  });
-});
-
 describe("buildDeveloperInstructions UI presentation guidance", () => {
   const uiTools = ["show_widget", "dashboard", "portal"].map(
     (name) =>

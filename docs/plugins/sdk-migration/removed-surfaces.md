@@ -54,6 +54,13 @@ tests use focused subpaths such as `plugin-sdk/plugin-test-runtime`,
 `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`,
 `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures`.
 
+### Credential prompt builder
+
+`buildCredentialSafetyPrompt` was removed from
+`openclaw/plugin-sdk/agent-harness-runtime`. Remove its imports and calls.
+Credential setup guidance belongs to the descriptions of the available setup
+and secrets tools; there is no replacement blanket prompt.
+
 ## Migration reference
 
 These mappings cover both removed July 2026 surfaces and later-window active
