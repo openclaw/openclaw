@@ -291,7 +291,10 @@ export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
     retained.errors.push(...closeOpenClawStateDatabaseHandle(database));
     notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: resolvedPath });
   }
-  if (retained.errors.length > 0) {
+  if (retained.errors.length === 1) {
+    throw retained.errors[0];
+  }
+  if (retained.errors.length > 1) {
     throw createSqliteLifecycleAggregateError(
       retained.errors,
       `OpenClaw state database cleanup failed for ${resolvedPath}.`,
@@ -311,7 +314,10 @@ export function closeOpenClawStateDatabase(
     errors.push(...closeOpenClawStateDatabaseHandle(database, options));
     notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
   }
-  if (errors.length > 0) {
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
     throw createSqliteLifecycleAggregateError(
       errors,
       "OpenClaw state database cleanup failed.",

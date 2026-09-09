@@ -221,7 +221,7 @@ describe("unpublished state database acquisition", () => {
         });
         openClawStateDatabaseCache.publishOpenClawStateDatabase(healthy);
         expect(() => openClawStateDatabaseCache.closeOpenClawStateDatabase()).toThrow(
-          AggregateError,
+          maintenanceFails ? AggregateError : nativeFailure,
         );
         expect(healthy.db.isOpen).toBe(false);
         expect(openClawStateDatabaseCache.isOpenClawStateDatabaseOpen()).toBe(false);
