@@ -6,6 +6,7 @@ import {
   buildControlUiUserAvatarPath,
   canonicalizeControlUiUserAvatarPath,
 } from "../../../src/gateway/control-ui-user-avatar-route.js";
+import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 import { fnv1aUtf16 } from "./fnv1a.ts";
 import { takeGraphemes } from "./graphemes.ts";
@@ -29,7 +30,7 @@ export function resolveTrustedAvatarUrl(
   resourceBasePath = readAvatarGatewayContext().resourceBasePath,
 ): string | null {
   try {
-    const parsed = new URL(value, ORIGIN_PROBE);
+    const parsed = new URL(uiDevGatewayResourceUrl(value), ORIGIN_PROBE);
     const relativeRoute = parsed.origin === ORIGIN_PROBE;
     const userPath = canonicalizeControlUiUserAvatarPath(parsed.pathname, resourceBasePath);
     const agentPath = parseControlUiResourcePath("agentAvatar", parsed.pathname, resourceBasePath);
