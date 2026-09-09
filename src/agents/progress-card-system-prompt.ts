@@ -8,7 +8,7 @@ import { shouldIncludeProgressCardToolForOpenClawTools } from "./openclaw-tools.
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 const PROGRESS_CARD_SYSTEM_PROMPT =
-  "During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.";
+  "Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. Update or clear existing cards as needed.";
 
 function isAgentMainSession(params: {
   agentId: string;

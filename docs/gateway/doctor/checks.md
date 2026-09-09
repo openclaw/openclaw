@@ -72,6 +72,7 @@ full behavior and rationale of each numbered check, follow the links under
 
   </Accordion>
   <Accordion title="Workspace and shell">
+    - Partial or shallow registry-owned project clone warnings, with manual repair commands for every detected partial-clone key and shallow history.
     - systemd linger check on Linux.
     - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
     - Skills readiness check for the default agent; reports allowed skills with missing bins, env, config, or OS requirements, and `--fix` can disable unavailable skills in `skills.entries`.

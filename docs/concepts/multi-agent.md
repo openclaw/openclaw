@@ -186,7 +186,8 @@ filtering, migration, and trust-boundary details.
 
 ## Cross-agent memory search
 
-The QMD cross-agent search path was removed. Builtin memory does not search
+The QMD cross-agent search path was removed in v2026.8.1 along with the rest
+of the QMD backend. Builtin memory does not search
 another agent's transcript corpus; each agent searches only its own configured
 memory and eligible same-agent session sources. Put intentionally shared
 Markdown in an explicit shared `memory.search.extraPaths` directory when the

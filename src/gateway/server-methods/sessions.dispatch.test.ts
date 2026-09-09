@@ -459,7 +459,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("passes a per-dispatch machine class to placement", async () => {
+  it("passes a per-dispatch machine class and operating system to placement", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
@@ -477,11 +477,11 @@ describe("sessions.dispatch", () => {
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
-      { profileId: "test", machineClass: "large" },
+      { profileId: "test", machineClass: "large", os: "os-a" },
     );
 
     expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "test", machineClass: "large" }),
+      expect.objectContaining({ profileId: "test", machineClass: "large", os: "os-a" }),
       expect.any(Function),
       undefined,
     );
@@ -633,13 +633,13 @@ describe("sessions.dispatch", () => {
       }),
       {
         expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
-        target: { kind: "profile", profileId: "test", machineClass: "beast" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast", os: "os-b" },
       },
     );
 
     expect(move).toHaveBeenCalledWith(
       expect.objectContaining({
-        target: { kind: "profile", profileId: "test", machineClass: "beast" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast", os: "os-b" },
       }),
       expect.any(Function),
       undefined,

@@ -11,11 +11,12 @@ import { buildDeepInfraEmbeddingAdapter } from "./embedding-adapter.js";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
 import { buildDeepInfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyDeepInfraConfig } from "./onboard.js";
-import { buildDeepInfraApiKeyCatalog, buildStaticDeepInfraProvider } from "./provider-catalog.js";
+import { buildDeepInfraApiKeyCatalog } from "./provider-catalog.js";
+import { getDeepInfraSurfaceFallbackCatalog } from "./provider-models.js";
 import {
   DEEPINFRA_DEFAULT_MODEL_REF,
-  getDeepInfraSurfaceFallbackCatalog,
-} from "./provider-models.js";
+  buildStaticDeepInfraProvider,
+} from "./provider-static-catalog.js";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 import {
   listDeepInfraImageGenCatalog,

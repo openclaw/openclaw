@@ -50,6 +50,7 @@ import {
 } from "./agent-turn-attachments.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
 import { createAbortAwareDispatcher } from "./dispatch-from-config.abort.js";
+import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import {
   appendRecentHistoryImageContext,
   resolveRecentInboundHistoryImages,
@@ -1067,10 +1068,7 @@ describe("tryDispatchAcpReplyCore", () => {
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
-    expect(result).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    expect(result).toEqual(expectedNoQueuedReplyResult());
     expect(transport).not.toHaveBeenCalled();
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
     expect(recordProcessed).toHaveBeenCalledWith("completed", {

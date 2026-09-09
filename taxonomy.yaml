@@ -3295,11 +3295,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: automation
-    name: "Automation: cron, hooks, tasks, polling"
+    name: Automation and durable work
     family: core
     level: beta
     level_code: M3
-    rationale: Documented and usable, but scenario proof should cover unattended delivery, retries, and failure visibility.
+    rationale: Cron, hooks, tasks, Task Flow, and durable work surfaces are documented and usable. Scenario proof should cover unattended delivery, recovery, and failure visibility.
     completeness_instructions: references/completeness/automation-cron-hooks-tasks-polling.md
     categories:
       - name: Cron Jobs
@@ -3561,12 +3561,28 @@ surfaces:
           - name: Plugin managedFlows
             coverageIds: [automation.plugin-managedflows]
             description: Covers Plugin managedFlows across managed and mirrored flow modes, flow registry persistence, revision tracking, owner-scoped access, and related task flow behavior.
+          - name: Workboard planning and dispatch
+            coverageIds: [automation.workboard-planning-and-dispatch]
+            description: Workboard card planning, assignment, dependency promotion, and dispatch into task-tracked worker runs.
+          - name: Standing orders and recurring programs
+            coverageIds: [automation.standing-orders-and-recurring-programs]
+            description: Workspace-defined standing authority combined with scheduled triggers, escalation boundaries, and recurring operator programs.
+          - name: Progress cards and completion delivery
+            coverageIds: [automation.progress-cards-and-completion-delivery]
+            description: Durable session progress state, user-visible notifications, and final result delivery for long-running work.
+          - name: Orphan reconciliation and recovery
+            coverageIds: [automation.orphan-reconciliation-and-recovery]
+            description: Recovery of interrupted tasks and flows, stale claim cleanup, cancellation settlement, and visible blocked or lost outcomes.
         docs:
           - docs/automation/tasks.md
           - docs/automation/index.md
+          - docs/automation/standing-orders.md
           - docs/cli/tasks.md
+          - docs/cli/workboard.md
           - docs/automation/taskflow.md
+          - docs/plugins/workboard.md
           - docs/plugins/sdk-runtime.md
+          - docs/tools/progress-card.md
         search_anchors:
           - Task list/show/cancel
           - Task notifications
@@ -3578,6 +3594,10 @@ surfaces:
           - openclaw tasks flow
           - Flow audit and maintenance
           - Plugin managedFlows
+          - Workboard CLI
+          - Standing orders
+          - Progress card
+          - Flow statuses
         category_note: background-task-ledger.md
         human_lts_override: false
       - name: Heartbeat
@@ -4169,7 +4189,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: control-ui
-    name: Gateway Web App
+    name: Control UI
     family: core
     level: beta
     level_code: M3
@@ -4974,8 +4994,7 @@ surfaces:
             coverageIds: [app-sdk.app-plugin-boundary]
             description: Clear distinction between external app integrations and in-process plugin authoring.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
         search_anchors:
           - OpenClaw App SDK overview
           - What ships today
@@ -5003,8 +5022,7 @@ surfaces:
             coverageIds: [app-sdk.scopes-and-redaction]
             description: Token scopes, secret-forwarding defaults, and redaction boundaries.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
           - docs/gateway/security/index.md
         search_anchors:
@@ -5038,8 +5056,7 @@ surfaces:
             coverageIds: [app-sdk.session-controls]
             description: Patch, abort, and compact operations.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
         search_anchors:
           - Run an agent
@@ -5070,8 +5087,7 @@ surfaces:
             coverageIds: [app-sdk.questions]
             description: Question handling alongside approval flows.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
         search_anchors:
           - Stream events
@@ -5104,8 +5120,7 @@ surfaces:
             coverageIds: [app-sdk.environments]
             description: Managed environment provider lifecycle and metadata.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
         search_anchors:
           - Models, tools, artifacts, and approvals
           - ToolSpace model
@@ -5133,7 +5148,7 @@ surfaces:
             coverageIds: [app-sdk.public-package-contract]
             description: Package publication and reusable-client expectations tracked explicitly.
         docs:
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/concepts/typebox.md
           - docs/gateway/protocol.md
         search_anchors:
@@ -6382,11 +6397,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: windows-app
-    name: Native Windows companion app
+    name: Windows App / Node
     family: platform-app
-    level: planned
-    level_code: M0
-    rationale: Planned only.
+    level: beta
+    level_code: M3
+    rationale: The Windows App ships signed x64 and ARM64 installers from openclaw/openclaw-windows-node with local or remote Gateway setup, native chat, diagnostics, updates, and opt-in Windows node capabilities.
     completeness_instructions: references/completeness/native-windows-companion-app.md
     categories:
       - name: Installation and Updates
@@ -6394,7 +6409,7 @@ surfaces:
         features:
           - name: Official app download
             coverageIds: [windows-app.official-app-download]
-            description: Official app download or installer path for the native Windows companion app.
+            description: Official Windows App download and installer path.
           - name: MSI/MSIX/App Installer/winget-style packaging
             coverageIds: [windows-app.installer-packaging]
             description: MSI/MSIX/App Installer/winget-style packaging, signing, update, rollback, uninstall, and desktop entries
@@ -6408,8 +6423,8 @@ surfaces:
           - docs/platforms/windows.md
           - docs/install/index.md
         search_anchors:
-          - Native Windows companion apps are planned
-          - Windows companion app
+          - Windows App
+          - Windows Node
           - App Installer
           - winget
         category_note: packaging-install-update-desktop-integration.md
@@ -6432,7 +6447,8 @@ surfaces:
           - docs/gateway/pairing.md
           - docs/gateway/remote.md
         search_anchors:
-          - Windows companion app
+          - Windows App
+          - Windows Node
           - local Gateway
           - remote Gateway
           - pairing
@@ -6453,7 +6469,8 @@ surfaces:
         search_anchors:
           - WebChat
           - Gateway WebSocket
-          - Windows companion app
+          - Windows App
+          - Windows Node
         category_note: native-chat-session-controls.md
         human_lts_override: false
       - name: Status and Repair
@@ -6479,7 +6496,8 @@ surfaces:
           - docs/gateway/doctor.md
           - docs/gateway/index.md
         search_anchors:
-          - Windows companion app
+          - Windows App
+          - Windows Node
           - Gateway status
           - doctor repair
           - system tray
@@ -6969,11 +6987,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: small-linux
-    name: Raspberry Pi and small Linux devices
+    name: ChromeOS, Raspberry Pi, and small Linux devices
     family: platform-app
     level: beta
     level_code: M3
-    rationale: Platform docs exist and Gateway path is Linux-based. Needs hardware-specific release smoke proof to move higher.
+    rationale: Raspberry Pi and ChromeOS/Crostini guides cover supported Linux-based Gateway paths. Needs platform-specific release smoke proof to move higher.
     completeness_instructions: references/completeness/raspberry-pi-small-linux-devices.md
     categories:
       - name: Setup and Compatibility
@@ -7015,7 +7033,11 @@ surfaces:
           - name: Fallback/build guidance
             coverageIds: [small-linux.fallback-build-guidance]
             description: Defines Fallback/build guidance setup, credential, configuration, and operator verification behavior for Package Manager and ARM Binary Compatibility.
+          - name: ChromeOS Crostini lifecycle
+            coverageIds: [small-linux.chromeos-crostini-lifecycle]
+            description: Crostini enablement, native installation, Node compatibility, service environment, and post-reboot Gateway recovery on ChromeOS.
         docs:
+          - docs/platforms/chromeos.md
           - docs/install/raspberry-pi.md
           - docs/install/index.md
           - docs/help/faq-first-run.md
@@ -7039,6 +7061,9 @@ surfaces:
           - Installer architecture detection
           - Optional ARM binary checks
           - Fallback/build guidance
+          - Enable the Linux container
+          - Prefer the native install over Docker
+          - Crostini is not always on
         category_note: arm-linux-install-and-runtime-prerequisites.md
         human_lts_override: false
       - name: Remote Access and Auth
@@ -8418,11 +8443,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: imessage-bluebubbles
-    name: iMessage and BlueBubbles
+    name: iMessage
     family: channel
     level: beta
     level_code: M3
-    rationale: Supported iMessage runs through imsg on a signed-in macOS Messages host; legacy BlueBubbles configs require migration. Keep macOS permissions, SSH wrapper, SIP/private API, and migration caveats visible.
+    rationale: Supported iMessage runs through imsg on a signed-in macOS Messages host. Keep macOS permissions, SSH wrapper, SIP/private API, and legacy BlueBubbles migration caveats visible without presenting the removed transport as an active channel.
     completeness_instructions: references/completeness/imessage-bluebubbles.md
     categories:
       - name: Channel Setup and Operations
@@ -8451,13 +8476,13 @@ surfaces:
             description: Covers Probe runtime health across local and remote `imsg rpc`, `cliPath`, `dbPath`, `remoteHost`, and related imsg transport, host requirements, and permissions behavior.
           - name: Account setup prompts
             coverageIds: [imessage-bluebubbles.account-setup-prompts]
-            description: Covers setup prompts, policy writes, account merging, default account selection, and account configuration behavior for iMessage/BlueBubbles.
+            description: Covers setup prompts, policy writes, account merging, default account selection, and account configuration behavior for iMessage.
           - name: Account status checks
             coverageIds: [imessage-bluebubbles.account-status-checks]
-            description: Covers account status output, setup state, account merging, and default account selection for iMessage/BlueBubbles.
+            description: Covers account status output, setup state, account merging, and default account selection for iMessage.
           - name: Doctor repair checks
             coverageIds: [imessage-bluebubbles.doctor-repair-checks]
-            description: Covers doctor checks, setup repair prompts, and policy verification for iMessage/BlueBubbles account configuration.
+            description: Covers doctor checks, setup repair prompts, and policy verification for iMessage account configuration.
           - name: Account Config
             coverageIds: [imessage-bluebubbles.account-config]
             description: Covers Account Config across setup prompts, policy writes, account merging, default account selection, and related setup, status, doctor, and account config behavior.
@@ -8479,7 +8504,7 @@ surfaces:
           - account status
           - doctor checks
           - Account Config
-          - imessage / bluebubbles setup, status, doctor, and account config
+          - iMessage setup, status, doctor, and account config
           - setup, status, doctor, and account config
         category_note: setup-status-doctor-and-account-config.md
         human_lts_override: false
@@ -8506,7 +8531,6 @@ surfaces:
             description: Covers System Prompts across `groupPolicy`, `groupAllowFrom`, `groups`, wildcard registry entries, `requireMention`, mention patterns, per-group tools, per-group system prompts, group sessions, and warnings for allowlist misconfiguration.
         docs:
           - docs/channels/imessage.md
-          - docs/channels/imessage-from-bluebubbles.md
           - docs/gateway/config-channels.md
         search_anchors:
           - Authorize direct senders
@@ -8515,7 +8539,7 @@ surfaces:
           - Group Policy
           - Mentions
           - System Prompts
-          - imessage / bluebubbles group policy, mentions, and system prompts
+          - iMessage group policy, mentions, and system prompts
           - group policy, mentions, and system prompts
         category_note: dm-pairing-access-and-session-routing.md
         human_lts_override: false
@@ -8569,19 +8593,18 @@ surfaces:
             description: Covers Message Tool across private API probing, action availability, action config gates, tapback mapping, edit/unsend/reply/effects/group management, `send-rich --file`, message-tool visibility/target grammar, and action dispatch errors.
         docs:
           - docs/channels/imessage.md
-          - docs/channels/imessage-from-bluebubbles.md
           - docs/gateway/config-channels.md
         search_anchors:
           - Media
           - Attachments
           - Remote Fetch
           - Chunking
-          - imessage / bluebubbles media, attachments, remote fetch, and chunking
+          - iMessage media, attachments, remote fetch, and chunking
           - media, attachments, remote fetch, and chunking
           - Native Actions
           - Private API
           - Message Tool
-          - imessage / bluebubbles native actions, private api, and message tool
+          - iMessage native actions, private api, and message tool
           - native actions, private api, and message tool
         category_note: media-attachments-remote-fetch-and-chunking.md
         human_lts_override: false
@@ -8603,15 +8626,15 @@ surfaces:
           - Native Approvals
           - Reactions
           - Operator Control
-          - imessage / bluebubbles native approvals, reactions, and operator control
+          - iMessage native approvals, reactions, and operator control
           - native approvals, reactions, and operator control
         category_note: native-approvals-reactions-and-operator-control.md
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: "2026-05-30"
+      completed_at: "2026-09-08"
       by: codex
-      source_ref: null
+      source_ref: openclaw@19537f3e957ce8720cfdf22a35e7f0bb3e6b7741
       process_version: 3
   - id: signal
     name: Signal
@@ -8854,7 +8877,6 @@ surfaces:
           - docs/gateway/health.md
           - docs/plugins/plugin-inventory.md
           - docs/channels/index.md
-          - docs/docs.json
         search_anchors:
           - Google Cloud project setup
           - Chat app configuration

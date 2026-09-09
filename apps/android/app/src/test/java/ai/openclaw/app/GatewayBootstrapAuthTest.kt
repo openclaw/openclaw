@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
@@ -29,6 +30,7 @@ import android.net.NetworkCapabilities
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -42,8 +44,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
@@ -53,6 +58,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -61,6 +68,8 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.QueueDispatcher
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
+import okio.ByteString
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -86,11 +95,13 @@ import java.net.ProxySelector
 import java.net.SocketAddress
 import java.net.URI
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -349,10 +360,15 @@ class GatewayBootstrapAuthTest {
   fun standaloneStatusPreservesLiveOperatorConnection() {
     val runtime = createTestRuntime(RuntimeEnvironment.getApplication())
     writeField(runtime, "operatorConnected", true)
-    val method = runtime.javaClass.getDeclaredMethod("setStandaloneGatewayStatus", String::class.java)
+    val method =
+      runtime.javaClass.getDeclaredMethod(
+        "setStandaloneGatewayStatus",
+        String::class.java,
+        GatewayConnectionProblem::class.java,
+      )
     method.isAccessible = true
 
-    method.invoke(runtime, "Verify gateway TLS fingerprint…")
+    method.invoke(runtime, "Verify gateway TLS fingerprint…", null)
 
     assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
     assertEquals("Verify gateway TLS fingerprint…", runtime.gatewayConnectionDisplay.value.statusText)
@@ -394,6 +410,29 @@ class GatewayBootstrapAuthTest {
 
     onDisconnected("Gateway error: timeout")
     assertEquals("Gateway error: timeout", runtime.gatewayConnectionDisplay.value.statusText)
+    assertNull(runtime.gatewayConnectionDisplay.value.problem)
+  }
+
+  @Test
+  fun networkProblemStaysVisibleDuringAutomaticOperatorRetry() {
+    val runtime = createTestRuntime(RuntimeEnvironment.getApplication())
+    val session = readField<GatewaySession>(runtime, "operatorSession")
+    val onDisconnected = readField<(String) -> Unit>(session, "onDisconnected")
+    val onConnectFailure = readField<(GatewaySession.ErrorShape, Boolean) -> Unit>(session, "onConnectFailure")
+    val failure =
+      ai.openclaw.app.gateway
+        .gatewayNetworkConnectError(timedOut = true)
+    onConnectFailure(failure, false)
+    for (status in listOf("Reconnecting…", "Connecting…")) {
+      onDisconnected(status)
+      assertEquals(failure.message, runtime.gatewayConnectionDisplay.value.statusText)
+      assertEquals(
+        "NETWORK_UNREACHABLE",
+        runtime.gatewayConnectionDisplay.value.problem
+          ?.code,
+      )
+    }
+    onDisconnected("Offline")
     assertNull(runtime.gatewayConnectionDisplay.value.problem)
   }
 
@@ -715,20 +754,31 @@ class GatewayBootstrapAuthTest {
         }
       val endpoint = tlsGatewayEndpoint()
       prefs.saveGatewayTlsFingerprint(endpoint.stableId, fingerprint)
+      val runtimeScope = readField<CoroutineScope>(runtime, "scope")
+      val existingJobs =
+        runtimeScope.coroutineContext.job.children
+          .toSet()
 
       runtime.connect(
         endpoint,
         auth(token = "shared-token"),
       )
-      val tlsProbeJob = probeJob.await()
+      probeJob.await()
+      val probeJobs =
+        runtimeScope.coroutineContext[Job]
+          ?.children
+          ?.filter { it !in existingJobs }
+          ?.toList()
+          .orEmpty()
 
       runtime.disconnect()
       probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
-      // Join the owning coroutine so assertions run after its stale-attempt guard.
-      tlsProbeJob.join()
+      // Drain the attempt and its worker before checking the observable stale-result guard.
+      withTimeout(5_000) { probeJobs.forEach { it.join() } }
 
       assertNull(runtime.pendingGatewayTrust.value)
-      assertNull(desiredBootstrapToken(runtime, "nodeSession"))
+      assertNull(desiredConnection(runtime, "nodeSession"))
+      assertEquals("Offline", runtime.statusText.value)
       assertEquals(fingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
     }
 
@@ -860,6 +910,118 @@ class GatewayBootstrapAuthTest {
       )
     assertTrue(options.permissions.getValue("camera"))
   }
+
+  @Test
+  fun unreachableTailnetEndpointShowsNetworkRecoveryWithoutCertificatePrompt() {
+    val (_, _, runtime) =
+      gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) }
+    runtime.connect(
+      GatewayEndpoint.manual(host = "gateway.tail-example.ts.net", port = 443),
+      auth(token = "test-token-placeholder"),
+    )
+    runBlocking {
+      withTimeout(5_000) {
+        runtime.gatewayConnectionDisplay.first { it.problem?.code == "NETWORK_UNREACHABLE" }
+      }
+    }
+    val problem = runtime.gatewayConnectionDisplay.value.problem
+    assertEquals("NETWORK_UNREACHABLE", problem?.code)
+    assertTrue(problem?.isTailscaleRoute == true)
+    assertNull(runtime.pendingGatewayTrust.value)
+  }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun supersededTlsRequestsWaitForOneNativeWorkerWithoutBlamingUnattemptedTargets() =
+    runBlocking {
+      for (disconnectBeforeRelease in listOf(false, true)) {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val worker = AtomicReference<Job>()
+        val hosts = ConcurrentLinkedQueue<String>()
+        val (_, _, runtime) =
+          gatewayFixture { host, _ ->
+            hosts.add(host)
+            if (host == "first.tail-example.ts.net") {
+              worker.set(currentCoroutineContext().job)
+              started.countDown()
+              check(release.await(10, TimeUnit.SECONDS))
+            }
+            GatewayTlsProbeResult(fingerprintSha256 = "ab".repeat(32))
+          }
+        neutralizeColdStartAutoConnect(runtime)
+        val originalScope = readField<CoroutineScope>(runtime, "scope")
+        val scheduler = TestCoroutineScheduler()
+        try {
+          runtime.connect(GatewayEndpoint.manual("first.tail-example.ts.net", 443))
+          assertTrue(started.await(5, TimeUnit.SECONDS))
+          writeField(runtime, "scope", CoroutineScope(originalScope.coroutineContext + StandardTestDispatcher(scheduler)))
+          runtime.connect(GatewayEndpoint.manual("second.tail-example.ts.net", 443))
+          assertTrue("A new request cancels the old native owner before admission", worker.get().isCancelled)
+          withTimeout(5_000) {
+            while (readField<Job?>(runtime, "tlsProbeJob") == null) {
+              scheduler.runCurrent()
+              delay(10)
+            }
+          }
+          val secondProbe = readField<Job>(runtime, "tlsProbeJob")
+          runtime.connect(GatewayEndpoint.manual("third.tail-example.ts.net", 443))
+          assertTrue("The superseded waiter must not later start DNS", secondProbe.isCancelled)
+          scheduler.runCurrent()
+          assertEquals(listOf("first.tail-example.ts.net"), hosts.toList())
+          assertNull(runtime.pendingGatewayTrust.value)
+          assertNull(runtime.gatewayConnectionDisplay.value.problem)
+          scheduler.advanceTimeBy(GATEWAY_CONNECT_TIMEOUT_MS)
+          scheduler.runCurrent()
+          assertEquals(
+            "transport-cleanup",
+            runtime.gatewayConnectionDisplay.value.problem
+              ?.reason,
+          )
+          assertFalse(
+            runtime.gatewayConnectionDisplay.value.problem
+              ?.isTailscaleRoute == true,
+          )
+          assertNull(runtime.pendingGatewayTrust.value)
+          if (disconnectBeforeRelease) runtime.disconnect()
+          release.countDown()
+          withTimeout(5_000) {
+            while (!worker.get().isCompleted || (!disconnectBeforeRelease && runtime.pendingGatewayTrust.value == null)) {
+              scheduler.runCurrent()
+              delay(10)
+            }
+          }
+          scheduler.runCurrent()
+          if (disconnectBeforeRelease) {
+            assertEquals(listOf("first.tail-example.ts.net"), hosts.toList())
+            assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
+            assertNull(runtime.gatewayConnectionDisplay.value.problem)
+            assertNull(runtime.pendingGatewayTrust.value)
+          } else {
+            assertEquals(listOf("first.tail-example.ts.net", "third.tail-example.ts.net"), hosts.toList())
+            assertEquals(
+              "third.tail-example.ts.net",
+              runtime.pendingGatewayTrust.value
+                ?.endpoint
+                ?.host,
+            )
+            assertNull(runtime.gatewayConnectionDisplay.value.problem)
+          }
+        } finally {
+          release.countDown()
+          runtime.disconnect()
+          scheduler.runCurrent()
+          writeField(runtime, "scope", originalScope)
+          originalScope.coroutineContext.job.cancel()
+          withTimeout(5_000) {
+            while (!originalScope.coroutineContext.job.isCompleted) {
+              scheduler.runCurrent()
+              delay(10)
+            }
+          }
+        }
+      }
+    }
 
   @Test
   fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
@@ -1010,6 +1172,272 @@ class GatewayBootstrapAuthTest {
     assertEquals(current.stableId, prefs.gatewayRegistry.activeStableId.value)
     assertEquals("Gateway not currently discoverable", runtime.statusText.value)
   }
+
+  @Test
+  fun switchingHealthyOrInactiveGatewayDoesNotPublishNetworkFailure() =
+    runBlocking {
+      for (wasConnected in listOf(false, true)) {
+        val probeStarted = CompletableDeferred<Unit>()
+        val probeResult = CompletableDeferred<GatewayTlsProbeResult>()
+        val (_, _, runtime) =
+          gatewayFixture { _, _ ->
+            probeStarted.complete(Unit)
+            probeResult.await()
+          }
+        neutralizeColdStartAutoConnect(runtime)
+        val current = GatewayEndpoint.manual("127.0.0.1", 18789)
+        val replacement = GatewayEndpoint.manual("replacement.tail-example.ts.net", 443)
+        writeField(runtime, "connectedEndpoint", current)
+        writeField(runtime, "operatorConnected", wasConnected)
+        readField<MutableStateFlow<Boolean>>(runtime, "_nodeConnected").value = wasConnected
+        readField<MutableStateFlow<GatewayConnectionDisplay>>(runtime, "_gatewayConnectionDisplay").value =
+          GatewayConnectionDisplay(wasConnected, if (wasConnected) "Connected" else "Offline", null)
+        val observed = ConcurrentLinkedQueue<GatewayConnectionDisplay>()
+        val collector =
+          launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+            runtime.gatewayConnectionDisplay.collect { observed.add(it) }
+          }
+        try {
+          assertTrue(withTimeout(5_000) { runtime.connectSwitchingGateway(replacement, auth(bootstrapToken = "replacement-bootstrap")) })
+          withTimeout(5_000) { probeStarted.await() }
+          assertTrue(observed.any { it.statusText == "Connecting…" })
+          assertFalse(observed.any { it.problem?.isNetworkFailure == true })
+          assertEquals("Verify gateway TLS fingerprint…", runtime.statusText.value)
+        } finally {
+          runtime.disconnect()
+          collector.cancelAndJoin()
+          withTimeout(5_000) { readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancelAndJoin() }
+        }
+      }
+    }
+
+  @Test
+  fun switchingGatewayKeepsCleanupProblemVisibleUntilTheRetiredTransportFinishes() =
+    runBlocking {
+      val probeCalls = AtomicInteger()
+      val (_, prefs, runtime) =
+        gatewayFixture { _, _ ->
+          probeCalls.incrementAndGet()
+          GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+        }
+      neutralizeColdStartAutoConnect(runtime)
+      prefs.setManualTls(false)
+      val current = GatewayEndpoint.manual("127.0.0.1", 18789)
+      val replacement = GatewayEndpoint.manual("replacement.tail-example.ts.net", 443)
+      val nodeSession = readField<GatewaySession>(runtime, "nodeSession")
+      val operatorSession = readField<GatewaySession>(runtime, "operatorSession")
+      val stalled = installStalledTransport(nodeSession)
+      writeField(nodeSession, "connectTimeoutMs", 100L)
+      var switching: Deferred<Boolean>? = null
+      var transport: Pair<WebSocket, WebSocketListener>? = null
+      try {
+        runtime.connect(current, auth(bootstrapToken = "test-bootstrap"))
+        transport = withTimeout(5_000) { stalled.created.await() }
+        withTimeout(5_000) {
+          while (runtime.gatewayConnectionDisplay.value.problem
+              ?.reason != "timeout"
+          ) {
+            delay(10)
+          }
+        }
+        val previousOperatorCleanup = readField<Job?>(operatorSession, "disconnectTail")
+        val switchAttempt =
+          async(Dispatchers.Default) {
+            runtime.connectSwitchingGateway(replacement, auth(bootstrapToken = "replacement-bootstrap"))
+          }
+        switching = switchAttempt
+        withTimeout(5_000) {
+          stalled.cancelled.await()
+          var operatorCleanup = readField<Job?>(operatorSession, "disconnectTail")
+          while (operatorCleanup == null || operatorCleanup === previousOperatorCleanup) {
+            delay(10)
+            operatorCleanup = readField(operatorSession, "disconnectTail")
+          }
+          operatorCleanup.join()
+        }
+        assertFalse(switchAttempt.isCompleted)
+        assertEquals(0, probeCalls.get())
+        val problem = runtime.gatewayConnectionDisplay.value.problem
+        assertEquals("NETWORK_UNREACHABLE", problem?.code)
+        assertEquals("transport-cleanup", problem?.reason)
+        assertFalse(problem?.isTailscaleRoute == true)
+        assertEquals(problem?.message, runtime.gatewayConnectionDisplay.value.statusText)
+
+        val (socket, listener) = checkNotNull(transport)
+        listener.onFailure(socket, IOException("cancelled"), null)
+        assertTrue(withTimeout(5_000) { switchAttempt.await() })
+        withTimeout(5_000) {
+          while (runtime.gatewayConnectionDisplay.value.problem
+              ?.reason != "unreachable"
+          ) {
+            delay(10)
+          }
+        }
+        assertEquals(1, probeCalls.get())
+        assertNull(runtime.pendingGatewayTrust.value)
+      } finally {
+        runtime.disconnect()
+        transport?.let { (socket, listener) -> listener.onFailure(socket, IOException("cancelled"), null) }
+        switching?.cancelAndJoin()
+        withTimeout(5_000) { readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancelAndJoin() }
+      }
+    }
+
+  @Test
+  fun queuedGatewaySwitchKeepsRetirementDeadlineUnlessExplicitlyDisconnected() = runBlocking { assertQueuedGatewayCleanupDeadline(StalledSessionOwner.PRIMARY) }
+
+  @Test
+  fun idlePrimaryCleanupKeepsRetirementDeadlineUnlessExplicitlyDisconnected() = runBlocking { assertQueuedGatewayCleanupDeadline(StalledSessionOwner.IDLE_PRIMARY) }
+
+  @Test
+  fun secondaryPromotionKeepsRetirementDeadlineUnlessExplicitlyDisconnected() = runBlocking { assertQueuedGatewayCleanupDeadline(StalledSessionOwner.SECONDARY) }
+
+  private enum class StalledSessionOwner { PRIMARY, IDLE_PRIMARY, SECONDARY }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private suspend fun assertQueuedGatewayCleanupDeadline(stalledOwner: StalledSessionOwner) =
+    kotlinx.coroutines.coroutineScope {
+      for (disconnectBeforeDeadline in listOf(false, true)) {
+        val probeCalls = AtomicInteger()
+        val (_, prefs, runtime) =
+          gatewayFixture { _, _ ->
+            probeCalls.incrementAndGet()
+            GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+          }
+        prefs.setManualTls(false)
+        val current = if (stalledOwner == StalledSessionOwner.SECONDARY) gatewayEndpoint() else GatewayEndpoint.manual("127.0.0.1", 18789)
+        val replacement = if (stalledOwner == StalledSessionOwner.SECONDARY) current else GatewayEndpoint.manual("replacement.tail-example.ts.net", 443)
+        val queuedTarget = GatewayEndpoint.manual("queued.tail-example.ts.net", 443)
+        val scheduler = TestCoroutineScheduler()
+        val dispatcher = StandardTestDispatcher(scheduler)
+        var switching: Deferred<Boolean>? = null
+        var queued: Deferred<Boolean>? = null
+        var transport: Pair<WebSocket, WebSocketListener>? = null
+        var liveSocket: WebSocket? = null
+        try {
+          val stalled =
+            if (stalledOwner == StalledSessionOwner.SECONDARY) {
+              gatewayServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+              prefs.gatewayRegistry.upsert(
+                GatewayRegistryEntry(
+                  stableId = current.stableId,
+                  kind = GatewayRegistryEntryKind.MANUAL,
+                  name = current.name,
+                  host = current.host,
+                  port = current.port,
+                  tls = false,
+                ),
+              )
+              prefs.saveGatewayCredentials(current.stableId, token = "secondary-token")
+              runtime.setGatewayConnectionEnabled(current.stableId, true)
+              val connection =
+                withTimeout(5_000) {
+                  var connection: Any? = null
+                  while (connection == null || readField<WebSocket?>(connection, "socket") == null) {
+                    val owner = readField<Map<String, Any>>(runtime, "secondaryOperatorSessions")[current.stableId]
+                    connection = owner?.let { readField<Any?>(readField<GatewaySession>(it, "session"), "currentConnection") }
+                    delay(10)
+                  }
+                  checkNotNull(connection)
+                }
+              val socket = readField<WebSocket>(connection, "socket")
+              liveSocket = socket
+              val stalled = StalledGatewayTransport()
+              // The fleet creates the real secondary. Delay only its terminal callback so
+              // promotion must drain the existing owner before admitting primary credentials.
+              writeField(
+                connection,
+                "socket",
+                object : WebSocket by socket {
+                  override fun cancel() {
+                    stalled.cancelled.complete(Unit)
+                  }
+                },
+              )
+              stalled.created.complete(socket to readField<WebSocketListener>(connection, "listener"))
+              neutralizeColdStartAutoConnect(runtime)
+              stalled
+            } else {
+              neutralizeColdStartAutoConnect(runtime)
+              installStalledTransport(readField(runtime, "nodeSession")).also {
+                runtime.connect(current, auth(bootstrapToken = "test-bootstrap"))
+              }
+            }
+          transport = withTimeout(5_000) { stalled.created.await() }
+          if (stalledOwner == StalledSessionOwner.IDLE_PRIMARY) runtime.disconnect()
+          val runtimeScope = readField<CoroutineScope>(runtime, "scope")
+          writeField(runtime, "scope", CoroutineScope(runtimeScope.coroutineContext + dispatcher))
+          assertNull(runtime.gatewayConnectionDisplay.value.problem)
+          val first =
+            async(dispatcher) {
+              runtime.connectSwitchingGateway(replacement, auth(bootstrapToken = "replacement-bootstrap"))
+            }
+          switching = first
+          scheduler.runCurrent()
+          withTimeout(5_000) {
+            while (!stalled.cancelled.isCompleted) {
+              scheduler.runCurrent()
+              delay(10)
+            }
+          }
+          assertEquals("Connecting…", runtime.gatewayConnectionDisplay.value.statusText)
+          assertNull(runtime.gatewayConnectionDisplay.value.problem)
+
+          val next =
+            async(dispatcher) {
+              runtime.connectSwitchingGateway(queuedTarget, auth(bootstrapToken = "queued-bootstrap"))
+            }
+          queued = next
+          scheduler.runCurrent()
+          assertFalse(first.isCompleted)
+          assertFalse(next.isCompleted)
+          if (disconnectBeforeDeadline) runtime.disconnect()
+
+          scheduler.advanceTimeBy(GATEWAY_CONNECT_TIMEOUT_MS)
+          scheduler.runCurrent()
+          assertEquals(0, probeCalls.get())
+          if (disconnectBeforeDeadline) {
+            assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
+            assertNull(runtime.gatewayConnectionDisplay.value.problem)
+          } else {
+            val problem = runtime.gatewayConnectionDisplay.value.problem
+            assertEquals("NETWORK_UNREACHABLE", problem?.code)
+            assertEquals("transport-cleanup", problem?.reason)
+            assertFalse(problem?.isTailscaleRoute == true)
+            assertEquals(problem?.message, runtime.gatewayConnectionDisplay.value.statusText)
+          }
+
+          val (socket, listener) = checkNotNull(transport)
+          listener.onFailure(socket, IOException("cancelled"), null)
+          withTimeout(5_000) {
+            while (!first.isCompleted || !next.isCompleted) {
+              scheduler.runCurrent()
+              delay(10)
+            }
+          }
+          assertFalse(first.await())
+          assertEquals(!disconnectBeforeDeadline, next.await())
+        } finally {
+          runtime.disconnect()
+          transport?.let { (socket, listener) -> listener.onFailure(socket, IOException("cancelled"), null) }
+          liveSocket?.cancel()
+          switching?.cancel()
+          queued?.cancel()
+          withTimeout(5_000) {
+            while (listOfNotNull(switching, queued).any { !it.isCompleted }) {
+              scheduler.runCurrent()
+              delay(10)
+            }
+            val owner = readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]
+            owner?.cancel()
+            while (owner?.isCompleted == false) {
+              scheduler.runCurrent()
+              delay(10)
+            }
+          }
+        }
+      }
+    }
 
   @Test
   fun gatewayConnectDoesNotHoldAuthMonitorWhileWaitingForSessionLifecycle() =
@@ -1513,6 +1941,41 @@ class GatewayBootstrapAuthTest {
     val prefs: SecurePrefs,
     val runtime: NodeRuntime,
   )
+
+  private data class StalledGatewayTransport(
+    val created: CompletableDeferred<Pair<WebSocket, WebSocketListener>> = CompletableDeferred(),
+    val cancelled: CompletableDeferred<Unit> = CompletableDeferred(),
+  )
+
+  private fun installStalledTransport(session: GatewaySession): StalledGatewayTransport {
+    val stalled = StalledGatewayTransport()
+    val factory: (OkHttpClient, Request, WebSocketListener) -> WebSocket =
+      { _, request, listener ->
+        val socket =
+          object : WebSocket {
+            override fun request(): Request = request
+
+            override fun queueSize(): Long = 0
+
+            override fun send(text: String): Boolean = false
+
+            override fun send(bytes: ByteString): Boolean = false
+
+            override fun close(
+              code: Int,
+              reason: String?,
+            ): Boolean = false
+
+            override fun cancel() {
+              stalled.cancelled.complete(Unit)
+            }
+          }
+        stalled.created.complete(socket to listener)
+        socket
+      }
+    writeField(session, "webSocketFactory", factory)
+    return stalled
+  }
 
   private fun gatewayFixture(
     tlsFingerprintProbe: (suspend (String, Int) -> GatewayTlsProbeResult)? = null,

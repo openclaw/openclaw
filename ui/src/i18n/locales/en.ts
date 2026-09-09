@@ -128,6 +128,7 @@ export const en: TranslationMap & {
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
     search: "Search",
+    pickerNoMatches: "No matches",
     save: "Save",
     saving: "Saving…",
     saveAndPublish: "Save & Publish",
@@ -944,6 +945,8 @@ export const en: TranslationMap & {
     gatewayNamed: "Gateway · {name}",
     cloudWorker: "Cloud · {profile}",
     cloudWorkerMachine: "{profile} · {machine}",
+    cloudWorkerOsMachine: "{profile} · {os} · {machine}",
+    cloudWorkerOs: "{profile} · {os}",
     cloudWorkerProvider: "Cloud worker provider: {provider}",
     cloudRuntimeUnsupported: "The {runtime} runtime does not support cloud workers.",
     cloudProfileRuntimeUnsupported:
@@ -992,6 +995,7 @@ export const en: TranslationMap & {
     registerProject: "Register as project",
     cloud: "Cloud",
     machine: "Machine",
+    operatingSystem: "Operating system",
     machineShape: "{cpu} vCPU · {memory} GB",
     machineCpu: "{cpu} vCPU",
     machineMemory: "{memory} GB",
@@ -1559,6 +1563,8 @@ export const en: TranslationMap & {
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
+      edit: "Edit",
+      editJob: "Edit {name}",
     },
     files: {
       emptyDraft: "Empty draft",
@@ -1589,6 +1595,9 @@ export const en: TranslationMap & {
       content: "Content",
       words: "{count} words",
       lines: "lines",
+      overwrite: "Overwrite",
+      conflictHint:
+        "This file changed in the agent workspace after this draft was started. Reload to take the workspace version, or Overwrite to replace it with this draft.",
     },
   },
   debug: {
@@ -2270,6 +2279,7 @@ export const en: TranslationMap & {
     uploadTooLarge: "File exceeds the 16 MiB terminal upload limit: {file}",
     uploadUnsafeCmdPath: "Cannot safely insert an uploaded path containing % or ! into cmd.exe",
     uploadUnsupportedShell: "Cannot safely insert an uploaded path into unsupported shell: {shell}",
+    uploadInvalidNativePath: "Cannot safely insert the uploaded native file path",
   },
   browser: {
     nativeTab: "Mac tab",
@@ -2279,6 +2289,7 @@ export const en: TranslationMap & {
     navigationBlocked:
       "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
     navigationCheckFailed: "OpenClaw couldn’t verify this tab’s address. Refresh to try again.",
+    tabUnavailable: "This tab is no longer available. Select another tab.",
     title: "Browser",
     open: "Open",
     openPanel: "Open browser panel",
@@ -3586,6 +3597,7 @@ export const en: TranslationMap & {
     header: {
       selfLearning: "Self-learning",
       selfLearningAria: "Toggle autonomous self-learning",
+      weeklyReviewsPaused: "Weekly reviews paused. Enable cron in Automation settings.",
       selfLearningTooltip:
         "Capture corrections and review completed work as reusable skills. Automatic mode applies scanner-approved captures to Skills.",
     },
@@ -3735,25 +3747,18 @@ export const en: TranslationMap & {
     selfLearning: {
       pitchTitle: "Turn on self-learning",
       pitchBody:
-        "OpenClaw reviews corrections and substantial completed runs, then applies scanner-approved skills and lists them here. Experience review spends extra background tokens.",
+        "OpenClaw learns from completed work and improves reusable skills in the background. Reviews use your configured model.",
       enable: "Enable self-learning",
       enabling: "Enabling\u2026",
       updateError: "Could not update the self-learning setting.",
     },
-    history: {
-      eyebrow: "Past work",
-      title: "Find reusable workflows",
-      body: "Review substantial sessions from newest to oldest. Only strong recovery patterns or workflows that save repeated tool calls become suggestions.",
-      findIdeas: "Find skill ideas",
-      scanEarlier: "Scan earlier work",
-      scanNew: "Scan new work",
-      scanning: "Reviewing sessions\u2026",
-      loading: "Loading history\u2026",
-      pendingOnly: "Creates suggestions only. Uses your configured model.",
-      reviewed: "{count} sessions reviewed",
-      found: "{count} ideas found",
-      noSessions: "No substantial sessions found in this window.",
-      today: "today",
+    learning: {
+      start: "Learn from past conversations",
+      starting: "Opening learning session\u2026",
+      title: "Learn from past conversations",
+      description:
+        "Open a session to find useful lessons and improve skills using your current learning mode.",
+      startFailed: "Could not start learning. Check your sessions before trying again.",
     },
   },
   // Chat swarm summaries render before the lazy Activity catalog loads.
@@ -3881,6 +3886,7 @@ export const en: TranslationMap & {
       retry: "Retry",
       frameResolverMissing: "Widget content is unavailable.",
       sandboxUnavailable: "Widget sandbox host is unavailable.",
+      runtimeError: "Script error: {message}",
       frameAuthorizationFailed: "Widget authorization failed after repeated refresh attempts.",
       sandboxOriginRequired:
         "Widget authorization failed after repeated refresh attempts. If the gateway runs behind a reverse proxy or tunnel that does not route the widget sandbox port, set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener.",
@@ -4627,7 +4633,6 @@ export const en: TranslationMap & {
     },
     mentions: {
       menu: "Mention a person",
-      loading: "Loading people…",
       empty: "No eligible people found.",
       truncated: "Keep typing to find more people.",
       online: "Online",
@@ -5319,6 +5324,7 @@ export const en: TranslationMap & {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
+      addToChat: "Add to chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
       dontAskAgain: "Don't ask again",
@@ -5539,6 +5545,8 @@ export const en: TranslationMap & {
         "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
     },
     pendingInputs: {
+      waitingForWorkspaceSync: "Received · waiting for workspace sync",
+      waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:
         "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
       cancelled:

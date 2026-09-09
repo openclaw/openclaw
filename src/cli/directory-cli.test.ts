@@ -118,6 +118,29 @@ describe("registerDirectoryCli", () => {
     });
   });
 
+  describe.each([
+    ["self", ["directory", "self"]],
+    ["peers", ["directory", "peers", "list"]],
+    ["groups", ["directory", "groups", "list"]],
+    ["members", ["directory", "groups", "members", "--group-id", "group-1"]],
+  ])("%s account input", (_leaf, args) => {
+    it.each(["", " \t\n "])("rejects blank %j before command startup", async (account) => {
+      const startup = vi.fn(() => {
+        throw new Error("Command startup reached");
+      });
+      const program = new Command().name("openclaw").hook("preAction", startup);
+      registerDirectoryCli(program);
+
+      await expect(
+        program.parseAsync([...args, "--channel", "slack", "--account", account], {
+          from: "user",
+        }),
+      ).rejects.toThrow("--account must not be blank");
+
+      expect(startup).not.toHaveBeenCalled();
+    });
+  });
+
   it("installs an explicit optional directory channel on demand", async () => {
     const tokenRef = {
       source: "env",
@@ -749,10 +772,14 @@ describe("registerDirectoryCli", () => {
   });
 
   it.each([
-    ["peers list", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
-    ["groups list", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
+    ["peers list", "5x", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
+    ["peers list", "", ["directory", "peers", "list", "--channel", "slack", "--limit", ""]],
+    ["peers list", "   ", ["directory", "peers", "list", "--channel", "slack", "--limit", "   "]],
+    ["groups list", "5x", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
+    ["groups list", "", ["directory", "groups", "list", "--channel", "slack", "--limit", ""]],
     [
       "group members",
+      "5x",
       [
         "directory",
         "groups",
@@ -765,7 +792,22 @@ describe("registerDirectoryCli", () => {
         "5x",
       ],
     ],
-  ])("rejects partial directory limit for %s", async (_label, args) => {
+    [
+      "group members",
+      "",
+      [
+        "directory",
+        "groups",
+        "members",
+        "--channel",
+        "slack",
+        "--group-id",
+        "group-1",
+        "--limit",
+        "",
+      ],
+    ],
+  ])("rejects invalid directory limit %s %j", async (_label, _limit, args) => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { slack: {} } },
       channelId: "slack",

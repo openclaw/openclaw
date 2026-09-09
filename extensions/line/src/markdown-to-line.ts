@@ -32,13 +32,6 @@ export interface ProcessedLineMessage {
 
 type LineMessageSegment = NonNullable<ProcessedLineMessage["segments"]>[number];
 
-export interface MarkdownTable {
-  headers: string[];
-  rows: string[][];
-  headerCells?: MarkdownTableCell[];
-  rowCells?: MarkdownTableCell[][];
-}
-
 export interface CodeBlock {
   language?: string;
   code: string;
@@ -59,17 +52,8 @@ const TRANSCRIPT_ROLE_PREFIX = "[assistant-authored transcript] ";
 // rather than cut down to it.
 const LINE_FLEX_CODE_CARD_MAX_CHARS = 2000;
 
-function parseLineMarkdown(text: string, tableMode: "block" | "bullets" | "off" = "block") {
+function parseLineMarkdown(text: string, tableMode: "block" | "bullets" = "block") {
   return markdownToIRWithMeta(text, { ...LINE_MARKDOWN_OPTIONS, tableMode });
-}
-
-function toMarkdownTable(table: MarkdownTableMeta): MarkdownTable {
-  return {
-    headers: table.headers,
-    rows: table.rows,
-    headerCells: table.headerCells,
-    rowCells: table.rowCells,
-  };
 }
 
 function codeBlockSpans(ir: MarkdownIR): MarkdownStyleSpan[] {
@@ -318,21 +302,38 @@ function renderTableCell(cell: MarkdownTableCell | undefined, fallback: string):
   };
 }
 
-function plainTableCell(text: string): MarkdownTableCell {
-  return parseLineMarkdown(text, "off").ir;
-}
-
-/** Convert a markdown table to a LINE Flex Message bubble. */
-export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
-  const headerCells = (table.headerCells ?? table.headers.map(plainTableCell)).map((cell) =>
-    renderTableCell(cell, "-"),
-  );
-  const rowCells = (table.rowCells ?? table.rows.map((row) => row.map(plainTableCell))).map((row) =>
-    row.map((cell) => renderTableCell(cell, "-")),
-  );
-  const hasInlineMarkup =
-    headerCells.some((cell) => cell.hasMarkup) ||
-    rowCells.some((row) => row.some((cell) => cell.hasMarkup));
+/** Convert a table to a Flex bubble when its rows fit the layout. */
+function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefined {
+  // Receipt cards keep 12 plain rows; generic and styled layouts keep only 10.
+  const requiresPlainCells = table.rowCells.length > 10;
+  if (requiresPlainCells && (table.headers.length !== 2 || table.rowCells.length > 12)) {
+    return undefined;
+  }
+  let hasInlineMarkup = false;
+  const renderCells = (cells: MarkdownTableCell[]): RenderedCell[] | undefined => {
+    const rendered: RenderedCell[] = [];
+    for (const cell of cells) {
+      const prepared = renderTableCell(cell, "-");
+      if (requiresPlainCells && prepared.hasMarkup) {
+        return undefined;
+      }
+      hasInlineMarkup ||= prepared.hasMarkup;
+      rendered.push(prepared);
+    }
+    return rendered;
+  };
+  const headerCells = renderCells(table.headerCells);
+  if (!headerCells) {
+    return undefined;
+  }
+  const rowCells: RenderedCell[][] = [];
+  for (const row of table.rowCells) {
+    const cells = renderCells(row);
+    if (!cells) {
+      return undefined;
+    }
+    rowCells.push(cells);
+  }
 
   if (table.headers.length === 2 && !hasInlineMarkup) {
     return createReceiptCard({
@@ -360,7 +361,7 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
     paddingBottom: "sm",
   } as FlexBox;
 
-  const dataRows: FlexComponent[] = rowCells.slice(0, 10).map((row, rowIndex) => ({
+  const dataRows: FlexComponent[] = rowCells.map((row, rowIndex) => ({
     type: "box",
     layout: "horizontal",
     contents: table.headers.map((_, colIndex) => {
@@ -440,15 +441,7 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   const plainTextInsertions: PlainTextInsertion[] = [];
 
   for (const table of tables) {
-    // Receipt cards keep 12 plain rows; generic and styled table layouts keep only 10.
-    const rowOverflow =
-      table.rowCells.length > 10 &&
-      (table.headers.length !== 2 ||
-        table.rowCells.length > 12 ||
-        [table.headerCells, ...table.rowCells].some((cells) =>
-          cells.some((cell) => renderTableCell(cell, "-").hasMarkup),
-        ));
-    const bubble = rowOverflow ? undefined : convertTableToFlexBubble(toMarkdownTable(table));
+    const bubble = convertTableToFlexBubble(table);
     if (!bubble || !fitsLineFlexBubble(bubble)) {
       plainTextInsertions.push({
         position: table.placeholderOffset,

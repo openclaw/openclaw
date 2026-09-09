@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { html, LitElement, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
@@ -11,6 +11,7 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import "./components/chat-sidebar-region.runtime.ts";
 import {
+  closeSlot,
   openSlot,
   promoteSidebarPanel,
   setSidebarDock,
@@ -44,6 +45,44 @@ function callbacks() {
   };
 }
 
+class NativeCloseLayoutFixture extends LitElement {
+  static override properties = { layout: { attribute: false } };
+  declare layout: SidebarLayout;
+
+  constructor() {
+    super();
+    this.layout = openSlot(openSlot({ columns: [] }, "workspace"), "detail");
+  }
+
+  override createRenderRoot() {
+    return this;
+  }
+
+  override render() {
+    return renderSidebarRegion({
+      availableWidth: 1_400,
+      availableSlots: ["detail", "workspace"],
+      callbacks: {
+        ...callbacks(),
+        closeSlot: (slot) => {
+          this.layout = closeSlot(this.layout, slot);
+        },
+      },
+      layout: this.layout,
+      narrow: false,
+      panelActions: {},
+      panelTemplates: {
+        detail: html`<textarea aria-label="Side panel input"></textarea>`,
+        workspace: html`<div>Workspace</div>`,
+      },
+      primary: html`<main>Conversation</main>`,
+      requestUpdate: () => this.requestUpdate(),
+    });
+  }
+}
+
+customElements.define("native-close-layout-fixture", NativeCloseLayoutFixture);
+
 async function renderLayout(container: HTMLElement, layout: SidebarLayout, narrow = false) {
   render(
     renderSidebarRegion({
@@ -70,6 +109,27 @@ afterEach(() => {
 });
 
 describe("chat pane sidebar layout", () => {
+  it("restores focus to the surviving tab after its parent commits native Close", async () => {
+    const parent = new NativeCloseLayoutFixture();
+    containers.push(parent);
+    document.body.append(parent);
+    await parent.updateComplete;
+    const region = parent.querySelector("openclaw-chat-sidebar-region")!;
+    await region.updateComplete;
+    parent.querySelector("textarea")!.focus();
+
+    const command = new CustomEvent("openclaw:native-close-focused-panel", { cancelable: true });
+    window.dispatchEvent(command);
+    expect(command.defaultPrevented).toBe(true);
+    await parent.updateComplete;
+    await region.updateComplete;
+
+    expect(sidebarActivePanel(parent.layout)?.slot).toBe("workspace");
+    const nextTab = parent.querySelector<HTMLElement>('wa-tab[panel="workspace"]')!;
+    expect(nextTab).not.toBeNull();
+    expect(document.activeElement).toBe(nextTab);
+  });
+
   it("preserves drafts and panel state across swapping, docking, focus, minimize, and mobile", async () => {
     const container = document.createElement("div");
     document.body.append(container);

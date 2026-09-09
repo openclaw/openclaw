@@ -1,6 +1,7 @@
 // Xiaomi setup module handles plugin onboarding behavior.
 import {
   createDefaultModelsPresetAppliers,
+  createDefaultModelsConnectionPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -17,21 +18,25 @@ import {
 export const XIAOMI_DEFAULT_MODEL_REF = `${XIAOMI_PROVIDER_ID}/${XIAOMI_DEFAULT_MODEL_ID}`;
 export const XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_REF = `${XIAOMI_TOKEN_PLAN_PROVIDER_ID}/${XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_ID}`;
 
+const xiaomiPreset = {
+  primaryModelRef: XIAOMI_DEFAULT_MODEL_REF,
+  resolveParams: () => {
+    const defaultProvider = buildXiaomiProvider();
+    return {
+      providerId: XIAOMI_PROVIDER_ID,
+      api: defaultProvider.api ?? "openai-completions",
+      baseUrl: defaultProvider.baseUrl,
+      defaultModels: () => defaultProvider.models ?? [],
+      defaultModelId: XIAOMI_DEFAULT_MODEL_ID,
+      aliases: [{ modelRef: XIAOMI_DEFAULT_MODEL_REF, alias: "Xiaomi" }],
+    };
+  },
+} satisfies Parameters<typeof createDefaultModelsConnectionPresetAppliers<[]>>[0];
+
 export const { applyConfig: applyXiaomiConfig, applyProviderConfig: applyXiaomiProviderConfig } =
-  createDefaultModelsPresetAppliers<[]>({
-    primaryModelRef: XIAOMI_DEFAULT_MODEL_REF,
-    resolveParams: () => {
-      const defaultProvider = buildXiaomiProvider();
-      return {
-        providerId: XIAOMI_PROVIDER_ID,
-        api: defaultProvider.api ?? "openai-completions",
-        baseUrl: defaultProvider.baseUrl,
-        defaultModels: defaultProvider.models ?? [],
-        defaultModelId: XIAOMI_DEFAULT_MODEL_ID,
-        aliases: [{ modelRef: XIAOMI_DEFAULT_MODEL_REF, alias: "Xiaomi" }],
-      };
-    },
-  });
+  createDefaultModelsPresetAppliers(xiaomiPreset);
+export const { applyConfig: applyXiaomiConnectionConfig } =
+  createDefaultModelsConnectionPresetAppliers(xiaomiPreset);
 
 const xiaomiTokenPlanPresetAppliers = createDefaultModelsPresetAppliers<[]>({
   primaryModelRef: XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_REF,

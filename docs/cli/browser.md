@@ -50,7 +50,7 @@ openclaw browser --browser-profile openclaw tabs
 openclaw browser --browser-profile openclaw open https://example.com
 ```
 
-Detailed guidance: [Browser troubleshooting](/tools/browser#cdp-startup-failure-vs-navigation-ssrf-block)
+Detailed guidance: [Browser troubleshooting](/tools/browser/troubleshooting#cdp-startup-failure-vs-navigation-ssrf-block)
 
 ## Lifecycle
 
@@ -88,7 +88,7 @@ If `openclaw browser` is an unknown command, check `plugins.allow` in `~/.opencl
 
 An explicit root `browser` block (for example `browser.enabled=true` or `browser.profiles.<name>`) also activates the bundled browser plugin under a restrictive plugin allowlist.
 
-Related: [Browser tool](/tools/browser#missing-browser-command-or-tool)
+Related: [Browser tool](/tools/browser/setup#missing-browser-command-or-tool)
 
 ## Profiles
 
@@ -301,7 +301,7 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
 
-When an action opens a modal dialog, the action response returns `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
+When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`; pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 
 Batch actions:
 
@@ -312,6 +312,8 @@ openclaw browser batch --actions-file - --continue
 ```
 
 `openclaw browser batch` sends a `kind="batch"` `/act` request with nested `BrowserActRequest` actions (`wait`, `click`, `type`, `evaluate`, ...) — not `open`/`navigate`/`snapshot`/`screenshot`, which are CLI subcommands, not `/act` kinds. `--continue` sets `stopOnError=false` (default stops on first error); `--target-id` scopes the whole batch to one tab. A failed nested action makes the command exit nonzero; use `--json` to retain the ordered `results` response. See [Browser batch CLI](/tools/browser-control#browser-batch-cli) for the full contract (ref lifecycle, target id conflicts, error summary). `batch` is not supported on `profile="user"` / existing-session profiles.
+
+If navigation or a closed page stops the batch, text output reports the action number and skipped count. Take a fresh snapshot before continuing with dependent actions.
 
 `--actions-file` and `--actions-file -` stdin input are capped at 1,000,000 bytes. Split larger plans into multiple `openclaw browser batch` commands.
 

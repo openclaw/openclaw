@@ -612,7 +612,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(anchor?.classList.contains("markdown-github-link")).toBe(true);
       expect(anchor?.dataset.githubKind).toBe(kind);
       expect(anchor?.textContent).toBe(`#${number}`);
-      expect(anchor?.title).toBe(href);
+      expect(anchor?.hasAttribute("title")).toBe(false);
       expect(anchor?.previousSibling?.textContent ?? "").toBe(prefix);
       expect(fragment.textContent).toBe(`${input}\n`);
     });
@@ -858,7 +858,13 @@ describe("toSanitizedMarkdownHtml links", () => {
       ["bare pull request", "https://github.com/openclaw/openclaw/pull/3434", "#3434", "pull"],
       ["bare issue", "https://github.com/openclaw/openclaw/issues/3435", "#3435", "issue"],
       ["autolink", "<https://github.com/openclaw/openclaw/pull/3434>", "#3434", "pull"],
-      ["bare www item", "https://www.github.com/openclaw/openclaw/issues/3435", "#3435", "issue"],
+      [
+        "bare www item",
+        "https://www.github.com/openclaw/openclaw/issues/3435",
+        "#3435",
+        "issue",
+        true,
+      ],
       ["repository", "https://github.com/openclaw/openclaw", "openclaw/openclaw", undefined],
       [
         "repository file",
@@ -944,7 +950,7 @@ describe("toSanitizedMarkdownHtml links", () => {
         "#3434",
         undefined,
       ],
-    ])("marks %s", (_kind, input, expectedText, expectedKind) => {
+    ])("marks %s", (_kind, input, expectedText, expectedKind, keepsTitle = false) => {
       const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
       const link = fragment.querySelector<HTMLAnchorElement>("a");
       expect(link?.classList.contains("markdown-github-link")).toBe(true);
@@ -952,7 +958,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(link?.classList.contains("markdown-github-item")).toBe(Boolean(expectedKind));
       expect(link?.getAttribute("data-github-kind")).toBe(expectedKind ?? null);
       if (expectedKind) {
-        expect(link?.getAttribute("title")).toBe(link?.getAttribute("href"));
+        expect(link?.getAttribute("title")).toBe(keepsTitle ? link?.getAttribute("href") : null);
         expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
         expect(link?.getAttribute("target")).toBe("_blank");
       }
@@ -989,15 +995,18 @@ describe("toSanitizedMarkdownHtml links", () => {
       ],
       ["a review comment query", "https://github.com/openclaw/openclaw/pull/3434?tab=files"],
       ["a diff anchor", "https://github.com/openclaw/openclaw/pull/3434/files#diff-abc123"],
-    ])("keeps the specific destination in the chip href and tooltip for %s", (_kind, input) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
-      const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.classList.contains("markdown-github-link")).toBe(true);
-      expect(link?.classList.contains("markdown-github-item")).toBe(true);
-      expect(link?.textContent).toBe("#3434");
-      expect(link?.getAttribute("href")).toBe(input);
-      expect(link?.getAttribute("title")).toBe(input);
-    });
+    ])(
+      "keeps the specific destination in the chip href without a native tooltip for %s",
+      (_kind, input) => {
+        const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+        const link = fragment.querySelector<HTMLAnchorElement>("a");
+        expect(link?.classList.contains("markdown-github-link")).toBe(true);
+        expect(link?.classList.contains("markdown-github-item")).toBe(true);
+        expect(link?.textContent).toBe("#3434");
+        expect(link?.getAttribute("href")).toBe(input);
+        expect(link?.hasAttribute("title")).toBe(false);
+      },
+    );
 
     it.each([
       ["non-github host", "[docs](https://example.com/openclaw)"],
@@ -1035,7 +1044,7 @@ describe("toSanitizedMarkdownHtml links", () => {
       const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-link");
       expect(link?.textContent).toBe(label);
       expect(link?.getAttribute("href")).toBe(href);
-      expect(link?.getAttribute("title")).toBe(href);
+      expect(link?.getAttribute("title")).toBe(kind ? null : href);
       expect(link?.classList.contains("markdown-bare-url")).toBe(true);
       expect(link?.classList.contains("markdown-github-item")).toBe(kind !== undefined);
       expect(link?.getAttribute("data-github-kind")).toBe(kind ?? null);

@@ -170,6 +170,7 @@ describe("ensureSkillsWatcher", () => {
         config: { skills: { load: {} } },
       });
 
+      seen.length = 0;
       watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit(
         "raw",
         "change",
@@ -208,6 +209,7 @@ describe("ensureSkillsWatcher", () => {
     expect(watched.options.depth).toBe(7);
 
     const changedPath = path.join(workspaceDir, "skills", "group", "demo", "SKILL.md");
+    seen.length = 0;
     watched.watcher.emit("all", "change", changedPath);
     await vi.advanceTimersByTimeAsync(250);
 
@@ -233,6 +235,7 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: {} } },
     });
 
+    seen.length = 0;
     watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit(
       "raw",
       "rename",
@@ -272,6 +275,7 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: {} } },
     });
 
+    seen.length = 0;
     watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit("raw", "rename", undefined, {
       watchedPath: path.join(fixtureWorkspaceDir, "skills"),
     });
@@ -303,6 +307,7 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: {} } },
     });
 
+    seen.length = 0;
     watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit("raw", "change", "SKILL.md", {
       watchedPath: skillDir,
     });
@@ -332,6 +337,7 @@ describe("ensureSkillsWatcher", () => {
     const versionBefore = getSkillsSnapshotVersion(fixtureWorkspaceDir);
     const stat = vi.spyOn(fsSync, "statSync");
 
+    seen.length = 0;
     watched.watcher.emit("raw", "change", "SKILL.md", { watchedPath: skillDir });
     await refreshModule.closeSkillsWatchers();
     expect(watched.watcher.close).toHaveBeenCalledOnce();
@@ -764,6 +770,7 @@ describe("ensureSkillsWatcher", () => {
         config: { skills: { load: {} } },
       });
 
+      seen.length = 0;
       watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).watcher.emit(
         "all",
         event,
@@ -826,6 +833,7 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: { extraDirs: [sharedA] } } },
     });
     const previousWatcher = watchForSkillRoot(sharedA).watcher;
+    seen.length = 0;
 
     refreshModule.ensureSkillsWatcher({
       workspaceDir: fixtureWorkspaceDir,
@@ -932,26 +940,36 @@ describe("ensureSkillsWatcher", () => {
     ]);
   });
 
-  it("fans out a shared-directory change to every subscribed workspace", async () => {
-    vi.useFakeTimers();
-    const secondWorkspace = await createFixtureDirectory("second-workspace");
-    const sharedRoot = await createFixtureDirectory("shared");
-    const config = { skills: { load: { extraDirs: [sharedRoot] } } };
-    const seen: SkillsChangeEvent[] = [];
-    refreshModule.registerSkillsChangeListener((change) => {
-      seen.push(change);
-    });
-    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
-    refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
-    const changedPath = path.join(sharedRoot, "demo", "SKILL.md");
-    watchForSkillRoot(sharedRoot).watcher.emit("all", "change", changedPath);
-    await vi.advanceTimersByTimeAsync(250);
+  it.each(["change", "ready"] as const)(
+    "fans out shared-directory %s to every subscribed workspace",
+    async (event) => {
+      vi.useFakeTimers();
+      const secondWorkspace = await createFixtureDirectory("second-workspace");
+      const sharedRoot = await createFixtureDirectory("shared");
+      const config = { skills: { load: { extraDirs: [sharedRoot] } } };
+      const seen: SkillsChangeEvent[] = [];
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+      refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
+      refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
+      seen.length = 0;
+      const changedPath =
+        event === "change" ? path.join(sharedRoot, "demo", "SKILL.md") : undefined;
+      const watcher = watchForSkillRoot(sharedRoot).watcher;
+      if (event === "ready") {
+        watcher.emit("ready");
+      } else {
+        watcher.emit("all", event, changedPath);
+      }
+      await vi.advanceTimersByTimeAsync(250);
 
-    expect(seen).toEqual([
-      { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath },
-      { workspaceDir: secondWorkspace, reason: "watch", changedPath },
-    ]);
-  });
+      expect(seen).toEqual([
+        { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath },
+        { workspaceDir: secondWorkspace, reason: "watch", changedPath },
+      ]);
+    },
+  );
 
   it("stops fanning a shared-directory change to a workspace after it unsubscribes", async () => {
     vi.useFakeTimers();

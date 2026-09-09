@@ -5,6 +5,7 @@ import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   controlUiSessionPath,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   expectPastedPngImage,
   installMockGateway,
@@ -113,20 +114,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -320,20 +308,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],

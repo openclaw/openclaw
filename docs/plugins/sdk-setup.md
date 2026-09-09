@@ -644,3 +644,6 @@ Bundled package metadata is explicit, not inferred from built JavaScript at gate
 - [Building plugins](/plugins/building-plugins) — step-by-step getting started guide
 - [Plugin manifest](/plugins/manifest) — full manifest schema reference
 - [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry`
+- [Plugin SDK overview](/plugins/sdk-overview) — import map and registration API reference
+- [Plugin SDK subpaths](/plugins/sdk-subpaths) — the public entrypoint catalog
+- [Plugin architecture internals](/plugins/architecture-internals) — load pipeline and registry model

@@ -7,6 +7,7 @@ import {
   applyConfigEnvVars,
   collectConfigRuntimeEnvOwnership,
   collectConfigRuntimeEnvVars,
+  collectConfigServiceEnvVars,
   createConfigRuntimeEnv,
   createConfigRuntimeEnvBase,
   getPublishedConfigRuntimeEnvState,
@@ -27,6 +28,41 @@ describe("config env vars", () => {
       expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
     });
   });
+
+  it.each(
+    ["OPENCLAW_CONFIG_READONLY", "OpenClaw_Config_ReadOnly"].flatMap((key) =>
+      ["direct", "vars"].map((source) => ({ key, source })),
+    ),
+  )("ignores config-owned $key from env $source in runtime and services", ({ key, source }) => {
+    const entries = { [key]: "1", OPENCLAW_NIX_MODE: "1", OPENCLAW_TEST_ALLOWED: "value" };
+    const config = { env: source === "vars" ? { vars: entries } : entries };
+    const expected = { OPENCLAW_NIX_MODE: "1", OPENCLAW_TEST_ALLOWED: "value" };
+    expect(collectConfigRuntimeEnvVars(config)).toEqual(expected);
+    expect(collectConfigServiceEnvVars(config)).toEqual(expected);
+    const env: NodeJS.ProcessEnv = {};
+    applyConfigEnvVars(config, env);
+    expect(env).toEqual(expected);
+  });
+
+  it.each([undefined, "0", "1"])(
+    "preserves host READONLY=%s through config env reload",
+    (value) => {
+      const key = "OPENCLAW_CONFIG_READONLY";
+      const env: NodeJS.ProcessEnv = value === undefined ? {} : { [key]: value };
+      const original = { ...env };
+      const previousConfig = { env: { vars: { [key]: "1" } } };
+      const nextConfig = { env: { vars: { [key]: "0" } } };
+      expect(() =>
+        assertGatewayConfigEnvSelectionUnchanged(previousConfig, nextConfig),
+      ).not.toThrow();
+      const prepared = prepareConfigRuntimeEnv({ previousConfig, nextConfig, env });
+      expect(prepared.env).toEqual(original);
+      const rollback = prepared.publish();
+      expect(env).toEqual(original);
+      rollback();
+      expect(env).toEqual(original);
+    },
+  );
 
   it("does not override existing env vars", async () => {
     await withEnvOverride({ OPENROUTER_API_KEY: "existing-key" }, async () => {
@@ -348,14 +384,14 @@ describe("config env vars", () => {
     });
   });
 
-  it("rejects process-stable Gateway selector changes during reload", () => {
-    expect(() =>
-      assertGatewayConfigEnvSelectionUnchanged(
-        {},
-        { env: { vars: { OPENCLAW_CONFIG_PATH: "/tmp/other.json" } } },
-      ),
-    ).toThrow("process-stable Gateway selector OPENCLAW_CONFIG_PATH");
-  });
+  it.each(["OPENCLAW_CONFIG_PATH"])(
+    "rejects process-stable Gateway selector %s changes during reload",
+    (key) => {
+      expect(() =>
+        assertGatewayConfigEnvSelectionUnchanged({}, { env: { vars: { [key]: "1" } } }),
+      ).toThrow(`process-stable Gateway selector ${key}`);
+    },
+  );
 
   it("preserves Windows case-insensitive env precedence in merged runtime env", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");

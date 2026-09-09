@@ -57,6 +57,8 @@ const TASK_COMPLETION_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
 const MAX_TASK_COMPLETION_STATUS_LABEL_CHARS = 500;
 const TASK_COMPLETION_STATUS_LABEL_TRUNCATION_MARKER = "…[truncated]";
 
+const MEDIA_DIRECTIVE_CONTROL_CHARS = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
+
 /** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
@@ -120,10 +122,7 @@ function sanitizeMultilineField(value: string): string {
 function sanitizeMediaDirectiveValue(value: string, raw = false): string | null {
   const sanitized = (raw ? value : escapeInternalRuntimeContextDelimiters(value))
     .replace(/\r?\n/g, " ")
-    .replace(/./gs, (char) => {
-      const code = char.charCodeAt(0);
-      return code < 32 || code === 127 ? " " : char;
-    })
+    .replace(MEDIA_DIRECTIVE_CONTROL_CHARS, " ")
     .trim();
   return sanitized || null;
 }

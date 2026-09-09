@@ -27,6 +27,7 @@ import {
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   getPreparedModelRuntimeSnapshot,
+  prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
@@ -58,6 +59,113 @@ describe("prepared model runtime scoped refresh", () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
     await resetPreparedModelRuntimeHarness(state);
   });
+
+  it.each(["warm", "cold"] as const)(
+    "does not carry catalog failure status from a %s source into its replacement",
+    async (inventoryState) => {
+      mocks.configuredAgentIds = ["default"];
+      const config = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://first.invalid/v1",
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      };
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      });
+      const input = {
+        agentId: "default",
+        agentDir: state.agentDir("default"),
+        inheritedAuthDir: state.agentDir("default"),
+        config,
+      };
+      const original = await prepareModelRuntimeSnapshot(input);
+      if (!original.loadFullModelCatalog) {
+        throw new Error("catalog source diagnostic requires a full catalog loader");
+      }
+      if (inventoryState === "warm") {
+        await original.loadFullModelCatalog();
+      }
+      const failure = new Error("previous source failed to refresh");
+      mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(failure);
+      await expect(original.loadFullModelCatalog({ refresh: true })).rejects.toBe(failure);
+      expect(original.modelCatalog.refreshFailed).toBe(true);
+
+      const replacementConfig = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://second.invalid/v1",
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      };
+      await refreshPreparedModelRuntimeSnapshots(replacementConfig, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      });
+      const replacement = await prepareModelRuntimeSnapshot({
+        ...input,
+        config: replacementConfig,
+      });
+      expect(replacement).not.toBe(original);
+      expect(replacement.isCurrent()).toBe(true);
+      expect(replacement.modelCatalog.refreshFailed).toBeUndefined();
+    },
+  );
+
+  it.each(["credentials", "plugins"] as const)(
+    "does not carry a cold catalog failure into replacement %s",
+    async (change) => {
+      mocks.configuredAgentIds = ["default"];
+      const originalIndex = mocks.pluginMetadataSnapshot.index;
+      mocks.pluginMetadataSnapshot.index = { ...originalIndex };
+      const input = {
+        agentId: "default",
+        agentDir: state.agentDir("default"),
+        inheritedAuthDir: state.agentDir("default"),
+        config: {},
+      };
+      const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+      try {
+        await refreshPreparedModelRuntimeSnapshots(input.config, options);
+        const original = await prepareModelRuntimeSnapshot(input);
+        if (!original.loadFullModelCatalog) {
+          throw new Error("expected the original catalog loader");
+        }
+        const failure = new Error("first catalog attempt failed");
+        mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(failure);
+        await expect(original.loadFullModelCatalog()).rejects.toBe(failure);
+        expect(original.modelCatalog.refreshFailed).toBe(true);
+        expect(original.readFullModelCatalog?.()).toBeUndefined();
+
+        if (change === "credentials") {
+          mocks.authStorage.getAll.mockReturnValue({
+            custom: { type: "api_key", key: "replacement-key" },
+          });
+        } else {
+          Object.assign(mocks.pluginMetadataSnapshot.index, {
+            hostContractVersion: "replacement",
+          });
+        }
+        await refreshPreparedModelRuntimeSnapshots(input.config, options);
+        const replacement = await prepareModelRuntimeSnapshot(input);
+        expect(replacement.isCurrent()).toBe(true);
+        expect(replacement.modelCatalog.refreshFailed).toBeUndefined();
+        expect(replacement.readFullModelCatalog?.()).toBeUndefined();
+      } finally {
+        mocks.pluginMetadataSnapshot.index = originalIndex;
+      }
+    },
+  );
 
   it.each([undefined, "provider-a:default"])(
     "retains failed-provider inventory and variants until authoritative recovery (%s)",

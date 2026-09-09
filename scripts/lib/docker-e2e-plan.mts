@@ -62,6 +62,8 @@ type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: stri
 const UPDATE_FIRST_HOP_COMPAT_CATALOGS = new Set([
   "3a07518cac2a3f92c0ecb73e177ced4ae3350872be59c8c9a1871c2f0e3c0773",
   "edf5302a5bb101f2a2efaf9735cd0ae90081bd1b693e0c77a1f8e56ada865096",
+  // Node-runner aliases for newer releases moved to the recorded package inventory.
+  "0a12e16a5b6a2d723472cff04a05b356751da92a54c7b9a19cbb539c94190bb6",
 ]);
 const IOS_WATCH_RELAY_COMMANDS = ['"watch.status"', '"watch.notify"'];
 type DockerE2ePlanOptions = {
@@ -336,6 +338,13 @@ function supportsMobilePairingReconnectForTarget(targetRoot: string | undefined)
     source.includes('platformId === "ios"') &&
     source.includes('normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"') &&
     source.includes("...watchRelayCommands")
+  );
+}
+
+function supportsCorruptPluginUpdateForTarget(targetRoot: string | undefined): boolean {
+  return (
+    !targetRoot ||
+    existsSync(resolve(targetRoot, "src/cli/update-cli/update-command-plugin-preflight.ts"))
   );
 }
 
@@ -636,9 +645,15 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       if (step.argv[0] !== "config" || step.argv[1] !== "set") {
         continue;
       }
-      const channelId = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(step.argv[2] ?? "")?.[1];
-      if (channelId) {
-        configuredChannelIds.add(channelId);
+      const configPaths: string[] =
+        step.argv[2] === "--batch-json"
+          ? JSON.parse(step.argv[3] ?? "").map((entry: { path: string }) => entry.path)
+          : [step.argv[2] ?? ""];
+      for (const configPath of configPaths) {
+        const channelId = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(configPath)?.[1];
+        if (channelId) {
+          configuredChannelIds.add(channelId);
+        }
       }
     }
   }
@@ -812,30 +827,32 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       : options.liveMode === "only"
         ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
         : applyLiveMode(retriedMainLanes, options.liveMode);
-  if (
-    options.allowFrozenTargetScenarioOmissions &&
-    !supportsUpdateFirstHopCompatForTarget(options.upgradeSurvivorTargetRoot)
-  ) {
-    const filteredLanes = configuredLanes.filter((lane) => lane.name !== "update-first-hop-compat");
-    if (filteredLanes.length !== configuredLanes.length) {
-      omittedUnsupportedLaneNames.add("update-first-hop-compat");
-      configuredLanes = filteredLanes;
-    }
-  }
-  if (
-    options.allowFrozenTargetScenarioOmissions &&
-    !supportsMobilePairingReconnectForTarget(options.upgradeSurvivorTargetRoot)
-  ) {
-    const filteredLanes = configuredLanes.filter(
-      (lane) => !lane.name.includes("mobile-pairing-reconnect"),
-    );
-    if (filteredLanes.length !== configuredLanes.length) {
-      for (const lane of configuredLanes) {
-        if (lane.name.includes("mobile-pairing-reconnect")) {
+  if (options.allowFrozenTargetScenarioOmissions) {
+    const unsupportedLaneRules = [
+      {
+        matches: (lane: DockerE2eLane) => lane.name === "update-first-hop-compat",
+        supported: supportsUpdateFirstHopCompatForTarget(options.upgradeSurvivorTargetRoot),
+      },
+      {
+        matches: (lane: DockerE2eLane) => lane.name.includes("mobile-pairing-reconnect"),
+        supported: supportsMobilePairingReconnectForTarget(options.upgradeSurvivorTargetRoot),
+      },
+      {
+        matches: (lane: DockerE2eLane) => lane.name === "update-corrupt-plugin",
+        supported: supportsCorruptPluginUpdateForTarget(options.upgradeSurvivorTargetRoot),
+      },
+    ];
+    for (const rule of unsupportedLaneRules) {
+      if (rule.supported) {
+        continue;
+      }
+      const retainedLanes = configuredLanes.filter((lane) => !rule.matches(lane));
+      if (retainedLanes.length !== configuredLanes.length) {
+        for (const lane of configuredLanes.filter(rule.matches)) {
           omittedUnsupportedLaneNames.add(lane.name);
         }
+        configuredLanes = retainedLanes;
       }
-      configuredLanes = filteredLanes;
     }
   }
   const configuredTailLanes =

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
@@ -41,9 +42,11 @@ async function fixing(boundary: Awaited<ReturnType<typeof start>>) {
 async function closed(boundary: Awaited<ReturnType<typeof start>>) {
   await vi.waitFor(
     async () => {
-      expect((await boundary.readEvents()).some((event) => event.kind === "scope-stopped")).toBe(
-        true,
-      );
+      const events = await boundary.readEvents();
+      expect(
+        events.some((event) => event.kind === "scope-stopped"),
+        `${await boundary.log()}\nEvents: ${JSON.stringify(events)}`,
+      ).toBe(true);
       expect((await boundary.members()).filter((member) => member.alive)).toEqual([]);
     },
     { timeout: 5000 },
@@ -56,6 +59,76 @@ async function closed(boundary: Awaited<ReturnType<typeof start>>) {
 }
 
 describe("managed triage attachment cutover (synthetic native boundary)", () => {
+  itUnix.each(["helper", "executor"] as const)(
+    "joins a controller started by the %s before fixture cleanup",
+    async (owner) => {
+      const coordination = await fs.mkdtemp(path.join(os.tmpdir(), "triage-controller-"));
+      const receipt = path.join(coordination, "ready.json");
+      let controller: { pid: number; start: number | null } | undefined;
+      let boundary: Awaited<ReturnType<typeof createTriageBoundary>> | undefined;
+      let cleanupAttempted = false;
+      try {
+        boundary = await createTriageBoundary("startup", undefined, undefined, async (root) => {
+          const native = path.join(root, "bin", "systemctl");
+          const script = await fs.readFile(native, "utf8");
+          const shebangEnd = script.indexOf("\n") + 1;
+          await fs.writeFile(
+            native,
+            script.slice(0, shebangEnd) +
+              `if (process.argv.includes('--fixture-pause')) {
+  require('node:fs').writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({pid:process.pid}));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+}\n` +
+              script.slice(shebangEnd),
+          );
+          const filename = path.join(root, owner === "helper" ? "handoff.cjs" : "candidate.mjs");
+          const source = await fs.readFile(filename, "utf8");
+          const marker =
+            owner === "helper"
+              ? 'const params = JSON.parse(fs.readFileSync(process.argv[2], "utf-8"));'
+              : "event('fixer', {failure:admission.failure});";
+          await fs.writeFile(
+            filename,
+            source.replace(
+              marker,
+              `${marker}\nspawn(${JSON.stringify(native)}, ['--fixture-pause'], {env:{...process.env,NODE_OPTIONS:''},stdio:'ignore'});`,
+            ),
+          );
+        });
+        await ready(boundary);
+        expect(await boundary.control("commit")).toBe("committed");
+        await fixing(boundary);
+        await vi.waitFor(async () => {
+          const { pid } = JSON.parse(await fs.readFile(receipt, "utf8"));
+          controller = { pid, start: getFileLockProcessStartTime(pid) };
+          expect(isPidAlive(pid)).toBe(true);
+        });
+        expect(
+          (await boundary.readEvents()).filter((event) => event.pid === controller!.pid),
+        ).toEqual([]);
+        cleanupAttempted = true;
+        await boundary.cleanup();
+        expect(isPidAlive(controller!.pid), "cleanup returned before its native controller").toBe(
+          false,
+        );
+        await expect(fs.access(boundary.root)).rejects.toThrow();
+      } finally {
+        if (
+          controller &&
+          isPidAlive(controller.pid) &&
+          getFileLockProcessStartTime(controller.pid) === controller.start
+        ) {
+          process.kill(controller.pid, "SIGKILL");
+          await vi.waitFor(() => expect(isPidAlive(controller!.pid)).toBe(false));
+        }
+        if (boundary && !cleanupAttempted) {
+          await boundary.cleanup();
+        }
+        await fs.rm(coordination, { recursive: true, force: true });
+      }
+    },
+  );
+
   itUnix.each(["allowed", "before-grant", "after-admission"] as const)(
     "retains the chat requester's authority at the repair effect boundary: %s",
     async (window) => {
@@ -537,12 +610,8 @@ const acceptTriageContinuation = async () => {
           script = script.replace(
             "event('branch',{child:branch.pid});",
             `
-event('branch',{child:branch.pid});
-const watcher = fs.watch(${JSON.stringify(root)}, (_event, name) => {
-  if (name !== 'disconnect') return;
-  watcher.close();
-  process.disconnect();
-});`,
+process.once('SIGUSR2', () => process.disconnect());
+event('branch',{child:branch.pid});`,
           );
         }
         await fs.writeFile(file, script);
@@ -557,7 +626,10 @@ const watcher = fs.watch(${JSON.stringify(root)}, (_event, name) => {
       } else if (loss === "cancelled" || loss === "scope") {
         boundary.replaceLease(loss);
       } else if (loss === "disconnect") {
-        await fs.writeFile(path.join(boundary.root, "disconnect"), "");
+        process.kill(
+          (await boundary.readEvents()).find((event) => event.kind === "fixer")!.pid,
+          "SIGUSR2",
+        );
       } else {
         process.kill(
           (await boundary.readEvents()).find((event) => event.kind === "fixer")!.pid,

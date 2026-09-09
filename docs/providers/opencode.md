@@ -193,4 +193,7 @@ a model does not prove your account can run it.
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config reference for agents, models, and providers.
   </Card>
+  <Card title="OpenCode plugin reference" href="/plugins/reference/opencode" icon="plug">
+    Native sessions, the session catalog toggle, and plugin config keys.
+  </Card>
 </CardGroup>

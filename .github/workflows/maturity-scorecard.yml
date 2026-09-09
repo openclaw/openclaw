@@ -391,6 +391,8 @@ jobs:
       actions: read
       contents: read
     outputs:
+      blocked_count: ${{ steps.validate_evidence.outputs.blocked_count }}
+      failed_count: ${{ steps.validate_evidence.outputs.failed_count }}
       scorecard_passed: ${{ steps.validate_evidence.outputs.scorecard_passed }}
     steps:
       - name: Checkout selected ref
@@ -689,7 +691,7 @@ jobs:
             "${allow_failures_args[@]}"
 
       - name: Upload generated PR files
-        if: ${{ inputs.publish_pull_request && steps.validate_evidence.outputs.scorecard_passed == 'true' }}
+        if: ${{ inputs.publish_pull_request }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}
@@ -708,19 +710,6 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Require zero failed or blocked scenarios
-        env:
-          BLOCKED_COUNT: ${{ steps.validate_evidence.outputs.blocked_count }}
-          FAILED_COUNT: ${{ steps.validate_evidence.outputs.failed_count }}
-          SCORECARD_PASSED: ${{ steps.validate_evidence.outputs.scorecard_passed }}
-        run: |
-          set -euo pipefail
-          if [[ "$SCORECARD_PASSED" != "true" ]]; then
-            echo "::error title=Maturity scorecard failed::${FAILED_COUNT} failed and ${BLOCKED_COUNT} blocked scenarios. Generated PR publication was blocked."
-            exit 1
-          fi
-          echo "Maturity scorecard passed with zero failed or blocked scenarios."
-
   publish_generated_pr:
     name: Publish generated maturity PR
     needs:
@@ -731,7 +720,6 @@ jobs:
       ${{ inputs.publish_pull_request &&
         needs.publisher_preflight.result == 'success' &&
         needs.publish.result == 'success' &&
-        needs.publish.outputs.scorecard_passed == 'true' &&
         github.event_name == 'workflow_dispatch' &&
         github.workflow_ref == 'openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main' &&
         needs.validate_selected_ref.outputs.workflow_file_path == '.github/workflows/maturity-scorecard.yml' &&
@@ -872,3 +860,28 @@ jobs:
             - Source SHA: `${{ needs.validate_selected_ref.outputs.selected_revision }}`
             - QA evidence run: `${{ inputs.qa_evidence_run_id || github.run_id }}`
             - Strict score validation and maturity docs rendering passed.
+
+  maturity_result:
+    name: Require complete maturity evidence
+    needs:
+      - publish
+      - publish_generated_pr
+    if: >-
+      ${{ always() &&
+        needs.publish.result == 'success' &&
+        (needs.publish_generated_pr.result == 'success' ||
+          needs.publish_generated_pr.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail incomplete maturity evidence
+        env:
+          BLOCKED_COUNT: ${{ needs.publish.outputs.blocked_count }}
+          FAILED_COUNT: ${{ needs.publish.outputs.failed_count }}
+          SCORECARD_PASSED: ${{ needs.publish.outputs.scorecard_passed }}
+        run: |
+          set -euo pipefail
+          if [[ "$SCORECARD_PASSED" != "true" ]]; then
+            echo "::error title=Maturity scorecard failed::${FAILED_COUNT} failed and ${BLOCKED_COUNT} blocked scenarios. Generated maturity PR was still published when requested."
+            exit 1
+          fi
+          echo "Maturity scorecard passed with zero failed or blocked scenarios."

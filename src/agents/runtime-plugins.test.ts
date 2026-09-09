@@ -127,17 +127,24 @@ describe("agent runtime plugin registries", () => {
 
   it("adopts full-only runtime capabilities from the active composition-root registry", () => {
     const activeRegistry = createEmptyPluginRegistry();
+    const primaryRegistry = createEmptyPluginRegistry();
     const contextEnginesAdopted = { handle: "context-engines" };
     const presentersAdopted = { handle: "presenters" };
+    const onPrimaryRegistry = vi.fn();
+    hoisted.loadPluginRegistryHandle.mockReturnValue(primaryRegistry);
     hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
     hoisted.adoptRuntimeContextEngineRegistrations.mockReturnValue(contextEnginesAdopted);
     hoisted.adoptRuntimeWidgetPresenterRegistrations.mockReturnValue(presentersAdopted);
 
     expect(
-      loadAgentRuntimePluginRegistryHandle({ config: {} as never, workspaceDir: "/tmp/workspace" }),
+      loadAgentRuntimePluginRegistryHandle(
+        { config: {}, workspaceDir: "/tmp/workspace" },
+        onPrimaryRegistry,
+      ),
     ).toBe(presentersAdopted);
+    expect(onPrimaryRegistry).toHaveBeenCalledExactlyOnceWith(primaryRegistry);
     expect(hoisted.adoptRuntimeContextEngineRegistrations).toHaveBeenCalledWith(
-      { handle: true },
+      primaryRegistry,
       activeRegistry,
     );
     expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).toHaveBeenCalledWith(

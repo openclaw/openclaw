@@ -61,6 +61,8 @@ export const SessionsCreateParamsSchema = closedObject({
         "When sessions.create creates a distinct child, whether that child succeeds its parent and emits the parent's terminal session_end. Requires parentSessionKey and emitCommandHooks. False keeps the parent active; omission preserves legacy behavior.",
     }),
   ),
+  // Applies only to the initial turn, matching chat.send (0 = no timeout).
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   mentions: Type.Optional(HumanMentionsSchema),

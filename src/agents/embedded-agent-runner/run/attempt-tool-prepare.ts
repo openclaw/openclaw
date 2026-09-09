@@ -69,6 +69,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   skillUsagePaths: SkillUsagePaths;
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
   codeModeSkills: readonly CodeModeSkill[];
+  reviewTranscript?: NonNullable<OpenClawCodingToolsOptions["exec"]>["reviewTranscript"];
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
@@ -252,6 +253,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
                 : {}),
               config: attempt.config,
               elevated: attempt.bashElevated,
+              reviewTranscript: params.reviewTranscript,
             },
             sandbox: params.setup.sandbox,
             stagedMediaPaths: resolveStagedInputMediaPaths(attempt.media),
@@ -276,7 +278,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
               ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
               origin: attempt.skillWorkshopOrigin,
               proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
-              proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
               proposalRevision: attempt.skillWorkshopProposalRevision,
               libraryAuthoring: attempt.skillLibraryAuthoring,
             },

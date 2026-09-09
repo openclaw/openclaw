@@ -46,6 +46,10 @@ the Gateway checks its pairing identity and generation against the persisted
 approval and limits access to the capabilities and commands that connection
 declared.
 
+An initial unapproved surface has no effective commands. While a later expansion
+waits, previously approved commands remain effective only if the node still
+declares them and Gateway command policy allows them.
+
 The **5-minute expiry** still applies to **device-pairing** requests,
 not to capability approvals on an already-paired device.
 
@@ -85,17 +89,40 @@ leaf certificate. The bootstrap token expires after 10 minutes. Explicit
 The bootstrap token and resulting device credential are separate, like a
 short-lived Tailscale auth key and the durable device identity it admits.
 Revoking or expiring the setup link does not revoke the paired device; remove
-the device separately when needed. The link never pre-approves `system.run` or
-folder sync. Those operations still use pending approval or
+the device separately when needed. Administrator-minted bootstrap enrollment
+approves the device and its first declared command surface, including `system.run`
+when declared, like
 [SSH-verified device auto-approval](#ssh-verified-device-auto-approval-default).
+Later command, capability, or permission expansion still requires approval.
+Gateway command policy and [node-local exec approvals](/tools/exec-approvals)
+remain separate gates. Local exec approvals default to `full` with `ask: "off"`;
+configure them before using a link if that access is too broad.
 
 ## CLI workflow (headless friendly)
 
+For manual device admission, first run on the Gateway:
+
+```bash
+openclaw devices list
+openclaw devices approve <deviceRequestId>
+```
+
+Restart the installed node with `openclaw node restart`, or stop and rerun its
+foreground command. A node paused on `PAIRING_REQUIRED` does not resume after
+manual approval. Its reconnect creates the separate command-surface request:
+
 ```bash
 openclaw nodes pending
-openclaw nodes approve <requestId>
-openclaw nodes reject <requestId>
+openclaw nodes approve <nodeRequestId>
 openclaw nodes status
+openclaw nodes describe --node <idOrNameOrIp>
+```
+
+The device and node request IDs are distinct. To reject a surface request or
+manage an existing node instead:
+
+```bash
+openclaw nodes reject <nodeRequestId>
 openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
@@ -150,13 +177,13 @@ top-level Gateway `fs.listDir` RPC needs `operator.write` for
 workspace-contained host browsing and `operator.admin` when `nodeId` is present.
 
 <Warning>
-Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.
+Node surface approval records the durable command/capability ceiling. It does
+not grant commands that the node adds later or no longer declares.
 
-- Live node commands come from what the node declares on connect, filtered by
-  the gateway's global node command policy (`gateway.nodes.commands.allow` and
-  `gateway.nodes.commands.deny`).
-- Per-node `system.run` allow and ask policy lives on the node in
-  `exec.approvals.node.*`, not in the pairing record.
+- Live commands must be both declared and approved, then pass the Gateway's
+  command policy (`gateway.nodes.commands.allow` and `gateway.nodes.commands.deny`).
+- Shell allowlist and ask policy for `system.run` live in the node's
+  [exec approvals](/tools/exec-approvals), not in the pairing record.
 
 </Warning>
 
@@ -340,6 +367,8 @@ Security boundary:
   network locality alone.
 - Only a fresh `role: node` device pairing request with no requested scopes is
   eligible.
+- This approves the device only. Its first command surface still needs
+  `openclaw nodes pending` and `openclaw nodes approve <nodeRequestId>`.
 - Operator, browser, Control UI, and WebChat clients stay manual.
 - Role, scope, metadata, and public-key upgrades stay manual.
 - Same-host loopback trusted-proxy header paths are not eligible, because that

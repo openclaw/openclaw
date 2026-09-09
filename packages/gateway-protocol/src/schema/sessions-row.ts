@@ -223,9 +223,14 @@ export const SessionRowSchema = Type.Object(
     /** Runtime model serving this session while it differs from the selected model. */
     activeModel: Type.Optional(Type.String()),
     activeModelProvider: Type.Optional(Type.String()),
-    /** Persisted override provenance; null means inherited, omission means not projected. */
+    /** Effective override provenance; null means configured default, omission means not projected. */
     modelOverrideSource: Type.Optional(
-      Type.Union([Type.Literal("user"), Type.Literal("auto"), Type.Null()]),
+      Type.Union([
+        Type.Literal("user"),
+        Type.Literal("auto"),
+        Type.Literal("inherited"),
+        Type.Null(),
+      ]),
     ),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },

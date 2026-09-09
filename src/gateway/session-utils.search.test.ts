@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { sessionStoreTargetsFixture } from "./session-list.test-support.js";
 import { filterAndSortSessionEntries } from "./session-utils-list.js";
 
 // Candidate search must never render full rows or read transcripts.
@@ -64,12 +65,12 @@ function selectSessionKeys(params: {
   return filterAndSortSessionEntries({
     cfg: params.cfg ?? baseCfg,
     store,
-    targetsBySessionKey: new Map(
-      Object.keys(store).map((key) => [
-        key,
-        { agentId: "main", storeTarget: { agentId: "main", storePath: "" } },
-      ]),
-    ),
+    targetsBySessionKey: sessionStoreTargetsFixture({
+      cfg: params.cfg ?? baseCfg,
+      storePath: "",
+      store,
+      agentId: "main",
+    }),
     opts: params.opts,
     now,
   }).map(([key]) => key);

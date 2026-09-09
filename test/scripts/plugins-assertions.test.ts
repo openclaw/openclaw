@@ -1850,6 +1850,53 @@ fs.renameSync = (source, destination) => {
     }
   });
 
+  it("accepts a retained legacy npm listing only for the keep-files assertion", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const installPath = path.join(home, ".openclaw", "npm", "demo-plugin-npm");
+    const dependencyPackagePath = path.join(installPath, "node_modules", "is-number");
+
+    try {
+      mkdirSync(dependencyPackagePath, { recursive: true });
+      writeJson(path.join(scratchRoot, "plugins-npm-retained.json"), {
+        plugins: [{ id: "demo-plugin-npm", status: "disabled", enabled: false }],
+      });
+      writeFileSync(path.join(scratchRoot, "plugins-npm-install-path.txt"), installPath, "utf8");
+      writeFileSync(
+        path.join(scratchRoot, "plugins-npm-dependency-path.txt"),
+        dependencyPackagePath,
+        "utf8",
+      );
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+        installRecords: {},
+      });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), { plugins: { entries: {} } });
+      const env = {
+        ...process.env,
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      };
+
+      const current = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-retained"], {
+        encoding: "utf8",
+        env,
+      });
+      const legacy = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-npm-retained"], {
+        encoding: "utf8",
+        env: { ...env, OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: "legacy" },
+      });
+
+      expect(current.status).not.toBe(0);
+      expect(current.stderr).toContain("still listed after uninstall");
+      expect(legacy.status, legacy.stderr).toBe(0);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("rejects unreadable config during plugin uninstall proof", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
     const home = path.join(root, "home");

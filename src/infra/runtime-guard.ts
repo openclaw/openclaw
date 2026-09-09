@@ -1,32 +1,18 @@
 // Validates the current runtime against OpenClaw's Node engine floor.
 import process from "node:process";
 import { format } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import {
   isNodeVersionAtLeast,
   isSupportedOpenClawNodeVersion,
   parseNodeReleaseVersion,
 } from "../../node-version.mjs";
-import { formatConsoleDiagnosticBlock } from "../logging/json-console-line.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import {
   detectCurrentRuntimeSqliteVersion,
   isSqliteWalResetSafeVersion,
 } from "./sqlite-runtime-version.js";
-
-// Runtime validation precedes console capture. Keep this direct sink aligned
-// with configured JSONL output without pulling in the full logger.
-const defaultRuntime: RuntimeEnv = {
-  log: (...args) => console.log(...args),
-  error: (...args) => {
-    const message = format(...args);
-    process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }));
-  },
-  exit: (code) => {
-    process.exit(code);
-  },
-};
 
 type RuntimeKind = "bun" | "node" | "unknown";
 
@@ -213,12 +199,27 @@ export function nodeVersionSatisfiesEngine(
 }
 
 /** Exits through the provided runtime when the current Node runtime is unsupported. */
-export function assertSupportedRuntime(
-  runtime: RuntimeEnv = defaultRuntime,
+export async function assertSupportedRuntime(
+  providedRuntime?: RuntimeEnv,
   details: RuntimeDetails = detectRuntime(),
-): void {
+): Promise<void> {
   if (runtimeSatisfies(details)) {
     return;
+  }
+  let runtime = providedRuntime;
+  // Healthy starts need no diagnostic graph; a supplied runtime already owns its error sink.
+  if (!runtime) {
+    const { formatConsoleDiagnosticBlock } = await import("../logging/json-console-line.js");
+    runtime = {
+      log: (...args) => console.log(...args),
+      error: (...args) => {
+        const message = format(...args);
+        process.stderr.write(
+          formatConsoleDiagnosticBlock({ level: "error", message: `${message}\n` }),
+        );
+      },
+      exit: (code) => process.exit(code),
+    };
   }
 
   const versionLabel = details.version ?? "unknown";

@@ -17,6 +17,8 @@ function isBlockedConfigEnvVar(key: string): boolean {
   return (
     key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
     key.toUpperCase() === "OPENCLAW_INCLUDE_ROOTS" ||
+    // Config cannot opt into or out of the host-selected read-only mode.
+    key.toUpperCase() === "OPENCLAW_CONFIG_READONLY" ||
     isDangerousHostEnvVarName(key) ||
     isDangerousHostEnvOverrideVarName(key)
   );

@@ -1,10 +1,13 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { crabboxCommandError } from "./crabbox-worker-command-error.js";
+import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { nonEmptyString } from "./crabbox-worker-profile.js";
+import { WARM_IMAGE_COMMAND_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
 
 const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
-export function parseCheckpointJson(stdout: string, action: string): Record<string, unknown> {
+function parseCheckpointJson(stdout: string, action: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -39,6 +42,22 @@ export function parseCreatedCheckpoint(
   return { checkpointId, kind, state: "available" };
 }
 
+export function parseForkedCheckpoint(
+  stdout: string,
+  expected: { checkpointId: string; leaseId: string; provider: string; slug: string },
+): void {
+  const fork = parseCheckpointJson(stdout, "fork");
+  if (
+    fork.checkpointId !== expected.checkpointId ||
+    fork.leaseId !== expected.leaseId ||
+    fork.provider !== expected.provider ||
+    fork.slug !== expected.slug ||
+    !nonEmptyString(fork.workdir)
+  ) {
+    throw new Error("Crabbox checkpoint fork returned an invalid lease identity");
+  }
+}
+
 export function parseCheckpointAvailability(stdout: string): "available" | "pending" | "missing" {
   const record = parseCheckpointJson(stdout, "inspect");
   if (!nonEmptyString(record.localState) || !nonEmptyString(record.nextAction)) {
@@ -57,4 +76,75 @@ export function parseCheckpointAvailability(stdout: string): "available" | "pend
     record.nextAction === "fork_restore_or_delete"
     ? "available"
     : "pending";
+}
+
+export type CheckpointContext = {
+  binary: string;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+};
+export type MaintenanceContext = Omit<CheckpointContext, "binary"> & {
+  binaries: readonly string[];
+};
+
+export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
+  const assertCurrent = (context: CheckpointContext | MaintenanceContext) => {
+    context.assertCurrent?.();
+    context.signal?.throwIfAborted();
+  };
+  const checkpointCommand = async (
+    context: CheckpointContext,
+    action: "create" | "delete" | "fork" | "inspect" | "scrub",
+    args: string[],
+    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
+    input?: string,
+  ): Promise<string> => {
+    assertCurrent(context);
+    const result = await runCrabboxCommand({
+      action: action === "scrub" ? action : `checkpoint ${action}`,
+      args,
+      binary: context.binary,
+      runCommand,
+      timeoutMs,
+      ...(context.signal ? { signal: context.signal } : {}),
+      ...(input === undefined ? {} : { input }),
+    });
+    if (result.termination !== "exit" || result.code !== 0) {
+      throw crabboxCommandError(action === "scrub" ? action : `checkpoint ${action}`, result);
+    }
+    return result.stdout;
+  };
+  const deleteCheckpoint = async (
+    context: CheckpointContext | MaintenanceContext,
+    checkpointId: string,
+    remainingMs: () => number,
+  ): Promise<boolean> => {
+    const binaries = "binary" in context ? [context.binary] : context.binaries;
+    if (binaries.length === 0) {
+      return false;
+    }
+    for (const [index, binary] of binaries.entries()) {
+      assertCurrent(context);
+      const timeoutMs = remainingMs();
+      if (timeoutMs <= 0) {
+        return false;
+      }
+      const stdout = await checkpointCommand(
+        { ...context, binary },
+        "delete",
+        ["checkpoint", "delete", checkpointId],
+        timeoutMs,
+      );
+      // Crabbox exits 0 with this line for ids outside its catalog; a record clears only
+      // after a real deletion or once every configured executable reports it absent.
+      if (
+        index === binaries.length - 1 ||
+        !stdout.split("\n").some((line) => line.trim() === `checkpoint absent id=${checkpointId}`)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return { checkpointCommand, deleteCheckpoint };
 }

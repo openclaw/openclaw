@@ -55,6 +55,13 @@ describe("test runtime prerequisites", () => {
     ["QA directory", ["extensions/qa-lab"], "private-qa"],
     ["tooling config", ["test/vitest/vitest.tooling.config.ts"], "private-qa"],
     ["QA config", ["test/vitest/vitest.extension-qa.config.ts"], "private-qa"],
+    [
+      "sticker provider runtime",
+      ["extensions/telegram/src/sticker-cache.selection.test.ts"],
+      "runtime",
+    ],
+    ["Telegram config", ["test/vitest/vitest.extension-telegram.config.ts"], "runtime"],
+    ["ordinary Telegram test", ["extensions/telegram/src/sequential-key.test.ts"], undefined],
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["root config", ["vitest.config.ts"], "private-qa"],
@@ -173,6 +180,7 @@ describe("test runtime prerequisites", () => {
     ["gateway", ["gateway-*.test.ts"], "runtime"],
     ["gateway", ["server*.test.ts"], "runtime"],
     ["tooling", ["**/gateway-codex-delivery-cache.test.ts"], "runtime"],
+    ["extension-telegram", ["**/sticker-cache.selection.test.ts"], undefined],
   ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
     const selections = resolveVitestRuntimeCliSelections(
       `test/vitest/vitest.${project}.config.ts`,
@@ -1095,7 +1103,10 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       changedPath: ".github/actions/setup-node-env/action.yml",
-      exactTargets: ["test/scripts/install-trufflehog.test.ts"],
+      exactTargets: [
+        "test/scripts/install-trufflehog.test.ts",
+        "test/scripts/setup-node-env-bun.test.ts",
+      ],
     },
   ])("unions exact owners and references for $changedPath", ({ changedPath, exactTargets }) => {
     withTinyGitRepo(
@@ -1112,6 +1123,13 @@ describe("scripts/test-projects changed-target routing", () => {
         expect(targets).toContain("test/scripts/direct-workflow-reference.test.ts");
         expect(targets).toContain("test/scripts/ci-workflow-guards.test.ts");
       },
+    );
+  });
+
+  it("routes the Bun image consumer to its executable action regression", () => {
+    expectChangedTargets(
+      [".github/actions/setup-node-env/seed-bun-from-image.mjs"],
+      ["test/scripts/setup-node-env-bun.test.ts"],
     );
   });
 
@@ -1166,6 +1184,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/npm-prepared-bundle.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
+        "test/scripts/verify-stable-main-closeout.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
@@ -1327,6 +1346,7 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/setup-pnpm-store-cache-image.test.ts",
         ],
       ],
     ]);
@@ -2281,7 +2301,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes mac restart helpers through restart-mac owner tests", () => {
     expectChangedTargets(
       ["scripts/lib/restart-mac-gateway.sh"],
-      ["test/scripts/restart-mac.test.ts"],
+      ["test/scripts/build-and-run-mac.test.ts", "test/scripts/restart-mac.test.ts"],
     );
   });
 

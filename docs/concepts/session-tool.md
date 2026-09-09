@@ -137,6 +137,8 @@ In Code Mode, the conversation tools reuse their exact Gateway output contracts.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities and normal visibility policy before admitting the target turn; target placement does not grant messaging access. Targets outside the configured visibility scope, archived targets, and replaced targets remain denied.
 
+During healthy worker provisioning or workspace preparation, accepted input stays queued until the intended worker is ready. It starts once after OpenClaw rechecks the session and placement. Cancellation, failed setup, or a replaced destination does not silently run that input locally or on another worker. Check the retained input and setup error before submitting another message.
+
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
 

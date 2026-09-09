@@ -208,6 +208,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ? getCodexAppServerClientInstanceId(params.client)
     : undefined;
   return {
+    effectiveConfig,
     contextEngineBinding,
     dynamicToolsContainDeferred,
     dynamicToolsFingerprint,

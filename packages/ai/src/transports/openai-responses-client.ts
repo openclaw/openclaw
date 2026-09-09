@@ -159,18 +159,15 @@ function resolveProviderTransportTurnState(
 
 export function createOpenAIResponsesClient(
   model: Model,
-  context: Context,
   apiKey: string,
-  optionHeaders?: Record<string, string>,
-  turnHeaders?: Record<string, string>,
-  sessionId?: string,
+  defaultHeaders: Record<string, string>,
   fetchOverride?: typeof globalThis.fetch,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: resolveOpenAIClientBaseUrl(model),
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
+    defaultHeaders,
     fetch: fetchOverride ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -234,15 +231,21 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               options?.headers,
               websocketSessionPolicy?.headers,
               options?.sessionId,
+              options?.cacheRetention,
             )
           : undefined;
-        const client = config.createClient(
+        const httpHeaders = buildOpenAIClientHeaders(
           model,
           context,
-          apiKey,
           options?.headers,
           turnState?.headers,
           options?.sessionId,
+          options?.cacheRetention,
+        );
+        const client = config.createClient(
+          model,
+          apiKey,
+          httpHeaders,
           compactRequest
             ? createBoundedOpenAIResponsesCompactionFetch(buildGuardedModelFetch(model))
             : undefined,
@@ -344,13 +347,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             sessionId,
             apiKey,
             baseUrl: model.baseUrl,
-            headers: buildOpenAIClientHeaders(
-              model,
-              context,
-              options?.headers,
-              turnState?.headers,
-              sessionId,
-            ),
+            headers: httpHeaders,
             request: params as ResponsesContinuationRequest,
             restoreRequest: () =>
               restoreResponsesReasoningState(context, model, responsesOptions, params),
@@ -664,18 +661,15 @@ function resolveAzureDeploymentName(model: Model): string {
 
 export function createAzureOpenAIClient(
   model: Model,
-  context: Context,
   apiKey: string,
-  optionHeaders?: Record<string, string>,
-  turnHeaders?: Record<string, string>,
-  _sessionId?: string,
+  defaultHeaders: Record<string, string>,
   fetchOverride?: typeof globalThis.fetch,
 ) {
   const baseURL = model.baseUrl.replace(/\/+$/, "");
   const clientOptions = {
     apiKey,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders,
     baseURL,
     fetch: fetchOverride ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),

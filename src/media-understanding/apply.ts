@@ -142,8 +142,8 @@ export async function applyMediaUnderstanding(params: {
   workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
-  /** Preserve native-harness ownership of image, video, and file inputs while applying STT. */
-  processingMode?: "audio-only";
+  /** Limit utility processing while preserving native image and video inputs. */
+  processingMode?: "audio-only" | "files-only" | "audio-and-files";
   /** Render local paths immediately only when the caller owns the final tool surface. */
   selfServeLocalPaths?: boolean;
   /** Attachment indexes the caller (ACP) has already resolved into native turn attachments. */
@@ -170,7 +170,11 @@ export async function applyMediaUnderstanding(params: {
 
   try {
     const results = await pMap(
-      params.processingMode === "audio-only" ? AUDIO_ONLY_CAPABILITY_ORDER : CAPABILITY_ORDER,
+      params.processingMode === "files-only"
+        ? []
+        : params.processingMode === "audio-only" || params.processingMode === "audio-and-files"
+          ? AUDIO_ONLY_CAPABILITY_ORDER
+          : CAPABILITY_ORDER,
       async (capability) =>
         await runMediaCapability({
           capability,

@@ -380,18 +380,6 @@ export async function refreshSenderAgentAvatars(
     return;
   }
   senderAvatarInputs.set(host, inputs);
-  // Use the same normalized sender metadata as grouping, after each transcript commit.
-  const agentIds = host.chatMessages.flatMap((message) => {
-    if (resolveMessageRole(message) !== "assistant") {
-      return [];
-    }
-    const id = readMessageSenderSession(asOptionalRecord(message)?.senderSession)?.agentId;
-    return id ? [id] : [];
-  });
-  await loadSenderAgentAvatars(host, agentIds);
-}
-
-async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly string[]) {
   // A unique token keeps a batch retired by invalidation from becoming current again.
   const request = {};
   senderAvatarRequests.set(host, request);
@@ -400,11 +388,23 @@ async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly s
   const client = host.client;
   const epoch = host.connectionEpoch;
   const agents = host.agentsList?.agents;
-  const roster = new Set(agents?.map((agent) => agent.id));
-  // Bound forwarded-agent work independently of transcript size.
-  const ids = [...new Set(agentIds)]
-    .filter((id) => host.connected && id !== agentId && roster.has(id))
-    .slice(0, CHAT_AVATAR_CACHE_LIMIT - 1);
+  const remainingIds = new Set(agents?.map((agent) => agent.id));
+  // Consume each sender once, reserving one cache slot for the current agent.
+  const ids: string[] = [];
+  if (host.connected) {
+    for (const message of host.chatMessages) {
+      if (resolveMessageRole(message) !== "assistant") {
+        continue;
+      }
+      const id = readMessageSenderSession(asOptionalRecord(message)?.senderSession)?.agentId;
+      if (id && id !== agentId && remainingIds.delete(id)) {
+        ids.push(id);
+        if (ids.length === CHAT_AVATAR_CACHE_LIMIT - 1) {
+          break;
+        }
+      }
+    }
+  }
   const previousAvatars = host.senderAgentAvatars;
   // Empty/disconnected batches clear synchronously; only awaited loads need the stale fence.
   const snapshots = ids.length

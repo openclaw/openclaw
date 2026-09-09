@@ -240,6 +240,10 @@ If a provider setup step fails in interactive onboarding (for example a CLI reus
 without a local sign-in), the wizard shows the error and returns to the provider picker
 instead of exiting. Explicit `--auth-choice` runs still fail fast for automation.
 
+The model defaults and provider support statements below describe v2026.9.3. Model
+defaults move with the product baseline, so check [Models](/concepts/models) if you are
+on a different release.
+
 <AccordionGroup>
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.

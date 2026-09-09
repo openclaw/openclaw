@@ -29,6 +29,7 @@ import {
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -196,13 +197,17 @@ export function createExecTool(
     label: "exec",
     displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
     get description() {
-      return describeExecTool({ hasCronTool: defaults?.hasCronTool === true });
+      return describeExecTool({
+        hasCronTool: defaults?.hasCronTool === true,
+        autoReview: defaults?.mode === "auto",
+      });
     },
     parameters: execSchema,
     prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
+      const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
       assertSupportedExecParams(args);
       // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
       let autoReviewer: ExecAutoReviewer | undefined = defaults?.autoReviewer;
@@ -218,6 +223,11 @@ export function createExecTool(
           return createModelExecAutoReviewer(reviewerParams)(input);
         };
       }
+      const reviewCommand = autoReviewer;
+      autoReviewer = (input) => {
+        const transcript = defaults?.reviewTranscript?.();
+        return reviewCommand(transcript ? { ...input, transcript } : input);
+      };
       let params = requestPreparation.normalizeParams(args);
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
@@ -225,8 +235,6 @@ export function createExecTool(
       const hookContext = requestPreparation.getExecHookContext(params);
       const preparedWorkdirState = requestPreparation.getResolvedExecWorkdirPreparedState(params);
 
-      const maxOutput = DEFAULT_MAX_OUTPUT;
-      const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const approvalWarningText = normalizeOptionalString(defaults?.approvalWarningText);
@@ -428,6 +436,7 @@ export function createExecTool(
           if (!defaults?.operationalRunInstance) {
             throw new Error("Secret egress proxy requires an admitted agent run instance");
           }
+          assertSourceActive();
           secretEgressEnv = registerSecretEgressProxyRun(
             defaults.operationalRunInstance,
             storeEnv.secretEgressBindings ?? [],
@@ -543,8 +552,8 @@ export function createExecTool(
             warnings,
             notifySessionKey,
             approvalRunningNoticeMs,
-            maxOutput,
-            pendingMaxOutput,
+            maxOutput: DEFAULT_MAX_OUTPUT,
+            pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
             cleanupMs,
             processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
@@ -589,8 +598,8 @@ export function createExecTool(
           containerWorkdir,
           usePty,
           warnings,
-          maxOutput,
-          pendingMaxOutput,
+          maxOutput: DEFAULT_MAX_OUTPUT,
+          pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
           cleanupMs,
           notifyOnExit,
           notifyOnExitEmptySuccess,

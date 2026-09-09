@@ -14,7 +14,7 @@ This guide sets up one OpenClaw gateway that a whole team uses: a bot in the wor
 - A host for the Gateway that stays on: a small VPS, an office Mac, or any [supported install target](/install).
 - OpenClaw installed and onboarded on that host - see [Getting started](/start/getting-started).
 - A chat workspace the team already uses (Discord, Google Chat, Mattermost, Microsoft Teams, Slack, Telegram, ...) - see [Channels](/channels).
-- A strong latest-generation model. Shared gateways see more varied input than a solo setup, and modern models are substantially more resistant to prompt injection - see [Security](/gateway/security#prompt-injection).
+- A strong latest-generation model. Shared gateways see more varied input than a solo setup, and modern models are substantially more resistant to prompt injection - see [Security](/gateway/security/prompt-injection).
 - Optional: teammates' GitHub accounts, if you want verified identity and commit credit.
 
 ## One trust boundary
@@ -47,7 +47,7 @@ Connect the channel your team lives in. Example: a Slack bot, allowed in one tea
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
       groupPolicy: "allowlist",
       channels: {
-        C0123456789: { requireMention: true },
+        "<SLACK_CHANNEL_ID>": { requireMention: true },
       },
     },
   },

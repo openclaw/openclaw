@@ -359,15 +359,9 @@ test("sessions.delete keeps same-key successor worktree creation behind exact cl
     },
   } as never;
   let successorWorktreeId: string | undefined;
-  let releaseRemoval = () => {};
-  const removalGate = new Promise<void>((resolve) => {
-    releaseRemoval = resolve;
-  });
+  const { promise: removalGate, resolve: releaseRemoval } = createDeferredCore();
   const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
-  let markRemovalStarted = () => {};
-  const removalStarted = new Promise<void>((resolve) => {
-    markRemovalStarted = resolve;
-  });
+  const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
   const removeSpy = vi.spyOn(managedWorktrees, "remove");
   try {
     const predecessor = await directSessionReq<{

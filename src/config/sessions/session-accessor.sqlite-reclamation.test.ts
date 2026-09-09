@@ -1,13 +1,17 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop, setTimeout as delay } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import type { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
+import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
@@ -45,8 +49,31 @@ import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
 const hooks = vi.hoisted(() => ({
   beforeAuthorization: undefined as (() => void) | undefined,
+  beforeWriteAdmission: undefined as (() => Promise<void>) | undefined,
   afterWriteAdmission: undefined as (() => Promise<void>) | undefined,
+  failWorkerLog: false,
+  workerLogAttempts: 0,
 }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => {
+      const logger = actual.createSubsystemLogger(name);
+      const warn = logger.warn;
+      logger.warn = (message, meta) => {
+        if (message === "slow SQLite reclamation Worker operation") {
+          hooks.workerLogAttempts += 1;
+          if (hooks.failWorkerLog) {
+            throw new Error("synthetic log transport failure");
+          }
+        }
+        warn(message, meta);
+      };
+      return logger;
+    },
+  };
+});
 vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
@@ -59,11 +86,13 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
         ...params,
         ...(withWriteAdmission
           ? {
-              withWriteAdmission: (run: Parameters<typeof withWriteAdmission>[0]) =>
-                withWriteAdmission(async (refusal) => {
+              withWriteAdmission: async (run: Parameters<typeof withWriteAdmission>[0]) => {
+                await hooks.beforeWriteAdmission?.();
+                return withWriteAdmission(async (refusal) => {
                   await hooks.afterWriteAdmission?.();
                   return await run(refusal);
-                }),
+                });
+              },
             }
           : {}),
         onCommitRequest: () => {
@@ -76,7 +105,10 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
 });
 afterEach(() => {
   hooks.beforeAuthorization = undefined;
+  hooks.beforeWriteAdmission = undefined;
   hooks.afterWriteAdmission = undefined;
+  hooks.failWorkerLog = false;
+  hooks.workerLogAttempts = 0;
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -663,3 +695,101 @@ test("file warnings link an awaited native worker without attributing it to the 
     setLoggerOverride(null);
   }
 });
+
+test.each([
+  { elapsedMs: 0, rejected: false, failLog: false },
+  { elapsedMs: 1_500, rejected: false, failLog: false },
+  { elapsedMs: 1_500, rejected: true, failLog: false },
+  { elapsedMs: 1_500, rejected: false, failLog: true },
+  { elapsedMs: 1_500, rejected: true, failLog: true },
+])(
+  "records the joined reclamation lifetime outside writers (elapsed=$elapsedMs, rejected=$rejected, log failure=$failLog)",
+  async ({ elapsedMs, rejected, failLog }) => {
+    const { databaseOptions, plan } = createFixture();
+    const file = path.join(tempDirs.make("openclaw-reclamation-log-"), "reclamation.log");
+    await fs.writeFile(file, "");
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const workers: Array<{ worker: Worker; id: number }> = [];
+    const observeWorker = (worker: Worker) => workers.push({ worker, id: worker.threadId });
+    process.on("worker", observeWorker);
+    const failure = new Error("synthetic reclamation refusal; private plan details");
+    let revoked = false;
+    let admissions = 0;
+    let otherWriterRan = false;
+    hooks.failWorkerLog = failLog;
+    hooks.beforeWriteAdmission = async () => {
+      if (++admissions !== 2) {
+        return;
+      }
+      // The first admission has ended; the second has not entered the writer FIFO.
+      await runExclusiveSqliteSessionWrite(databaseOptions, async () => {
+        otherWriterRan = true;
+      });
+      clock = elapsedMs;
+      revoked = rejected;
+    };
+    const trace = { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: "01" };
+    const operation = runWithDiagnosticTraceContext(trace, () =>
+      runSqliteSessionReclamation({
+        forceInProcess: false,
+        plan,
+        diagnostics: { kind: "history-eviction" },
+        assertCommitAllowed: () => {
+          if (revoked) {
+            throw failure;
+          }
+        },
+      }),
+    );
+    try {
+      if (rejected) {
+        await expect(operation).rejects.toBe(failure);
+      } else {
+        await expect(operation).resolves.toMatchObject({ kind: "history-eviction" });
+      }
+      await flushLogger();
+      const records = (await fs.readFile(file, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const value: unknown = JSON.parse(line);
+          assert.ok(isRecord(value));
+          return value;
+        });
+      const slow = records.filter(
+        (record) => record.message === "slow SQLite reclamation Worker operation",
+      );
+      expect(otherWriterRan).toBe(true);
+      expect(workers).toHaveLength(1);
+      expect(workers[0]?.id).toBeGreaterThan(0);
+      expect(workers[0]?.worker.threadId).toBe(-1);
+      expect(records.some((record) => record["1"] === "slow SQLite session write")).toBe(false);
+      expect(hooks.workerLogAttempts).toBe(elapsedMs > 0 ? 1 : 0);
+      expect(slow).toHaveLength(elapsedMs > 0 && !failLog ? 1 : 0);
+      if (slow[0]) {
+        expect(slow[0]).toMatchObject(trace);
+        expect(slow[0]["1"]).toEqual({
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          reclamationKind: "history-eviction",
+          workerThreadId: workers[0]?.id,
+          elapsedMs,
+          outcome: rejected ? "rejected" : "resolved",
+          exitCode: rejected ? 1 : 0,
+        });
+      }
+      await expect(
+        runExclusiveSqliteSessionWrite(databaseOptions, async () => "after"),
+      ).resolves.toBe("after");
+    } finally {
+      await Promise.allSettled([operation]);
+      process.off("worker", observeWorker);
+      vi.restoreAllMocks();
+      await flushLogger();
+      setLoggerOverride(null);
+    }
+  },
+);

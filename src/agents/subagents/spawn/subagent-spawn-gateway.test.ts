@@ -16,7 +16,7 @@ vi.mock("./subagent-spawn.runtime.js", async () => {
     forkSessionEntryFromParent: vi.fn(),
     getGlobalHookRunner: vi.fn(),
     getRuntimeConfig: vi.fn(),
-    loadPreparedModelCatalog: vi.fn(),
+    readPreparedModelCatalog: vi.fn(),
     resolveProviderRefOwnership: vi.fn(),
     resolveContextEngine: vi.fn(),
   };

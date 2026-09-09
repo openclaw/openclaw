@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
+import type { Result } from "@openclaw/normalization-core/result";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -12,6 +13,8 @@ import {
   getPreparedMessageToolCatalogForRegistry,
 } from "../plugins/prepared-message-tool-catalog.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
@@ -31,6 +34,7 @@ import {
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import {
   buildConfiguredModelCatalog,
   parseConfiguredModelVisibilityEntries,
@@ -48,7 +52,7 @@ import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogFacts,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
+import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
@@ -56,7 +60,6 @@ import {
   collectPreparedModelRuntimeProviderIds,
   prepareConfiguredRuntimeModels,
   prepareRuntimeCapabilityModels,
-  toStaticCatalogEntry,
 } from "./prepared-model-runtime.configured.js";
 import {
   prepareWorkspacePluginRegistries,
@@ -191,17 +194,23 @@ export async function prepareWorkspaceBuildGroup(
   const preferBuiltPluginArtifacts =
     reusablePluginGeneration?.preferBuiltPluginArtifacts ??
     options.preferBuiltPluginArtifacts === true;
-  const { inboundPluginRegistry, runtimePluginRegistry } = prepareWorkspacePluginRegistries(
-    input,
-    pluginMetadataSnapshot,
-    loadInboundPluginRegistry,
-    preferBuiltPluginArtifacts,
-    reusablePluginGeneration,
-    options.getConfiguredHarnessRuntimes,
-    options.basePluginIds,
-  );
+  const { inboundPluginRegistry, runtimePluginRegistry, primaryRegistry } =
+    prepareWorkspacePluginRegistries(
+      input,
+      pluginMetadataSnapshot,
+      loadInboundPluginRegistry,
+      preferBuiltPluginArtifacts,
+      reusablePluginGeneration,
+      options.getConfiguredHarnessRuntimes,
+      options.basePluginIds,
+    );
   const reuseRuntimeFacts =
     reusablePluginGeneration && runtimePluginRegistry === reusablePluginGeneration.pluginRegistry;
+  const resources = primaryRegistry && getPluginRegistryInspectionResources(primaryRegistry);
+  const mediaCapabilityProviderSource =
+    primaryRegistry && resources
+      ? Object.freeze({ registry: primaryRegistry, resources })
+      : undefined;
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
   prepareOwnedPluginLoadContext(
     input,
@@ -392,6 +401,8 @@ export async function prepareWorkspaceBuildGroup(
     const agentFacts: PreparedModelRuntimeAgentFacts[] = [];
     for (const facts of agentBaseFacts) {
       const configuredRuntimeModels = prepareConfiguredRuntimeModels({
+        config: facts.input.config,
+        inlineProviderModels,
         configuredModelRefs: facts.configuredModelRefs,
         metadataSnapshot: pluginMetadataSnapshot,
         ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
@@ -405,7 +416,7 @@ export async function prepareWorkspaceBuildGroup(
         candidates: [
           ...configuredCatalogEntries,
           ...configuredRuntimeModels.map(({ model, modelId, provider }) => ({
-            ...toStaticCatalogEntry(model),
+            ...modelCatalogRowToEntry(model),
             id: modelId,
             provider,
           })),
@@ -450,6 +461,7 @@ export async function prepareWorkspaceBuildGroup(
       inboundPluginRegistry,
       inlineProviderModels,
       mediaCapabilityProviders,
+      mediaCapabilityProviderSource,
       messageToolCatalog,
       pluginMetadataSnapshot,
       preparedStaticProviderCatalog,
@@ -471,13 +483,54 @@ export async function prepareWorkspaceBuildGroup(
       pluginGeneration,
     };
   };
-  return await withPluginRuntimeGenerationScope(
-    {
-      metadataSnapshot: pluginMetadataSnapshot,
-      pluginRegistry: runtimePluginRegistry,
-    },
-    prepare,
+  const run = () =>
+    withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: pluginMetadataSnapshot,
+        pluginRegistry: runtimePluginRegistry,
+      },
+      prepare,
+    );
+  if (!mediaCapabilityProviderSource) {
+    return await run();
+  }
+  const isSourceCurrent = capturePluginLifecycleAuthority(
+    mediaCapabilityProviderSource.registry,
+    undefined,
+    { scopedRuntime: true },
   );
+  if (!isSourceCurrent?.()) {
+    throw new Error("Prepared media capability provider source is retired");
+  }
+  const claim = mediaCapabilityProviderSource.resources.retain();
+  let outcome: Result<Awaited<ReturnType<typeof prepare>>, unknown>;
+  try {
+    outcome = { ok: true, value: await run() };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+  try {
+    // The caller still owns the original inspection; construction owns its actual awaited work.
+    await claim.release();
+  } catch (cleanupError) {
+    outcome = {
+      ok: false,
+      error: outcome.ok
+        ? cleanupError
+        : new AggregateError(
+            [outcome.error, cleanupError],
+            "Prepared construction and registration cleanup failed",
+            { cause: outcome.error },
+          ),
+    };
+  }
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  if (!isSourceCurrent()) {
+    throw new Error("Prepared media capability provider source is retired");
+  }
+  return outcome.value;
 }
 
 export function captureModelsJsonContents(agentDir: string): string | null {
@@ -607,7 +660,7 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
       );
       catalogs.set(
         facts.input,
-        prepareConfiguredRuntimeFacts({
+        prepareCapturedRuntimeFacts({
           agentFacts: facts,
           workspaceFacts: params.pluginGeneration,
           templateModelRegistry,

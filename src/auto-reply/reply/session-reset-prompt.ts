@@ -7,7 +7,7 @@ import {
 import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
 import {
   resolveEffectiveToolInventory,
-  resolveEffectiveToolInventoryRuntimeModelContextAsync,
+  acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
 import { isWorkspaceBootstrapPending } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -47,27 +47,34 @@ export async function resolveBareResetBootstrapFileAccess(params: {
   modelProvider?: string;
   modelId?: string;
 }): Promise<boolean> {
-  if (!params.cfg) {
+  const cfg = params.cfg;
+  if (!cfg) {
     return false;
   }
-  const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
-    cfg: params.cfg,
+  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+    cfg,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  const inventory = resolveEffectiveToolInventory({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    modelApi: runtimeModelContext.modelApi,
-    runtimeModel: runtimeModelContext.runtimeModel,
-  });
-  return inventory.groups.some((group) => group.tools.some((tool) => tool.id === "read"));
+  try {
+    return acquired.run((runtimeModelContext) => {
+      const inventory = resolveEffectiveToolInventory({
+        cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        modelProvider: params.modelProvider,
+        modelId: params.modelId,
+        modelApi: runtimeModelContext.modelApi,
+        runtimeModel: runtimeModelContext.runtimeModel,
+      });
+      return inventory.groups.some((group) => group.tools.some((tool) => tool.id === "read"));
+    });
+  } finally {
+    acquired.release();
+  }
 }
 
 export async function resolveBareSessionResetPromptState(params: {
