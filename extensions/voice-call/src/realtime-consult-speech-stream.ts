@@ -123,8 +123,9 @@ export function createRealtimeConsultSpeechStream(params: {
       }
       try {
         const final = finalText.trim();
-        if (final.startsWith(committedText)) {
-          await deliver(final.slice(committedText.length));
+        const spoken = committedText.trim();
+        if (final.startsWith(spoken)) {
+          await deliver(final.slice(spoken.length));
         } else if (delivered && final) {
           await deliver(`Correction: ${final}`);
         }
@@ -172,7 +173,7 @@ function findStableSpeechBoundary(text: string, start: number): number | undefin
   for (let index = start; index < text.length; index += 1) {
     const character = text[index];
     if (character === "\n" && text[index + 1] === "\n") {
-      return index;
+      return index + 2;
     }
     if (
       (character === "." || character === "!" || character === "?") &&
@@ -195,8 +196,9 @@ function truncateUtf16Safe(value: string, maxChars: number): string {
 
 function readUnspokenSuffix(spoken: string, finalText: string): string {
   const final = finalText.trim();
-  if (final.startsWith(spoken)) {
-    const suffix = final.slice(spoken.length).trim();
+  const normalizedSpoken = spoken.trim();
+  if (final.startsWith(normalizedSpoken)) {
+    const suffix = final.slice(normalizedSpoken.length).trim();
     if (suffix) {
       return suffix;
     }

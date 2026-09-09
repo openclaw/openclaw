@@ -99,6 +99,34 @@ describe("createRealtimeConsultSpeechStream", () => {
     expect(deliver.mock.calls.map(([text]) => text)).toEqual(["First segment."]);
   });
 
+  it("advances across paragraph boundaries while preserving delivery order", async () => {
+    const deliver = vi.fn(async (_text: string) => {});
+    const stream = createRealtimeConsultSpeechStream({ deliver });
+    stream.start("run-1");
+
+    const text = "First paragraph\n\nSecond paragraph.";
+    await stream.push({ runId: "run-1", text });
+
+    await expect(stream.finish(text)).resolves.toEqual({ suppressResponse: true });
+    expect(deliver.mock.calls.map(([spoken]) => spoken)).toEqual([
+      "First paragraph",
+      "Second paragraph.",
+    ]);
+  });
+
+  it("does not repeat a streamed paragraph when the final trims its delimiter", async () => {
+    const deliver = vi.fn(async (_text: string) => {});
+    const stream = createRealtimeConsultSpeechStream({ deliver });
+    stream.start("run-1");
+
+    await stream.push({ runId: "run-1", text: "First paragraph\n\n" });
+
+    await expect(stream.finish("First paragraph\n\n")).resolves.toEqual({
+      suppressResponse: true,
+    });
+    expect(deliver.mock.calls.map(([spoken]) => spoken)).toEqual(["First paragraph"]);
+  });
+
   it("falls back to the completed result when streaming delivery fails", async () => {
     const onCancel = vi.fn();
     const stream = createRealtimeConsultSpeechStream({
