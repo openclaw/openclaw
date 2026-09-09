@@ -95,6 +95,33 @@ describe("native plugin browser builds", () => {
     ]);
   });
 
+  // Windows chmod only toggles the read-only attribute, so exact POSIX mode bits
+  // are asserted where the Gateway can actually run as a different UID.
+  it.skipIf(process.platform === "win32")(
+    "publishes generations that another runtime UID can traverse and read",
+    async () => {
+      const project = await fixture();
+      // A restrictive umask on the build host leaves the parent owner-only as well.
+      const generations = path.join(project.rootDir, "dist/control-ui");
+      await fs.mkdir(generations, { recursive: true, mode: 0o700 });
+      const first = await buildPluginControlUi(project);
+      const generation = path.join(project.rootDir, path.dirname(first.entry));
+      const modeOf = async (target: string) => ((await fs.stat(target)).mode & 0o777).toString(8);
+      expect(await modeOf(generations)).toBe("755");
+      expect(await modeOf(generation)).toBe("755");
+      expect(await modeOf(path.join(project.rootDir, first.entry))).toBe("644");
+      assert.ok(first.styles?.[0]);
+      expect(await modeOf(path.join(project.rootDir, first.styles[0]))).toBe("644");
+
+      // A generation published by an earlier build stays reusable and is normalized in place.
+      await fs.chmod(generation, 0o700);
+      await fs.chmod(path.join(project.rootDir, first.entry), 0o600);
+      expect(await buildPluginControlUi(project)).toEqual(first);
+      expect(await modeOf(generation)).toBe("755");
+      expect(await modeOf(path.join(project.rootDir, first.entry))).toBe("644");
+    },
+  );
+
   it("bundles browser-safe primitive SDK exports", async () => {
     const project = await fixture();
     await fs.writeFile(
