@@ -93,7 +93,7 @@ export function resolveSessionCatalogProfiles(sessionEntry: ChatMetadataSessionE
   const profileId = sessionEntry?.authProfileOverride?.trim();
   const runtime = sessionEntry?.agentRuntimeOverride?.trim();
   const context = {
-    ...(sessionEntry?.modelProvider ? { profileProvider: sessionEntry.modelProvider } : {}),
+    ...(sessionEntry?.providerOverride ? { profileProvider: sessionEntry.providerOverride } : {}),
     ...(runtime ? { runtimeOverride: runtime } : {}),
   };
   if (!profileId) {

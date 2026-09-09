@@ -228,16 +228,24 @@ export function isExternalCliAuthProfileInScope(params: {
     profileId: params.profileId,
     ...(credential?.type === "oauth" ? { credential } : {}),
   });
-  return providerConfig
-    ? isExternalCliProviderInScope({
-        providerConfig,
-        store: params.store,
-        options: {
-          ...(params.providerIds ? { providerIds: params.providerIds } : {}),
-          ...(params.profileIds ? { profileIds: params.profileIds } : {}),
-        },
-      })
-    : false;
+  if (!providerConfig) {
+    // A retired reader still has to release its tagged runtime overlay on refresh.
+    return (
+      Array.from(params.profileIds ?? []).includes(params.profileId) ||
+      (credential !== undefined &&
+        normalizeProviderScope(params.providerIds)?.has(
+          normalizeProviderId(credential.provider),
+        ) === true)
+    );
+  }
+  return isExternalCliProviderInScope({
+    providerConfig,
+    store: params.store,
+    options: {
+      ...(params.providerIds ? { providerIds: params.providerIds } : {}),
+      ...(params.profileIds ? { profileIds: params.profileIds } : {}),
+    },
+  });
 }
 
 function listScopedExternalCliProfileIds(params: {

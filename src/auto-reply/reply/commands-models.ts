@@ -65,6 +65,7 @@ type ModelsCommandSessionEntry = Partial<
     | "authProfileOverride"
     | "authProfileOverrideSource"
     | "modelProvider"
+    | "providerOverride"
     | "model"
     | "modelSelectionLocked"
     | "agentRuntimeOverride"
@@ -239,7 +240,7 @@ async function projectPreparedModelsProviderData(
       options.sessionEntry?.authProfileOverrideSource === "user"
         ? options.sessionEntry.authProfileOverride
         : undefined,
-    profileProvider: options.sessionEntry?.modelProvider,
+    profileProvider: options.sessionEntry?.providerOverride ?? options.sessionEntry?.modelProvider,
     runtimeOverride: options.sessionEntry?.agentRuntimeOverride,
   });
   // Configured/default rows may remain visible without auth, but must not
@@ -251,9 +252,12 @@ async function projectPreparedModelsProviderData(
       : async (provider, ref) => {
           const entry = catalog.find((row) => row.provider === provider && row.id === ref?.modelId);
           if (!entry) {
-            return undefined;
+            return false;
           }
-          return decisions.evaluateNative(entry, await decisions.evaluateEntry(entry)).availability;
+          return (
+            decisions.evaluateNative(entry, await decisions.evaluateEntry(entry)).availability ===
+            true
+          );
         };
   const visibleCatalog = await resolveLogicalVisibleModelCatalog({
     cfg,

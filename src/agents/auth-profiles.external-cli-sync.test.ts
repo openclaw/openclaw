@@ -15,7 +15,7 @@ let readExternalCliBootstrapCredential: typeof import("./auth-profiles/external-
 let resolveExternalCliAuthProfiles: typeof import("./auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
 let hasUsableOAuthCredential: typeof import("./auth-profiles/credential-state.js").hasUsableOAuthCredential;
 let shouldBootstrapFromExternalCliCredential: typeof import("./auth-profiles/oauth-shared.js").shouldBootstrapFromExternalCliCredential;
-let OPENAI_CODEX_DEFAULT_PROFILE_ID: typeof import("./auth-profiles/constants.js").OPENAI_CODEX_DEFAULT_PROFILE_ID;
+const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 let MINIMAX_CLI_PROFILE_ID: typeof import("./auth-profiles/constants.js").MINIMAX_CLI_PROFILE_ID;
 
 function makeOAuthCredential(
@@ -67,8 +67,7 @@ describe("external cli oauth resolution", () => {
     ({ hasUsableOAuthCredential } = await import("./auth-profiles/credential-state.js"));
     ({ shouldBootstrapFromExternalCliCredential } =
       await import("./auth-profiles/oauth-shared.js"));
-    ({ OPENAI_CODEX_DEFAULT_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } =
-      await import("./auth-profiles/constants.js"));
+    ({ MINIMAX_CLI_PROFILE_ID } = await import("./auth-profiles/constants.js"));
   });
 
   describe("external cli bootstrap policy", () => {

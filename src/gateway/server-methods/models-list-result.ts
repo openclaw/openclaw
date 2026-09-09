@@ -142,15 +142,16 @@ function createPublicModelsListProjector(params: {
           ? Object.assign({}, entry, { alias })
           : entry;
       const capabilityProvider = params.apiKeyCapabilities?.resolveProvider(entry.provider);
-      const agentRuntime = projectWorkerPlacementAgentRuntime(
-        resolveCatalogDecisionRuntime({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          entry,
-          evaluation,
-          pluginRegistry: params.pluginRegistry,
-        }),
-      );
+      const selectedRuntime = resolveCatalogDecisionRuntime({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        entry,
+        evaluation,
+        pluginRegistry: params.pluginRegistry,
+      });
+      const agentRuntime = selectedRuntime
+        ? projectWorkerPlacementAgentRuntime(selectedRuntime)
+        : undefined;
       const thinkingProfile =
         typeof publicEntry.reasoning !== "boolean"
           ? undefined
@@ -159,7 +160,7 @@ function createPublicModelsListProjector(params: {
               agentId: params.agentId,
               provider: entry.provider,
               model: entry.id,
-              agentRuntime: agentRuntime.id,
+              agentRuntime: selectedRuntime?.id ?? "openclaw",
               modelCatalog: params.thinkingCatalog,
               configuredReasoning: publicEntry.configuredReasoning ?? publicEntry.reasoning,
               thinkingPolicyProvider: publicEntry.thinkingPolicyProvider,

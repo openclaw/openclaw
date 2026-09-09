@@ -34,6 +34,7 @@ import {
 } from "./openai-model-routes.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 function listEnabledSyntheticAuthProviderRefs(
@@ -89,6 +90,7 @@ function createModelsListEntryEvaluator(params: {
   pinnedProfileId?: string;
   profileProvider?: string;
   runtimeOverride?: string;
+  normalizeAuthProvider: (provider: string) => string;
 }): (
   entry: ModelCatalogEntry,
   routeVariants?: readonly ModelCatalogEntry[],
@@ -108,7 +110,8 @@ function createModelsListEntryEvaluator(params: {
       );
       const sameProvider =
         !params.profileProvider ||
-        normalizeProviderId(params.profileProvider) === normalizeProviderId(entry.provider);
+        params.normalizeAuthProvider(params.profileProvider) ===
+          params.normalizeAuthProvider(entry.provider);
       const preferredProfileId =
         (sameProvider ? params.preferredProfileId : undefined) ?? defaultProfileId;
       // New sessions capture personal defaults with the same strength as explicit account pins.
@@ -290,6 +293,8 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     providerOutcomes: params.snapshot.providerOutcomes,
     preferredProfilesByProvider,
     runtimeOverride: params.runtimeOverride,
+    normalizeAuthProvider: (provider) =>
+      resolveProviderIdForAuth(provider, { config: params.cfg, metadataSnapshot }),
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
     profileProvider,
@@ -332,7 +337,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         pluginRegistry: params.pluginRegistry,
       });
       const candidates = new Set([
-        selected.id,
+        selected?.id ?? "openclaw",
         "openclaw",
         ...variants.flatMap((variant) => (variant.nativeRuntime ? [variant.nativeRuntime] : [])),
         ...(initial.routeResolution?.kind === "routes"
@@ -444,7 +449,7 @@ export function resolveCatalogDecisionRuntime(params: {
   entry: ModelCatalogEntry;
   evaluation: ModelAuthAvailabilityEvaluation;
   pluginRegistry?: PluginRegistry;
-}): GatewayAgentRuntime {
+}): GatewayAgentRuntime | undefined {
   const route = params.evaluation.selectedRoute;
   const context = {
     config: params.cfg,
@@ -498,6 +503,13 @@ export function resolveCatalogDecisionRuntime(params: {
             (policy.runtime === "auto" ? "openclaw" : policy.runtime),
         };
       })();
+  if (
+    selected.policy.runtime === "auto" &&
+    selected.runtime === "openclaw" &&
+    !params.evaluation.requestedRuntimeId
+  ) {
+    return undefined;
+  }
   return {
     id: selected.runtime,
     source: selected.policy.runtimeSource ?? "implicit",

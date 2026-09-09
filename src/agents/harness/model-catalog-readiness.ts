@@ -118,9 +118,10 @@ export function createAgentHarnessCatalogEvaluator(
       // A failed/disposed owner supplies no account observation; do not infer host readiness.
     }
     return {
-      ...host,
       availability: ready,
       availabilityAuthoritative: true,
+      routeResolution: null,
+      ...(host.requestedRuntimeId ? { requestedRuntimeId: host.requestedRuntimeId } : {}),
       runtimeAuth: { id: runtime, source: "native" },
     };
   };

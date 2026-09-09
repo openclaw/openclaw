@@ -5,6 +5,7 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import * as modelDecisions from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import * as providerAuth from "../../agents/model-provider-auth.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,

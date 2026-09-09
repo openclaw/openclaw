@@ -182,9 +182,11 @@ export async function applySessionModelSelection(
   const prepared = await prepareModelSelectionRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
+    workspaceDir: startingEntry.spawnedWorkspaceDir,
     sessionEntry: request.profileOverride
       ? {
           ...startingEntry,
+          providerOverride: request.provider,
           modelProvider: request.provider,
           authProfileOverride: request.profileOverride,
           authProfileOverrideSource: "user",

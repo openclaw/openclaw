@@ -173,6 +173,7 @@ export async function handleDirectiveOnly(
     ? await prepareModelSelectionRuntime({
         cfg: params.cfg,
         agentId: activeAgentId,
+        workspaceDir: params.workspaceDir,
         provider: resolvedProvider,
         model: resolvedModel,
         catalog: thinkingCatalog ?? [],
@@ -223,11 +224,8 @@ export async function handleDirectiveOnly(
     directives.fastMode ??
     (directives.clearFastMode ? fastModeState.mode : currentFastMode) ??
     fastModeState.mode;
-  const effectiveFastModeSource =
-    directives.fastMode !== undefined ? "session" : fastModeState.source;
 
   if (directives.hasThinkDirective && !directives.thinkLevel && !directives.clearThinkLevel) {
-    // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {
       const level = resolveSupportedThinkingLevel({
         ...thinkingPolicy,
@@ -282,7 +280,7 @@ export async function handleDirectiveOnly(
     if (!directives.rawFastMode || isFastStatus) {
       const statusText = formatFastModeCurrentStatus({
         mode: effectiveFastMode,
-        source: effectiveFastModeSource,
+        source: fastModeState.source,
         fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
       });
       return acknowledgeIgnoredDirective(

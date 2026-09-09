@@ -81,6 +81,7 @@ type ModelSelectionPreparation =
 export async function prepareModelSelectionRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  workspaceDir?: string;
   provider: string;
   model: string;
   catalog: readonly ModelCatalogEntry[];
@@ -88,12 +89,17 @@ export async function prepareModelSelectionRuntime(params: {
   profileOverride?: string;
   sessionEntry?: Pick<
     SessionEntry,
-    "agentRuntimeOverride" | "authProfileOverride" | "authProfileOverrideSource" | "modelProvider"
+    | "agentRuntimeOverride"
+    | "authProfileOverride"
+    | "authProfileOverrideSource"
+    | "modelProvider"
+    | "providerOverride"
   >;
 }): Promise<ModelSelectionPreparation> {
   const sessionEntry = params.profileOverride
     ? {
         ...params.sessionEntry,
+        providerOverride: params.provider,
         modelProvider: params.provider,
         authProfileOverride: params.profileOverride,
         authProfileOverrideSource: "user" as const,
@@ -113,64 +119,17 @@ export async function prepareModelSelectionRuntime(params: {
   }
   let validateRuntimeSelection: (() => string | undefined) | undefined;
   if (runtime.kind === "set") {
-    const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
-      await import("../../agents/prepared-model-catalog.js");
-    const { getPreparedModelRuntimeAuthStore } =
-      await import("../../agents/prepared-model-runtime-auth.js");
-    const { createModelCatalogDecisions } = await import("../../agents/model-catalog-decisions.js");
-    const published = getPublishedPreparedModelCatalogOwnerSnapshot({
-      config: params.cfg,
-      agentId: params.agentId,
+    const { preparePublishedModelRuntimeChoice } =
+      await import("../../agents/model-runtime-choice.js");
+    const choice = await preparePublishedModelRuntimeChoice({
+      ...params,
+      sessionEntry,
+      runtimeId: runtime.runtime,
     });
-    const unavailable = `Runtime "${runtime.runtime}" is not available for ${params.provider}/${params.model}. Refresh the model catalog and choose again.`;
-    if (!published) {
-      return { status: "rejected", reason: "invalid-runtime", message: unavailable };
+    if (choice.kind === "unavailable") {
+      return { status: "rejected", reason: "invalid-runtime", message: choice.message };
     }
-    const owner = materializePreparedModelCatalogOwner(published);
-    const authStore = getPreparedModelRuntimeAuthStore(owner);
-    if (!authStore) {
-      return { status: "rejected", reason: "invalid-runtime", message: unavailable };
-    }
-    const decisions = createModelCatalogDecisions({
-      cfg: owner.config,
-      agentId: owner.agentId ?? params.agentId,
-      agentDir: owner.agentDir,
-      workspaceDir: owner.workspaceDir,
-      snapshot: owner.modelCatalog,
-      metadataSnapshot: owner.metadataSnapshot,
-      preparedAuthStore: authStore,
-      preparedRuntimeAuthModes: owner.authModes,
-      pluginRegistry: owner.pluginRegistry,
-      observationConfig: owner.observationConfig,
-      isCurrent: owner.isCurrent,
-      preferredProfileId: sessionEntry?.authProfileOverride,
-      pinnedProfileId:
-        sessionEntry?.authProfileOverrideSource === "user"
-          ? sessionEntry.authProfileOverride
-          : undefined,
-      profileProvider: sessionEntry?.modelProvider,
-    });
-    const entry = findSelectedCatalogEntry({ ...params, catalog: decisions.snapshot.entries });
-    if (!entry) {
-      return { status: "rejected", reason: "invalid-runtime", message: unavailable };
-    }
-    const variants = decisions.snapshot.routeVariants.filter(
-      (row) => modelKey(row.provider, row.id) === modelKey(entry.provider, entry.id),
-    );
-    const choices = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
-    if (!choices?.includes(runtime.runtime)) {
-      return { status: "rejected", reason: "invalid-runtime", message: unavailable };
-    }
-    const host = await decisions.evaluateEntry(
-      entry,
-      variants.length ? variants : [entry],
-      runtime.runtime,
-    );
-    validateRuntimeSelection = () =>
-      decisions.isCurrent() &&
-      decisions.evaluateNative(entry, host, runtime.runtime).availability === true
-        ? undefined
-        : unavailable;
+    validateRuntimeSelection = choice.validate;
   }
   if (selected?.reasoning !== undefined) {
     return { status: "ready", runtime, catalog: [...params.catalog], validateRuntimeSelection };

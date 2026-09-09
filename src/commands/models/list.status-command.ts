@@ -544,7 +544,6 @@ export async function modelsStatusCommand(
           preparedRuntimeAuthModes: nativeMode
             ? { codex: { source: "native", mode: nativeMode } }
             : {},
-          preparedSyntheticAuthComplete: true,
           metadataSnapshot,
         });
       let authResolver = createStatusAuthResolver(store);

@@ -1,7 +1,11 @@
 import { CODEX_APP_SERVER_AUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "openclaw/plugin-sdk/windows-spawn";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
@@ -36,7 +40,15 @@ export async function probeCodexNativeAuth(params: {
     if (start.transport !== "stdio") {
       return undefined;
     }
-    const result = await runUtf8CommandWithTimeout([start.command, "login", "status"], {
+    const invocation = materializeWindowsSpawnProgram(
+      resolveWindowsSpawnProgram({
+        command: start.command,
+        env: params.env ?? process.env,
+        packageName: "@openai/codex",
+      }),
+      ["login", "status"],
+    );
+    const result = await runUtf8CommandWithTimeout([invocation.command, ...invocation.argv], {
       baseEnv: params.env ?? process.env,
       timeoutMs: 3_000,
       signal: params.signal,
