@@ -1032,7 +1032,7 @@ jobs:
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -1045,12 +1045,39 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
+      - name: Checkout trusted cache validation harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          fetch-depth: 1
+          path: .release-harness
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/lib/frozen-target-compat.sh
+            scripts/lib/frozen-target-source.mjs
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+
+      - name: Resolve Gateway runtime cache availability
+        id: runtime-cache
+        env:
+          OPENCLAW_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          OPENCLAW_TOOLING_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source .release-harness/scripts/lib/frozen-target-compat.sh
+          run_lane="$(openclaw_resolve_frozen_gateway_prompt_cache "$GITHUB_WORKSPACE")"
+          echo "run_lane=$run_lane" >> "$GITHUB_OUTPUT"
+          if [[ "$run_lane" == "false" ]]; then
+            echo "Gateway runtime prompt cache: NOT RUN; the authorized historical target predates this suite. Synthetic cache validation is unchanged." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Validate live cache credentials
         run: |
@@ -1077,6 +1104,14 @@ jobs:
             fi
             sleep $((attempt * 15))
           done
+
+      - name: Verify Gateway runtime prompt cache
+        if: ${{ !cancelled() && steps.runtime-cache.outputs.run_lane == 'true' }}
+        env:
+          OPENCLAW_LIVE_CACHE_RUNTIME_PROFILE: daily
+        run: |
+          set -euo pipefail
+          timeout --foreground --kill-after=30s 25m pnpm test:live:cache:runtime
 
   validate_repo_e2e_gateway:
     name: Gateway E2E
@@ -3487,7 +3522,7 @@ jobs:
 
   prepare_live_test_image:
     needs: [validate_selected_ref, plan_release_workflow_matrices]
-    if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
+    if: inputs.include_live_suites && inputs.live_suite_filter != 'live-cache' && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
     # Image preparation stays blocking even when validation suites are advisory.
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
@@ -4406,7 +4441,7 @@ jobs:
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
     needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
+    if: inputs.include_live_suites && !inputs.live_models_only && inputs.live_suite_filter != 'live-cache' && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
     continue-on-error: ${{ inputs.advisory || inputs.live_advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}

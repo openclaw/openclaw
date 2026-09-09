@@ -87,6 +87,69 @@ openclaw_frozen_target_source_flag() {
   esac
 }
 
+openclaw_resolve_frozen_gateway_prompt_cache() {
+  local source_root="${1:?missing selected source root}" authorization_status=0 resolved trusted_helper
+  openclaw_frozen_target_omissions_authorized || authorization_status=$?
+  case "$authorization_status" in
+    0 | 1) ;;
+    *) return "$authorization_status" ;;
+  esac
+  trusted_helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/frozen-target-compat.sh" || return 2
+
+  # Even strict/current targets must be inspected. Only complete historical
+  # absence can be omitted; missing blobs and partial backports remain failures.
+  resolved="$(node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [root, sha, trustedHelper] = process.argv.slice(1);
+try {
+  const { createFrozenTargetSource } = await import(new URL("./frozen-target-source.mjs", pathToFileURL(trustedHelper)));
+  const source = createFrozenTargetSource(root, sha);
+  const manifestText = source.readText("package.json");
+  if (manifestText === null) throw new Error("missing selected package.json");
+  let manifest;
+  try { manifest = JSON.parse(manifestText); } catch {
+    throw new Error("invalid selected package.json");
+  }
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error("invalid selected package.json");
+  }
+  const scripts = manifest.scripts ?? {};
+  if (manifest.scripts === null || typeof scripts !== "object" || Array.isArray(scripts)) {
+    throw new Error("invalid selected package scripts");
+  }
+  const command = scripts["test:live:cache:runtime"];
+  if (command !== undefined && (typeof command !== "string" || !command.trim())) {
+    throw new Error("invalid Gateway runtime cache command");
+  }
+  const files = [
+    "gateway-prompt-cache.live.test.ts",
+    "gateway-prompt-cache-capture.ts",
+    "gateway-prompt-cache-contract.ts",
+    "gateway-prompt-cache-fixture.ts",
+  ].map((name) => source.readText(`test/e2e/qa-lab/runtime/${name}`));
+  if (command !== undefined && files.every((text) => text !== null && text.trim())) {
+    process.stdout.write("present");
+  } else if (command === undefined && files.every((text) => text === null)) {
+    process.stdout.write("absent");
+  } else {
+    throw new Error("incomplete Gateway runtime cache contract");
+  }
+} catch (error) {
+  console.error(`Gateway runtime cache availability: ${error.message}`);
+  process.exitCode = 2;
+}
+' "$source_root" "${OPENCLAW_SELECTED_SHA:-}" "$trusted_helper")" || return 2
+
+  if [ "$resolved" = present ]; then
+    printf 'true\n'
+  elif [ "$resolved" = absent ] && [ "$authorization_status" -eq 0 ]; then
+    printf 'false\n'
+  else
+    echo "Gateway runtime cache absence requires authorized distinct frozen-target tooling" >&2
+    return 2
+  fi
+}
+
 openclaw_resolve_frozen_gateway_network_layout() {
   local source_root="${1:?missing selected source root}" authorization_status=0 has_old has_new
   export OPENCLAW_FROZEN_TARGET_GATEWAY_NETWORK_LEGACY_LIB=""

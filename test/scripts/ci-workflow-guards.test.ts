@@ -90,6 +90,144 @@ const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$
   exit 1
 fi`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+it("runs the complete Gateway cache matrix separately from synthetic cache retries", () => {
+  const workflow = parse(
+    readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
+  );
+  const job = workflow.jobs.validate_release_live_cache;
+  expect(job["continue-on-error"]).toBe("${{ inputs.advisory || inputs.live_advisory }}");
+  expect(job.if).toBe(
+    "inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')",
+  );
+  const steps = job.steps as WorkflowStep[];
+  const synthetic = steps.find((step) => step.name === "Verify live prompt cache floors");
+  const runtime = steps.filter((step) => step.name === "Verify Gateway runtime prompt cache");
+  const availability = steps.find(
+    (step) => step.name === "Resolve Gateway runtime cache availability",
+  );
+  const harness = steps.find((step) => step.name === "Checkout trusted cache validation harness");
+  expect(harness?.with).toMatchObject({
+    repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
+    ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+    path: ".release-harness",
+    "persist-credentials": false,
+  });
+  expect(availability?.env).toEqual({
+    OPENCLAW_SELECTED_SHA: "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+    OPENCLAW_TOOLING_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+  });
+  expect(workflow.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS).toBe(
+    "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
+  );
+  expect(synthetic?.run).toContain("for attempt in 1 2");
+  expect(synthetic?.run).toContain("pnpm test:live:cache;");
+  expect(synthetic?.run).not.toContain("test:live:cache:runtime");
+  expect(runtime).toHaveLength(1);
+  for (const [available, cancelled, shouldRun] of [
+    ["true", false, true],
+    ["false", false, false],
+    ["", false, false],
+    ["true", true, false],
+  ] as const) {
+    expect(
+      evaluateWorkflowExpression(runtime[0]?.if, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        failed: true,
+        cancelled,
+        steps: { "runtime-cache": { outputs: { run_lane: available } } },
+      }),
+    ).toBe(shouldRun);
+  }
+  expect(runtime[0]?.env).toEqual({ OPENCLAW_LIVE_CACHE_RUNTIME_PROFILE: "daily" });
+  expect(runtime[0]?.run).toContain("pnpm test:live:cache:runtime");
+  expect(runtime[0]?.run).not.toMatch(/for attempt|retry|continue-on-error/);
+  expect(runtime[0]?.["continue-on-error"]).toBeUndefined();
+});
+it.each([
+  { label: "full", filter: "", live: true, modelsOnly: false, image: true, docker: true },
+  {
+    label: "cache",
+    filter: "live-cache",
+    live: true,
+    modelsOnly: false,
+    image: false,
+    docker: false,
+  },
+  {
+    label: "cache models-only",
+    filter: "live-cache",
+    live: true,
+    modelsOnly: true,
+    image: false,
+    docker: false,
+  },
+  {
+    label: "gateway",
+    filter: "live-gateway-docker",
+    live: true,
+    modelsOnly: false,
+    image: true,
+    docker: true,
+  },
+  {
+    label: "other live",
+    filter: "live-provider-native",
+    live: true,
+    modelsOnly: false,
+    image: true,
+    docker: true,
+  },
+  {
+    label: "Docker models",
+    filter: "docker-live-models",
+    live: true,
+    modelsOnly: false,
+    image: true,
+    docker: false,
+  },
+  {
+    label: "unrelated",
+    filter: "openshell-e2e",
+    live: true,
+    modelsOnly: false,
+    image: false,
+    docker: false,
+  },
+  {
+    label: "full models-only",
+    filter: "",
+    live: true,
+    modelsOnly: true,
+    image: true,
+    docker: false,
+  },
+  { label: "disabled", filter: "", live: false, modelsOnly: false, image: false, docker: false },
+])("keeps cache-only E2E free of unrelated Docker jobs ($label)", (entry) => {
+  const workflow = parse(
+    readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
+  );
+  const context = {
+    eventName: "workflow_dispatch" as const,
+    repository: "openclaw/openclaw",
+    runAttempt: 1,
+    inputs: {
+      include_live_suites: entry.live,
+      live_models_only: entry.modelsOnly,
+      live_suite_filter: entry.filter,
+    },
+  };
+  expect(
+    evaluateWorkflowExpression(`\${{ ${workflow.jobs.prepare_live_test_image.if} }}`, context),
+  ).toBe(entry.image);
+  expect(
+    evaluateWorkflowExpression(
+      `\${{ ${workflow.jobs.validate_live_docker_provider_suites.if} }}`,
+      context,
+    ),
+  ).toBe(entry.docker);
+});
 const rootPackageManager = (
   JSON.parse(readFileSync("package.json", "utf8")) as {
     packageManager: string;
@@ -141,6 +279,7 @@ function evaluateWorkflowExpression(
     headRepository?: string;
     headSha?: string;
     hostedRunnerProfileContract?: boolean;
+    inputs?: Record<string, unknown>;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
     pullRequestNumber?: number;
@@ -235,6 +374,7 @@ function evaluateWorkflowExpression(
       target_context_ref: context.targetContextRef ?? "",
       target_ref: context.targetRef ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
+      ...context.inputs,
     },
     env: context.env ?? {},
     matrix: context.matrix ?? {},
