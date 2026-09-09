@@ -1,24 +1,19 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionsListResult } from "../../api/types.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import {
   adoptStartedChatRun,
+  type ChatRunUiStatus,
   reconcileChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
 
 type AbortDiagnosticState = ChatState & {
-  chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;
-  lastLocalTerminalReconcile?: { sessionStatus: string } | null;
-  sessionsResult?: {
-    ts: number;
-    path: string;
-    count: number;
-    defaults: Record<string, unknown>;
-    sessions: Array<Record<string, unknown>>;
-  };
+  chatRunStatus?: ChatRunUiStatus | null;
+  sessionsResult?: SessionsListResult;
 };
 
 function createAbortDiagnosticState(runId = "run-validation-abort"): AbortDiagnosticState {
@@ -47,7 +42,7 @@ function createAbortDiagnosticState(runId = "run-validation-abort"): AbortDiagno
       ts: 0,
       path: "",
       count: 1,
-      defaults: {},
+      defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [
         {
           key: "main",

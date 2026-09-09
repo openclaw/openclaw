@@ -56,7 +56,7 @@ export function captureChatProjectionScope(owner: object, runId?: string): () =>
     runId &&
     captured.runId === runId &&
     Object.hasOwn(captured.runs, runId) &&
-    captured.runs[runId].scope === captured.scope
+    captured.runs[runId]?.scope === captured.scope
       ? runId
       : undefined;
   return () => {
@@ -70,7 +70,7 @@ export function captureChatProjectionScope(owner: object, runId?: string): () =>
         current.lifetime === captured.lifetime &&
         current.runId === ownedRunId &&
         Object.hasOwn(current.runs, ownedRunId) &&
-        current.runs[ownedRunId].scope === current.scope,
+        current.runs[ownedRunId]?.scope === current.scope,
       )
     );
   };
