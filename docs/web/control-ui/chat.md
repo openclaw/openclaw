@@ -18,6 +18,8 @@ Side chat answers questions about the selected session and its project without e
 
 Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
 
+In Side chat, press **Shift+Enter** to insert a new line. Press **Enter** or select **Ask** to send. Questions can contain up to 400 characters. The editor wraps long text and grows to its height limit, then scrolls internally. Submitted questions keep their paragraph breaks.
+
 The headline owns that run's sidebar subtitle instead of heuristic live activity. It is shared with the official iOS and Android session lists. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
 
 Session observation is enabled by default. Safe preamble headlines do not require a utility model; the utility model only owns richer assessments and terminal summaries. In **Settings > Appearance > Sidebar**, you can turn observation off gateway-wide, inspect the resolved small model and its provenance, or choose automatic routing, disable utility tasks, or select an explicit `agents.defaults.utilityModel`. The equivalent config controls are `gateway.controlUi.sessionObserver: false` and `agents.defaults.utilityModel: ""`.

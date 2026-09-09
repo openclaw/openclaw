@@ -2499,7 +2499,7 @@ openclaw-chat-session-rail {
 .chat-session-rail__thread {
   display: flex;
   flex: 1 1 auto;
-  min-height: 96px;
+  min-height: 0;
   flex-direction: column;
   gap: 14px;
   margin-top: 12px;
@@ -2508,6 +2508,12 @@ openclaw-chat-session-rail {
   border-top: 1px solid var(--border);
   user-select: text;
   overscroll-behavior-y: contain;
+}
+
+/* Let the whole empty state scroll instead of centering it above the scroll origin. */
+.chat-session-rail__thread > openclaw-panel-empty-state {
+  height: auto;
+  flex-shrink: 0;
 }
 
 /* No digest or embedded header means the thread would otherwise open with a
@@ -2527,7 +2533,7 @@ openclaw-chat-session-rail {
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  padding: 0 14px 10px;
+  padding: 0;
 }
 
 .chat-session-rail__starter {
@@ -2577,6 +2583,7 @@ openclaw-chat-session-rail {
   color: var(--text);
   font-weight: 600;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .chat-session-rail__answer {
