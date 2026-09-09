@@ -562,6 +562,23 @@ export async function sendSubagentAnnounceDirectly(params: {
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );
+    // A provisional expiry instructs the parent to stay quiet, so intentional
+    // silence is the instruction being carried out and settles the
+    // notification. This holds in every delivery mode, not just message-tool-only:
+    // an internal parent on the automatic route follows the same instruction and
+    // would otherwise fall through to `visible_reply_missing`, leaving the wait
+    // manager to re-announce every few seconds while the child still works.
+    // Real delivery evidence is unaffected (it produces a visible reply) and so
+    // are synthesis failures (they throw before reaching here).
+    const settlesAsProvisionalSilence =
+      hasProvisionalTrustedSubagentCompletion && hasIntentionalSilentCompletionReply;
+    const provisionalSilenceSettled = {
+      delivered: false,
+      path: "direct",
+      reason: "delivery_suppressed",
+      terminal: true,
+      disposition: "intentional_non_delivery",
+    } as const satisfies SubagentAnnounceDeliveryResult;
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
@@ -617,20 +634,8 @@ export async function sendSubagentAnnounceDirectly(params: {
           error: "completion agent did not produce a visible reply",
         };
       }
-      // A provisional expiry tells the parent to stay quiet, so an explicitly
-      // silent reply is the instruction being carried out, not a delivery
-      // failure. Settle it: reporting this as retryable makes the wait manager
-      // re-announce every few seconds, forever, while the child is still
-      // working. Synthesis errors never reach here (they throw), and a terminal
-      // completion still owes a visible reply, so both stay strict.
-      if (hasProvisionalTrustedSubagentCompletion && hasIntentionalSilentCompletionReply) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "delivery_suppressed",
-          terminal: true,
-          disposition: "intentional_non_delivery",
-        };
+      if (settlesAsProvisionalSilence) {
+        return provisionalSilenceSettled;
       }
       if (subagentDirectMessageCompletionRequiresMessageTool) {
         const textDelivery = await tryTextCompletionDirectDelivery(
@@ -663,6 +668,9 @@ export async function sendSubagentAnnounceDirectly(params: {
               ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
               : !origin?.to,
           )));
+    if (!hasVisibleCompletionReply && settlesAsProvisionalSilence) {
+      return provisionalSilenceSettled;
+    }
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
