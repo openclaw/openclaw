@@ -107,7 +107,9 @@ export async function updateNpmInstalledPlugins(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
+  signal?: AbortSignal;
 }): Promise<PluginUpdateSummary> {
+  params.signal?.throwIfAborted();
   const logger = params.logger ?? {};
   const consentCallbacks = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   const installs = params.config.plugins?.installs ?? {};
@@ -155,6 +157,7 @@ export async function updateNpmInstalledPlugins(params: {
   const completedCanonicalUpdates = new Set<string>();
 
   for (const pluginId of targets) {
+    params.signal?.throwIfAborted();
     if (params.skipIds?.has(pluginId)) {
       recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (already updated).`);
       continue;
@@ -203,6 +206,7 @@ export async function updateNpmInstalledPlugins(params: {
       coreVersion: params.coreVersion,
       versionBoundToCore: params.versionBoundPluginIds?.has(pluginId),
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
@@ -377,6 +381,7 @@ export async function updateNpmInstalledPlugins(params: {
         : await resolveNpmSpecMetadata({
             spec: effectiveSpec!,
             timeoutMs: params.timeoutMs,
+            ...(params.signal ? { signal: params.signal } : {}),
           });
       if (metadataResult.ok) {
         const bypassTrustedOfficialUnchangedNpmCheck = shouldBypassTrustedOfficialUnchangedNpmCheck(
@@ -391,21 +396,22 @@ export async function updateNpmInstalledPlugins(params: {
               metadata: metadataResult.metadata,
               spec: effectiveSpec!,
               timeoutMs: params.timeoutMs,
+              ...(params.signal ? { signal: params.signal } : {}),
             })
           : undefined;
-        const expectedIntegrityMetadata =
-          trustedPrereleaseFallback?.metadata ?? metadataResult.metadata;
+        params.signal?.throwIfAborted();
+        const expectedMetadata = trustedPrereleaseFallback?.metadata ?? metadataResult.metadata;
         expectedIntegrity =
           catalogExpectedIntegrity ??
           expectedIntegrityForNpmUpdate({
             effectiveSpec,
-            metadata: expectedIntegrityMetadata,
+            metadata: expectedMetadata,
             record,
             trustedSourceLinkedOfficialInstall,
           });
         if (
           !catalogExpectedIntegrity &&
-          (!isNpmMetadataCompatibleWithCurrentHost(expectedIntegrityMetadata) ||
+          (!isNpmMetadataCompatibleWithCurrentHost(expectedMetadata) ||
             (bypassTrustedOfficialUnchangedNpmCheck && !trustedPrereleaseFallback))
         ) {
           expectedIntegrity = undefined;
@@ -433,6 +439,7 @@ export async function updateNpmInstalledPlugins(params: {
             resolution: metadataResult.metadata,
             updateChannel,
             timeoutMs: params.timeoutMs,
+            ...(params.signal ? { signal: params.signal } : {}),
             hasSpecOverride: Boolean(npmSpecOverride),
             syncOfficialInstall: Boolean(
               params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall,
@@ -491,6 +498,7 @@ export async function updateNpmInstalledPlugins(params: {
           installNpmSpecForUpdate,
           logger,
           onIntegrityDrift: params.onIntegrityDrift,
+          ...(params.signal ? { signal: params.signal } : {}),
         }),
       );
     const attempt = await runPluginUpdateWithClawHubLease({
@@ -498,7 +506,9 @@ export async function updateNpmInstalledPlugins(params: {
       clawhubPackage: recordClawHubPackage,
       dryRun: params.dryRun === true,
       run: runAttempt,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     consentCallbacks.rethrowCallbackError();
     if (attempt.kind === "exception") {
       if (attempt.error instanceof ManagedPluginLifecycleError && attempt.error.capabilityConsent) {
@@ -585,6 +595,7 @@ export async function updateNpmInstalledPlugins(params: {
           hasSpecOverride: Boolean(npmSpecOverride),
           updateChannel,
           timeoutMs: params.timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
           channelFallbackSuffix,
         }),
       );

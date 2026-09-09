@@ -35,6 +35,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { sleep } from "../../utils/sleep.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import {
   armShutdownHardExitWatchdog,
@@ -160,7 +161,11 @@ export async function runGatewayLoop(params: {
   beginBoot?: (startedAtMs: number) => void | Promise<void>;
   completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
   onRestartStartupFailure?: (error: unknown, signal: AbortSignal) => Promise<void>;
+  /** Signal owned by CLI preflight until this loop installs its process handlers. */
+  startupSignal?: AbortSignal;
+  releaseStartupSignalOwner?: () => void;
 }) {
+  params.startupSignal?.throwIfAborted();
   // macOS/BSD process inspection reports process.title instead of the original
   // argv. Give the long-running Gateway a verifiable identity for lock readers.
   if (process.title === "openclaw") {
@@ -182,16 +187,17 @@ export async function runGatewayLoop(params: {
   // here pulls the lifecycle re-export graph into memory, immune to later disk
   // rotation.
   const eagerLifecycleRuntime = await loadGatewayLifecycleRuntimeModule();
+  params.startupSignal?.throwIfAborted();
   const supervisorMode = eagerLifecycleRuntime.detectGatewayRespawnSupervisor(
     process.env,
     process.platform,
     { includeLinuxOpenClawGatewayServiceMarker: true },
   );
-  let lock = await acquireGatewayLock({ port: params.lockPort });
   // Process-owned signal handling must survive gaps with no listening server.
   // Node's signal listeners and pending promises do not retain the event loop.
   const processLifetime = params.ownsProcessLifecycle ? new MessageChannel() : undefined;
   processLifetime?.port1.ref();
+  let lock: Awaited<ReturnType<typeof acquireGatewayLock>> = null;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let hostLifecycle: ReturnType<typeof createGatewayHostLifecycle> | undefined;
   let startupOperations = createGatewayStartupOperations();
@@ -1186,11 +1192,26 @@ export async function runGatewayLoop(params: {
     });
   };
 
-  process.on("SIGTERM", onSigterm);
-  process.on("SIGINT", onSigint);
-  process.on("SIGUSR1", onSigusr1);
-
   try {
+    // Keep acquisition inside the cleanup owner so an abort on resolution cannot strand the lock.
+    lock = await acquireGatewayLock({
+      port: params.lockPort,
+      ...(params.startupSignal
+        ? { sleep: async (ms: number) => await sleep(ms, params.startupSignal) }
+        : {}),
+    });
+    params.startupSignal?.throwIfAborted();
+
+    process.on("SIGTERM", onSigterm);
+    process.on("SIGINT", onSigint);
+    process.on("SIGUSR1", onSigusr1);
+    // Transfer ownership only after the normal handlers are installed. If
+    // startup was interrupted in the handoff window, the finally block below
+    // still releases the lock and removes every listener before propagating
+    // the abort.
+    params.releaseStartupSignalOwner?.();
+    params.startupSignal?.throwIfAborted();
+
     const onRestart = async () => {
       // After an in-process restart (SIGUSR1), reset command-queue lane state.
       // Interrupted tasks from the previous lifecycle may have left `active`

@@ -20,6 +20,7 @@ import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 type GatewayRunGuardParams = {
   opts: GatewayRunPreBootstrapOptions & Pick<GatewayRunOpts, "allowUnconfigured" | "dev">;
   runtime: RuntimeEnv;
+  signal?: AbortSignal;
 };
 
 type GatewayRunEnvironmentSelection = {
@@ -208,6 +209,11 @@ async function readGuardedGatewayRunConfig(
       observe: false,
       pluginValidation: "core-only",
     });
+    // Startup cancellation observed during the read must refuse the config before any
+    // recovery planning; ownership guards alone do not see the abort.
+    if (params.signal?.aborted) {
+      return null;
+    }
     const guard = (snapshot: ConfigFileSnapshot) =>
       enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
     if (!guard(current)) {
@@ -219,6 +225,9 @@ async function readGuardedGatewayRunConfig(
       observe: false,
       pluginValidation: "core-only",
     }).prepareConfigRecovery(current);
+    if (params.signal?.aborted) {
+      return null;
+    }
     return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
   });
 }

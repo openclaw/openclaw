@@ -180,7 +180,9 @@ export async function prepareStartupMigrationPlugins(params: {
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
   readRefreshedSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
   beforeStateMigrations?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+  signal?: AbortSignal;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
+  params.signal?.throwIfAborted();
   if (params.converge) {
     if (!params.lease) {
       throw new Error("Startup plugin convergence requires the startup migration lease.");
@@ -190,7 +192,10 @@ export async function prepareStartupMigrationPlugins(params: {
   setActiveDegradedPlugins([]);
   const convergence = await (
     params.converge ? runStartupUpgradeConvergence : refreshStartupPluginQuarantine
-  )(params);
+  )({
+    ...params,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
   setActiveDegradedPlugins(convergence.quarantinedPlugins);
   if (convergence.blockingDiagnostic) {
     throwStartupMigrationRefusal(

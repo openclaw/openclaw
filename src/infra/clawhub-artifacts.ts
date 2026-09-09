@@ -98,6 +98,7 @@ export async function downloadClawHubPackageArchive(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubDownloadResult> {
   if (params.artifact === "clawpack") {
@@ -111,6 +112,7 @@ export async function downloadClawHubPackageArchive(params: {
       )}/artifact/download`,
       token: params.token,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
       fetchImpl: params.fetchImpl,
     });
     if (!response.ok) {
@@ -186,6 +188,7 @@ export async function downloadClawHubPackageArchive(params: {
     search,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {

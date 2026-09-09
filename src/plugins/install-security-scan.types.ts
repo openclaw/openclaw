@@ -17,6 +17,8 @@ type InstallPolicyWarningAcknowledgementResult = { status: "approved" } | { stat
 /** Overrides that intentionally loosen install safety policy for trusted/operator paths. */
 export type InstallSafetyOverrides = {
   config?: OpenClawConfig;
+  signal?: AbortSignal;
+  dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: (
     request: InstallPolicyWarningAcknowledgementRequest,
   ) => Promise<InstallPolicyWarningAcknowledgementResult>;

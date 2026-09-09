@@ -170,6 +170,8 @@ export async function installPluginFromManagedNpmRoot(
       }
     | undefined;
   const runManagedNpmInstall = async (npmRoot: string): Promise<InstallPluginResult> => {
+    const throwIfAborted = () => params.signal?.throwIfAborted();
+    throwIfAborted();
     const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
     const prepared = await resolveManagedNpmRootDependencySpecForInstall({
       npmRoot,
@@ -188,6 +190,7 @@ export async function installPluginFromManagedNpmRoot(
         signal: params.signal,
         logger,
       });
+      throwIfAborted();
       if (repairedOpenClawPeer) {
         logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}`);
       }
@@ -226,6 +229,7 @@ export async function installPluginFromManagedNpmRoot(
           }),
         };
       } catch (error) {
+        throwIfAborted();
         return {
           ok: false,
           error: `npm peer dependency planning failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -240,6 +244,7 @@ export async function installPluginFromManagedNpmRoot(
       omitNpmAliasOverrides,
     });
     const initialPeerSync = await syncManagedPeerDependenciesForInstall();
+    throwIfAborted();
     if (!initialPeerSync.ok) {
       return { ok: false, error: initialPeerSync.error };
     }
@@ -267,6 +272,7 @@ export async function installPluginFromManagedNpmRoot(
       }),
     };
     let install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+    throwIfAborted();
     if (install.code !== 0 && isNpmAliasOverrideCompatibilityError(install)) {
       logger.warn?.(
         "npm rejected managed npm overrides; retrying plugin install without npm-incompatible overrides for this npm version.",
@@ -280,6 +286,7 @@ export async function installPluginFromManagedNpmRoot(
         omitNpmAliasOverrides,
       });
       const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall();
+      throwIfAborted();
       if (!aliasRetryPeerSync.ok) {
         return {
           ok: false,
@@ -287,6 +294,7 @@ export async function installPluginFromManagedNpmRoot(
         };
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+      throwIfAborted();
     }
     if (!recovery && install.code !== 0 && isManagedNpmProjectCorruptionInstallFailure(install)) {
       const originalError = formatNpmCommandFailureOutput(install);
@@ -311,6 +319,7 @@ export async function installPluginFromManagedNpmRoot(
     let settledManagedPeerDependencies = false;
     for (let peerSyncPass = 0; peerSyncPass < 10; peerSyncPass += 1) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
+      throwIfAborted();
       if (!peerSync.ok) {
         return { ok: false, error: peerSync.error };
       }
@@ -320,6 +329,7 @@ export async function installPluginFromManagedNpmRoot(
         break;
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+      throwIfAborted();
       if (install.code !== 0) {
         return {
           ok: false,
@@ -329,6 +339,7 @@ export async function installPluginFromManagedNpmRoot(
     }
     if (!settledManagedPeerDependencies) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
+      throwIfAborted();
       if (!peerSync.ok) {
         return { ok: false, error: peerSync.error };
       }
@@ -393,6 +404,7 @@ export async function installPluginFromManagedNpmRoot(
           },
         });
       } catch (error) {
+        throwIfAborted();
         return {
           ok: false,
           error: `Failed to repair missing or incomplete current-platform package(s) ${incompletePlatformPackageNames.join(", ")}: ${String(error)}`,
@@ -408,6 +420,7 @@ export async function installPluginFromManagedNpmRoot(
           }
         }
       }
+      throwIfAborted();
       if (install.code !== 0) {
         return {
           ok: false,
@@ -440,6 +453,7 @@ export async function installPluginFromManagedNpmRoot(
         signal: params.signal,
         logger,
       });
+      throwIfAborted();
       if (repairedOpenClawPeer) {
         logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot} after npm install`);
       }

@@ -53,6 +53,7 @@ export async function ensureCliExecutionBootstrap(params: {
   validateConfigOnly?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
+  signal?: AbortSignal;
 }) {
   const {
     runtime,
@@ -80,6 +81,7 @@ export async function ensureCliExecutionBootstrap(params: {
         ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
         ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
         ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
       });
     });
   }
