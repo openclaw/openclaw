@@ -36,7 +36,7 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   zoomOut: { modifiers: [], key: "-" },
   zoomReset: { modifiers: [], key: "0" },
   // Display-only mouse chords; never keyboard-matched.
-  toggleSessionSelect: { modifiers: ["mod"], key: "Click" },
+  toggleSessionSelect: { modifiers: ["alt"], key: "Click" },
   extendSessionSelect: { modifiers: ["shift"], key: "Click" },
 } as const satisfies Record<string, ShortcutDefinition<string>>;
 

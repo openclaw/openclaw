@@ -6,6 +6,7 @@ import type { Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { OLLAMA_DEFAULT_CONTEXT_WINDOW } from "./defaults.js";
 import {
   buildOllamaProvider,
@@ -21,28 +22,6 @@ import {
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./provider-models.js";
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
 
 describe("ollama provider models", () => {
   afterEach(() => {
@@ -805,7 +784,7 @@ describe("ollama provider models", () => {
   });
 
   it("cancels non-OK discovery response bodies before fallback results", async () => {
-    const tagsResponse = cancelTrackedResponse("ollama unavailable", { status: 503 });
+    const tagsResponse = cancelTrackedTextResponse("ollama unavailable", { status: 503 });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => tagsResponse.response),
@@ -817,7 +796,7 @@ describe("ollama provider models", () => {
     });
     expect(tagsResponse.wasCanceled()).toBe(true);
 
-    const psResponse = cancelTrackedResponse("process listing unavailable", { status: 503 });
+    const psResponse = cancelTrackedTextResponse("process listing unavailable", { status: 503 });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => psResponse.response),
@@ -829,7 +808,7 @@ describe("ollama provider models", () => {
     });
     expect(psResponse.wasCanceled()).toBe(true);
 
-    const showResponse = cancelTrackedResponse("model unavailable", { status: 503 });
+    const showResponse = cancelTrackedTextResponse("model unavailable", { status: 503 });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => showResponse.response),
@@ -842,7 +821,7 @@ describe("ollama provider models", () => {
   });
 
   it("reports failed strict model inspections while releasing their response bodies", async () => {
-    const showResponse = cancelTrackedResponse("model unavailable", { status: 503 });
+    const showResponse = cancelTrackedTextResponse("model unavailable", { status: 503 });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => showResponse.response),

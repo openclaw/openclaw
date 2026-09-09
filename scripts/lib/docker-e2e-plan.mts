@@ -645,9 +645,15 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       if (step.argv[0] !== "config" || step.argv[1] !== "set") {
         continue;
       }
-      const channelId = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(step.argv[2] ?? "")?.[1];
-      if (channelId) {
-        configuredChannelIds.add(channelId);
+      const configPaths: string[] =
+        step.argv[2] === "--batch-json"
+          ? JSON.parse(step.argv[3] ?? "").map((entry: { path: string }) => entry.path)
+          : [step.argv[2] ?? ""];
+      for (const configPath of configPaths) {
+        const channelId = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(configPath)?.[1];
+        if (channelId) {
+          configuredChannelIds.add(channelId);
+        }
       }
     }
   }

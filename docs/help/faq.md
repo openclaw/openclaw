@@ -395,7 +395,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`.
     - `responsebody`, PDF export, download interception, and batch actions still require the managed browser path.
 
-    See [Browser](/tools/browser#existing-session-via-chrome-devtools-mcp) for the full comparison.
+    See [Browser](/tools/browser/existing-session#existing-session-via-chrome-devtools-mcp) for the full comparison.
 
   </Accordion>
 </AccordionGroup>
@@ -744,7 +744,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="How do I use Brave for browser control?">
-    Set `browser.executablePath` to your Brave binary (or any Chromium-based browser) and restart the Gateway. See [Browser](/tools/browser#use-brave-or-another-chromium-based-browser).
+    Set `browser.executablePath` to your Brave binary (or any Chromium-based browser) and restart the Gateway. See [Browser](/tools/browser/configuration#use-brave-or-another-chromium-based-browser).
   </Accordion>
 </AccordionGroup>
 

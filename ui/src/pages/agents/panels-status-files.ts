@@ -35,24 +35,15 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
-import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
+import {
+  countLines,
+  countWords,
+  estimateReadingTimeLabel,
+  resetAgentFilePreview,
+  setPreviewExpandButtonState,
+} from "./agent-file-preview-state.ts";
+import { renderAgentFileError } from "./file-conflict-callout.ts";
 import { renderAgentContextSection } from "./panels-overview.ts";
-
-function countWords(text: string) {
-  const normalized = text.trim();
-  return normalized ? normalized.split(/\s+/).length : 0;
-}
-
-function countLines(text: string) {
-  return text.length === 0 ? 0 : text.split(/\r?\n/).length;
-}
-
-function estimateReadingTimeLabel(wordCount: number) {
-  if (wordCount <= 0) {
-    return t("agents.files.emptyDraft");
-  }
-  return t("agents.files.minRead", { count: String(Math.max(1, Math.round(wordCount / 220))) });
-}
 
 function getExtensionLabel(fileName: string) {
   const ext = fileName.split(".").pop()?.trim().toLowerCase();
@@ -387,12 +378,15 @@ export function renderAgentFiles(params: {
   agentFileContents: Record<string, string>;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
+  agentFileConflict: string | null;
   canWrite: boolean;
   onLoadFiles: (agentId: string) => void;
   onSelectFile: (name: string) => void;
   onFileDraftChange: (name: string, content: string) => void;
   onFileReset: (name: string) => void;
   onFileSave: (name: string) => void;
+  onFileReload: (name: string) => void;
+  onFileOverwrite: (name: string) => void;
 }) {
   const list = params.agentFilesList?.agentId === params.agentId ? params.agentFilesList : null;
   const files = list?.files ?? [];
@@ -434,11 +428,14 @@ export function renderAgentFiles(params: {
       : t("agents.files.updatedUnknown");
 
   return html`
-    ${
-      params.agentFilesError
-        ? html`<div class="callout danger">${params.agentFilesError}</div>`
-        : nothing
-    }
+    ${renderAgentFileError({
+      error: params.agentFilesError,
+      conflictName: active && params.agentFileConflict === active ? active : null,
+      busy: params.agentFilesLoading || params.agentFileSaving,
+      canWrite: params.canWrite,
+      onReload: params.onFileReload,
+      onOverwrite: params.onFileOverwrite,
+    })}
     ${renderSettingsSection(
       {
         title: t("agents.files.coreFilesTitle"),

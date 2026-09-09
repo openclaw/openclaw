@@ -382,6 +382,33 @@ describe("preflightDiscordMessage", () => {
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
   });
 
+  it("carries the host channel context builder into the preflight context", async () => {
+    const buildContext = vi.fn();
+    const channelId = "dm-channel-host-builder";
+    const message = createDiscordMessage({
+      id: "m-host-builder",
+      channelId,
+      content: "hello",
+      author: { id: "user-1", bot: false, username: "alice" },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: { dmPolicy: "open" } as DiscordConfig,
+        data: {
+          channel_id: channelId,
+          author: message.author,
+          message,
+        } as DiscordMessageEvent,
+        client: createDmClient(channelId),
+      }),
+      buildContext,
+    });
+
+    expect(expectPreflightResult(result).buildContext).toBe(buildContext);
+  });
+
   it("admits embed-only messages when their text appears after a textless first embed", async () => {
     const channelId = "dm-channel-multiple-embeds";
     const message = Object.assign(

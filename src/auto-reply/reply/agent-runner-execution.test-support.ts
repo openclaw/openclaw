@@ -619,10 +619,10 @@ export function makeTestSessionStorePath(): string {
   );
 }
 
-export function createFailureRunAgentTurnParams(): AgentTurnParams {
+export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnParams {
   return {
     commandBody: "hello",
-    followupRun: createFollowupRun(),
+    followupRun,
     sessionCtx: {
       Provider: "whatsapp",
       MessageSid: "msg",

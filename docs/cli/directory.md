@@ -19,6 +19,9 @@ Results are meant to be pasted into other commands, especially `openclaw message
 - `--json`: output JSON
 - `--limit <n>`: positive integer cap for peers/groups/members listings
 
+Omit `--account` to select the channel default. Explicitly empty and whitespace-only account
+values fail with `--account must not be blank` before account setup or lookup.
+
 `--limit` requires a positive integer. Omit `--limit` to use the selected channel plugin's default.
 Explicitly empty and whitespace-only values are rejected.
 

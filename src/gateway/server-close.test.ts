@@ -1,8 +1,10 @@
+import assert from "node:assert/strict";
 /**
  * Gateway server close lifecycle tests.
  */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
@@ -11,7 +13,9 @@ import {
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
@@ -280,6 +284,20 @@ describe("createGatewayCloseHandler", () => {
       );
       const state = await createOpenClawTestState({ label: "shutdown-actual-sqlite" });
       const database = openOpenClawStateDatabase({ env: state.env });
+      const sdkDatabase = new DatabaseSync(":memory:");
+      const sdkHost = new LegacyPluginSdkResourceHost();
+      const inspection = new PluginRegistryInspectionResources();
+      inspection.attach(createEmptyPluginRegistry());
+      const sdkDisposalReads: unknown[] = [];
+      inspection.register("sdk-provider", {
+        id: "native-sdk-borrow",
+        dispose: () => {
+          sdkDisposalReads.push(database.db.prepare("SELECT 42 AS value").get());
+          sdkDatabase.close();
+        },
+      });
+      sdkHost.adopt(inspection, inspection.retain());
+      await inspection.release();
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const finished = createDeferredCore();
@@ -290,6 +308,7 @@ describe("createGatewayCloseHandler", () => {
         try {
           await release.promise;
           reads.push(database.db.prepare("SELECT 1 AS value").get());
+          expect(sdkDatabase.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
         } catch (error) {
           failures.push(error);
         } finally {
@@ -321,6 +340,7 @@ describe("createGatewayCloseHandler", () => {
       const close = createGatewayCloseHandler(
         createGatewayCloseTestDeps({
           httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
+          closeSdkResources: () => sdkHost.close(),
         }),
       );
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -342,22 +362,127 @@ describe("createGatewayCloseHandler", () => {
         );
         await vi.waitFor(() => expect(httpClose).toHaveBeenCalledOnce());
         expect(database.db.isOpen).toBe(true);
+        expect(sdkDatabase.isOpen).toBe(true);
+        expect(sdkDisposalReads).toEqual([]);
         expect(closed).toBe(false);
         expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
       } finally {
         release.resolve();
         await finished.promise;
-        await closing;
-        hooks.unregisterInternalHook(eventKey, cleanup);
-        vi.useRealTimers();
-        closePluginStateDatabase();
-        await state.cleanup();
+        try {
+          await closing;
+          expect(sdkDisposalReads).toEqual([{ value: 42 }]);
+          expect(sdkDatabase.isOpen).toBe(false);
+        } finally {
+          await sdkHost.close().catch(() => undefined);
+          if (sdkDatabase.isOpen) {
+            sdkDatabase.close();
+          }
+          hooks.unregisterInternalHook(eventKey, cleanup);
+          vi.useRealTimers();
+          closePluginStateDatabase();
+          await state.cleanup();
+        }
       }
       expect(cleanup).toHaveBeenCalledOnce();
       expect(failures).toEqual([]);
       expect(reads).toEqual([{ value: 1 }]);
       expect(database.db.isOpen).toBe(false);
       expect(mocks.closePluginStateDatabase).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "finishes shared state cleanup after actual SDK disposal rejects (global failure: %s)",
+    async (globalFailure) => {
+      const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+      const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+      const { closePluginStateDatabase } = await vi.importActual<
+        typeof import("../plugin-state/plugin-state-store.js")
+      >("../plugin-state/plugin-state-store.js");
+      const state = await createOpenClawTestState({ label: "sdk-disposal-failure-tail" });
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const sdkDatabase = new DatabaseSync(":memory:");
+      const sdkHost = new LegacyPluginSdkResourceHost();
+      const inspection = new PluginRegistryInspectionResources();
+      inspection.attach(createEmptyPluginRegistry());
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const disposalError = new Error("synthetic SDK disposal failure");
+      const dispose = vi.fn(async () => {
+        entered.resolve();
+        await resume.promise;
+        expect(database.db.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
+        sdkDatabase.close();
+        throw disposalError;
+      });
+      inspection.register("sdk-provider", { id: "native-sdk-failure", dispose });
+      sdkHost.adopt(inspection, inspection.retain());
+      await inspection.release();
+      const globalError = new Error("synthetic singleton reset failure");
+      let resetFailureEnabled = globalFailure;
+      const reset = vi.fn(() => {
+        if (resetFailureEnabled) {
+          throw globalError;
+        }
+      });
+      resolveGlobalSingleton(Symbol("sdk-failure-tail"), () => ({}), reset);
+      const clearSecretsRuntimeSnapshot = vi.fn();
+      mocks.closePluginStateDatabase.mockImplementation(async () => closePluginStateDatabase());
+      let sdkFailure: unknown;
+      const close = createGatewayCloseHandler(
+        createGatewayCloseTestDeps({
+          clearSecretsRuntimeSnapshot,
+          closeSdkResources: () =>
+            sdkHost.close().catch((error: unknown) => {
+              sdkFailure = error;
+              throw error;
+            }),
+        }),
+      );
+      const outcome = close({ reason: "SDK failure tail proof" }).catch((error: unknown) => error);
+      const expectCleanupFailure = (failure: unknown) => {
+        assert(failure instanceof AggregateError);
+        if (globalFailure) {
+          expect(failure.cause).toBe(sdkFailure);
+          expect(failure.errors).toEqual([
+            sdkFailure,
+            expect.objectContaining({ errors: [globalError] }),
+          ]);
+        } else {
+          expect(failure).toBe(sdkFailure);
+        }
+      };
+      try {
+        await entered.promise;
+        expect(database.db.isOpen).toBe(true);
+        expect(sdkDatabase.isOpen).toBe(true);
+        expect(reset).not.toHaveBeenCalled();
+        expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+        resume.resolve();
+        const failure = await outcome;
+        expectCleanupFailure(failure);
+        expect(sdkDatabase.isOpen).toBe(false);
+        expect(database.db.isOpen).toBe(false);
+        expect(reset).toHaveBeenCalledOnce();
+        expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+        expectCleanupFailure(
+          await close({ reason: "retry SDK failure tail proof" }).catch((error: unknown) => error),
+        );
+        expect(dispose).toHaveBeenCalledOnce();
+        expect(reset).toHaveBeenCalledTimes(2);
+        expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledTimes(2);
+      } finally {
+        resetFailureEnabled = false;
+        resume.resolve();
+        await outcome;
+        await sdkHost.close().catch(() => undefined);
+        if (sdkDatabase.isOpen) {
+          sdkDatabase.close();
+        }
+        closePluginStateDatabase();
+        await state.cleanup();
+      }
     },
   );
 

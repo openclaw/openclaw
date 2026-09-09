@@ -152,7 +152,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **24.16+** or **26.1+** is the primary and default runtime (Node 26 recommended). `pnpm` is the repo package manager.
+    Node **24.16+** or **26.1+** is the primary and default runtime (Node 26 recommended); see
+    [Node.js](/install/node) for the maintained requirement. `pnpm` is the repo package manager.
     Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
   </Accordion>
 
@@ -463,10 +464,13 @@ and troubleshooting see the main [FAQ](/help/faq).
     ```bash
     openclaw update
     openclaw update status
-    openclaw update --channel stable|extended-stable|beta|dev
-    openclaw update --tag <dist-tag|version>
+    openclaw update --channel beta
+    openclaw update --tag 2026.9.3
     openclaw update --no-restart
     ```
+
+    `--channel` accepts `stable`, `extended-stable`, `beta`, or `dev`. `--tag`
+    accepts an npm dist-tag or an exact version.
 
     Automating from an agent:
 

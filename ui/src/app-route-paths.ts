@@ -418,3 +418,18 @@ export function locationForRoute(routeId: RouteId, basePath: string): RouteLocat
     hash: "",
   };
 }
+
+export function restoreBridgedRouteLocation(
+  location: RouteLocation,
+  pathParam: string,
+): RouteLocation {
+  const params = new URLSearchParams(location.search);
+  const pathname = params.get(pathParam) ?? location.pathname;
+  params.delete(pathParam);
+  const search = params.toString();
+  return {
+    pathname,
+    search: search ? `?${search}` : "",
+    hash: location.hash,
+  };
+}

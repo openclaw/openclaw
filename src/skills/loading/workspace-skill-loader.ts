@@ -29,7 +29,11 @@ import { loadSingleSkillDirectory } from "./local-loader.js";
 import { resolvePluginSkillRoots, resolvePluginSkillRootsFromMetadata } from "./plugin-skills.js";
 import type { Skill } from "./skill-contract.js";
 import { resolveSkillEntryMetadata } from "./skill-entry-metadata.js";
-import { compactSkillPath, resolveSkillsUserHomeDir } from "./skill-paths.js";
+import {
+  compactSkillPath,
+  resolvePluginSkillsDir,
+  resolveSkillsUserHomeDir,
+} from "./skill-paths.js";
 import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
 import {
   loadGeneratedPluginSkillRecords,
@@ -180,6 +184,7 @@ function loadLocalSkillTiers(
       ? configuredCustodianAgentId
       : undefined;
   const osHomeDir = resolveSkillsUserHomeDir();
+  const pluginSkillsDir = opts?.pluginSkillsDir ?? resolvePluginSkillsDir();
   // Snapshot versions are the watcher-owned invalidation boundary; cache hits must do no IO.
   const cacheKey = JSON.stringify([
     workspaceDir,
@@ -189,7 +194,7 @@ function loadLocalSkillTiers(
     custodianAgentId,
     opts?.managedSkillsDir,
     opts?.bundledSkillsDir,
-    opts?.pluginSkillsDir,
+    pluginSkillsDir,
     opts?.config ? fingerprintSkillSnapshotConfig(opts.config) : undefined,
     osHomeDir,
     process.env.OPENCLAW_STATE_DIR,
@@ -210,7 +215,6 @@ function loadLocalSkillTiers(
   const bundledSkillsDir = workspaceOnly
     ? undefined
     : (opts?.bundledSkillsDir ?? resolveBundledSkillsDir());
-  const pluginSkillsDir = opts?.pluginSkillsDir ?? path.join(CONFIG_DIR, "plugin-skills");
   const extraDirsRaw = workspaceOnly ? [] : (opts?.config?.skills?.load?.extraDirs ?? []);
   const extraDirs = normalizeTrimmedStringList(extraDirsRaw);
   const pluginSkillRoots = workspaceOnly

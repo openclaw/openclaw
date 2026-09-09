@@ -28,7 +28,6 @@ import type {
   SkillProposalOrigin,
   SkillProposalReadResult,
   SkillWorkshopProposalMutationBudget,
-  SkillWorkshopProposalReviewCompletion,
   SkillWorkshopProposalRevisionConstraint,
 } from "../../skills/workshop/types.js";
 import { readWritableWorkshopSkill } from "../../skills/workshop/workspace-skill-read.js";
@@ -46,8 +45,6 @@ import { buildSkillWorkshopToolDescription } from "./skill-workshop-tool-descrip
 import {
   actionResult,
   assertAutonomousSkillSize,
-  beginProposalReviewMutation,
-  completeProposalReview,
   proposalMutationText,
   proposalResult,
   readLifecycleProposalIdParam,
@@ -141,8 +138,6 @@ type SkillWorkshopToolOptions = {
   autonomousCapture?: boolean;
   /** Run-scoped budget shared by every tool instance created across retries. */
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
-  /** Optional durable completion latch shared across runner retries. */
-  proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
   /** Effective selected-model context used for every model-visible Workshop projection. */
   modelContextWindowTokens?: number;
   /** Exact proposal revision reviewed before this operator-requested revision turn. */
@@ -181,25 +176,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       const rawParams = asToolParamsRecord(args);
       const action = readToolStringParam(rawParams, "action", { required: true });
       const params = bindProposalRevisionConstraint(rawParams, action, options.proposalRevision);
-      const proposalActions = resolveProposalOnlyActions(
-        options.updateProposals === true,
-        options.proposalReviewCompletion !== undefined,
-      );
+      const proposalActions = resolveProposalOnlyActions(options.updateProposals === true);
 
       if (options.proposalOnly === true && !proposalActions.includes(action)) {
         throw new ToolInputError(
           `this Skill Workshop review allows only: ${proposalActions.join(", ")}`,
         );
-      }
-
-      if (action === "complete") {
-        if (!options.proposalReviewCompletion) {
-          throw new ToolInputError("this Skill Workshop session cannot complete a review");
-        }
-        return await completeProposalReview(options.proposalReviewCompletion);
-      }
-      if (options.proposalReviewCompletion && options.proposalReviewCompletion.phase !== "open") {
-        throw new ToolInputError("this Skill Workshop review is already completing or complete");
       }
 
       if (action === "restore_collection") {
@@ -508,9 +490,6 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           "this Skill Workshop session has reached its proposal mutation limit",
         );
       }
-      const releaseMutation = reservesMutation
-        ? beginProposalReviewMutation(options.proposalReviewCompletion)
-        : undefined;
       try {
         if (reservesMutation && options.proposalMutationBudget) {
           options.proposalMutationBudget.remaining -= 1;
@@ -610,13 +589,6 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             options.proposalMutationBudget.mutatedProposalIds ?? new Set<string>();
           mutatedProposalIds.add(proposal.record.id);
           options.proposalMutationBudget.mutatedProposalIds = mutatedProposalIds;
-          options.proposalMutationBudget.successfulMutations =
-            (options.proposalMutationBudget.successfulMutations ?? 0) + 1;
-          await options.proposalReviewCompletion?.recordProgress?.({
-            proposalIds: [...mutatedProposalIds],
-            remaining: options.proposalMutationBudget.remaining,
-            successfulMutations: options.proposalMutationBudget.successfulMutations,
-          });
         }
 
         if (foregroundRepair && workshopConfig.autonomous.mode === "auto") {
@@ -637,18 +609,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
         return proposalResult(proposal, { contentText });
       } catch (error) {
-        if (reservesMutation && options.proposalMutationBudget) {
+        if (
+          reservesMutation &&
+          options.proposalMutationBudget &&
+          error instanceof SkillProposalStaleTargetError
+        ) {
           // A concurrent live edit is not a reviewer mutation. Preserve the budget
           // so the reviewer can re-read the new body and redraft either update form.
-          if (error instanceof SkillProposalStaleTargetError) {
-            options.proposalMutationBudget.remaining += 1;
-          }
-          options.proposalMutationBudget.failedMutations =
-            (options.proposalMutationBudget.failedMutations ?? 0) + 1;
+          options.proposalMutationBudget.remaining += 1;
         }
         throw error;
-      } finally {
-        releaseMutation?.();
       }
     },
   };

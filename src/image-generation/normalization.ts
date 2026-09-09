@@ -60,8 +60,11 @@ export function resolveImageGenerationOverrides(params: {
   });
   const ignoredOverrides: ImageGenerationIgnoredOverride[] = sanitized.ignoredOverrides;
   let { quality, outputFormat, background } = params;
+  const output = params.provider.capabilities.output;
+  const qualities =
+    (params.model ? output?.qualitiesByModel?.[params.model] : undefined) ?? output?.qualities;
 
-  if (quality && !(params.provider.capabilities.output?.qualities ?? []).includes(quality)) {
+  if (quality && !(qualities ?? []).includes(quality)) {
     ignoredOverrides.push({ key: "quality", value: quality });
     quality = undefined;
   }

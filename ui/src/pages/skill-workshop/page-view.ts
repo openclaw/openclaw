@@ -1,6 +1,9 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { icons } from "../../components/icons.ts";
+import { t } from "../../i18n/index.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   filterSkillWorkshopProposals,
   type SkillWorkshopMode,
@@ -32,10 +35,15 @@ export function renderSkillWorkshopPage(
     onRevisionSubmit,
     selfLearning,
     onSelfLearningToggle,
-    onHistoryScan,
+    learningBusy,
+    learningError,
+    onLearn,
     onRetry,
   } = renderContext;
   const access = resolveWorkshopAccess(context.gateway.snapshot);
+  const learningAccess = readSessionMethodAccess(context.gateway.snapshot, {
+    method: "sessions.create",
+  });
   const selectInstalled = (name: string) => {
     void selectSkillWorkshopInstalledSkill(state, context, name, {
       onProgress: requestUpdate,
@@ -81,7 +89,18 @@ export function renderSkillWorkshopPage(
             automationHref: `${pathForRoute("automation", context.basePath)}?section=cron`,
             onModeChange: selectMode,
           })}
+          <button
+            type="button"
+            class="btn sw-learn-button"
+            ?disabled=${learningBusy || !learningAccess.allowed}
+            title=${learningAccess.allowed ? t("skillWorkshop.learning.description") : learningAccess.reason}
+            @click=${onLearn}
+          >
+            <span aria-hidden="true">${icons.wandSparkles}</span>
+            ${learningBusy ? t("skillWorkshop.learning.starting") : t("skillWorkshop.learning.start")}
+          </button>
         </div>
+        ${learningError ? html`<div class="sw-error" role="alert">${learningError}</div>` : nothing}
         ${(() => {
           const visibleProposals = filterSkillWorkshopProposals(
             state.skillWorkshopProposals,
@@ -160,7 +179,6 @@ export function renderSkillWorkshopPage(
               assistantName: context.config.current.assistantIdentity.name,
               workshopAgentName,
               selfLearning,
-              historyScan: state.skillWorkshopHistoryScan,
               onRetry,
               onQueryChange: (query) => {
                 state.skillWorkshopQuery = query;
@@ -257,7 +275,6 @@ export function renderSkillWorkshopPage(
                 requestUpdate();
               },
               onSelfLearningToggle,
-              onHistoryScan,
             })}
           </wa-tab-panel>`;
         })()}

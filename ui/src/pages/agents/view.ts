@@ -73,6 +73,7 @@ type AgentFilesState = {
   contents: Record<string, string>;
   drafts: Record<string, string>;
   saving: boolean;
+  conflict: string | null;
 };
 
 type AgentSkillsState = {
@@ -141,6 +142,8 @@ type AgentsProps = {
   onFileDraftChange: (name: string, content: string) => void;
   onFileReset: (name: string) => void;
   onFileSave: (name: string) => void;
+  onFileReload: (name: string) => void;
+  onFileOverwrite: (name: string) => void;
   onToolsProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onToolsOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -409,12 +412,15 @@ export function renderAgents(props: AgentsProps) {
                           agentFileContents: props.agentFiles.contents,
                           agentFileDrafts: props.agentFiles.drafts,
                           agentFileSaving: props.agentFiles.saving,
+                          agentFileConflict: props.agentFiles.conflict,
                           canWrite: props.access.canWriteFiles,
                           onLoadFiles: props.onLoadFiles,
                           onSelectFile: props.onSelectFile,
                           onFileDraftChange: props.onFileDraftChange,
                           onFileReset: props.onFileReset,
                           onFileSave: props.onFileSave,
+                          onFileReload: props.onFileReload,
+                          onFileOverwrite: props.onFileOverwrite,
                         })
                       : nothing
                   }

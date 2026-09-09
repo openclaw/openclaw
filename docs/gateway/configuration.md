@@ -568,10 +568,10 @@ Reload never migrates workspace state.
 
 ### Reload modes
 
-| Mode                   | Behavior                                                                |
-| ---------------------- | ----------------------------------------------------------------------- |
-| **`hybrid`** (default) | Applies hot-reloadable settings. Automatically restarts when required.  |
-| **`off`**              | Disables file watching. Changes take effect on the next manual restart. |
+| Mode                   | Behavior                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| **`hybrid`** (default) | Applies hot-reloadable settings. Automatically restarts when required.                        |
+| **`off`**              | Keeps watching and validating config. Runtime changes take effect on the next manual restart. |
 
 ```json5
 {

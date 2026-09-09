@@ -46,6 +46,21 @@ Retained compatibility entrypoints keep their shipped caller names:
 `resolvePluginProviders`, and `agent-runtime`'s
 `resolveThinkingDefaultWithRuntimeCatalog` accepts `loadModelCatalog`.
 
+`resolvePluginProviders` remains synchronous and returns the existing provider
+array. When it borrows from an owned inspection, the Gateway lifecycle or
+executable CLI invocation retains the backing resources until its actual work
+and cleanup finish. Finish calls using those providers before the host closes;
+keeping the array does not authorize use after host retirement. A released
+inspection stays retired, and a new lookup through that inspection is refused.
+Callers outside an OpenClaw host retain the standalone process lifetime of this
+SDK contract; process exit does not guarantee asynchronous plugin disposal.
+
+Inspection release relinquishes the inspection's own claim. If an SDK host
+still borrows the same source, final disposal belongs to that host. The host
+reports later disposal failures during teardown; they cannot retroactively
+change an already returned inspection result. Internal provider resolvers do
+not acquire this compatibility lifetime.
+
 `text-chunking` retains positional `CodeRegion` inputs with `start` and `end`
 offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not

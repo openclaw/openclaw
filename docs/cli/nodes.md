@@ -50,12 +50,18 @@ openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name <displayName>
 ```
 
-These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake. See [Nodes](/nodes) for how the two relate.
+These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake.
+
+For manual enrollment, first approve the device request, then restart or rerun
+a node paused on `PAIRING_REQUIRED`. Its reconnect creates the separate request
+shown by `nodes pending`. Approve that node request, whose ID differs from the
+device request ID. See [Node pairing and status](/nodes/pairing-and-status#pairing-+-status)
+for the complete sequence.
 
 - `remove` revokes the device's `node` role and clears its approved and pending command/capability surfaces. It disconnects the device's node-role sessions. A mixed-role device keeps its record and other roles; a node-only device record is deleted.
 - Removal stays effective even if worker cleanup reports an error: revoked node connections still close.
 - `pending` only needs `operator.pairing` scope.
-- `gateway.nodes.pairing.autoApproveCidrs` can skip the pending step for explicitly trusted, first-time `role: node` device pairing. Off by default; does not approve role upgrades.
+- `gateway.nodes.pairing.autoApproveCidrs` can approve explicitly trusted, first-time `role: node` device pairing. It is off by default and does not approve role upgrades or the separate command surface; that request still appears in `nodes pending`.
 - `gateway.nodes.pairing.sshVerify` (on by default) auto-approves first-time `role: node` device pairing when the gateway can verify the device key over SSH to the node host; the first capability surface is approved in the same step. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).
 - `approve` scope requirements follow the pending request's declared commands:
   - commandless request: `operator.pairing`
@@ -74,8 +80,8 @@ Flags:
 
 - `--command <command>` (required): e.g. `device.info`.
 - `--params <json>`: JSON object string (default `{}`).
-- `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
-- `--timeout <ms>`: Gateway transport timeout (default `30000`).
+- `--invoke-timeout <ms>`: node invoke timeout as a positive integer (default `15000`).
+- `--timeout <ms>`: Gateway transport timeout (default `30000`). For a positive invoke timeout, the effective transport timeout is `max(timeout, invokeTimeout + 10000)`, allowing transport grace beyond the node's invoke deadline.
 - `--idempotency-key <key>`: optional idempotency key.
 
 `system.run` and `system.run.prepare` are blocked here; use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.

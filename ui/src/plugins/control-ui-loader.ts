@@ -2,13 +2,14 @@ import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plug
 import type { ControlUiDisposer, ControlUiPlugin } from "../../../src/plugin-sdk/control-ui.js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 // Native views and contributions must be defined before activation can publish registrations.
 import "./control-ui-view.runtime.ts";
 
 function assetUrl(path: string, prefix: string): string {
-  const url = new URL(path, window.location.href);
+  const url = new URL(uiDevGatewayResourceUrl(path), window.location.href);
   if (url.origin !== window.location.origin || !url.pathname.startsWith(prefix)) {
     throw new Error("Native plugin assets must be served by this Control UI Gateway.");
   }

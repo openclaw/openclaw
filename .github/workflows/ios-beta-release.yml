@@ -122,6 +122,7 @@ jobs:
           fetch-depth: 0
           sparse-checkout: |
             .github/actions/mobile-release-authority
+            .github/actions/ios-signing-keychain
             scripts
             apps/mobile/version.json
             apps/android/version.json
@@ -239,6 +240,9 @@ jobs:
           test -n "$watch_toolchain"
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
 
+      - name: Create job-owned iOS signing keychain
+        uses: ./apps/ios/build/mobile-release-ci/authority/.github/actions/ios-signing-keychain
+
       - name: Refresh trusted authority before store access
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -254,6 +258,26 @@ jobs:
             apps/android/Config/Version.properties
             apps/android/fastlane/metadata/android/en-US/release_notes.txt
             apps/ios/CHANGELOG.md
+
+      - name: Revalidate release authority immediately before signing proof
+        uses: ./apps/ios/build/mobile-release-ci/sink/.github/actions/mobile-release-authority
+        with:
+          operation: revalidate
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ needs.authorize.outputs.target_ref }}
+          target-sha: ${{ env.RELEASE_TARGET_SHA }}
+          authority-run-id: ${{ needs.authorize.outputs.run_id }}
+
+      - name: Validate readonly iOS signing key access
+        env:
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          pnpm ios:release:signing:check
+          node apps/ios/build/mobile-release-ci/authority/.github/actions/ios-signing-keychain/keychain.mjs probe
 
       - name: Revalidate release authority immediately before upload
         uses: ./apps/ios/build/mobile-release-ci/sink/.github/actions/mobile-release-authority

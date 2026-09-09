@@ -112,15 +112,14 @@ export function collectConfiguredPluginIds(
     }
     addConfiguredPluginId(ids, pluginId);
   }
-  const searchProvider = cfg.tools?.web?.search?.provider;
-  if (cfg.tools?.web?.search?.enabled !== false && typeof searchProvider === "string") {
+  const searchProvider = normalizeOptionalLowercaseString(cfg.tools?.web?.search?.provider);
+  if (cfg.tools?.web?.search?.enabled !== false && searchProvider) {
     const installEntry = resolveWebSearchInstallCatalogEntry({ providerId: searchProvider });
     if (installEntry?.pluginId) {
       ids.add(installEntry.pluginId);
     }
-  }
-  if (cfg.tools?.web?.search?.enabled !== false) {
-    // Env-only web providers are valid auto-detect inputs and need their manifest installed first.
+  } else if (cfg.tools?.web?.search?.enabled !== false) {
+    // Only auto-detect from environment credentials when no provider was selected.
     for (const entry of resolveWebSearchInstallCatalogEntriesForEnv(env ?? process.env)) {
       ids.add(entry.pluginId);
     }

@@ -142,6 +142,8 @@ jobs:
           emulator_pid=""
           adb_started=0
           readiness_failure_latched=0
+          final_cold_boot_observation_seconds=900
+          emulator_observation_deadline=0
 
           capture_accel_check() {
             local accel_raw="$DIAGNOSTIC_DIR/emulator-accel-check.raw"
@@ -198,22 +200,28 @@ jobs:
             local output_file="$1"
             local deadline="$2"
             shift 2
+            local probe_deadline
             local probe_pid
-            local probe_poll_seconds=1
+            local probe_poll_seconds=0.1
+            local probe_timeout_seconds=5
 
             probe_status=0
             probe_timed_out=false
+            : >"$output_file"
             if (( SECONDS >= deadline )); then
-              : >"$output_file"
               probe_status=124
               probe_timed_out=true
               return 0
             fi
 
+            probe_deadline=$((SECONDS + probe_timeout_seconds))
+            if (( probe_deadline > deadline )); then
+              probe_deadline=$deadline
+            fi
             "$@" >"$output_file" 2>&1 &
             probe_pid=$!
             while kill -0 "$probe_pid" 2>/dev/null; do
-              if (( SECONDS >= deadline )); then
+              if (( SECONDS >= probe_deadline )); then
                 probe_timed_out=true
                 if kill "$probe_pid" 2>/dev/null; then
                   :
@@ -225,12 +233,12 @@ jobs:
               fi
               sleep "$probe_poll_seconds"
             done
-            if wait "$probe_pid"; then
+            if wait "$probe_pid" 2>/dev/null; then
               probe_status=0
             else
               probe_status=$?
             fi
-            if (( SECONDS >= deadline )); then
+            if (( SECONDS >= probe_deadline )); then
               probe_timed_out=true
             fi
             if [[ "$probe_timed_out" == "true" ]]; then
@@ -238,14 +246,78 @@ jobs:
             fi
           }
 
+          retain_probe_output() {
+            local source_file="$1"
+            local destination_file="$2"
+            local max_bytes="$3"
+            local exit_status="$4"
+            local timed_out="$5"
+            local output_bytes
+            local output_truncated=false
+            local retained_bytes
+
+            output_bytes="$(wc -c <"$source_file" | tr -d ' ')"
+            retained_bytes="$output_bytes"
+            if (( output_bytes > max_bytes )); then
+              head -c "$max_bytes" "$source_file" >"$destination_file"
+              retained_bytes="$max_bytes"
+              output_truncated=true
+            else
+              cp "$source_file" "$destination_file"
+            fi
+            rm -f "$source_file"
+            {
+              printf '\nprobe_exit_status=%s\n' "$exit_status"
+              printf 'probe_timed_out=%s\n' "$timed_out"
+              printf 'output_bytes=%s\n' "$output_bytes"
+              printf 'retained_bytes=%s\n' "$retained_bytes"
+              printf 'output_truncated=%s\n' "$output_truncated"
+            } >>"$destination_file"
+          }
+
+          capture_cold_boot_snapshot() {
+            local snapshot_name="$1"
+            local serial="$2"
+            local observation_deadline="$3"
+            local snapshot_properties_max_bytes=65536
+            local snapshot_logcat_max_bytes=262144
+            local snapshot_dir="$DIAGNOSTIC_DIR/cold-boot-snapshots/$snapshot_name"
+            local probe_output="$DIAGNOSTIC_DIR/cold-boot-snapshot.raw"
+            local remaining_seconds=$((observation_deadline - SECONDS))
+
+            if (( remaining_seconds < 0 )); then
+              remaining_seconds=0
+            fi
+            mkdir -p "$snapshot_dir"
+            {
+              printf 'snapshot=%s\n' "$snapshot_name"
+              printf 'captured_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              printf 'serial=%s\n' "$serial"
+              printf 'avd_name=%s\n' "$AVD_NAME"
+              printf 'remaining_seconds_at_start=%s\n' "$remaining_seconds"
+            } >"$snapshot_dir/metadata.txt"
+
+            run_bounded_probe "$probe_output" "$observation_deadline" \
+              adb -s "$serial" shell getprop
+            retain_probe_output "$probe_output" "$snapshot_dir/boot-properties.txt" \
+              "$snapshot_properties_max_bytes" "$probe_status" "$probe_timed_out"
+
+            run_bounded_probe "$probe_output" "$observation_deadline" \
+              adb -s "$serial" logcat -b system -b crash -d -v threadtime -t 2000
+            retain_probe_output "$probe_output" "$snapshot_dir/system-crash-logcat.txt" \
+              "$snapshot_logcat_max_bytes" "$probe_status" "$probe_timed_out"
+          }
+
           observe_after_readiness_timeout() {
             local serial="${1:-}"
-            local post_deadline_observation_seconds=300
-            local post_deadline_poll_seconds=2
-            local observation_deadline=$((SECONDS + post_deadline_observation_seconds))
+            local observation_deadline="$2"
+            local observation_poll_seconds=2
+            local final_snapshot_lead_seconds=15
             local observation_log="$DIAGNOSTIC_DIR/post-deadline-observations.log"
             local observation_stop="observation-cap-reached"
             local late_adb_recorded=false
+            local first_snapshot_recorded=false
+            local final_snapshot_recorded=false
             local observed_at
             local probe_output="$DIAGNOSTIC_DIR/post-deadline-probe.raw"
             local adb_output
@@ -257,7 +329,7 @@ jobs:
 
             {
               printf 'original_deadline_reached_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              printf 'observation_cap_seconds=%s\n' "$post_deadline_observation_seconds"
+              printf 'observation_cap_seconds=%s\n' "$final_cold_boot_observation_seconds"
               printf 'owned_emulator_pid=%s\n' "$emulator_pid"
             } >>"$observation_log"
 
@@ -276,81 +348,88 @@ jobs:
                   "$observed_at" "$probe_status" "$probe_timed_out"
                 printf '%s\n' "$adb_output"
               } >>"$observation_log"
-              if [[ "$probe_timed_out" == "true" ]]; then
-                observation_stop="adb-devices-timeout"
-                break
-              fi
-              if [[ "$probe_status" -ne 0 ]]; then
-                observation_stop="adb-devices-failed"
-                break
+              if [[ "$probe_timed_out" == "false" && "$probe_status" == "0" ]]; then
+                serials="$(printf '%s\n' "$adb_output" | awk 'NR > 1 && $2 == "device" { print $1 }')"
+                count="$(printf '%s\n' "$serials" | sed '/^$/d' | wc -l | tr -d ' ')"
+                if [[ "$count" -gt 1 ]]; then
+                  observation_stop="unexpected-multiple-devices"
+                  break
+                fi
+                if [[ "$count" == "1" ]]; then
+                  if [[ -n "$serial" && "$serial" != "$serials" ]]; then
+                    observation_stop="unexpected-device-change"
+                    break
+                  fi
+                  if [[ -z "$serial" ]]; then
+                    serial="$serials"
+                  fi
+                  run_bounded_probe "$probe_output" "$observation_deadline" \
+                    adb -s "$serial" emu avd name
+                  avd_name="$(head -c 4096 "$probe_output" | tr -d '\r' | sed -n '1p')"
+                  printf '[%s] serial=%s avd_status=%s avd_timed_out=%s avd_name=%s\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$serial" "$probe_status" \
+                    "$probe_timed_out" "${avd_name:-unset}" >>"$observation_log"
+                  if [[ "$probe_timed_out" == "false" && "$probe_status" == "0" ]]; then
+                    if [[ "$avd_name" != "$AVD_NAME" ]]; then
+                      observation_stop="unexpected-avd"
+                      break
+                    fi
+                    if [[ "$late_adb_recorded" == "false" ]]; then
+                      printf 'late_adb_online_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                        >>"$observation_log"
+                      late_adb_recorded=true
+                    fi
+                    if [[ "$first_snapshot_recorded" == "false" ]]; then
+                      capture_cold_boot_snapshot "first-online" "$serial" "$observation_deadline"
+                      first_snapshot_recorded=true
+                    fi
+
+                    if (( SECONDS < observation_deadline )); then
+                      run_bounded_probe "$probe_output" "$observation_deadline" \
+                        adb -s "$serial" shell getprop sys.boot_completed
+                      boot_completed="$(tr -d '\r' <"$probe_output")"
+                      printf '[%s] serial=%s boot_status=%s boot_timed_out=%s boot_completed=%s\n' \
+                        "$observed_at" "$serial" "$probe_status" "$probe_timed_out" \
+                        "${boot_completed:-unset}" >>"$observation_log"
+                      if [[ "$probe_timed_out" == "false" && "$probe_status" == "0" &&
+                        "$boot_completed" == "1" ]]; then
+                        printf 'late_boot_completed_at=%s\n' \
+                          "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$observation_log"
+                        observation_stop="late-boot-completed"
+                        break
+                      fi
+                      remaining_seconds=$((observation_deadline - SECONDS))
+                      if [[ "$final_snapshot_recorded" == "false" ]] &&
+                        (( remaining_seconds <= final_snapshot_lead_seconds )); then
+                        capture_cold_boot_snapshot \
+                          "near-ceiling" "$serial" "$observation_deadline"
+                        final_snapshot_recorded=true
+                      fi
+                    fi
+                  fi
+                fi
               fi
 
-              serials="$(printf '%s\n' "$adb_output" | awk 'NR > 1 && $2 == "device" { print $1 }')"
-              count="$(printf '%s\n' "$serials" | sed '/^$/d' | wc -l | tr -d ' ')"
-              if [[ "$count" -gt 1 ]]; then
-                observation_stop="unexpected-multiple-devices"
+              if (( SECONDS >= observation_deadline )); then
                 break
               fi
-              if [[ "$count" == "1" ]]; then
-                if [[ -n "$serial" && "$serial" != "$serials" ]]; then
-                  observation_stop="unexpected-device-change"
-                  break
-                fi
-                if [[ -z "$serial" ]]; then
-                  serial="$serials"
-                fi
-                run_bounded_probe "$probe_output" "$observation_deadline" \
-                  adb -s "$serial" emu avd name
-                avd_name="$(head -c 4096 "$probe_output" | tr -d '\r' | sed -n '1p')"
-                printf '[%s] serial=%s avd_status=%s avd_name=%s\n' \
-                  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$serial" "$probe_status" \
-                  "${avd_name:-unset}" >>"$observation_log"
-                if [[ "$probe_timed_out" == "true" ]]; then
-                  observation_stop="avd-identity-timeout"
-                  break
-                fi
-                if [[ "$probe_status" -ne 0 || "$avd_name" != "$AVD_NAME" ]]; then
-                  observation_stop="unexpected-avd"
-                  break
-                fi
-                if [[ "$late_adb_recorded" == "false" ]]; then
-                  printf 'late_adb_online_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-                    >>"$observation_log"
-                  late_adb_recorded=true
-                fi
-
-                run_bounded_probe "$probe_output" "$observation_deadline" \
-                  adb -s "$serial" shell getprop sys.boot_completed
-                boot_completed="$(tr -d '\r' <"$probe_output")"
-                printf '[%s] serial=%s boot_status=%s boot_completed=%s\n' \
-                  "$observed_at" "$serial" "$probe_status" "${boot_completed:-unset}" \
-                  >>"$observation_log"
-                if [[ "$probe_timed_out" == "true" ]]; then
-                  observation_stop="boot-query-timeout"
-                  break
-                fi
-                if [[ "$probe_status" == "0" && "$boot_completed" == "1" ]]; then
-                  printf 'late_boot_completed_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-                    >>"$observation_log"
-                  observation_stop="late-boot-completed"
-                  break
-                fi
-              fi
-
               sample_owned_qemu
               remaining_seconds=$((observation_deadline - SECONDS))
               if (( remaining_seconds <= 0 )); then
                 break
               fi
-              if (( remaining_seconds < post_deadline_poll_seconds )); then
+              if (( remaining_seconds < observation_poll_seconds )); then
                 sleep "$remaining_seconds"
               else
-                sleep "$post_deadline_poll_seconds"
+                sleep "$observation_poll_seconds"
               fi
             done
 
+            rm -f "$probe_output"
             printf 'observation_finished_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               >>"$observation_log"
+            printf 'first_snapshot_recorded=%s\n' "$first_snapshot_recorded" >>"$observation_log"
+            printf 'final_snapshot_recorded=%s\n' "$final_snapshot_recorded" >>"$observation_log"
             printf 'observation_stop=%s\n' "$observation_stop" >>"$observation_log"
           }
 
@@ -359,7 +438,7 @@ jobs:
             local serial="${2:-}"
 
             readiness_failure_latched=1
-            observe_after_readiness_timeout "$serial"
+            observe_after_readiness_timeout "$serial" "$emulator_observation_deadline"
             printf '::error::%s\n' "$failure_message" >&2
             return 1
           }
@@ -422,6 +501,8 @@ jobs:
           emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -verbose -show-kernel)
           printf '%q ' "${emulator_args[@]}" >"$DIAGNOSTIC_DIR/emulator-args.txt"
           printf '\n' >>"$DIAGNOSTIC_DIR/emulator-args.txt"
+          emulator_launch_seconds=$SECONDS
+          emulator_observation_deadline=$((emulator_launch_seconds + final_cold_boot_observation_seconds))
           emulator "${emulator_args[@]}" >"$DIAGNOSTIC_DIR/emulator.log" 2>&1 &
           emulator_pid=$!
           printf 'emulator_pid=%s\n' "$emulator_pid" >"$DIAGNOSTIC_DIR/process-status.log"

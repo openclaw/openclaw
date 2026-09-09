@@ -40,6 +40,43 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
+  it("keeps capabilities available when development plugin grants contain invalid URLs", async () => {
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+      gatewayUrl: "ws://gateway.example/mount",
+      proxyPath: "/dev-gateway",
+    });
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        terminalEnabled: true,
+        cliAgentsEnabled: true,
+        pluginFrameGrants: [
+          {
+            pluginId: "fixture",
+            path: "/mount/plugins/fixture/",
+            match: "prefix",
+            unrecognized: "discard",
+          },
+          { pluginId: "malformed", path: "http://[", match: "prefix" },
+          { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+          { path: "/missing-owner", match: "prefix" },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ resourceBasePath: "/dev-gateway/mount" });
+    await expect(config.refresh()).resolves.toMatchObject({
+      terminalEnabled: true,
+      cliAgentsEnabled: true,
+      pluginFrameGrants: [
+        { pluginId: "fixture", path: "/dev-gateway/mount/plugins/fixture/", match: "prefix" },
+        { pluginId: "malformed", path: "http://[", match: "prefix" },
+        { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+      ],
+    });
+    expect(config.current.pluginFrameGrants[0]).not.toHaveProperty("unrecognized");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps invitations hidden until bootstrap enables them and accepts later opt-outs", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

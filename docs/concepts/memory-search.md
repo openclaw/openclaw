@@ -232,3 +232,4 @@ the managed server endpoints before rebuilding the index.
 - [Active memory](/concepts/active-memory)
 - [Builtin memory engine](/concepts/memory-builtin)
 - [Memory configuration reference](/reference/memory-config)
+- [Memory LanceDB](/plugins/memory-lancedb)

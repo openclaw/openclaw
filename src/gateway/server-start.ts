@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   createGatewayKernel,
@@ -25,11 +26,25 @@ export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  return await sdkResourceHost.run(() =>
+    startGatewayServerWithSdkHost(port, opts, sdkResourceHost),
+  );
+}
+
+async function startGatewayServerWithSdkHost(
+  port: number,
+  opts: GatewayServerOptions,
+  sdkResourceHost: LegacyPluginSdkResourceHost,
+): Promise<GatewayServer> {
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
   });
-  const gatewayKernel = await createGatewayKernel(port, opts, { deferEarlyRuntime: true });
+  const gatewayKernel = await createGatewayKernel(port, opts, {
+    deferEarlyRuntime: true,
+    sdkResourceHost,
+  });
   if (!gatewayKernel.minimalTestGateway) {
     // Start the Keychain read early so it overlaps bootstrap; post-attach awaits the
     // shared promise before plugins can use TLS.
@@ -104,10 +119,10 @@ export async function startGatewayServerCore(
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: (optsLocal) => {
       if (!closePromise) {
-        const prelude = beginClosePrelude(optsLocal);
-        clearTimeout(postReadyWorkTimer);
-        releasePostReadyWork();
-        closePromise = (async () => {
+        closePromise = sdkResourceHost.run(async () => {
+          const prelude = beginClosePrelude(optsLocal);
+          clearTimeout(postReadyWorkTimer);
+          releasePostReadyWork();
           await prelude;
           const close = await prepareClose(optsLocal);
           await runGatewayShutdownSteps({
@@ -146,7 +161,7 @@ export async function startGatewayServerCore(
             ],
             onError: (message) => log.error(message),
           });
-        })();
+        });
       }
       return closePromise;
     },

@@ -1595,6 +1595,9 @@ export const en: TranslationMap & {
       content: "Content",
       words: "{count} words",
       lines: "lines",
+      overwrite: "Overwrite",
+      conflictHint:
+        "This file changed in the agent workspace after this draft was started. Reload to take the workspace version, or Overwrite to replace it with this draft.",
     },
   },
   debug: {
@@ -2286,6 +2289,7 @@ export const en: TranslationMap & {
     navigationBlocked:
       "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
     navigationCheckFailed: "OpenClaw couldn’t verify this tab’s address. Refresh to try again.",
+    tabUnavailable: "This tab is no longer available. Select another tab.",
     title: "Browser",
     open: "Open",
     openPanel: "Open browser panel",
@@ -3743,25 +3747,18 @@ export const en: TranslationMap & {
     selfLearning: {
       pitchTitle: "Turn on self-learning",
       pitchBody:
-        "OpenClaw reviews corrections and substantial completed runs, then applies scanner-approved skills and lists them here. Experience review spends extra background tokens.",
+        "OpenClaw learns from completed work and improves reusable skills in the background. Reviews use your configured model.",
       enable: "Enable self-learning",
       enabling: "Enabling\u2026",
       updateError: "Could not update the self-learning setting.",
     },
-    history: {
-      eyebrow: "Past work",
-      title: "Find reusable workflows",
-      body: "Review substantial sessions from newest to oldest. Only strong recovery patterns or workflows that save repeated tool calls become suggestions.",
-      findIdeas: "Find skill ideas",
-      scanEarlier: "Scan earlier work",
-      scanNew: "Scan new work",
-      scanning: "Reviewing sessions\u2026",
-      loading: "Loading history\u2026",
-      pendingOnly: "Creates suggestions only. Uses your configured model.",
-      reviewed: "{count} sessions reviewed",
-      found: "{count} ideas found",
-      noSessions: "No substantial sessions found in this window.",
-      today: "today",
+    learning: {
+      start: "Learn from past conversations",
+      starting: "Opening learning session\u2026",
+      title: "Learn from past conversations",
+      description:
+        "Open a session to find useful lessons and improve skills using your current learning mode.",
+      startFailed: "Could not start learning. Check your sessions before trying again.",
     },
   },
   // Chat swarm summaries render before the lazy Activity catalog loads.
@@ -5548,6 +5545,8 @@ export const en: TranslationMap & {
         "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
     },
     pendingInputs: {
+      waitingForWorkspaceSync: "Received · waiting for workspace sync",
+      waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:
         "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
       cancelled:

@@ -691,42 +691,33 @@ describe("refreshChat", () => {
     },
   );
 
-  it.each(["missing", "empty"])(
-    "revalidates a warm %s snapshot when startup omits metadata",
-    async (kind) => {
-      const ready = { id: "model", name: "Model", provider: "test", available: true };
-      const host = makeChatHost({
-        requestHandlers: {
-          "chat.startup": async () => ({ messages: [] }),
-          "chat.metadata": async () => ({ commands: [] }),
-          "models.list": async () => ({ models: [ready] }),
-        },
-      });
-      const client = expectDefined(host.client, "chat client");
-      const scope = { agentId: "main", sessionKey: host.sessionKey };
-      const release = subscribeChatMetadata(client, scope, () => {});
-      beginChatMetadataPublication(client, scope).publish({
-        commands: [],
-        models:
-          kind === "empty"
-            ? []
-            : [{ ...ready, available: false, unavailableReason: "missing-auth" }],
-      });
-      await refreshPageChat(asChatPageHost(host), {
-        startup: true,
-        awaitHistory: true,
-        deferBranches: true,
-      });
-      try {
-        await waitForFast(() => expect(host.chatModelCatalog).toEqual([ready]));
-        expect(asChatPageHost(host).chatModelsLoading).toBe(false);
-        expect(host.request).toHaveBeenCalledWith("chat.metadata", scope);
-      } finally {
-        release();
-        retireChatMetadataRequests(asChatPageHost(host));
-      }
-    },
-  );
+  it("revalidates warm command metadata when startup omits metadata", async () => {
+    const ready = { id: "model", name: "Model", provider: "test", available: true };
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.startup": async () => ({ messages: [] }),
+        "chat.metadata": async () => ({ commands: [] }),
+        "models.list": async () => ({ models: [ready] }),
+      },
+    });
+    const client = expectDefined(host.client, "chat client");
+    const scope = { agentId: "main", sessionKey: host.sessionKey };
+    const release = subscribeChatMetadata(client, scope, () => {});
+    beginChatMetadataPublication(client, scope).publish({ commands: [] });
+    await refreshPageChat(asChatPageHost(host), {
+      startup: true,
+      awaitHistory: true,
+      deferBranches: true,
+    });
+    try {
+      await waitForFast(() => expect(host.chatModelCatalog).toEqual([ready]));
+      expect(asChatPageHost(host).chatModelsLoading).toBe(false);
+      expect(host.request).toHaveBeenCalledWith("chat.metadata", scope);
+    } finally {
+      release();
+      retireChatMetadataRequests(asChatPageHost(host));
+    }
+  });
 
   it.each([
     [

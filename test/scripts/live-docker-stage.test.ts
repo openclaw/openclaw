@@ -1,15 +1,649 @@
 // Live Docker Stage tests cover live docker stage script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const stageScriptPath = path.join(repoRoot, "scripts/lib/live-docker-stage.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function committedSourceFixture(files: Record<string, string | null>) {
+  const root = tempDirs.make("openclaw-frozen-source-");
+  for (const [relative, content] of Object.entries(files)) {
+    if (content === null) {
+      continue;
+    }
+    mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+    writeFileSync(path.join(root, relative), content);
+  }
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  git("init", "-q");
+  git("config", "user.email", "test@example.invalid");
+  git("config", "user.name", "Test");
+  const commit = () => {
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    return git("rev-parse", "HEAD");
+  };
+  return { root, git, commit, sha: commit() };
+}
+
+describe("frozen committed source errors", () => {
+  const metadata = "scripts/print-cli-backend-live-metadata.ts";
+  const gatewayOld = "scripts/e2e/lib/gateway-network/client.mjs";
+  const gatewayNew = "scripts/e2e/lib/gateway-network/client.mts";
+
+  function invoke(
+    source: { root: string; sha: string },
+    command: string,
+    env: Record<string, string> = {},
+  ) {
+    return spawnSync(
+      "bash",
+      ["-c", `set -euo pipefail; source "$1"; ${command}`, "test", stageScriptPath, source.root],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_SELECTED_SHA: source.sha,
+          OPENCLAW_TOOLING_SHA: "b".repeat(40),
+          ...env,
+        },
+      },
+    );
+  }
+
+  function removeObject(source: ReturnType<typeof committedSourceFixture>, expression: string) {
+    const oid = source.git("rev-parse", expression);
+    const objectPath = path.join(source.root, ".git/objects", oid.slice(0, 2), oid.slice(2));
+    rmSync(objectPath);
+    return objectPath;
+  }
+
+  it("reads committed text through the imported API and distinguishes absent from unreadable blobs", () => {
+    const committedText = "selected committed text\n";
+    const source = committedSourceFixture({ [metadata]: committedText });
+    writeFileSync(path.join(source.root, metadata), "dirty worktree decoy\n");
+    const reader = createFrozenTargetSource(source.root, source.sha);
+    expect(reader.readText(metadata)).toBe(committedText);
+    expect(reader.readText("scripts/absent.ts")).toBeNull();
+
+    removeObject(source, `${source.sha}:${metadata}`);
+    const freshReader = createFrozenTargetSource(source.root, source.sha);
+    expect(() => freshReader.readText(metadata)).toThrow();
+  });
+
+  it("distinguishes genuine absence from read errors through fallback and negative predicates", () => {
+    const source = committedSourceFixture({ "package.json": "{}\n" });
+    const result = invoke(
+      source,
+      `openclaw_resolve_frozen_target_file "$2" ${metadata} fallback; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf '%s\\n' "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE"`,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("fallback\nlegacy\n");
+  });
+
+  it.each(["commit", "root tree", "intermediate tree", "blob"] as const)(
+    "propagates a missing %s without hydrating a promisor or returning fallback",
+    (kind) => {
+      const source = committedSourceFixture({ [metadata]: "resolveCliBackendDockerPackages\n" });
+      const expression =
+        kind === "commit"
+          ? source.sha
+          : kind === "root tree"
+            ? `${source.sha}^{tree}`
+            : kind === "intermediate tree"
+              ? `${source.sha}:scripts`
+              : `${source.sha}:${metadata}`;
+      const bin = path.join(source.root, "bin");
+      const transportLog = path.join(source.root, "transport.log");
+      mkdirSync(bin);
+      writeFileSync(
+        path.join(bin, "git-remote-fixture"),
+        '#!/bin/sh\nprintf "unexpected hydration\\n" >> "$SOURCE_TRANSPORT_LOG"\nexit 97\n',
+        { mode: 0o755 },
+      );
+      source.git("config", "remote.origin.url", "fixture::unavailable");
+      source.git("config", "remote.origin.promisor", "true");
+      source.git("config", "extensions.partialClone", "origin");
+      source.git("config", "protocol.fixture.allow", "always");
+      removeObject(source, expression);
+      const env = { PATH: `${bin}:${process.env.PATH}`, SOURCE_TRANSPORT_LOG: transportLog };
+      for (const command of [
+        'openclaw_prepare_frozen_target_context "$2"',
+        `openclaw_resolve_frozen_target_file "$2" ${metadata} fallback`,
+        'openclaw_resolve_frozen_live_cli_backend_package_mode "$2"',
+      ]) {
+        if (command.includes("prepare") && (kind === "intermediate tree" || kind === "blob")) {
+          continue;
+        }
+        const result = invoke(source, `status=0; ${command} || status=$?; exit "$status"`, env);
+        expect(result.status, `${command}\n${result.stderr}`).toBe(2);
+        expect(result.stdout).toBe("");
+      }
+      expect(existsSync(transportLog)).toBe(false);
+    },
+  );
+
+  it.each(["positive", "negative"] as const)(
+    "rejects a corrupt blob in a %s marker predicate even under a conditional caller",
+    (kind) => {
+      const marker = kind === "positive" ? "src/cli/update-cli/update-command.ts" : metadata;
+      const source = committedSourceFixture({ [marker]: "contract marker\n" });
+      const objectPath = removeObject(source, `${source.sha}:${marker}`);
+      writeFileSync(objectPath, "corrupt fixture object\n");
+      const resolver =
+        kind === "positive"
+          ? "openclaw_resolve_frozen_update_channel_dry_run_mode"
+          : "openclaw_resolve_frozen_live_cli_backend_package_mode";
+      const result = invoke(source, `status=0; ${resolver} "$2" || status=$?; exit "$status"`);
+      expect(result.status, result.stderr).toBe(2);
+    },
+  );
+
+  it.each([
+    ["upgrade_survivor_capabilities", "src/infra/clawhub-install-trust.ts"],
+    ["upgrade_survivor_capabilities", "src/plugins/clawhub.ts"],
+    ["plugin_harness_capabilities", "scripts/e2e/lib/plugins/assertions.mjs"],
+    ["plugin_harness_capabilities", "src/config/types.messages.ts"],
+    ["plugin_harness_capabilities", "src/config/types.plugins.ts"],
+    ["plugin_harness_capabilities", "src/plugin-sdk/session-store-runtime.ts"],
+    ["plugin_harness_capabilities", "src/plugins/uninstall-package-plan.ts"],
+    ["core_harness_capabilities", "src/config/zod-schema.ts"],
+    ["core_harness_capabilities", "src/commands/onboard-hooks.ts"],
+    ["core_harness_capabilities", "src/agents/memory-search.ts"],
+    ["core_harness_capabilities", "src/state/openclaw-agent-db-session-migrations.ts"],
+    ["core_harness_capabilities", "src/commands/doctor-session-transcripts.ts"],
+    ["core_harness_capabilities", "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"],
+    ["core_harness_capabilities", "src/agents/code-mode-namespaces.ts"],
+  ])("propagates %s read failure at %s", (resolver, relative) => {
+    const source = committedSourceFixture({
+      "src/plugins/clawhub.ts": 'from "../infra/clawhub.js"',
+      "scripts/e2e/lib/plugins/assertions.mjs": "function assertPluginTgzRemoved() {}",
+      "src/config/types.messages.ts": "tts?: TtsConfig;",
+      "src/config/types.plugins.ts": 'bundledDiscovery?: "compat" | "allowlist";',
+      "src/plugin-sdk/session-store-runtime.ts": "before SQLite migration",
+      "src/config/zod-schema.ts": "lastRunAt:",
+      "src/commands/onboard-hooks.ts": "setupInternalHooks",
+      "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts":
+        "fragments?: RuntimeContextFragment[];\nconst fragments = params.fragments?.filter",
+      [relative]: "unavailable source bytes",
+    });
+    removeObject(source, `${source.sha}:${relative}`);
+    const result = invoke(
+      source,
+      `status=0; openclaw_resolve_frozen_${resolver} "$2" || status=$?; exit "$status"`,
+    );
+    expect(result.status, result.stderr).toBe(2);
+    expect(result.stderr).toContain("unable to read selected source");
+  });
+
+  it("ignores replacement objects and ambient Git repository routing", () => {
+    const source = committedSourceFixture({ [metadata]: "resolveCliBackendDockerPackages\n" });
+    const original = source.git("rev-parse", `${source.sha}:${metadata}`);
+    const replacementPath = path.join(source.root, "replacement");
+    writeFileSync(replacementPath, "legacy decoy\n");
+    const replacement = source.git("hash-object", "-w", replacementPath);
+    source.git("replace", original, replacement);
+    const decoy = committedSourceFixture({ "package.json": "{}\n" });
+    const result = invoke(
+      source,
+      'openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s\\n" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE"',
+      {
+        GIT_DIR: path.join(decoy.root, ".git"),
+        GIT_WORK_TREE: decoy.root,
+        GIT_OBJECT_DIRECTORY: path.join(decoy.root, ".git/objects"),
+        GIT_NO_REPLACE_OBJECTS: "0",
+        GIT_NO_LAZY_FETCH: "0",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("current\n");
+  });
+
+  it.each(["oversized", "invalid UTF-8", "wrong object bytes"] as const)(
+    "rejects %s instead of classifying text",
+    (kind) => {
+      const source = committedSourceFixture({ [metadata]: "original\n" });
+      const original = source.git("rev-parse", `${source.sha}:${metadata}`);
+      writeFileSync(
+        path.join(source.root, metadata),
+        kind === "oversized"
+          ? "x".repeat(16 * 1024 * 1024 + 1)
+          : kind === "invalid UTF-8"
+            ? Buffer.from([0xff])
+            : "different\n",
+      );
+      source.sha = source.commit();
+      if (kind === "wrong object bytes") {
+        const current = source.git("rev-parse", `${source.sha}:${metadata}`);
+        const objectDir = path.join(source.root, ".git/objects");
+        const content = readFileSync(path.join(objectDir, original.slice(0, 2), original.slice(2)));
+        const currentPath = path.join(objectDir, current.slice(0, 2), current.slice(2));
+        rmSync(currentPath);
+        writeFileSync(currentPath, content);
+      }
+      const result = invoke(
+        source,
+        'status=0; openclaw_resolve_frozen_live_cli_backend_package_mode "$2" || status=$?; exit "$status"',
+      );
+      expect(result.status, result.stderr).toBe(2);
+    },
+  );
+
+  it("matches literal committed paths and treats an empty blob as present", () => {
+    const relative = "scripts/[literal]*.ts";
+    const source = committedSourceFixture({ [relative]: "", [metadata]: "match\n" });
+    writeFileSync(path.join(source.root, metadata), "dirty decoy\n");
+    const result = invoke(
+      source,
+      `openclaw_frozen_target_source_has_path "$2" '${relative}'; openclaw_frozen_target_source_contains "$2" ${metadata} match`,
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each(["symlink", "directory", "gitlink"] as const)(
+    "rejects a %s substitution for a selected file",
+    (kind) => {
+      const source = committedSourceFixture({ [metadata]: "marker\n" });
+      rmSync(path.join(source.root, metadata));
+      if (kind === "symlink") {
+        symlinkSync("missing", path.join(source.root, metadata));
+        source.sha = source.commit();
+      } else if (kind === "directory") {
+        mkdirSync(path.join(source.root, metadata));
+        writeFileSync(path.join(source.root, metadata, "nested"), "marker\n");
+        source.sha = source.commit();
+      } else {
+        source.git("update-index", "--cacheinfo", `160000,${source.sha},${metadata}`);
+        source.git("commit", "-qm", "gitlink fixture");
+        source.sha = source.git("rev-parse", "HEAD");
+      }
+      const result = invoke(
+        source,
+        `status=0; openclaw_resolve_frozen_target_file "$2" ${metadata} fallback || status=$?; exit "$status"`,
+      );
+      expect(result.status, result.stderr).toBe(2);
+      expect(result.stdout).toBe("");
+    },
+  );
+
+  it("allows only the explicitly directory-owned upgrade scenario tree", () => {
+    const directory = "scripts/e2e/lib/upgrade-survivor";
+    const source = committedSourceFixture({ [`${directory}/run.sh`]: "#!/bin/sh\n" });
+    const result = invoke(source, `openclaw_resolve_frozen_target_file "$2" ${directory}`);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`${source.root}/${directory}\n`);
+    removeObject(source, `${source.sha}:${directory}`);
+    const missing = invoke(source, `openclaw_resolve_frozen_target_file "$2" ${directory}`);
+    expect(missing.status, missing.stderr).toBe(2);
+    expect(missing.stdout).toBe("");
+  });
+
+  it.each(["../package.json", "/package.json", "scripts//entry", "scripts/./entry"])(
+    "rejects unsafe path %s instead of treating it as absent",
+    (relative) => {
+      const source = committedSourceFixture({ "package.json": "{}\n" });
+      const result = invoke(
+        source,
+        `status=0; openclaw_frozen_target_source_has_path "$2" "${relative}" || status=$?; exit "$status"`,
+      );
+      expect(result.status, result.stderr).toBe(2);
+    },
+  );
+
+  it("stops the gateway wrapper before Docker when the negative layout read fails", () => {
+    const source = committedSourceFixture({ [gatewayOld]: "old\n", [gatewayNew]: "current\n" });
+    removeObject(source, `${source.sha}:${gatewayNew}`);
+    const bin = path.join(source.root, "bin");
+    const log = path.join(source.root, "docker.log");
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, "docker"),
+      '#!/bin/sh\nprintf "called\\n" >> "$DOCKER_LOG"\nexit 91\n',
+      {
+        mode: 0o755,
+      },
+    );
+    const result = invoke(source, "bash scripts/e2e/gateway-network-docker.sh", {
+      PATH: `${bin}:${process.env.PATH}`,
+      DOCKER_LOG: log,
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: source.root,
+      OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1",
+    });
+    expect(result.status, result.stderr).toBe(2);
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it.each([
+    { old: true, current: false, authorization: "1", legacy: true },
+    { old: true, current: true, authorization: "1", legacy: false },
+    { old: false, current: true, authorization: "1", legacy: false },
+    { old: true, current: false, authorization: "0", legacy: false },
+  ])("preserves gateway layout selection $old/$current/$authorization", (entry) => {
+    const source = committedSourceFixture({
+      [gatewayOld]: entry.old ? "old\n" : null,
+      [gatewayNew]: entry.current ? "current\n" : null,
+    });
+    const result = invoke(
+      source,
+      'openclaw_resolve_frozen_gateway_network_layout "$2"; printf "%s\\n" "$OPENCLAW_FROZEN_TARGET_GATEWAY_NETWORK_LEGACY_LIB"',
+      { OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: entry.authorization },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(entry.legacy ? `${source.root}/scripts/e2e/lib\n` : "\n");
+  });
+});
+
+describe("frozen bundle committed contract", () => {
+  const juneClient = "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts";
+  const julyClient = "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts";
+  const helperPath = "scripts/e2e/lib/temp-state-dir.ts";
+  const runtimePath = "src/agents/agent-bundle-mcp-runtime.ts";
+  const managerPath = "src/agents/agent-bundle-mcp-manager-api.ts";
+  const runtimeSource =
+    "export async function getOrCreateSessionMcpRuntime() {}\nexport async function disposeAllSessionMcpRuntimes() {}\n";
+  const managerSource =
+    "export async function acquireSessionMcpRuntime() {}\nexport async function disposeAllSessionMcpRuntimes() {}\n";
+
+  function fixture(
+    layout: "June" | "July" | "current" = "July",
+    overrides: Record<string, string | null> = {},
+  ) {
+    const clientPath = layout === "June" ? juneClient : julyClient;
+    const prefix = layout === "June" ? "../.." : "../../../..";
+    const owner = layout === "current" ? "manager-api" : "runtime";
+    const acquire =
+      layout === "current" ? "acquireSessionMcpRuntime" : "getOrCreateSessionMcpRuntime";
+    const files: Record<string, string | null> = {
+      "package.json": '{"type":"module","version":"2026.1.0"}\n',
+      [clientPath]: [
+        `import { ${acquire}, disposeAllSessionMcpRuntimes } from "${prefix}/dist/agents/agent-bundle-mcp-${owner}.js";`,
+        `import { createE2eStateDir } from "${layout === "June" ? "./lib" : `${prefix}/scripts/e2e/lib`}/temp-state-dir.ts";`,
+        'throw new Error("selected client must not execute during resolution");',
+        "",
+      ].join("\n"),
+      [helperPath]: "export async function createE2eStateDir() {}\n",
+      [runtimePath]: runtimeSource,
+      ...(layout === "current" ? { [managerPath]: managerSource } : {}),
+      ...overrides,
+    };
+    return { ...committedSourceFixture(files), clientPath, files };
+  }
+
+  function resolve(
+    source: { root: string; sha: string },
+    env: Record<string, string> = {},
+    cwd = repoRoot,
+  ) {
+    return spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; status=0; openclaw_resolve_frozen_agent_bundle_mcp_contract "$2" || status=$?; printf "%s:%s\\n" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_CLIENT_PATH"; exit "$status"',
+        "test",
+        stageScriptPath,
+        source.root,
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_SELECTED_SHA: source.sha,
+          OPENCLAW_TOOLING_SHA: "b".repeat(40),
+          OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE: "stale",
+          OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_CLIENT_PATH: "stale",
+          ...env,
+        },
+      },
+    );
+  }
+
+  function expectRejected(result: ReturnType<typeof resolve>, message: string) {
+    expect(result.status, result.stderr).toBe(2);
+    expect(result.stderr).toContain(message);
+    expect(result.stdout).toBe(":\n");
+  }
+
+  it.each(["June", "July", "current"] as const)(
+    "selects the committed %s contract regardless of package version and dirty decoys",
+    (layout) => {
+      const source = fixture(layout);
+      writeFileSync(path.join(source.root, source.clientPath), "dirty client\n");
+      writeFileSync(path.join(source.root, helperPath), "dirty helper\n");
+      writeFileSync(path.join(source.root, "package.json"), '{"type":"commonjs"}');
+      if (layout !== "current") {
+        writeFileSync(path.join(source.root, managerPath), managerSource);
+      }
+      const result = resolve(source);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        `${layout === "current" ? "current" : "legacy"}:${source.clientPath}\n`,
+      );
+    },
+  );
+
+  it("keeps authorization off on the current harness without reading selected source", () => {
+    const result = resolve(
+      { root: "/nonexistent-bundle-source", sha: "malformed" },
+      { OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`current:${julyClient}\n`);
+  });
+
+  it("loads the parser from trusted tooling even when invoked inside selected source", () => {
+    const source = fixture();
+    const targetParser = path.join(source.root, "node_modules/typescript");
+    mkdirSync(targetParser, { recursive: true });
+    writeFileSync(path.join(targetParser, "package.json"), '{"main":"index.js"}');
+    writeFileSync(
+      path.join(targetParser, "index.js"),
+      'throw new Error("target parser executed");',
+    );
+    const result = resolve(source, {}, source.root);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`legacy:${julyClient}\n`);
+  });
+
+  it.each<{ env: Record<string, string>; error: string }>([
+    { env: { OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "yes" }, error: "expected 0 or 1" },
+    { env: { OPENCLAW_SELECTED_SHA: "short" }, error: "full lowercase commit SHA" },
+    { env: { OPENCLAW_TOOLING_SHA: "SHORT" }, error: "full lowercase commit SHA" },
+    { env: { OPENCLAW_SELECTED_SHA: "c".repeat(40) }, error: "checkout does not match" },
+  ])("rejects malformed frozen identity $env", ({ env, error }) => {
+    expectRejected(resolve(fixture(), env), error);
+  });
+
+  it("rejects identical selected and tooling identities", () => {
+    const source = fixture();
+    expectRejected(resolve(source, { OPENCLAW_TOOLING_SHA: source.sha }), "require distinct");
+  });
+
+  it.each<{ name: string; files: Record<string, string | null>; error: string }>([
+    { name: "both layouts", files: { [juneClient]: "export {};\n" }, error: "exactly one" },
+    { name: "no layout", files: { [julyClient]: null }, error: "exactly one" },
+    { name: "missing runtime", files: { [runtimePath]: null }, error: "missing required" },
+    {
+      name: "unknown runtime",
+      files: { [runtimePath]: "export {};\n" },
+      error: "client/API contract",
+    },
+    {
+      name: "unknown manager",
+      files: { [managerPath]: "export {};\n" },
+      error: "client/API contract",
+    },
+    {
+      name: "mixed manager/client",
+      files: { [managerPath]: managerSource },
+      error: "client/API contract",
+    },
+    { name: "unknown client", files: { [julyClient]: "export {};\n" }, error: "helper contract" },
+    { name: "missing helper", files: { [helperPath]: null }, error: "missing required" },
+    { name: "unknown helper", files: { [helperPath]: "export {};\n" }, error: "helper contract" },
+    { name: "missing manifest", files: { "package.json": null }, error: "package.json" },
+    { name: "invalid manifest", files: { "package.json": "invalid" }, error: "package.json" },
+    {
+      name: "non-ESM manifest",
+      files: { "package.json": '{"type":"commonjs"}' },
+      error: "ESM scope",
+    },
+  ])("rejects $name without publishing stale selection", ({ files, error }) => {
+    expectRejected(resolve(fixture("July", files)), error);
+  });
+
+  it("rejects a manager client whose required API export is missing", () => {
+    expectRejected(
+      resolve(
+        fixture("current", {
+          [managerPath]: "export async function acquireSessionMcpRuntime() {}\n",
+        }),
+      ),
+      "client/API contract",
+    );
+  });
+
+  it.each(
+    [runtimePath, helperPath, julyClient].flatMap((relative) =>
+      ["comment", "template", "invalid syntax"].map((form) => ({ relative, form })),
+    ),
+  )("rejects $relative contract markers in $form", ({ relative, form }) => {
+    const source = fixture();
+    const original = source.files[relative];
+    const content =
+      form === "comment"
+        ? `/*\n${original}*/\n`
+        : form === "template"
+          ? `const inert = \`\n${original}\`;\n`
+          : `${original}\nfunction (`;
+    writeFileSync(path.join(source.root, relative), content);
+    source.sha = source.commit();
+    expectRejected(resolve(source), "contract");
+  });
+
+  it.each([julyClient, helperPath, "package.json", runtimePath, managerPath, "test/e2e"])(
+    "rejects committed symlinks at %s",
+    (relative) => {
+      const source = fixture();
+      rmSync(path.join(source.root, relative), { recursive: true, force: true });
+      symlinkSync("nonexistent-target", path.join(source.root, relative));
+      source.sha = source.commit();
+      const result = resolve(source);
+      expectRejected(result, relative === "package.json" ? "package.json" : "expected");
+    },
+  );
+
+  it("rejects a directory in place of a client blob", () => {
+    const source = fixture();
+    rmSync(path.join(source.root, julyClient));
+    mkdirSync(path.join(source.root, julyClient));
+    writeFileSync(path.join(source.root, julyClient, "nested.ts"), "export {};\n");
+    source.sha = source.commit();
+    expectRejected(resolve(source), "expected regular committed file");
+  });
+
+  it.each([
+    "commit",
+    "root tree",
+    "intermediate tree",
+    "client blob",
+    "manager blob",
+    "helper blob",
+  ])("rejects a missing %s without lazy hydration", (missing) => {
+    const source = fixture("current");
+    const object = source.git(
+      "rev-parse",
+      missing === "commit"
+        ? source.sha
+        : missing === "root tree"
+          ? `${source.sha}^{tree}`
+          : `${source.sha}:${
+              missing === "intermediate tree"
+                ? "src/agents"
+                : missing === "client blob"
+                  ? julyClient
+                  : missing === "manager blob"
+                    ? managerPath
+                    : helperPath
+            }`,
+    );
+    const bin = path.join(source.root, "transport-bin");
+    const transportLog = path.join(source.root, "transport.log");
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, "git-remote-fixture"),
+      '#!/bin/sh\nprintf "unexpected hydration\\n" >> "$BUNDLE_TRANSPORT_LOG"\nexit 1\n',
+      { mode: 0o755 },
+    );
+    source.git("config", "remote.origin.url", "fixture::unavailable");
+    source.git("config", "remote.origin.promisor", "true");
+    source.git("config", "extensions.partialClone", "origin");
+    source.git("config", "protocol.fixture.allow", "always");
+    rmSync(path.join(source.root, ".git/objects", object.slice(0, 2), object.slice(2)));
+    const result = resolve(source, {
+      PATH: `${bin}:${process.env.PATH}`,
+      BUNDLE_TRANSPORT_LOG: transportLog,
+    });
+    expectRejected(result, "unable to read selected bundle source");
+    expect(existsSync(transportLog)).toBe(false);
+  });
+
+  it("rejects a corrupt referenced blob instead of treating its owner as absent", () => {
+    const source = fixture("current");
+    const object = source.git("rev-parse", `${source.sha}:${managerPath}`);
+    const objectPath = path.join(source.root, ".git/objects", object.slice(0, 2), object.slice(2));
+    rmSync(objectPath);
+    writeFileSync(objectPath, "corrupt fixture object\n");
+    expectRejected(resolve(source), "unable to read selected bundle source");
+  });
+
+  it("does not read an unrelated missing runtime-context blob", () => {
+    const unrelated = "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts";
+    const source = fixture("July", { [unrelated]: "unknown runtime-context contract\n" });
+    const object = source.git("rev-parse", `${source.sha}:${unrelated}`);
+    rmSync(path.join(source.root, ".git/objects", object.slice(0, 2), object.slice(2)));
+    const result = resolve(source);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`legacy:${julyClient}\n`);
+  });
+
+  it("rejects older Git before attempting object reads", () => {
+    const source = fixture();
+    const bin = path.join(source.root, "old-git-bin");
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, "git"),
+      '#!/bin/sh\ncase "$*" in *--version) printf "git version 2.44.0\\n";; *) exit 99;; esac\n',
+      { mode: 0o755 },
+    );
+    expectRejected(resolve(source, { PATH: `${bin}:${process.env.PATH}` }), "Git 2.45 or newer");
+  });
+});
 
 describe("live Docker state staging", () => {
   function linkFixtureNodeModules(root: string) {
@@ -500,15 +1134,9 @@ export function parseRegistryNpmSpec(spec: string) {
     mkdirSync(path.join(root, "src/commands"), { recursive: true });
     mkdirSync(path.join(root, "scripts"), { recursive: true });
     mkdirSync(path.join(root, "src/config"), { recursive: true });
-    mkdirSync(path.join(root, "scripts/e2e"), { recursive: true });
     writeFileSync(
       path.join(root, "src/agents/code-mode-namespaces.ts"),
       'export const globals = ["ALL_TOOLS"];\n',
-    );
-    writeFileSync(path.join(root, "src/agents/agent-bundle-mcp-runtime.ts"), "export {};\n");
-    writeFileSync(
-      path.join(root, "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"),
-      "export {};\n",
     );
     writeFileSync(
       path.join(root, "src/config/zod-schema.ts"),
@@ -537,7 +1165,7 @@ export function parseRegistryNpmSpec(spec: string) {
     }).trim();
     const resolveCoreDialects = [
       "-c",
-      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s|%s|%s|%s|%s|%s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE"',
+      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s|%s|%s|%s|%s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES"',
       "test",
       stageScriptPath,
       root,
@@ -552,7 +1180,7 @@ export function parseRegistryNpmSpec(spec: string) {
     });
 
     expect(strictResult.status, strictResult.stderr).toBe(0);
-    expect(strictResult.stdout.trim()).toBe("sqlite|current|current|producer-fragments||current");
+    expect(strictResult.stdout.trim()).toBe("sqlite|current|current|producer-fragments|");
 
     const result = spawnSync("bash", resolveCoreDialects, {
       encoding: "utf8",
@@ -566,7 +1194,7 @@ export function parseRegistryNpmSpec(spec: string) {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe(
-      "jsonl|legacy|legacy|legacy-marked-prompt|local-basic,remote-non-interactive,reset,channels,skills|legacy",
+      "jsonl|legacy|legacy|legacy-marked-prompt|local-basic,remote-non-interactive,reset,channels,skills",
     );
   });
 

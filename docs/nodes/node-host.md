@@ -29,8 +29,8 @@ Approval note:
 A Gateway can remain healthy for browser users while node hosting is unavailable. Run `openclaw doctor` on the Gateway before onboarding nodes, and check these preconditions:
 
 - **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
-- **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
-- **Node onboarding plugin:** Join codes and `openclaw connect` require the bundled `device-pair` plugin. If it is disabled or excluded by plugin policy, set `plugins.entries.device-pair.enabled: true`, make sure `device-pair` is allowed, and restart the Gateway.
+- **Node onboarding URL:** With only the default `gateway.bind: "loopback"` and no advertised endpoint, `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.` Configure a reachable endpoint through Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl`. Remote join URLs require TLS; enabling LAN bind alone does not enable plaintext remote join URLs. Explicitly configured loopback endpoints can produce HTTP join URLs, but the joining machine must be able to reach that loopback endpoint, for example through a local tunnel. Plaintext LAN pairing can use a setup code directly.
+- **Node onboarding support:** Join-code creation and `/j` redemption are core Gateway operations. They do not require enabling the `device-pair` plugin, even though its retained `publicUrl` configuration field can supply an endpoint. See [Join codes](/cli/devices#openclaw-devices-join-code) for the printed `npx openclaw connect <url>` command.
 - **Device session runtime:** Paired-device runners support the embedded OpenClaw runtime and explicitly authorized Codex `remote-exec`; ACPX routes cannot dispatch to a paired device. Codex requires `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` plus its normal pairing and invocation approvals. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [Codex paired-device placement](/plugins/codex-harness/placement#run-codex-on-a-paired-device) and [runtime policy](/gateway/config-agents/runtime-and-cli-backends#runtime-policy).
 - **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol).
 
@@ -65,9 +65,13 @@ openclaw node run --pair "oc-pair://<setup-code>"
 
 The link is single-use and expires after 10 minutes. It supplies the endpoint,
 bootstrap token, TLS mode, and certificate pin when available. Explicit
-gateway flags override the corresponding `--pair` values. Pairing does not
-pre-approve command execution; the first `system.run` request still follows
-the normal pending-approval or SSH-verification path. See
+gateway flags override the corresponding `--pair` values. Administrator-minted
+bootstrap enrollment approves the device and its first declared command surface,
+including `system.run` and `system.which` when declared. Later command,
+capability, or permission expansion still creates an approval request.
+Gateway command policy and the node host's [exec approvals](/tools/exec-approvals)
+still apply. Local exec approvals default to `full` with `ask: "off"`; configure
+them before using the link if that access is too broad. See
 [Node pairing](/gateway/pairing#one-paste-node-pairing).
 
 `node run` also accepts `--pair`, `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
@@ -109,15 +113,32 @@ openclaw node restart
 
 ### Pair + name
 
-On the gateway host:
+On the Gateway host, approve the device request:
 
 ```bash
 openclaw devices list
-openclaw devices approve <requestId>
-openclaw nodes status
+openclaw devices approve <deviceRequestId>
 ```
 
 If the node retries with changed auth details, re-run `openclaw devices list` and approve the current `requestId`.
+
+Restart an installed node with `openclaw node restart`, or stop and rerun its
+foreground `openclaw node run` command. A node paused on `PAIRING_REQUIRED`
+does not resume automatically after manual approval. Its reconnect creates a
+separate command-surface request. On the Gateway:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <nodeRequestId>
+openclaw nodes describe --node <id|name|ip>
+```
+
+The device and node request IDs are distinct. An initial unapproved surface has
+no effective commands. SSH-verified and bootstrap enrollment can approve the
+first surface automatically; trusted-network device approval alone does not.
+Later expansions need approval, while previously approved commands that remain
+declared and allowed can still run. [Gateway command policy](/nodes/command-policy)
+and node-local exec approvals remain separate gates.
 
 Naming options:
 
@@ -182,7 +203,7 @@ openclaw node run --host <gateway-host> --port 18789
 
 Notes:
 
-- Pairing is still required (the Gateway will show a device pairing prompt).
+- Device pairing and command-surface approval are still required; follow [Pair + name](/nodes/node-host#pair-+-name) through both stages.
 - Client instance metadata, signed device identity, and pairing auth use separate state records; see [Headless identity state](#headless-identity-state).
 - Exec approvals are enforced locally via
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` (see [Exec approvals](/tools/exec-approvals)).

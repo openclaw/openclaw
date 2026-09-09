@@ -98,6 +98,10 @@ const SessionPlacementConflictProperties = {
   workspaceResultConflict: Type.Optional(WorkspaceResultConflictSchema),
 };
 
+const SessionPlacementWorkspaceReconciliationProperties = {
+  workspaceResultReconciling: Type.Optional(Type.Literal(true)),
+};
+
 const TerminalSessionPlacementProperties = {
   ...SessionPlacementIdentityProperties,
   environmentId: Type.Optional(NonEmptyString),
@@ -163,14 +167,16 @@ const StartingSessionPlacementSchema = closedObject({
 
 const ActiveWorkerSessionPlacementSchema = closedObject({
   ...workerOwnedSessionPlacementProperties("active"),
+  ...SessionPlacementWorkspaceReconciliationProperties,
   runner: Type.Optional(SessionPlacementRunnerSchema),
 });
-const DrainingSessionPlacementSchema = closedObject(
-  workerOwnedSessionPlacementProperties("draining"),
-);
-const ReconcilingSessionPlacementSchema = closedObject(
-  workerOwnedSessionPlacementProperties("reconciling"),
-);
+const DrainingSessionPlacementSchema = closedObject({
+  ...workerOwnedSessionPlacementProperties("draining"),
+  ...SessionPlacementWorkspaceReconciliationProperties,
+});
+const ReconcilingSessionPlacementSchema = closedObject({
+  ...workerOwnedSessionPlacementProperties("reconciling"),
+});
 
 const ReclaimedSessionPlacementSchema = closedObject({
   state: Type.Literal("reclaimed"),
