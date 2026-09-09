@@ -3328,6 +3328,30 @@
     "target": "配置 — 提供商示例"
   },
   {
+    "source": "Author plugins",
+    "target": "编写插件"
+  },
+  {
+    "source": "Install plugins",
+    "target": "安装插件"
+  },
+  {
+    "source": "List installed plugins",
+    "target": "列出已安装插件"
+  },
+  {
+    "source": "Uninstall and update plugins",
+    "target": "卸载与更新插件"
+  },
+  {
+    "source": "Inspect and diagnose plugins",
+    "target": "检查与诊断插件"
+  },
+  {
+    "source": "Marketplace feeds",
+    "target": "市场订阅源"
+  },
+  {
     "source": "Author a policy file",
     "target": "编写策略文件"
   },

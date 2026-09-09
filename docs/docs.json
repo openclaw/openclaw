@@ -2579,6 +2579,17 @@
                     "group": "Plugins and skills",
                     "pages": [
                       "cli/plugins",
+                      {
+                        "group": "Plugins CLI",
+                        "pages": [
+                          "cli/plugins/authoring",
+                          "cli/plugins/install",
+                          "cli/plugins/list",
+                          "cli/plugins/uninstall-and-update",
+                          "cli/plugins/inspect-and-diagnose",
+                          "cli/plugins/marketplace"
+                        ]
+                      },
                       "cli/path",
                       "cli/policy",
                       {
