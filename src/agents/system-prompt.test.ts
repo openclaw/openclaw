@@ -2139,10 +2139,11 @@ describe("buildAgentSystemPrompt", () => {
       ...params,
       runtimeInfo: {
         ...params.runtimeInfo,
-        gitCoauthorTrailers: [
+        gitCoauthorPrompt: [
+          "Git co-authors: add these exact trailers to every commit you make from this session.",
           "Co-authored-by: ada <20+ada@users.noreply.github.com>",
           "Co-authored-by: grace <10+grace@users.noreply.github.com>",
-        ],
+        ].join("\n"),
       },
     });
 
@@ -2157,14 +2158,14 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it.each([undefined, []])(
+  it.each([undefined, ""])(
     "preserves prompt bytes without Git co-author trailers (%j)",
-    (trailers) => {
+    (gitCoauthorPrompt) => {
       const params = { workspaceDir: "/tmp/openclaw", runtimeInfo: { agentId: "work" } };
       const baseline = buildAgentSystemPrompt(params);
       const prompt = buildAgentSystemPrompt({
         ...params,
-        runtimeInfo: { ...params.runtimeInfo, gitCoauthorTrailers: trailers },
+        runtimeInfo: { ...params.runtimeInfo, gitCoauthorPrompt },
       });
 
       expect(prompt).toBe(baseline);

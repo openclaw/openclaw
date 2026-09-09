@@ -24,6 +24,44 @@ afterEach(() => {
 });
 
 describe("Git co-author attribution", () => {
+  it("resolves credit from the configured templated session store", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:custom-store-credit";
+      const scope = { agentId: "main", env: state.env, sessionKey };
+      const storePath = state.statePath("custom-store", "main", "sessions.json");
+      const config = {
+        session: { store: state.statePath("custom-store", "{agentId}", "sessions.json") },
+      };
+      const entry = { sessionId: "custom-store-credit", updatedAt: 1 };
+      await upsertSessionEntryCore(scope, entry);
+      await upsertSessionEntryCore({ ...scope, storePath }, entry);
+      const profile = ensureProfileForEmail("ada@example.test", { env: state.env });
+      syncGitHubIdentity(
+        {
+          identity: { accountId: 20, login: "ada" },
+          authenticationAlias: { kind: "email", email: "ada@example.test" },
+        },
+        { env: state.env },
+      );
+      recordSessionParticipant(
+        { ...scope, storePath },
+        { identity: { type: "profile", id: profile.id }, promptedAt: 1, sessionAgentId: "main" },
+      );
+
+      expect(
+        resolveGitCoauthorAttribution({
+          ...scope,
+          config,
+          storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+        }),
+      ).toBeUndefined();
+      expect(resolveGitCoauthorAttribution({ ...scope, config })).toEqual({
+        logins: ["ada"],
+        trailers: ["Co-authored-by: ada <20+ada@users.noreply.github.com>"],
+      });
+    });
+  });
+
   it.each(["unresolved", "opted-out", "primary-author"] as const)(
     "returns undefined when the only participant is %s",
     async (kind) => {

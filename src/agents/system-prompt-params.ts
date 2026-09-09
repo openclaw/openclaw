@@ -15,16 +15,14 @@ import {
   getCurrentActiveNodeContext,
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
-import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentIdentity } from "./identity.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 const MAX_RUNTIME_AGENT_NAME_CHARS = 128;
 const MAX_RUNTIME_SESSION_URL_CHARS = 512;
-const log = createSubsystemLogger("agents/system-prompt");
 
 type RuntimeInfoInput = {
   agentId?: string;
@@ -32,7 +30,7 @@ type RuntimeInfoInput = {
   sessionKey?: string;
   sessionId?: string;
   sessionUrl?: string;
-  gitCoauthorTrailers?: string[];
+  gitCoauthorPrompt?: string;
   host: string;
   os: string;
   arch: string;
@@ -56,14 +54,22 @@ type SystemPromptRuntimeParams = {
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
-  runtime: Omit<RuntimeInfoInput, "agentId" | "agentName" | "sessionUrl" | "gitCoauthorTrailers">;
+  runtime: Omit<RuntimeInfoInput, "agentId" | "agentName" | "sessionUrl" | "gitCoauthorPrompt">;
   workspaceDir?: string;
   cwd?: string;
   preparedRepoRoot?: string | null;
+  preparedGitCoauthorPrompt?: string | null;
 }): SystemPromptRuntimeParams {
   const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
     ? (params.preparedRepoRoot ?? undefined)
     : resolveSystemPromptRepoRoot(params);
+  const gitCoauthorPrompt = Object.hasOwn(params, "preparedGitCoauthorPrompt")
+    ? (params.preparedGitCoauthorPrompt ?? undefined)
+    : resolveSessionGitCoauthorPrompt({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.runtime.sessionKey,
+      });
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userDate = formatDateStamp(Date.now(), userTimezone);
   const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
@@ -77,18 +83,6 @@ export function buildSystemPromptParams(params: {
           exactKey: true,
         })
       : undefined;
-  let gitCoauthorTrailers: string[] | undefined;
-  if (params.config && params.agentId && params.runtime.sessionKey && runId === undefined) {
-    try {
-      gitCoauthorTrailers = resolveGitCoauthorAttribution({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.runtime.sessionKey,
-      })?.trailers;
-    } catch (error) {
-      log.warn("failed to resolve session Git co-authors", { error });
-    }
-  }
   return {
     runtimeInfo: {
       agentId: params.agentId,
@@ -97,7 +91,7 @@ export function buildSystemPromptParams(params: {
           ? resolveRuntimeAgentName(params.config, params.agentId)
           : undefined,
       ...params.runtime,
-      gitCoauthorTrailers,
+      gitCoauthorPrompt,
       // Published links must be externally usable and bounded before entering model context.
       sessionUrl:
         sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS

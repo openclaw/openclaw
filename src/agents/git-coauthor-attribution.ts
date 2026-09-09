@@ -1,5 +1,6 @@
 import { listSessionParticipantsReadOnly } from "../config/sessions/session-accessor.js";
 import { MAX_SESSION_PARTICIPANTS } from "../config/sessions/session-entry-provenance.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserProfileGitHubAttribution } from "../state/user-profile-github-identity.js";
 import { resolveConfiguredGitHubToolIdentity } from "./github-tool-identity.js";
@@ -27,12 +28,21 @@ export function resolveGitCoauthorAttribution(params: {
   if (!params.sessionKey) {
     return undefined;
   }
+  const storePath = resolveSessionStorePathForScope(
+    {
+      agentId: params.agentId,
+      env: params.env,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    params.config,
+  );
   const records =
     listSessionParticipantsReadOnly({
       agentId: params.agentId,
       env: params.env,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      storePath,
     }).get(params.sessionKey) ?? [];
   const profileRecords = new Map(
     records.flatMap((record) =>

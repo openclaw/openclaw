@@ -6,16 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
-import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
 
-const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
-
-vi.mock("./git-coauthor-attribution.js", () => ({
-  resolveGitCoauthorAttribution: vi.fn(),
-}));
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn }),
+vi.mock("./git-coauthor-prompt.js", () => ({
+  resolveSessionGitCoauthorPrompt: vi.fn(),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -43,8 +38,7 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
 
 describe("buildSystemPromptParams", () => {
   beforeEach(() => {
-    vi.mocked(resolveGitCoauthorAttribution).mockReset();
-    warn.mockReset();
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockReset();
   });
 
   afterEach(() => {
@@ -67,79 +61,45 @@ describe("buildSystemPromptParams", () => {
     expect(tokyo.userDate).toBe("2026-01-06");
   });
 
-  describe("session Git co-authors", () => {
-    const runtime = { host: "host", os: "os", arch: "arch", node: "node", model: "model" };
-    const trailers = ["Co-authored-by: ada <20+ada@users.noreply.github.com>"];
-
-    it.each(["agent:main:main", "agent:main:cron:nightly"])(
-      "resolves credit for a stable session %s",
-      (sessionKey) => {
-        vi.mocked(resolveGitCoauthorAttribution).mockReturnValue({ trailers, logins: ["ada"] });
-        const config: OpenClawConfig = {};
-        const { runtimeInfo } = buildSystemPromptParams({
-          config,
-          agentId: "main",
-          runtime: { ...runtime, sessionKey },
-        });
-
-        expect(resolveGitCoauthorAttribution).toHaveBeenCalledExactlyOnceWith({
-          config,
-          agentId: "main",
-          sessionKey,
-        });
-        expect(runtimeInfo.gitCoauthorTrailers).toEqual(trailers);
+  describe("session Git co-author prompt", () => {
+    const prompt =
+      "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+      "Co-authored-by: ada <20+ada@users.noreply.github.com>";
+    const params = {
+      config: {},
+      agentId: "main",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+        sessionKey: "agent:main:main",
       },
-    );
+    };
+
+    it("resolves credit only when no prepared value was supplied", () => {
+      vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue(prompt);
+      const { runtimeInfo } = buildSystemPromptParams(params);
+
+      expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.runtime.sessionKey,
+      });
+      expect(runtimeInfo.gitCoauthorPrompt).toBe(prompt);
+    });
 
     it.each([
-      { name: "no config", config: undefined, agentId: "main", sessionKey: "agent:main:main" },
-      { name: "no agent", config: {}, agentId: undefined, sessionKey: "agent:main:main" },
-      { name: "no session", config: {}, agentId: "main", sessionKey: undefined },
-      {
-        name: "an isolated cron run",
-        config: {},
-        agentId: "main",
-        sessionKey: "agent:main:cron:nightly:run:11111111-1111-1111-1111-111111111111",
-      },
-    ])("skips credit lookup with $name", ({ config, agentId, sessionKey }) => {
-      vi.mocked(resolveGitCoauthorAttribution).mockReturnValue({ trailers, logins: ["ada"] });
-      const { runtimeInfo } = buildSystemPromptParams({
-        config,
-        agentId,
-        runtime: { ...runtime, sessionKey },
-      });
+      { name: "prepared credit", preparedGitCoauthorPrompt: prompt },
+      { name: "explicit undefined", preparedGitCoauthorPrompt: undefined },
+      { name: "explicit null", preparedGitCoauthorPrompt: null },
+    ])("preserves $name without repeating the lookup", ({ preparedGitCoauthorPrompt }) => {
+      vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue("unexpected second lookup");
+      const { runtimeInfo } = buildSystemPromptParams({ ...params, preparedGitCoauthorPrompt });
 
-      expect(resolveGitCoauthorAttribution).not.toHaveBeenCalled();
-      expect(runtimeInfo.gitCoauthorTrailers).toBeUndefined();
-    });
-
-    it("omits trailers when the session has nobody to credit", () => {
-      const { runtimeInfo } = buildSystemPromptParams({
-        config: {},
-        agentId: "main",
-        runtime: { ...runtime, sessionKey: "agent:main:main" },
-      });
-
-      expect(resolveGitCoauthorAttribution).toHaveBeenCalledOnce();
-      expect(runtimeInfo.gitCoauthorTrailers).toBeUndefined();
-    });
-
-    it("keeps prompt building available and warns once when credit lookup fails", () => {
-      const error = new Error("participant store unavailable");
-      vi.mocked(resolveGitCoauthorAttribution).mockImplementation(() => {
-        throw error;
-      });
-      const { runtimeInfo } = buildSystemPromptParams({
-        config: {},
-        agentId: "main",
-        runtime: { ...runtime, sessionKey: "agent:main:main" },
-      });
-
-      expect(runtimeInfo.gitCoauthorTrailers).toBeUndefined();
-      expect(runtimeInfo.sessionKey).toBe("agent:main:main");
-      expect(warn).toHaveBeenCalledExactlyOnceWith("failed to resolve session Git co-authors", {
-        error,
-      });
+      expect(runtimeInfo.gitCoauthorPrompt).toBe(preparedGitCoauthorPrompt ?? undefined);
+      expect(resolveSessionGitCoauthorPrompt).not.toHaveBeenCalled();
     });
   });
 

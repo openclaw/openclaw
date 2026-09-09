@@ -108,7 +108,7 @@ export type SystemPromptRuntimeInfo = {
   sessionKey?: string;
   sessionId?: string;
   sessionUrl?: string;
-  gitCoauthorTrailers?: string[];
+  gitCoauthorPrompt?: string;
   host?: string;
   os?: string;
   arch?: string;
@@ -1541,12 +1541,7 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities),
-    ...(runtimeInfo?.gitCoauthorTrailers?.length
-      ? [
-          "Git co-authors: add these exact trailers to every commit you make from this session.",
-          ...runtimeInfo.gitCoauthorTrailers,
-        ]
-      : []),
+    ...(runtimeInfo?.gitCoauthorPrompt ? [runtimeInfo.gitCoauthorPrompt] : []),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
     `Reasoning=${reasoningLevel}; hidden unless on/stream. Toggle /reasoning; /status shows when enabled.`,
   );
