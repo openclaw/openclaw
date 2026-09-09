@@ -281,6 +281,15 @@ const workboardInspection = {
     skills: [],
     dangerousConfigFlags: [],
   },
+  components: {
+    mapped: [],
+    skills: [],
+    mcpServers: [],
+    commands: [],
+    hooks: [],
+    lspServers: [],
+    unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
+  },
   grants: {
     hooks: {
       allowPromptInjection: { effective: true },
