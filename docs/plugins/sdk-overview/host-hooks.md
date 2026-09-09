@@ -45,9 +45,10 @@ still does not invoke a discovery-only engine factory. `dispose()` must not dele
 durable state or disable another registration. Existing raw loader and Gateway
 lifetimes do not gain automatic disposal: keep their `cleanup(ctx)` behavior.
 
-Music generation also owns fresh registrations acquired by
-`api.runtime.musicGeneration.generate(...)`. It waits for the provider's complete
-audio buffers and tracked operation cleanup, then awaits registration disposal
+Image and music generation also own fresh registrations acquired by
+`api.runtime.imageGeneration.generate(...)` and
+`api.runtime.musicGeneration.generate(...)`. They wait for the provider's complete
+image or audio buffers and tracked operation cleanup, then await registration disposal
 before resolving or rejecting. Existing managed registrations are retained for
 the operation; raw host registrations and caller-supplied providers retain their
 existing owner. Provider listing still returns caller-owned callbacks and does
