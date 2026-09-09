@@ -410,13 +410,9 @@ export class ShellChromeOwner {
       )
     ) {
       event.preventDefault();
-      const agentId =
-        host.context.agentSelection?.state.selectedId?.trim() ||
-        host.context.gateway.snapshot.assistantAgentId?.trim() ||
-        "";
-      window.dispatchEvent(
-        new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, agentId ? { detail: { agentId } } : undefined),
-      );
+      // Do not send agentId here. The shell panel already binds the
+      // route-validated owner; a selection-only payload would overwrite it.
+      window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT));
       return;
     }
     if (isHomePanelShortcut(event) && isHomePanelAvailable(host.context?.gateway)) {
