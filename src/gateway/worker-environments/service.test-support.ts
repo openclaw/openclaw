@@ -193,6 +193,7 @@ export function createService(
       | "projectNamespace"
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
+      | "registerPreparedWorkspace"
       | "prepareNodeBootstrap"
       | "prepareNodeArtifacts"
       | "prepareNodeRuntime"
