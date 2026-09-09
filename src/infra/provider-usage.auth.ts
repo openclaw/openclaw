@@ -8,6 +8,7 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
+import { authProfilesLog } from "../agents/auth-profiles/constants.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
@@ -351,8 +352,17 @@ async function resolveOAuthToken(params: {
         // identity for static bearer profiles whose tokens expose no claims.
         ...(cred.email ? { email: cred.email } : {}),
       };
-    } catch {
-      // ignore
+    } catch (error) {
+      // Skipping the profile is intentional: one unusable credential must not
+      // abort usage collection for the remaining candidates. Log it, though —
+      // an unmaterialized SecretRef here is otherwise invisible, and the
+      // provider just disappears from `status --usage` with no explanation.
+      authProfilesLog.debug("usage auth: skipped auth profile that failed to resolve", {
+        profileId,
+        provider: params.provider,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
     }
   }
 
