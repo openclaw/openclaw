@@ -547,7 +547,6 @@ class ChatQuestionPanel extends LitElement {
         </div>
 
         ${renderQuestionExternalStep(question.url)}
-
         ${renderQuestionOptions({
           question,
           selected: this.selectedById.get(question.questionId) ?? [],
