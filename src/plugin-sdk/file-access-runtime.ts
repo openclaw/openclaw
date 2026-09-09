@@ -32,3 +32,4 @@ export { basenameFromMediaSource, safeFileURLToPath } from "../infra/local-file-
 export { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
 export { getFileWatchCapacityCode } from "../infra/fs-watch-errors.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+export { readFileRangeAsync } from "../config/sessions/file-range.js";
