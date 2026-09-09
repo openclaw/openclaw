@@ -1,6 +1,6 @@
 // Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 import type { Command } from "commander";
-import { isSupportedOpenClawNodeVersion } from "../../../node-version.mjs";
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -134,7 +134,8 @@ export function registerMaintenanceCommands(program: Command) {
         typeof opts.stateSqlite !== "string" &&
         typeof opts.sessionSqlite !== "string";
       const unsupportedNode =
-        !process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node);
+        !process.versions.bun &&
+        Boolean(nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities()));
       const lintMode =
         opts.lint === true || unsupportedNode ? "--lint" : jsonImpliesLint ? "--json" : undefined;
       const mutationOption =

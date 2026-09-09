@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as nodeSqlite from "../../../node-sqlite.mjs";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
@@ -75,6 +76,12 @@ describe("update status Node runtime findings", () => {
         ...process,
         versions: { ...process.versions, node: source === "cli" ? version : "26.8.1" },
       });
+      if (source === "cli") {
+        vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockReturnValue({
+          ...nodeSqlite.detectCurrentSqliteCapabilities(),
+          text: false,
+        });
+      }
       if (source === "gateway-service") {
         service.readCommand.mockResolvedValue({
           programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],

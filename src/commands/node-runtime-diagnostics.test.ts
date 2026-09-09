@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
+import * as runtimeGuard from "../infra/runtime-guard.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { statusCommand } from "./status.command.js";
 
@@ -48,6 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -80,14 +82,26 @@ describe("Node runtime diagnostics command surfaces", () => {
     }
   });
 
-  it("registers Doctor findings for the CLI and recorded service runtimes", async () => {
+  it("registers canonical Doctor findings for CLI and recorded service runtimes", async () => {
     vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "26.0.0" } });
+    vi.spyOn(runtimeGuard, "detectRuntime").mockReturnValue({
+      kind: "node",
+      version: "26.0.0",
+      execPath: "/fixture/node",
+      pathEnv: "/fixture",
+      hasNodeSqlite: true,
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: false, blob: true, json: true },
+    });
     const checks = await resolveDoctorContributionHealthChecks();
     const check = checks.find((entry) => entry.id === "core/doctor/node-runtime");
     expect(check).toBeDefined();
     const findings = await check?.detect({ mode: "lint", cfg: {}, runtime, env: {} });
     expect(findings).toEqual([
-      expect.objectContaining({ source: "cli", message: expect.stringContaining("26.0.0") }),
+      expect.objectContaining({
+        message: expect.stringContaining("26.0.0"),
+        fixHint: expect.stringContaining("nvm install 26"),
+      }),
       expect.objectContaining({
         source: "gateway-service",
         message: expect.stringContaining("22.23.2"),
@@ -106,6 +120,28 @@ describe("Node runtime diagnostics command surfaces", () => {
     );
     expect(runtime.log).not.toHaveBeenCalled();
   });
+
+  it.each(["cli", "service"])(
+    "does not warn for an admitted out-of-table %s runtime",
+    async (source) => {
+      mocks.readCommand.mockResolvedValue(null);
+      if (source === "cli") {
+        vi.stubGlobal("process", {
+          ...process,
+          versions: { ...process.versions, node: "24.15.0" },
+        });
+      } else {
+        mocks.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
+        mocks.resolveNodeRuntimeInfo.mockResolvedValue({
+          status: "supported",
+          version: "24.15.0",
+          note: "Node 24.15.0: unsupported version, capability probe passed.",
+        });
+      }
+      await statusCommand({ json: true }, runtime);
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports an uninspectable service without claiming its Node is unsupported", async () => {
     mocks.resolveNodeRuntimeInfo.mockResolvedValue({

@@ -1,7 +1,7 @@
 /** Read-only Node findings shared by Doctor and status commands. */
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../node-sqlite.mjs";
 import {
   formatUnsupportedNodeVersionMessage,
-  isSupportedOpenClawNodeVersion,
   SUPPORTED_NODE_VERSIONS,
 } from "../../node-version.mjs";
 import { isDefaultInstallIdentity } from "../config/paths.js";
@@ -15,6 +15,7 @@ const CHECK_ID = "core/doctor/node-runtime";
 function unsupportedNodeFinding(
   version: string | null,
   source: "cli" | "gateway-service",
+  capabilityError?: string,
 ): HealthFinding {
   const label = source === "cli" ? "CLI" : "Gateway service";
   return {
@@ -24,6 +25,7 @@ function unsupportedNodeFinding(
     message: `${label} Node ${version ?? "unknown"} is unsupported. Required: ${SUPPORTED_NODE_VERSIONS}.`,
     requirement: SUPPORTED_NODE_VERSIONS,
     fixHint: [
+      ...(capabilityError ? [capabilityError] : []),
       formatUnsupportedNodeVersionMessage(version),
       ...(source === "gateway-service"
         ? [
@@ -39,9 +41,21 @@ export async function collectNodeRuntimeFindings(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<HealthFinding[]> {
   const findings: HealthFinding[] = [];
-  if (!process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node)) {
-    findings.push(unsupportedNodeFinding(process.versions.node ?? null, "cli"));
+  if (!process.versions.bun) {
+    const probe = detectCurrentSqliteCapabilities();
+    const failure = nodeRuntimeFailure(process.versions.node, probe);
+    if (failure) {
+      findings.push(unsupportedNodeFinding(process.versions.node, "cli", failure));
+    }
   }
+  return [...findings, ...(await collectServiceNodeRuntimeFindings(env))];
+}
+
+/** Inspect the recorded service executable without starting or repairing the service. */
+export async function collectServiceNodeRuntimeFindings(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<HealthFinding[]> {
+  const findings: HealthFinding[] = [];
   if (!isDefaultInstallIdentity(env)) {
     return findings;
   }
@@ -53,8 +67,10 @@ export async function collectNodeRuntimeFindings(
       if (runtime.status === "probe-failed") {
         throw runtime.error;
       }
-      if (!isSupportedOpenClawNodeVersion(runtime.version)) {
-        findings.push(unsupportedNodeFinding(runtime.version, "gateway-service"));
+      if (runtime.status === "unsupported") {
+        findings.push(
+          unsupportedNodeFinding(runtime.version, "gateway-service", runtime.capabilityError),
+        );
       }
     }
   } catch {

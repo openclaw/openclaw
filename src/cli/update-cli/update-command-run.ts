@@ -1,7 +1,5 @@
-import {
-  formatUnsupportedNodeVersionMessage,
-  isSupportedOpenClawNodeVersion,
-} from "../../../node-version.mjs";
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
+import { formatUnsupportedNodeVersionMessage } from "../../../node-version.mjs";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
@@ -257,8 +255,11 @@ export function readDevUpdateTarget(): DevUpdateTarget | undefined {
 
 export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   // Refuse before preflight can inspect write ownership or admit a live run ledger.
-  if (!process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node)) {
-    const error = formatUnsupportedNodeVersionMessage(process.versions.node);
+  const runtimeFailure = process.versions.bun
+    ? null
+    : nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities());
+  if (runtimeFailure) {
+    const error = `${runtimeFailure}\n${formatUnsupportedNodeVersionMessage(process.versions.node)}`;
     if (opts.json) {
       defaultRuntime.writeJson({
         status: "error",

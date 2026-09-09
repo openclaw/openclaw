@@ -18,4 +18,4 @@ export function formatUnsupportedNodeDiagnosticWarning(version: string | null): 
 export function classifyUnsupportedNodeCommand(
   argv: readonly string[],
 ): "diagnostic" | "update" | null;
-export function canRunOpenClawNodeDiagnostics(value: unknown, hasNodeSqlite?: boolean): boolean;
+export function canRunOpenClawNodeDiagnostics(value: unknown, hasNodeSqlite: boolean): boolean;

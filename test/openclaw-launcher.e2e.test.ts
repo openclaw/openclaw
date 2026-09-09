@@ -398,6 +398,40 @@ describe("openclaw launcher", () => {
       await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
+    it("runs pending lifecycle for an admitted build outside the release table", async () => {
+      const fixture = await prepareRecovery({
+        version: "24.15.0",
+        tty: false,
+        pendingLifecycle: true,
+      });
+      await fs.writeFile(
+        path.join(fixture.root, "dist/infra/package-lifecycle.js"),
+        'export function completePendingPackageLifecycle() { process.stdout.write("lifecycle-completed\\n"); }',
+      );
+      const result = fixture.run("", ["update", "status"]);
+      expect(result.status, result.stderr).toBe(17);
+      expect(result.stdout).toContain("lifecycle-completed");
+      expect(result.stderr).not.toContain("diagnostics may show truncated text");
+    });
+
+    it("skips pending lifecycle for a broken in-range SQLite runtime", async () => {
+      const fixture = await prepareRecovery({
+        version: "26.8.1",
+        tty: false,
+        pendingLifecycle: true,
+      });
+      const preload = path.join(fixture.root, "broken-sqlite.mjs");
+      await fs.writeFile(
+        preload,
+        'globalThis[Symbol.for("openclaw.sqliteCapabilities")] = { available: true, version: "3.53.4", text: false, blob: true, json: true };',
+      );
+      const result = fixture.run("", ["update", "status"], {
+        NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+      });
+      expect(result.status, result.stderr).toBe(17);
+      expect(result.stderr).not.toContain("legacy lifecycle loaded");
+    });
+
     it("keeps a supported active Node even when a private runtime exists", async () => {
       const fixture = await prepareRecovery({ cached: true, version: process.versions.node });
       const result = fixture.run("");

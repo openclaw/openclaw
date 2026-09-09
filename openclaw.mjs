@@ -11,7 +11,6 @@ import {
   canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
-  isSupportedOpenClawNodeVersion,
 } from "./node-version.mjs";
 
 const isSourceCheckoutLauncher = () =>
@@ -54,7 +53,7 @@ const ensureSupportedRuntimeVersion = async () => {
     return false;
   }
   const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
-  const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node);
+  const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node, probe.available);
   const diagnosticExemption = unsupportedCommand === "diagnostic" && canRunDiagnostics;
   if (!diagnosticExemption) {
     process.stderr.write(`openclaw: ${failure}\n`);
@@ -805,11 +804,14 @@ const tryOutputPrecomputedCommandHelp = () => {
 
 // Resolve Node before loading pending package lifecycle code or any built runtime modules.
 const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
+const currentNodeRuntimeFailure = process.versions.bun
+  ? null
+  : nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities());
 
 if (!waitingForNodeUpdateRespawn) {
   // Diagnostics must not replay package lifecycle scripts under an unsupported Node.
   if (
-    (process.versions.bun || isSupportedOpenClawNodeVersion(process.versions.node)) &&
+    !currentNodeRuntimeFailure &&
     !isSourceCheckoutLauncher() &&
     (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
       existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
@@ -827,7 +829,7 @@ if (!waitingForNodeUpdateRespawn) {
     }
   }
   if (tryOutputLauncherVersion(process.argv)) {
-    if (!process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node)) {
+    if (currentNodeRuntimeFailure) {
       process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
     }
     process.exit(0);
@@ -858,7 +860,7 @@ if (
 
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
-    if (!process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node)) {
+    if (currentNodeRuntimeFailure) {
       process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
     }
   } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {

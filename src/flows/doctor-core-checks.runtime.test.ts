@@ -975,6 +975,7 @@ describe("doctor gateway runtime checks", () => {
           severity,
           message: expect.stringContaining(message),
           target: "/opt/runtime/bin/node",
+          ...(severity === "error" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
         }),
       ]);
     },
@@ -1017,6 +1018,7 @@ describe("doctor gateway runtime checks", () => {
           severity,
           message,
           target: "/opt/runtime/bin/node",
+          ...(severity === "warning" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
         }),
       ]);
     },

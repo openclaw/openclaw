@@ -1,6 +1,7 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { nodeRuntimeFailure, nodeRuntimeNote } from "../../node-sqlite.mjs";
+import { formatUnsupportedNodeVersionMessage } from "../../node-version.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
@@ -221,6 +222,7 @@ export function collectNodeRuntimeFindings(): readonly HealthFinding[] {
           severity: failure ? "error" : "info",
           message,
           target: runtime.execPath ?? undefined,
+          ...(failure ? { fixHint: formatUnsupportedNodeVersionMessage(runtime.version) } : {}),
         },
       ]
     : [];
@@ -272,7 +274,14 @@ export async function collectGatewayDaemonFindings(
         path: state.command?.sourcePath,
         target: nodePath,
         ...(runtime.status !== "supported"
-          ? { fixHint: "Repair the Node runtime, then run `openclaw gateway install`." }
+          ? {
+              fixHint: [
+                ...(runtime.status === "unsupported"
+                  ? [formatUnsupportedNodeVersionMessage(runtime.version)]
+                  : []),
+                "Repair the Node runtime, then run `openclaw gateway install`.",
+              ].join("\n"),
+            }
           : {}),
       });
     }

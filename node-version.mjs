@@ -136,17 +136,10 @@ export function classifyUnsupportedNodeCommand(argv) {
 
 /** Diagnostic bundles target Node 22 syntax and require the native SQLite reader. */
 export function canRunOpenClawNodeDiagnostics(value, hasNodeSqlite) {
-  if (!isNodeVersionAtLeast(parseNodeReleaseVersion(value), { major: 22, minor: 0, patch: 0 })) {
-    return false;
-  }
-  if (hasNodeSqlite !== undefined) {
-    return hasNodeSqlite;
-  }
-  try {
-    return typeof process.getBuiltinModule?.("node:sqlite")?.DatabaseSync === "function";
-  } catch {
-    return false;
-  }
+  return (
+    hasNodeSqlite &&
+    isNodeVersionAtLeast(parseNodeReleaseVersion(value), { major: 22, minor: 0, patch: 0 })
+  );
 }
 
 /** Parses an anchored release SemVer, allowing a leading v and valid build metadata. */
