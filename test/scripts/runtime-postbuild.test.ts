@@ -1189,6 +1189,41 @@ describe("runtime postbuild static assets", () => {
     }
   });
 
+  it("keeps the 2026.9.1 Git updater restart import loadable after dist replacement", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-old-updater-");
+    const distDir = path.join(rootDir, "dist");
+    const ownerPath = path.join(distDir, "update-command-service-command.mjs");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      ownerPath,
+      'export async function restart() { return (await import("./shared-1Uyqkfns.js")).resolveNodeRunner(); }\n',
+    );
+    const output = childProcess.execFileSync(
+      process.execPath,
+      [
+        "--import",
+        path.join(MODULE_ROOT, "scripts/tsx.mjs"),
+        "--input-type=module",
+        "-e",
+        [
+          'import fs from "node:fs/promises";',
+          'import path from "node:path";',
+          'import { pathToFileURL } from "node:url";',
+          `import { writeLegacyCliExitCompatChunks } from ${JSON.stringify(pathToFileURL(path.join(MODULE_ROOT, "scripts/runtime-postbuild.mts")).href)};`,
+          "const rootDir = process.argv[1];",
+          'const owner = await import(pathToFileURL(path.join(rootDir, "dist/update-command-service-command.mjs")).href);',
+          'await fs.rm(path.join(rootDir, "dist"), { recursive: true, force: true });',
+          "writeLegacyCliExitCompatChunks({ rootDir });",
+          "process.stdout.write(await owner.restart());",
+        ].join("\n"),
+        rootDir,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(output).toBe(process.execPath);
+  });
+
   it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"])(
     "preserves the old updater node-runner ABI through %s",
     async (chunk) => {

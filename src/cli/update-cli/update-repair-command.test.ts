@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,10 +64,24 @@ const tempDirs = createTempDirTracker();
 const now = Date.now();
 
 function seedRun(
-  params: { phase?: UpdateRunRecord["phase"]; liveDriver?: boolean; ageMs?: number } = {},
+  params: {
+    phase?: UpdateRunRecord["phase"];
+    driver?: "live" | "exited" | "reused";
+    ageMs?: number;
+  } = {},
 ) {
   vi.mocked(Date.now).mockReturnValue(now - (params.ageMs ?? 3_600_000));
-  const driver = params.liveDriver ? readUpdateRunDriver() : undefined;
+  let driver = params.driver ? readUpdateRunDriver() : undefined;
+  if (params.driver && !driver) {
+    throw new Error("Test process identity is unavailable");
+  }
+  if (driver && params.driver === "exited") {
+    const child = spawnSync(process.execPath, ["-e", ""], { timeout: 5_000 });
+    expect(child.status).toBe(0);
+    driver = { ...driver, pid: child.pid };
+  } else if (driver && params.driver === "reused") {
+    driver = { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) };
+  }
   const run = createUpdateRun({
     trigger: "control-ui",
     before: { version: "2026.9.2" },
@@ -132,6 +147,31 @@ describe("update repair ledger recovery", () => {
     },
   );
 
+  it.each(["exited", "reused"] as const)(
+    "repairs a young requested row with a dead driver (%s) without maintenance",
+    async (driver) => {
+      const run = seedRun({ driver, ageMs: 60_000 });
+
+      await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair"] });
+
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason: "abandoned",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+        ]),
+      });
+      expect(listUpdateRuns({ active: true })).toEqual([]);
+      expect(listUpdateRuns()).toHaveLength(1);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+      expect(mocks.runtime.log).toHaveBeenCalledWith(
+        "Gateway is healthy. Reconciled 1 abandoned update run. No maintenance or service restart was needed.",
+      );
+      expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
+    },
+  );
+
   it("exits successfully when the Gateway already reconciled the abandoned row", async () => {
     const run = seedRun();
     finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
@@ -181,11 +221,14 @@ describe("update repair ledger recovery", () => {
 
   it.each([
     { label: "recent request", ageMs: 60_000 },
-    { label: "live driver", phase: "staging" as const, liveDriver: true },
+    { label: "live driver", phase: "staging" as const, driver: "live" as const },
+    { label: "young live driver", ageMs: 60_000, driver: "live" as const },
   ])("leaves a $label alone without entering maintenance", async (fixture) => {
     const run = seedRun(fixture);
 
-    await expect(updateRepairCommand({})).rejects.toThrow("still in progress");
+    await expect(updateRepairCommand({})).rejects.toThrow(
+      `Update ${run.runId} is still in progress (${run.phase}); its driver is live or abandonment is not established. Wait for that update before running update repair.`,
+    );
 
     expect(getUpdateRun(run.runId)).toEqual(run);
     expect(mocks.finalize).not.toHaveBeenCalled();

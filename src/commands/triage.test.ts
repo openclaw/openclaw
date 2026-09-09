@@ -2,20 +2,35 @@ import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { promisify } from "node:util";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
+import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js";
+import { withUpdateFailureTriage } from "../cli/update-cli/update-command-triage.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
+import type { UpdateRunResult } from "../infra/update-runner.js";
+import { defaultRuntime } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { triageAfterFailure } from "./triage-failure.js";
 import { triageCommand } from "./triage.js";
 import { createTriageRuntime, withTriageTerminal } from "./triage.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const failedUpdate: UpdateRunResult = {
+  status: "error",
+  mode: "npm",
+  reason: "install failed",
+  steps: [],
+  durationMs: 1,
+};
 
 const mocks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+  select: vi.fn(),
   collectDoctorFindings: vi.fn(),
   callGatewayFromCliWithTransport: vi.fn(),
   writeDiagnosticSupportExport: vi.fn(),
@@ -24,6 +39,12 @@ const mocks = vi.hoisted(() => ({
   agentExecCommand: vi.fn(),
   resolveExecutablePath: vi.fn(),
   spawn: vi.fn(),
+}));
+
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
+  confirm: mocks.confirm,
+  select: mocks.select,
 }));
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -63,6 +84,8 @@ describe("triageCommand", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.confirm.mockResolvedValue(true);
+    mocks.select.mockResolvedValue("triage");
     stateDir = tempDirs.make("openclaw-triage-test-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_SHELL", "");
@@ -85,9 +108,149 @@ describe("triageCommand", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.each([false, true])(
+    "declining automatic update repair preserves diagnostics without launching an agent (embedded=%s)",
+    async (run) => {
+      mocks.confirm.mockResolvedValue(false);
+      mocks.resolveExecutablePath.mockImplementation((agent: string) =>
+        agent === "claude" ? "/usr/local/bin/claude" : undefined,
+      );
+      const runtime = createTriageRuntime();
+      await withTriageTerminal(true, () =>
+        triageCommand(runtime, {
+          run,
+          recovery: {
+            target: resolveInstallationTarget(),
+            updateFailure: { result: failedUpdate },
+          },
+        }),
+      );
+
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
+      expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output).toContain("Ready-to-run agent handoffs:");
+      expect(output).toContain("claude -p");
+      expect(output).toContain("openclaw triage");
+      const artifacts = await fs.readdir(path.join(stateDir, "logs/support"));
+      const promptFile = artifacts.find((file) => file.endsWith(".md"));
+      expect(await fs.readFile(path.join(stateDir, "logs/support", promptFile!), "utf8")).toContain(
+        "install failed",
+      );
+      const failureFile = artifacts.find((file) => file.endsWith(".json"));
+      expect(
+        JSON.parse(await fs.readFile(path.join(stateDir, "logs/support", failureFile!), "utf8")),
+      ).toMatchObject({ result: { status: "error", reason: "install failed" } });
+    },
+  );
+
+  it("keeps the updater's failure exit code when automatic triage is declined", async () => {
+    mocks.confirm.mockResolvedValue(false);
+    mocks.resolveExecutablePath.mockImplementation((agent: string) =>
+      agent === "claude" ? "/usr/local/bin/claude" : undefined,
+    );
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const failure = new UpdateCommandFailure(failedUpdate, 17);
+    await withTriageTerminal(true, async () => {
+      await expect(
+        withUpdateFailureTriage({}, { env: { ...process.env } }, async () => {
+          throw failure;
+        }),
+      ).rejects.toMatchObject({ code: 17 });
+    });
+    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("Ready-to-run agent handoffs:");
+  });
+
+  it.each([
+    { answer: "y", run: false, launches: true },
+    { answer: "\r", run: true, launches: true },
+    { answer: "timeout", run: false, launches: true },
+    { answer: "timeout", run: true, launches: true },
+    { answer: "n", run: false, launches: false },
+    { answer: "\u0003", run: false, launches: false },
+    { answer: "abort", run: false, launches: false },
+    { answer: "owner-loss", run: false, launches: false },
+  ])(
+    "settles the real update prompt for $answer (embedded=$run)",
+    async ({ answer, run, launches }) => {
+      const clack = await vi.importActual<typeof import("@clack/prompts")>("@clack/prompts");
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const started = createDeferredCore();
+      const controller = new AbortController();
+      let current = true;
+      mocks.confirm.mockImplementation((options: Parameters<typeof clack.confirm>[0]) => {
+        const pending = clack.confirm({ ...options, input, output });
+        started.resolve();
+        return pending;
+      });
+      mocks.resolveExecutablePath.mockImplementation((agent: string) =>
+        agent === "claude" ? "/usr/local/bin/claude" : undefined,
+      );
+      const runtime = createTriageRuntime();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        await withTriageTerminal(true, async () => {
+          const pending = triageCommand(runtime, {
+            run,
+            recovery: {
+              target: resolveInstallationTarget(),
+              updateFailure: { error: "install failed" },
+              signal: controller.signal,
+              isCurrent: () => current && !controller.signal.aborted,
+            },
+          });
+          await started.promise;
+          expect(mocks.spawn).not.toHaveBeenCalled();
+          expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
+          const agent = run ? "the embedded OpenClaw agent using your configured model" : "claude";
+          expect(runtime.log).toHaveBeenCalledWith(
+            `Agent: ${agent}. This will use your own account/tokens.`,
+          );
+          expect(mocks.confirm.mock.calls[0]?.[0].message).toContain(
+            `Open ${agent} to diagnose and repair the installation now? [Y/n]`,
+          );
+          if (answer === "timeout") {
+            await vi.advanceTimersByTimeAsync(29_999);
+            expect(mocks.spawn).not.toHaveBeenCalled();
+            expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+          } else if (answer === "abort") {
+            controller.abort();
+          } else {
+            if (answer === "owner-loss") {
+              current = false;
+            }
+            input.write(answer === "owner-loss" ? "y" : answer);
+          }
+          await pending;
+          expect(mocks.spawn).toHaveBeenCalledTimes(launches && !run ? 1 : 0);
+          expect(mocks.runUpdateRepairLoop).toHaveBeenCalledTimes(launches && run ? 1 : 0);
+          expect(
+            runtime.log.mock.calls.flat().join("\n").includes("No answer; continuing with"),
+          ).toBe(answer === "timeout");
+          expect(input.listenerCount("keypress")).toBe(0);
+          expect(output.listenerCount("resize")).toBe(0);
+          expect(input.isPaused()).toBe(true);
+          expect(vi.getTimerCount()).toBe(0);
+        });
+      } finally {
+        controller.abort();
+        input.destroy();
+        output.destroy();
+      }
+    },
+  );
 
   it("runs one selected automatic route with the original failure prompt", async () => {
     await fs.writeFile(
@@ -555,6 +718,7 @@ describe("triageCommand", () => {
       expect(JSON.stringify(output)).not.toContain(secret);
       expect(mocks.spawn).not.toHaveBeenCalled();
       expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
+      expect(mocks.confirm).not.toHaveBeenCalled();
     },
   );
 
@@ -830,6 +994,7 @@ describe("triageCommand", () => {
       }
     });
 
+    expect(mocks.confirm).not.toHaveBeenCalled();
     const promptPath = String(runtime.log.mock.calls[0]?.[0]).replace("Debugging prompt: ", "");
     expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
       `/usr/local/bin/${agent}`,

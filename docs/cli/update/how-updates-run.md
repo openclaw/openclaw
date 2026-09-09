@@ -151,6 +151,11 @@ chained after the update. After a handoff result, use the printed follow-up comm
 for the final outcome. Plain terminal updates remain synchronous, and `--no-restart`
 does not authorize stopping the agent's Gateway.
 
+Post-core steps follow the verified replacement package, including pnpm updates
+that change the target of the global package link. The helper retains the
+original installation identity for recovery; a child running from a different
+installation is still rejected.
+
 The Gateway core auto-updater requires a managed service restart path. It hands
 the CLI update to a detached helper before activation. A foreground
 Gateway keeps update hints but leaves installation and activation to the
@@ -298,7 +303,7 @@ the sentinel.
 
     Dev can walk back up to 10 commits to find the newest buildable candidate. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Update builds skip TypeScript declaration generation by default. Set `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to explicitly request declarations. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run source lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
 
-    The updater already running owns staging. Updating to a commit with this repair cannot change an older published updater's first hop; that default path requires a published baseline containing the repair.
+    The updater already running owns staging. Artifact-area staging first shipped in 2026.8.1; updating to a commit that contains it cannot change an older published updater's first hop, which still stages under the system temporary directory.
 
     Uses the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary npm installation of the target checkout’s exact pnpm version) instead of running `npm run build` inside a pnpm workspace. If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` in the checkout.
 

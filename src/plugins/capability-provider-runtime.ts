@@ -13,6 +13,7 @@ import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import { resolvePluginCapabilityCatalogContext } from "./loader-runtime-load.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import {
@@ -89,6 +90,7 @@ function resolveCapabilityPluginIds(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">;
 }): CapabilityPluginResolution {
   const snapshot = loadCapabilityManifestSnapshot(params);
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, params.cfg);
   let normalizedConfig: NormalizedPluginsConfig | undefined;
   const providerIds = params.providerIds;
   const matchedProviderIds = providerIds ? new Set<string>() : undefined;
@@ -104,6 +106,7 @@ function resolveCapabilityPluginIds(params: {
         snapshot,
         plugin,
         config: params.cfg,
+        isInstalledPluginEnabled: isEnabled,
         normalizedConfig:
           params.cfg?.plugins && (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins)),
         // Legacy TTS remains available when the operator disables plugins globally.

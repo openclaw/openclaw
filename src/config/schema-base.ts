@@ -130,9 +130,7 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   const publicSchema = preparePublicSchema(schema);
   const stablePayload = {
     schema: publicSchema,
-    uiHints: applyDerivedTags(
-      applyResolvedConfigTierHints(publicSchema, applyDerivedTags(baseHints)),
-    ),
+    uiHints: applyDerivedTags(applyResolvedConfigTierHints(publicSchema, baseHints)),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;
   baseConfigSchemaStablePayload = stablePayload;

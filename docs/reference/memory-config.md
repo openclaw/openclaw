@@ -465,7 +465,13 @@ If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, chec
 permissions. Back up the legacy journal before replacing any symlink. To import it, preserve its
 contents at `memory/.dreams/events.jsonl` as a regular file under regular directories inside the intended
 workspace, then rerun `openclaw doctor --fix`. Doctor leaves rejected sources untouched. A symlink to
-the workspace root itself is supported; symlinks below that root are refused by this migration.
+the workspace root itself is supported. Symlinks below that root are refused when a legacy event
+source, import claim, or migrated archive is present; directories without those sources need no repair.
+
+If a checkpointed `events.jsonl.migrated` archive changed other than by append, Doctor warns and
+preserves both the archive and the already imported SQLite events. It defers later event generations
+in that workspace while continuing unrelated repairs. Preserve the archive for inspection; this warning
+does not mean its edited contents were imported. Unsafe source paths and failed imports still stop Doctor.
 
 ---
 
@@ -533,7 +539,7 @@ Ordinary user-session transcripts, including retained, reset, and
 deleted-session archives, remain eligible until explicitly targeted.
 
 <Note>
-The [session-memory hook](/automation/hooks#session-memory) saves conversation
+The [session-memory hook](/automation/hooks/bundled-hooks#session-memory) saves conversation
 excerpts to `<workspace>/memory/`, which the `memory` source already indexes.
 If transcript indexing is also enabled, the same conversation can appear from
 both `memory` and `sessions`, resulting in overlapping search results and

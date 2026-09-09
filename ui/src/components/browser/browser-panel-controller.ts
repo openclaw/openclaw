@@ -444,7 +444,11 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  async selectTab(targetId: string, route?: BrowserRoute): Promise<void> {
+  async selectTab(
+    targetId: string,
+    route?: BrowserRoute,
+    options?: { focusBrowserTab?: boolean },
+  ): Promise<void> {
     this.native.cancelPendingActivation(targetId);
     const nativeTab = this.native.tabs.find((tab) => tab.id === targetId);
     if (nativeTab) {
@@ -474,16 +478,21 @@ export class BrowserPanelController implements ReactiveController {
     if (!route && this.clearUnavailableView()) {
       return;
     }
-    const focused = await this.runAction(async (actionClient) => {
+    const selectionSucceeded = await this.runAction(async (actionClient) => {
       if (route) {
-        // Listing can observe stopped or blocked tabs; focus needs a running,
-        // accessible tab. A historical target cannot survive a browser restart.
-        await this.refreshTabsOnly(actionClient, () => this.operations.isLive(epoch, actionClient));
+        // Listing can observe stopped or blocked tabs; focus and capture need a
+        // running, accessible tab. A historical target cannot survive a browser restart.
+        const refreshed = await this.refreshTabsOnly(actionClient, () =>
+          this.operations.isLive(epoch, actionClient),
+        );
         if (!this.operations.isLive(epoch, actionClient)) {
           return;
         }
         const selected = this.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId);
         this.setState("activeTargetId", this.running === false ? null : (selected?.id ?? targetId));
+        if (refreshed === "accepted" && this.running !== false && !selected) {
+          throw new Error(t("browser.tabUnavailable"));
+        }
         if (this.clearUnavailableView()) {
           return;
         }
@@ -492,7 +501,9 @@ export class BrowserPanelController implements ReactiveController {
       if (!selectedTargetId) {
         return;
       }
-      await focusBrowserTab(actionClient, selectedTargetId);
+      if (options?.focusBrowserTab !== false) {
+        await focusBrowserTab(actionClient, selectedTargetId);
+      }
       if (!this.operations.isLive(epoch, actionClient)) {
         return;
       }
@@ -505,7 +516,7 @@ export class BrowserPanelController implements ReactiveController {
         this.operations.markNavigationReconciled(actionClient, selectedTargetId);
       }
     }, false);
-    if (!focused && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
+    if (!selectionSucceeded && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
       if (this.operations.hasPendingNavigation(client, previous.targetId)) {
         // The prior remote document changed while selection failed. Expose an
         // unavailable state instead of restoring a screenshot that no longer owns it.

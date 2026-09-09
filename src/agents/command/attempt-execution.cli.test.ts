@@ -3773,6 +3773,38 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("keeps native Git attribution in replayable runtime context, not the user prompt", async () => {
+    const attribution = "Git commit attribution: no enabled co-author credit.";
+    const fragment = { kind: "runtime-instruction" as const, text: "Existing runtime instruction" };
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      body: "Commit from the native runtime.",
+      opts: { gitCoauthorAttribution: attribution, runtimeContextFragments: [fragment] },
+      runId: "native-coauthor-replay",
+    });
+    expect(embeddedArg.prompt).toBe("Commit from the native runtime.");
+    expect(embeddedArg.runtimeContextFragments).toEqual([
+      fragment,
+      { kind: "runtime-instruction", text: attribution },
+    ]);
+  });
+
+  it.each([{ modelRun: true }, { promptMode: "none" as const }])(
+    "keeps raw-model Git attribution in the existing prompt path: %j",
+    async (rawOptions) => {
+      const attribution = "Git commit attribution: no enabled co-author credit.";
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        body: "Raw user input",
+        opts: { ...rawOptions, gitCoauthorAttribution: attribution },
+        runId: "raw-coauthor-prompt",
+      });
+      expectRecordFields(embeddedArg, {
+        prompt: `Raw user input\n\n${attribution}`,
+        transcriptPrompt: "Raw user input",
+        runtimeContextFragments: undefined,
+      });
+    },
+  );
+
   it("keeps live stream output for visible subagent lane runs", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
       opts: { lane: "subagent" },

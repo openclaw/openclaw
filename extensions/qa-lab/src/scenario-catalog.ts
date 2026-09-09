@@ -4,6 +4,7 @@ import YAML from "yaml";
 import { z } from "zod";
 import { isRepoRootRelativeRef } from "./cli-paths.js";
 import { qaCoverageIdSchema } from "./coverage-id.js";
+import { parseQaYamlWithContext } from "./qa-yaml.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 
@@ -434,21 +435,6 @@ function readTextFile(relativePath: string): string {
     return "";
   }
   return fs.readFileSync(resolved, "utf8");
-}
-
-function formatZodIssuePath(pathLocal: PropertyKey[]) {
-  return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
-}
-
-function parseQaYamlWithContext<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
-  const parsed = schema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issues = parsed.error.issues
-    .map((issue) => `${formatZodIssuePath(issue.path)}: ${issue.message}`)
-    .join("; ");
-  throw new Error(`${label}: ${issues}`);
 }
 
 function parseQaYamlFileWithContext<T>(schema: z.ZodType<T>, relativePath: string): T {

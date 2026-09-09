@@ -21,6 +21,10 @@ const runInteractiveUpdateFailureAction = vi.hoisted(() =>
 );
 
 vi.mock("./update-command-report.js", () => ({ runInteractiveUpdateFailureAction }));
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
+  confirm: async () => true,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

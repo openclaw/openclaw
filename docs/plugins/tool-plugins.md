@@ -504,6 +504,7 @@ Check these in order:
 ## See also
 
 - [Building plugins](/plugins/building-plugins)
+- [Plugin SDK overview](/plugins/sdk-overview)
 - [Plugin entry points](/plugins/sdk-entrypoints)
 - [Plugin SDK subpaths](/plugins/sdk-subpaths)
 - [Plugin manifest](/plugins/manifest)

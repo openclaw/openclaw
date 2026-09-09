@@ -214,6 +214,9 @@ await web_search({
   <Card title="Exa search" href="/tools/exa-search" icon="magnifying-glass">
     Neural search with content extraction.
   </Card>
+  <Card title="Perplexity provider" href="/providers/perplexity-provider" icon="server">
+    Provider setup, auth, and config keys for Perplexity web search.
+  </Card>
   <Card title="Perplexity Search API docs" href="https://docs.perplexity.ai/docs/search/quickstart" icon="arrow-up-right-from-square">
     Official Perplexity Search API quickstart and reference.
   </Card>

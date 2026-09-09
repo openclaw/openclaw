@@ -3093,84 +3093,90 @@ fi
     expect(postSource).not.toContain("createOwnedKeychain");
   });
 
-  it("masks and owns the exact resolved iOS keychain through post cleanup", async () => {
-    const runnerTemp = tempRoots.make("openclaw-ios-keychain-runner-");
+  it("masks and owns both resolved iOS keychain filename forms through post cleanup", async () => {
     const workspace = tempRoots.make("openclaw-ios-keychain-workspace-");
     fs.mkdirSync(path.join(workspace, "apps/ios"), { recursive: true });
-    const environmentFile = path.join(runnerTemp, "environment");
-    const stateFile = path.join(runnerTemp, "state");
-    const env = {
-      ...process.env,
-      GITHUB_ENV: environmentFile,
-      GITHUB_STATE: stateFile,
-      GITHUB_WORKSPACE: workspace,
-      RUNNER_TEMP: runnerTemp,
-    };
-    let actionOutput = "";
-    const output = {
-      write(value: string) {
-        actionOutput += value;
-        return true;
-      },
-    };
-    const commands: Array<{ args: string[]; executable: string }> = [];
-    const runCommand = async (
-      executable: string,
-      args: string[],
-      options: { env?: NodeJS.ProcessEnv },
-    ) => {
-      commands.push({ args, executable });
-      expect(executable).toBe("bundle");
-      if (args.includes("create_keychain")) {
-        const requestedPath = args.find((argument) => argument.startsWith("path:"))?.slice(5);
-        if (!requestedPath) {
-          throw new Error("Missing create_keychain path");
+    for (const filenameSuffix of ["", "-db"] as const) {
+      const runnerTemp = tempRoots.make(
+        `openclaw-ios-keychain-${filenameSuffix ? "database" : "requested"}-`,
+      );
+      const environmentFile = path.join(runnerTemp, "environment");
+      const stateFile = path.join(runnerTemp, "state");
+      const env = {
+        ...process.env,
+        GITHUB_ENV: environmentFile,
+        GITHUB_STATE: stateFile,
+        GITHUB_WORKSPACE: workspace,
+        RUNNER_TEMP: runnerTemp,
+      };
+      let actionOutput = "";
+      const output = {
+        write(value: string) {
+          actionOutput += value;
+          return true;
+        },
+      };
+      const commands: Array<{ args: string[]; executable: string }> = [];
+      const runCommand = async (
+        executable: string,
+        args: string[],
+        options: { env?: NodeJS.ProcessEnv },
+      ) => {
+        commands.push({ args, executable });
+        expect(executable).toBe("bundle");
+        if (args.includes("create_keychain")) {
+          const requestedPath = args.find((argument) => argument.startsWith("path:"))?.slice(5);
+          if (!requestedPath) {
+            throw new Error("Missing create_keychain path");
+          }
+          expect(fs.readFileSync(stateFile, "utf8")).toContain(`requested_path=${requestedPath}\n`);
+          const password = options.env?.KEYCHAIN_PASSWORD;
+          expect(password).toMatch(/^[a-f0-9]{64}$/u);
+          expect(args.join("\n")).not.toContain(password);
+          fs.writeFileSync(`${requestedPath}${filenameSuffix}`, "owned keychain\n");
+        } else if (args.includes("delete_keychain")) {
+          const keychainPath = args
+            .find((argument) => argument.startsWith("keychain_path:"))
+            ?.slice("keychain_path:".length);
+          if (!keychainPath) {
+            throw new Error("Missing delete_keychain path");
+          }
+          fs.unlinkSync(keychainPath);
+        } else {
+          throw new Error(`Unexpected Fastlane action: ${args.join(" ")}`);
         }
-        expect(fs.readFileSync(stateFile, "utf8")).toContain(`requested_path=${requestedPath}\n`);
-        const password = options.env?.KEYCHAIN_PASSWORD;
-        expect(password).toMatch(/^[a-f0-9]{64}$/u);
-        expect(args.join("\n")).not.toContain(password);
-        fs.writeFileSync(`${requestedPath}-db`, "owned keychain\n");
-      } else if (args.includes("delete_keychain")) {
-        const keychainPath = args
-          .find((argument) => argument.startsWith("keychain_path:"))
-          ?.slice("keychain_path:".length);
-        if (!keychainPath) {
-          throw new Error("Missing delete_keychain path");
-        }
-        fs.unlinkSync(keychainPath);
-      } else {
-        throw new Error(`Unexpected Fastlane action: ${args.join(" ")}`);
-      }
-      return { stderr: "", stdout: "" };
-    };
+        return { stderr: "", stdout: "" };
+      };
 
-    const created = await createOwnedKeychain({ env, output, runCommand });
-    expect(created.resolvedPath).toBe(`${created.requestedPath}-db`);
-    expect(fs.statSync(created.ownedRoot).mode & 0o777).toBe(0o700);
-    expect(actionOutput).toBe(`::add-mask::${created.password}\n`);
-    expect(fs.readFileSync(environmentFile, "utf8")).toBe(
-      `MATCH_KEYCHAIN_NAME=${created.resolvedPath}\n` +
-        `MATCH_KEYCHAIN_PASSWORD=${created.password}\n`,
-    );
-    const state = Object.fromEntries(
-      fs
-        .readFileSync(stateFile, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
-    );
-    await cleanupOwnedKeychain({
-      env: {
-        ...env,
-        STATE_owned_root: state.owned_root,
-        STATE_requested_path: state.requested_path,
-        STATE_resolved_path: state.resolved_path,
-      },
-      runCommand,
-    });
-    expect(fs.existsSync(created.ownedRoot)).toBe(false);
-    expect(commands.map(({ args }) => args[4])).toEqual(["create_keychain", "delete_keychain"]);
+      const created = await createOwnedKeychain({ env, output, runCommand });
+      expect(created.resolvedPath).toBe(`${created.requestedPath}${filenameSuffix}`);
+      expect(fs.statSync(created.ownedRoot).mode & 0o777).toBe(0o700);
+      expect(actionOutput).toBe(`::add-mask::${created.password}\n`);
+      expect(fs.readFileSync(environmentFile, "utf8")).toBe(
+        `MATCH_KEYCHAIN_NAME=${created.resolvedPath}\n` +
+          `MATCH_KEYCHAIN_PASSWORD=${created.password}\n`,
+      );
+      const state = Object.fromEntries(
+        fs
+          .readFileSync(stateFile, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
+      );
+      expect(state.resolved_path).toBe(created.resolvedPath);
+      await cleanupOwnedKeychain({
+        env: {
+          ...env,
+          STATE_owned_root: state.owned_root,
+          STATE_requested_path: state.requested_path,
+          STATE_resolved_path: state.resolved_path,
+        },
+        runCommand,
+      });
+      expect(fs.existsSync(created.ownedRoot)).toBe(false);
+      expect(commands.map(({ args }) => args[4])).toEqual(["create_keychain", "delete_keychain"]);
+      expect(commands.at(-1)?.args).toContain(`keychain_path:${created.resolvedPath}`);
+    }
 
     const source = fs.readFileSync(".github/actions/ios-signing-keychain/keychain.mjs", "utf8");
     expect(source.indexOf("maskSecret(password, output)")).toBeLessThan(
@@ -3185,61 +3191,71 @@ fi
   });
 
   it("cleans a partial iOS keychain create and refuses paths outside its ownership", async () => {
-    const runnerTemp = tempRoots.make("openclaw-ios-keychain-partial-runner-");
     const workspace = tempRoots.make("openclaw-ios-keychain-partial-workspace-");
     fs.mkdirSync(path.join(workspace, "apps/ios"), { recursive: true });
-    const environmentFile = path.join(runnerTemp, "environment");
-    const stateFile = path.join(runnerTemp, "state");
+    for (const filenameSuffix of ["", "-db"] as const) {
+      const runnerTemp = tempRoots.make(
+        `openclaw-ios-keychain-partial-${filenameSuffix ? "database" : "requested"}-`,
+      );
+      const environmentFile = path.join(runnerTemp, "environment");
+      const stateFile = path.join(runnerTemp, "state");
+      const env = {
+        ...process.env,
+        GITHUB_ENV: environmentFile,
+        GITHUB_STATE: stateFile,
+        GITHUB_WORKSPACE: workspace,
+        RUNNER_TEMP: runnerTemp,
+      };
+      const createCommand = async (_command: string, args: string[]) => {
+        const requestedPath = args.find((argument) => argument.startsWith("path:"))?.slice(5);
+        if (!requestedPath) {
+          throw new Error("Missing partial create path");
+        }
+        fs.writeFileSync(`${requestedPath}${filenameSuffix}`, "partial keychain\n");
+        throw new Error("partial create");
+      };
+
+      await expect(
+        createOwnedKeychain({
+          env,
+          output: { write: () => true },
+          runCommand: createCommand,
+        }),
+      ).rejects.toThrow("partial create");
+      expect(fs.existsSync(environmentFile)).toBe(false);
+      const state = Object.fromEntries(
+        fs
+          .readFileSync(stateFile, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
+      );
+      const partialPath = `${state.requested_path}${filenameSuffix}`;
+      expect(fs.existsSync(partialPath)).toBe(true);
+      await cleanupOwnedKeychain({
+        env: {
+          ...env,
+          STATE_owned_root: state.owned_root,
+          STATE_requested_path: state.requested_path,
+        },
+        runCommand: async (_command: string, args: string[]) => {
+          const keychainPath = args
+            .find((argument) => argument.startsWith("keychain_path:"))
+            ?.slice("keychain_path:".length);
+          expect(keychainPath).toBe(partialPath);
+          fs.unlinkSync(partialPath);
+          return { stderr: "", stdout: "" };
+        },
+      });
+      expect(fs.existsSync(state.owned_root)).toBe(false);
+    }
+
+    const runnerTemp = tempRoots.make("openclaw-ios-keychain-guard-runner-");
     const env = {
       ...process.env,
-      GITHUB_ENV: environmentFile,
-      GITHUB_STATE: stateFile,
       GITHUB_WORKSPACE: workspace,
       RUNNER_TEMP: runnerTemp,
     };
-    const createCommand = async (_command: string, args: string[]) => {
-      const requestedPath = args.find((argument) => argument.startsWith("path:"))?.slice(5);
-      if (!requestedPath) {
-        throw new Error("Missing partial create path");
-      }
-      fs.writeFileSync(`${requestedPath}-db`, "partial keychain\n");
-      throw new Error("partial create");
-    };
-
-    await expect(
-      createOwnedKeychain({
-        env,
-        output: { write: () => true },
-        runCommand: createCommand,
-      }),
-    ).rejects.toThrow("partial create");
-    expect(fs.existsSync(environmentFile)).toBe(false);
-    const state = Object.fromEntries(
-      fs
-        .readFileSync(stateFile, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
-    );
-    const partialPath = `${state.requested_path}-db`;
-    expect(fs.existsSync(partialPath)).toBe(true);
-    await cleanupOwnedKeychain({
-      env: {
-        ...env,
-        STATE_owned_root: state.owned_root,
-        STATE_requested_path: state.requested_path,
-      },
-      runCommand: async (_command: string, args: string[]) => {
-        const keychainPath = args
-          .find((argument) => argument.startsWith("keychain_path:"))
-          ?.slice("keychain_path:".length);
-        expect(keychainPath).toBe(partialPath);
-        fs.unlinkSync(partialPath);
-        return { stderr: "", stdout: "" };
-      },
-    });
-    expect(fs.existsSync(state.owned_root)).toBe(false);
-
     const outsidePath = path.join(runnerTemp, "outside.keychain-db");
     fs.writeFileSync(outsidePath, "not owned\n");
     const ownedRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
@@ -3261,9 +3277,28 @@ fi
     ).rejects.toThrow("Unexpected owned keychain path");
     expect(cleanupCalled).toBe(false);
     expect(fs.existsSync(outsidePath)).toBe(true);
+
+    const ambiguousRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+    const ambiguousRequestedPath = path.join(ambiguousRoot, "signing.keychain");
+    fs.writeFileSync(ambiguousRequestedPath, "requested keychain\n");
+    fs.writeFileSync(`${ambiguousRequestedPath}-db`, "database keychain\n");
+    await expect(
+      cleanupOwnedKeychain({
+        env: {
+          ...env,
+          STATE_owned_root: ambiguousRoot,
+          STATE_requested_path: ambiguousRequestedPath,
+        },
+        runCommand: async () => {
+          cleanupCalled = true;
+          return { stderr: "", stdout: "" };
+        },
+      }),
+    ).rejects.toThrow("Refusing ambiguous job-owned keychain cleanup");
+    expect(cleanupCalled).toBe(false);
   });
 
-  it("binds the signing probe to the configured team and bounds owned child processes", async () => {
+  it("binds both iOS keychain filename forms to the configured signing team", async () => {
     const runnerTemp = tempRoots.make("openclaw-ios-keychain-probe-runner-");
     const workspace = tempRoots.make("openclaw-ios-keychain-probe-workspace-");
     writeFile(
@@ -3271,67 +3306,78 @@ fi
       "apps/ios/Config/AppStoreSigning.json",
       `${JSON.stringify({ teamId: "FWJYW4S8P8" }, null, 2)}\n`,
     );
-    const ownedRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
-    const keychainPath = path.join(ownedRoot, "signing.keychain-db");
-    fs.writeFileSync(keychainPath, "owned keychain\n");
-    const calls: Array<{ args: string[]; executable: string; timeoutMs?: number }> = [];
     const identityHash = "A".repeat(40);
-    const runCommand = async (
-      executable: string,
-      args: string[],
-      options: { timeoutMs?: number },
-    ) => {
-      calls.push({ args, executable, timeoutMs: options.timeoutMs });
-      if (executable === "/usr/bin/security") {
-        return {
-          stderr: "",
-          stdout: `  1) ${identityHash} "Apple Distribution: OpenClaw Foundation (FWJYW4S8P8)"\n`,
-        };
-      }
-      const probePath = args.at(-1);
-      expect(executable).toBe("/usr/bin/codesign");
-      expect(probePath).toBeTruthy();
-      expect(fs.readFileSync(probePath as string)).toEqual(fs.readFileSync("/usr/bin/true"));
-      if (args.includes("--display")) {
-        return { stderr: "TeamIdentifier=FWJYW4S8P8\n", stdout: "" };
-      }
-      return { stderr: "", stdout: "" };
-    };
+    for (const keychainFilename of ["signing.keychain", "signing.keychain-db"] as const) {
+      const ownedRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+      const keychainPath = path.join(ownedRoot, keychainFilename);
+      fs.writeFileSync(keychainPath, "owned keychain\n");
+      const calls: Array<{ args: string[]; executable: string; timeoutMs?: number }> = [];
+      const runCommand = async (
+        executable: string,
+        args: string[],
+        options: { timeoutMs?: number },
+      ) => {
+        calls.push({ args, executable, timeoutMs: options.timeoutMs });
+        if (executable === "/usr/bin/security") {
+          expect(args.at(-1)).toBe(keychainPath);
+          return {
+            stderr: "",
+            stdout: `  1) ${identityHash} "Apple Distribution: OpenClaw Foundation (FWJYW4S8P8)"\n`,
+          };
+        }
+        const probePath = args.at(-1);
+        expect(executable).toBe("/usr/bin/codesign");
+        expect(probePath).toBeTruthy();
+        expect(fs.readFileSync(probePath as string)).toEqual(fs.readFileSync("/usr/bin/true"));
+        if (args.includes("--force")) {
+          expect(args).toContain(keychainPath);
+        }
+        if (args.includes("--display")) {
+          return { stderr: "TeamIdentifier=FWJYW4S8P8\n", stdout: "" };
+        }
+        return { stderr: "", stdout: "" };
+      };
 
+      await expect(
+        probeOwnedKeychain({
+          env: {
+            ...process.env,
+            GITHUB_WORKSPACE: workspace,
+            MATCH_KEYCHAIN_NAME: keychainPath,
+            RUNNER_TEMP: runnerTemp,
+          },
+          runCommand,
+        }),
+      ).resolves.toEqual({
+        identity: "Apple Distribution: OpenClaw Foundation (FWJYW4S8P8)",
+        teamId: "FWJYW4S8P8",
+      });
+      expect(calls.map(({ executable }) => executable)).toEqual([
+        "/usr/bin/security",
+        "/usr/bin/codesign",
+        "/usr/bin/codesign",
+        "/usr/bin/codesign",
+      ]);
+      expect(calls.every(({ timeoutMs }) => timeoutMs !== undefined && timeoutMs <= 30_000)).toBe(
+        true,
+      );
+      expect(calls.some(({ executable, args }) => executable === args.at(-1))).toBe(false);
+      expect(
+        fs
+          .readdirSync(runnerTemp)
+          .some((entry) => entry.startsWith("openclaw-ios-codesign-probe-")),
+      ).toBe(false);
+    }
+
+    const wrongTeamRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+    const wrongTeamPath = path.join(wrongTeamRoot, "signing.keychain");
+    fs.writeFileSync(wrongTeamPath, "owned keychain\n");
     await expect(
       probeOwnedKeychain({
         env: {
           ...process.env,
           GITHUB_WORKSPACE: workspace,
-          MATCH_KEYCHAIN_NAME: keychainPath,
-          RUNNER_TEMP: runnerTemp,
-        },
-        runCommand,
-      }),
-    ).resolves.toEqual({
-      identity: "Apple Distribution: OpenClaw Foundation (FWJYW4S8P8)",
-      teamId: "FWJYW4S8P8",
-    });
-    expect(calls.map(({ executable }) => executable)).toEqual([
-      "/usr/bin/security",
-      "/usr/bin/codesign",
-      "/usr/bin/codesign",
-      "/usr/bin/codesign",
-    ]);
-    expect(calls.every(({ timeoutMs }) => timeoutMs !== undefined && timeoutMs <= 30_000)).toBe(
-      true,
-    );
-    expect(calls.some(({ executable, args }) => executable === args.at(-1))).toBe(false);
-    expect(
-      fs.readdirSync(runnerTemp).some((entry) => entry.startsWith("openclaw-ios-codesign-probe-")),
-    ).toBe(false);
-
-    await expect(
-      probeOwnedKeychain({
-        env: {
-          ...process.env,
-          GITHUB_WORKSPACE: workspace,
-          MATCH_KEYCHAIN_NAME: keychainPath,
+          MATCH_KEYCHAIN_NAME: wrongTeamPath,
           RUNNER_TEMP: runnerTemp,
         },
         runCommand: async () => ({
@@ -3341,6 +3387,43 @@ fi
       }),
     ).rejects.toThrow("Expected one Apple Distribution identity for team FWJYW4S8P8, found 0");
 
+    let unsafeCommandCount = 0;
+    const rejectUnsafeCommand = async () => {
+      unsafeCommandCount += 1;
+      return { stderr: "", stdout: "" };
+    };
+    const missingRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+    await expect(
+      probeOwnedKeychain({
+        env: {
+          ...process.env,
+          GITHUB_WORKSPACE: workspace,
+          MATCH_KEYCHAIN_NAME: path.join(missingRoot, "signing.keychain"),
+          RUNNER_TEMP: runnerTemp,
+        },
+        runCommand: rejectUnsafeCommand,
+      }),
+    ).rejects.toThrow("Owned keychain is missing");
+    const symlinkRoot = fs.mkdtempSync(path.join(runnerTemp, "openclaw-ios-signing-keychain-"));
+    const symlinkTarget = path.join(runnerTemp, "foreign.keychain");
+    fs.writeFileSync(symlinkTarget, "foreign keychain\n");
+    fs.symlinkSync(symlinkTarget, path.join(symlinkRoot, "signing.keychain"));
+    await expect(
+      probeOwnedKeychain({
+        env: {
+          ...process.env,
+          GITHUB_WORKSPACE: workspace,
+          MATCH_KEYCHAIN_NAME: path.join(symlinkRoot, "signing.keychain"),
+          RUNNER_TEMP: runnerTemp,
+        },
+        runCommand: rejectUnsafeCommand,
+      }),
+    ).rejects.toThrow("Owned keychain path is not a regular file");
+    expect(unsafeCommandCount).toBe(0);
+  });
+
+  it("bounds owned child process trees", async () => {
+    const runnerTemp = tempRoots.make("openclaw-ios-keychain-process-runner-");
     if (process.platform !== "win32") {
       const exerciseOwnedProcessTree = async ({
         expectedError,

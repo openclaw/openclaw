@@ -180,7 +180,9 @@ describe("prepared model runtime snapshots", () => {
     expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
       "codex",
     ]);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(([params]) => params),
+    ).toContainEqual(
       expect.objectContaining({
         selections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
       }),
@@ -203,9 +205,9 @@ describe("prepared model runtime snapshots", () => {
         mocks.pluginMetadataSnapshot as never,
       ).runtimePluginRegistry,
     ).toBe(pluginRegistry);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ selections: undefined }),
-    );
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(([params]) => params),
+    ).toContainEqual(expect.objectContaining({ selections: undefined }));
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {
@@ -268,7 +270,9 @@ describe("prepared model runtime snapshots", () => {
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
     });
 
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(([params]) => params),
+    ).toContainEqual({
       config: {},
       configuredHarnessRuntimes: [],
       env: process.env,

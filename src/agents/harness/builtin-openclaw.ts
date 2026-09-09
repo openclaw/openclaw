@@ -46,6 +46,9 @@ function buildRestrictedFinalizationAttempt(
     onExecutionPhase: attempt.onExecutionPhase,
     onLaneWait: attempt.onLaneWait,
     onRunProgress: attempt.onRunProgress,
+    // The caller owns terminal publication across the failed and finalizing attempts.
+    onAgentEvent: attempt.onAgentEvent,
+    deferTerminalLifecycle: attempt.deferTerminalLifecycle,
     onAttemptTimeoutArmed: attempt.onAttemptTimeoutArmed,
     onAttemptDeadlineChanged: attempt.onAttemptDeadlineChanged,
     onAttemptTimeout: attempt.onAttemptTimeout,

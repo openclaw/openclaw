@@ -10,7 +10,10 @@ import {
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { INCOMPLETE_ASSISTANT_STREAM_RE } from "../../failover/message-patterns.js";
+import {
+  INCOMPLETE_ASSISTANT_STREAM_RE,
+  TERMINATED_TRANSPORT_MESSAGE_RE,
+} from "../../failover/message-patterns.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
@@ -117,7 +120,11 @@ function isTransientSettledTurnFailure(failure: unknown): boolean {
     typeof failure.message === "string"
       ? failure.message.trim()
       : "";
-  return INCOMPLETE_ASSISTANT_STREAM_RE.test(message);
+  // A projected bare `terminated` can lack a retryable code. Keep settled tools
+  // eligible for the existing tool-free finalizer.
+  return (
+    INCOMPLETE_ASSISTANT_STREAM_RE.test(message) || TERMINATED_TRANSPORT_MESSAGE_RE.test(message)
+  );
 }
 
 function normalizeEmbeddedAttemptToolMetas(

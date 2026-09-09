@@ -19,6 +19,7 @@ import {
 import { assertCodexNativeHookRelayAllowed } from "./native-hook-relay.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
+import { mergeCodexNativeProjectDocThreadConfig } from "./project-doc-thread-config.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import { readScheduledCodexAppManagedRequirementsFingerprint } from "./scheduled-app-authority.js";
 import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
@@ -148,11 +149,12 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
     throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }
-  if ((restrictedToolSurface || params.nativeCodeModeEnabled !== false) && !effectiveConfig) {
-    effectiveConfig = await lifecycleTiming.measure("tool-policy-config-read", () =>
-      readCodexEffectiveConfig(params.client, params.cwd, params.signal),
+  if (!effectiveConfig) {
+    effectiveConfig = await lifecycleTiming.measure("effective-config-read", () =>
+      readCodexEffectiveConfig(params.client, params.cwd, { signal: params.signal }),
     );
   }
+  params.config = mergeCodexNativeProjectDocThreadConfig(params.config, effectiveConfig);
   const restrictedToolSurfaceInheritedMcpServerNames = restrictedToolSurface
     ? await lifecycleTiming.measure("restricted-tool-surface-mcp-policy", () =>
         readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal, effectiveConfig),

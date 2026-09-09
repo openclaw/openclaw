@@ -1,5 +1,6 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
+import { ConfigReadOnlyError, NixModeConfigMutationError } from "../config/config-write-guard.js";
 import {
   GatewayCredentialsRequiredError,
   GatewayExplicitAuthRequiredError,
@@ -219,6 +220,14 @@ describe("formatCliFailureLines", () => {
     {
       label: "gateway URL override without explicit credentials",
       createError: () => new GatewayExplicitAuthRequiredError(EXPLICIT_GATEWAY_AUTH_MESSAGE),
+    },
+    {
+      label: "externally managed config",
+      createError: () => new ConfigReadOnlyError({ configPath: "/tmp/openclaw.json" }),
+    },
+    {
+      label: "Nix-managed config",
+      createError: () => new NixModeConfigMutationError({ configPath: "/tmp/openclaw.json" }),
     },
     {
       label: "unreachable gateway",

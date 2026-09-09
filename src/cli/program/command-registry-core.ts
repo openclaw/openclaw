@@ -12,6 +12,7 @@ import {
   getCoreCliCommandNamesCore,
 } from "./core-command-descriptors.js";
 import {
+  findCommandGroupEntry,
   registerCommandGroupByName,
   registerCommandGroups,
   type CommandGroupEntry,
@@ -93,8 +94,15 @@ function resolveCoreCommandGroups(ctx: ProgramContext): CommandGroupEntry[] {
   return buildCommandGroupEntries(descriptors, visibleEntrySpecs, ctx);
 }
 
-export function getCoreCliCommandNames(): string[] {
-  return getCoreCliCommandNamesCore();
+export function getCoreCliCompletionGroups(ctx: ProgramContext): CommandGroupEntry[] {
+  const entries = resolveCoreCommandGroups(ctx);
+  // Keep separated visits: an intervening group affects Commander's final output order.
+  return getCoreCliCommandNamesCore()
+    .map((name) => findCommandGroupEntry(entries, name))
+    .filter(
+      (entry, index, groups): entry is CommandGroupEntry =>
+        entry !== undefined && entry !== groups[index - 1],
+    );
 }
 
 export async function registerCoreCliByName(

@@ -10439,8 +10439,10 @@ describe("update-cli", () => {
     expect(serviceStop).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     const report = getLogOutput();
-    expect(report).toContain(`Node 22.18.0 at ${serviceNode} is too old`);
-    expect(report).toContain("Upgrade the Node runtime that owns the managed Gateway service");
+    expect(report).toContain(`Node 22.18.0 at ${serviceNode} is incompatible`);
+    expect(report).toContain(
+      "Use a compatible version of the Node runtime that owns the managed Gateway service",
+    );
   });
 
   it("runs managed service package follow-up commands with the service Node despite heap argv", async () => {

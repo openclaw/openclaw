@@ -55,6 +55,10 @@ did not name.
 
 ## Status / capabilities / resolve / logs
 
+`capabilities` and `resolve` reject explicitly empty or whitespace-only `--account`
+values. Omit the option to keep each command's default or broader account scope;
+do not pass an empty shell variable to request that scope.
+
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`

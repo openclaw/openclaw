@@ -12,7 +12,6 @@ import { WebSocketServer } from "../../packages/gateway-client/src/websocket.tes
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -257,6 +256,7 @@ export async function verifyCompositeAcquisition({
   failure,
   shutdown,
 }: CompositeAcquisitionCase): Promise<void> {
+  const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
   await withOpenClawTestState(
     {
       label: "composite-acquisition",
@@ -487,6 +487,7 @@ describe("raw Gateway helper acquisition ownership", () => {
     },
     { helper: "device request", behavior: "no response", error: "timeout" },
   ] as const)("$helper owns cleanup after $behavior", async ({ helper, behavior, error }) => {
+    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     await withOpenClawTestState({ label: "raw-acquisition" }, async () => {
       await withAcquisitionPeer(behavior, async (peer) => {
         const { openTrackedWs } = await import("./device-authz.test-helpers.js");
@@ -552,6 +553,7 @@ describe("raw Gateway helper acquisition ownership", () => {
   });
 
   it("retains the native error until awaited webchat preparation finishes", async () => {
+    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     await withOpenClawTestState({ label: "webchat-preparation" }, async () => {
       await withAcquisitionPeer("reply", async (peer) => {
         const preparing = createDeferred();
@@ -595,6 +597,7 @@ describe("raw Gateway helper acquisition ownership", () => {
   });
 
   it("restores the token environment when server startup rejects before acquisition", async () => {
+    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     await withOpenClawTestState(
       {
         label: "server-start-rejection",
@@ -641,6 +644,7 @@ describe("raw Gateway helper acquisition ownership", () => {
   it.each(["success", "rejection"] as const)(
     "owns returned-server selectors through close %s",
     async (shutdown) => {
+      const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
       await withOpenClawTestState(
         {
           label: "returned-client-server",
@@ -690,6 +694,7 @@ describe("raw Gateway helper acquisition ownership", () => {
   );
 
   it("joins the one-shot device socket close before returning its response", async () => {
+    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
     await withOpenClawTestState({ label: "device-acquisition-response" }, async () => {
       await withAcquisitionPeer("reply", async (peer) => {
         const { connectDeviceAuthReq } = await import("./test-helpers.e2e.js");
