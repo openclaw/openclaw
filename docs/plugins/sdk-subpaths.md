@@ -504,3 +504,5 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
 - [Plugin SDK overview](/plugins/sdk-overview)
 - [Plugin SDK setup](/plugins/sdk-setup)
 - [Building plugins](/plugins/building-plugins)
+- [Plugin architecture internals](/plugins/architecture-internals)
+- [Tool plugins](/plugins/tool-plugins)

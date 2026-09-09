@@ -106,7 +106,7 @@ export async function buildPluginControlUi(params: {
     for (const file of files) {
       await fs.writeFile(path.join(staging, path.basename(file.path)), file.contents);
     }
-    await publishReadableGeneration(staging, files);
+    await normalizeGenerationPermissions(staging, files);
     try {
       await fs.rename(staging, outputDir);
     } catch (error) {
@@ -127,7 +127,7 @@ export async function buildPluginControlUi(params: {
         }
       }
       // A generation published by an earlier build may still carry owner-only modes.
-      await publishReadableGeneration(outputDir, files);
+      await normalizeGenerationPermissions(outputDir, files);
     }
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
@@ -135,12 +135,9 @@ export async function buildPluginControlUi(params: {
   return declaration;
 }
 
-// mkdtemp creates the staging directory owner-only and writeFile follows the
-// build host's umask, but the Gateway that serves a bundled generation may run
-// as a different UID than the one that built it (container images admitted under
-// an arbitrary runtime UID). Publish the directory traversable and its assets
-// world-readable without touching the immutable bytes.
-async function publishReadableGeneration(directory: string, files: Array<{ path: string }>) {
+// mkdtemp is owner-only and file creation follows umask. Normalize generated
+// asset modes before publication or after validating a reused generation.
+async function normalizeGenerationPermissions(directory: string, files: Array<{ path: string }>) {
   await fs.chmod(directory, 0o755);
   for (const file of files) {
     await fs.chmod(path.join(directory, path.basename(file.path)), 0o644);

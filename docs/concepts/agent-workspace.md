@@ -84,7 +84,7 @@ Standard files OpenClaw expects inside the workspace:
     The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance. Template: [AGENTS.md Tools section](/reference/templates/AGENTS#tools).
   </Accordion>
   <Accordion title="BOOT.md - startup checklist">
-    Optional startup checklist run on Gateway startup when the [boot-md hook](/automation/hooks#boot-md) is enabled. Enabling a different internal hook does not enable `boot-md`. Keep it short; use the message tool for outbound sends. Template: [BOOT.md](/reference/templates/BOOT).
+    Optional startup checklist run on Gateway startup when the [boot-md hook](/automation/hooks/bundled-hooks#boot-md) is enabled. Enabling a different internal hook does not enable `boot-md`. Keep it short; use the message tool for outbound sends. Template: [BOOT.md](/reference/templates/BOOT).
   </Accordion>
   <Accordion title="BOOTSTRAP.md - first-run ritual">
     One-time first-run ritual. Only created for a brand-new workspace. Delete it after the ritual is complete. Template: [BOOTSTRAP.md](/reference/templates/BOOTSTRAP).
@@ -110,8 +110,7 @@ These live under `~/.openclaw/` and should NOT be committed to the workspace rep
 
 - `~/.openclaw/openclaw.json` (config)
 - `~/.openclaw/state/openclaw.sqlite` (shared workspace setup state and attestations)
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (model auth profiles, routing state, standing intents, and other agent-scoped durability)
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (session rows, transcripts, and per-agent runtime state)
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (model auth profiles, routing state, standing intents, session rows, transcripts, memory index state, and other per-agent runtime durability)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
 - `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
 - `~/.openclaw/agents/<agentId>/sessions/` (legacy migration sources and archive/support artifacts)
@@ -243,3 +242,4 @@ Suggested `.gitignore` starter:
 - [Sandboxing](/gateway/sandboxing) - workspace access in sandboxed environments
 - [Session](/concepts/session) - session storage paths
 - [Standing orders](/automation/standing-orders) - persistent instructions in workspace files
+- [System prompt](/concepts/system-prompt) - where workspace files are injected into the prompt

@@ -205,7 +205,7 @@ that product setting remains private-only even when advanced Active Memory is
 allowed in groups or channels. Default:
 
 ```json5
-allowedChatTypes: ["direct"];
+allowedChatTypes: ["direct"]
 ```
 
 Valid values: `direct`, `group`, `channel`, `explicit` (portal-style sessions
@@ -214,8 +214,8 @@ Direct-message sessions run by default; group, channel, and explicit sessions
 need to be opted in:
 
 ```json5
-allowedChatTypes: ["direct", "group"];
-allowedChatTypes: ["direct", "group", "channel"];
+allowedChatTypes: ["direct", "group"]
+allowedChatTypes: ["direct", "group", "channel"]
 ```
 
 For narrower rollout inside an allowed chat type, add
@@ -409,12 +409,12 @@ explicit plugin model (config.model)
 ```
 
 ```json5
-modelFallback: "google/gemini-3-flash";
+modelFallback: "google/gemini-3-flash"
 ```
 
 If nothing in that chain resolves, active memory skips recall for the turn.
-`config.modelFallbackPolicy` is a deprecated compatibility field kept for
-older configs; it no longer changes runtime behavior — `modelFallback` is
+`config.modelFallbackPolicy` is a compatibility field kept for older configs,
+deprecated in v2026.4.12; it no longer changes runtime behavior — `modelFallback` is
 strictly the last resort in the chain above, not a runtime failover that
 swaps in another model when the resolved one errors.
 
@@ -604,7 +604,7 @@ since active memory runs in the reply path and extra thinking time directly
 adds user-visible latency):
 
 ```json5
-thinking: "medium"; // default: "off"
+thinking: "medium" // default: "off"
 ```
 
 `config.fastMode` overrides fast mode only for the blocking memory sub-agent.
@@ -613,7 +613,7 @@ agent, session, and model defaults. `"auto"` uses the recall model's configured
 `fastAutoOnSeconds` cutoff:
 
 ```json5
-fastMode: true;
+fastMode: true
 ```
 
 `config.promptAppend` adds operator instructions after the default prompt
@@ -621,7 +621,7 @@ and before the conversation context — pair it with a custom `toolsAllow` when
 a non-core memory plugin needs specific tool order or query shaping:
 
 ```json5
-promptAppend: "Prefer stable long-term preferences over one-off events.";
+promptAppend: "Prefer stable long-term preferences over one-off events."
 ```
 
 `config.promptOverride` replaces the default prompt entirely (conversation
@@ -630,7 +630,7 @@ testing a different recall contract — the default prompt is tuned to return
 either `NONE` or compact user-fact context for the main model:
 
 ```json5
-promptOverride: "You are a memory search agent. Return NONE or one compact user fact.";
+promptOverride: "You are a memory search agent. Return NONE or one compact user fact."
 ```
 
 ## Transcript persistence
@@ -763,7 +763,7 @@ execution.
 
 If you upgraded from v2026.4.x and tuned `timeoutMs` for the old
 implicit-grace world (the recommended starter `timeoutMs: 15000` is one
-example), set `setupGraceTimeoutMs: 30000` to restore the pre-v5.2 effective
+example), set `setupGraceTimeoutMs: 30000` to restore the pre-v2026.5.2 effective
 budget:
 
 ```json5

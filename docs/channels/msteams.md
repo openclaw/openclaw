@@ -140,4 +140,7 @@ Every section heading from the previous single-page version keeps its anchor her
   <Card title="Security" icon="shield" href="/gateway/security">
     Access model and hardening.
   </Card>
+  <Card title="Microsoft Teams meetings plugin" icon="video" href="/plugins/teams-meetings">
+    Joining Teams meetings as a guest.
+  </Card>
 </CardGroup>

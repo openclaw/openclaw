@@ -123,3 +123,4 @@ Current limits:
 - [Sub-agents](/tools/subagents) — spawn edges and completion announcements
 - [Heartbeat](/gateway/heartbeat) — how queued notices wake main sessions
 - [Session management](/concepts/session) — session keys, scopes, lifecycle
+- [Codex session catalog and supervision](/plugins/codex-supervision) — native session discovery and adoption

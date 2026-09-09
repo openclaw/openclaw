@@ -30,8 +30,7 @@ function resolveDistImportPath(importerPath, specifier) {
   return path.posix.normalize(path.posix.join(path.posix.dirname(importerPath), stripped));
 }
 
-function collectImportSpecifiers(source, importerPath) {
-  const specifiers = [];
+function appendImportEdges(source, importerPath, imports) {
   const sourceFile = ts.createSourceFile(
     importerPath,
     source,
@@ -44,17 +43,18 @@ function collectImportSpecifiers(source, importerPath) {
     sourceFile,
     ({ kind, specifier }) => {
       if (
-        specifier.startsWith(".") &&
-        (kind !== "import-meta-url" ||
-          (hasJavaScriptFileExtension(specifier) &&
-            resolveDistImportPath(importerPath, specifier)?.startsWith("dist/")))
+        !specifier.startsWith(".") ||
+        (kind === "import-meta-url" && !hasJavaScriptFileExtension(specifier))
       ) {
-        specifiers.push(specifier);
+        return;
+      }
+      const importedPath = resolveDistImportPath(importerPath, specifier);
+      if (importedPath && (kind !== "import-meta-url" || importedPath.startsWith("dist/"))) {
+        imports.push({ importerPath, importedPath });
       }
     },
     { includeCommonJs: true, includeImportMetaUrl: true },
   );
-  return specifiers;
 }
 
 /** Collect missing-file errors for relative imports inside package dist files. */
@@ -75,21 +75,20 @@ export function collectPackageDistImportErrors(params) {
 
 /** Collect relative dist import edges from package JavaScript files. */
 export function collectPackageDistImports(params) {
-  const files = [...new Set(params.files.map(normalizePackagePath))];
+  const files =
+    params.files.length === 1
+      ? [normalizePackagePath(params.files[0])]
+      : [...new Set(params.files.map(normalizePackagePath))].toSorted((left, right) =>
+          left.localeCompare(right),
+        );
   const imports = [];
 
-  for (const importerPath of files.toSorted((left, right) => left.localeCompare(right))) {
+  for (const importerPath of files) {
     if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
       continue;
     }
     const source = params.readText(importerPath);
-    for (const specifier of collectImportSpecifiers(source, importerPath)) {
-      const importedPath = resolveDistImportPath(importerPath, specifier);
-      if (!importedPath) {
-        continue;
-      }
-      imports.push({ importerPath, importedPath });
-    }
+    appendImportEdges(source, importerPath, imports);
   }
 
   return imports;

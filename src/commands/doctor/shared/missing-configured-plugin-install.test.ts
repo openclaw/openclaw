@@ -4017,27 +4017,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "@openclaw/plugin-demo@1.0.0",
-              installPath: "/tmp/openclaw-plugins/demo",
-            },
-          },
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(
+      successfulUpdate("demo", {
+        demo: {
+          source: "npm",
+          spec: "@openclaw/plugin-demo@1.0.0",
+          installPath: "/tmp/openclaw-plugins/demo",
         },
-      },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "updated",
-          message: "Updated demo.",
-        },
-      ],
-    });
+      }),
+    );
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -4081,27 +4069,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       reviewToken: review.reviewToken,
     });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "clawhub",
-              spec: "clawhub:@openclaw/plugin-demo@1.0.0",
-              installPath: "/tmp/openclaw-plugins/demo",
-            },
-          },
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(
+      successfulUpdate("demo", {
+        demo: {
+          source: "clawhub",
+          spec: "clawhub:@openclaw/plugin-demo@1.0.0",
+          installPath: "/tmp/openclaw-plugins/demo",
         },
-      },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "updated",
-          message: "Updated demo.",
-        },
-      ],
-    });
+      }),
+    );
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -4143,27 +4119,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         config: Record<string, unknown>;
       }) => {
         params.logger?.warn?.(repairWarning);
-        return {
-          changed: true,
-          config: {
-            plugins: {
-              installs: {
-                demo: {
-                  source: "npm",
-                  spec: "@openclaw/plugin-demo@1.0.0",
-                  installPath: "/tmp/openclaw-plugins/demo",
-                },
-              },
-            },
+        return successfulUpdate("demo", {
+          demo: {
+            source: "npm",
+            spec: "@openclaw/plugin-demo@1.0.0",
+            installPath: "/tmp/openclaw-plugins/demo",
           },
-          outcomes: [
-            {
-              pluginId: "demo",
-              status: "updated",
-              message: "Updated demo.",
-            },
-          ],
-        };
+        });
       },
     );
 
@@ -4205,27 +4167,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         config: Record<string, unknown>;
       }) => {
         params.logger?.warn?.(coloredReviewNotice);
-        return {
-          changed: true,
-          config: {
-            plugins: {
-              installs: {
-                demo: {
-                  source: "clawhub",
-                  spec: "clawhub:@openclaw/plugin-demo@1.0.0",
-                  installPath: "/tmp/openclaw-plugins/demo",
-                },
-              },
-            },
+        return successfulUpdate("demo", {
+          demo: {
+            source: "clawhub",
+            spec: "clawhub:@openclaw/plugin-demo@1.0.0",
+            installPath: "/tmp/openclaw-plugins/demo",
           },
-          outcomes: [
-            {
-              pluginId: "demo",
-              status: "updated",
-              message: "Updated demo.",
-            },
-          ],
-        };
+        });
       },
     );
 
@@ -4271,27 +4219,15 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       ],
     });
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: true,
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "@openclaw/plugin-demo@1.0.0",
-              installPath: "/tmp/openclaw-plugins/demo",
-            },
-          },
+    mocks.updateNpmInstalledPlugins.mockResolvedValue(
+      successfulUpdate("demo", {
+        demo: {
+          source: "npm",
+          spec: "@openclaw/plugin-demo@1.0.0",
+          installPath: "/tmp/openclaw-plugins/demo",
         },
-      },
-      outcomes: [
-        {
-          pluginId: "demo",
-          status: "updated",
-          message: "Updated demo.",
-        },
-      ],
-    });
+      }),
+    );
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");

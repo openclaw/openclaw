@@ -106,3 +106,4 @@ entry points at the page that now holds the content.
 - [Configuration](/gateway/configuration) — common tasks and quick setup
 - [Configuration examples](/gateway/configuration-examples)
 - [Model providers](/concepts/model-providers) — provider setup and model catalogs
+- [Agent bindings](/concepts/agent-bindings) — how channel accounts and users select an agent

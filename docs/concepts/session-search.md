@@ -52,14 +52,14 @@ sessions whose active branch was rewound are reindexed by a background reconcili
 with the next search. A response with `indexing: true` can therefore be incomplete; retry after
 indexing finishes. Deleting a session removes its index entries in the same transaction.
 
-Search currently uses SQLite's Unicode word tokenizer with diacritic removal. Trigram tokenization
-for CJK substring matching is a future improvement.
+Search uses SQLite's Unicode word tokenizer with diacritic removal.
 
 ## Session search vs. memory search
 
 Use `sessions_search` for exact words or phrases from raw session transcripts. Use
 [`memory_search`](/concepts/memory-search) for durable memory files and semantic recall. The
-experimental session-memory corpus is the semantic complement to this exact transcript search.
+[experimental session-memory corpus](/concepts/memory-search#session-memory-search) is the semantic
+complement to this exact transcript search.
 
 ## Related
 

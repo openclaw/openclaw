@@ -265,4 +265,4 @@ If the status says **Accessibility grant may be stale**, OpenClaw may already ap
 
 ## Relationship to other desktop-control paths
 
-This is the agent-driven path. See [Peekaboo bridge](/platforms/mac/peekaboo) for how it relates to the PeekabooBridge host, Codex Computer Use, and the direct `cua-driver` MCP.
+This is the agent-driven path. See [Peekaboo bridge](/platforms/mac/peekaboo) for how it relates to the PeekabooBridge host, [Codex Computer Use](/plugins/codex-computer-use), and the direct `cua-driver` MCP.

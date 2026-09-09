@@ -279,7 +279,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 
 | Provider                                | Id                               | Auth env                                             | Example model                                          |
 | --------------------------------------- | -------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
-| Arcee                                   | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`            | `arcee/trinity-large-thinking`                         |
+| [Arcee](/providers/arcee)               | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`            | `arcee/trinity-large-thinking`                         |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                   | `byteplus-plan/ark-code-latest`                        |
 | Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                                   | `cerebras/zai-glm-4.7`                                 |
 | Chutes                                  | `chutes`                         | `CHUTES_API_KEY` or `CHUTES_OAUTH_TOKEN`             | `chutes/zai-org/GLM-5-TEE`                             |
@@ -733,3 +733,4 @@ See also: [Configuration](/gateway/configuration) for full configuration example
 - [Model failover](/concepts/model-failover) - fallback chains and retry behavior
 - [Models](/concepts/models) - model configuration and aliases
 - [Providers](/providers) - per-provider setup guides
+- [Agent harness plugins](/plugins/sdk-agent-harness) - SDK surface for plugins that replace the embedded agent executor

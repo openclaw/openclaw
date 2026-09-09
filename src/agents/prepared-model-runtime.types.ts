@@ -5,6 +5,7 @@ import type { prepareMediaCapabilityProviders } from "../plugins/capability-prov
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import type { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
@@ -17,10 +18,22 @@ import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export type PreparedModelRuntimeCatalogMode = "live" | "static";
 
+export type PreparedMediaCapabilityProviderSource = Readonly<{
+  registry: PluginRegistry;
+  resources: Pick<PluginRegistryInspectionResources, "retain">;
+}>;
+
+export type PreparedMediaCapabilityProviderAcquisition = Readonly<{
+  providers: ReturnType<typeof prepareMediaCapabilityProviders>;
+  assertOpen: () => void;
+  release: () => Promise<void>;
+}>;
+
 export type PreparedModelRuntimePluginGeneration = Readonly<{
   pluginMetadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
+  mediaCapabilityProviderSource?: PreparedMediaCapabilityProviderSource;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   /** Captured static rows; cleared when catalog discovery expands the provider registry. */
   providerStaticModels?: readonly ProviderRuntimeModel[];
@@ -53,6 +66,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
+  /** Borrows an inspected source; raw prepared hosts retain their existing external ownership. */
+  acquireMediaCapabilityProviders?: () => PreparedMediaCapabilityProviderAcquisition;
   /** Registry value owned by this generation; omitted from read-only builds. */
   pluginRegistry?: PluginRegistry;
   allowGatewaySubagentBinding: boolean;

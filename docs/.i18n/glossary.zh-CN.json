@@ -1588,6 +1588,26 @@
     "target": "Hooks"
   },
   {
+    "source": "Writing hooks",
+    "target": "编写 Hook"
+  },
+  {
+    "source": "Hook configuration and discovery",
+    "target": "Hook 配置与发现"
+  },
+  {
+    "source": "Bundled hooks",
+    "target": "内置 Hook"
+  },
+  {
+    "source": "Hook event types and context",
+    "target": "Hook 事件类型与上下文"
+  },
+  {
+    "source": "Hook troubleshooting",
+    "target": "Hook 故障排查"
+  },
+  {
     "source": "Incident response",
     "target": "事件响应"
   },
@@ -2596,6 +2616,30 @@
     "target": "编写与添加测试"
   },
   {
+    "source": "Quick live smokes and the Android node sweep",
+    "target": "快速 Live 冒烟测试与 Android 节点扫描"
+  },
+  {
+    "source": "Live model smoke (profile keys)",
+    "target": "Live 模型冒烟测试（配置文件密钥）"
+  },
+  {
+    "source": "CLI backend and APNs lanes",
+    "target": "CLI 后端与 APNs 通道"
+  },
+  {
+    "source": "ACP bind and Codex app-server lanes",
+    "target": "ACP 绑定与 Codex app-server 通道"
+  },
+  {
+    "source": "OpenAI long context and the live model matrix",
+    "target": "OpenAI 长上下文与 Live 模型矩阵"
+  },
+  {
+    "source": "Media provider live lanes",
+    "target": "媒体提供商 Live 通道"
+  },
+  {
     "source": "Provider model catalogs",
     "target": "提供商模型目录"
   },
@@ -3508,6 +3552,38 @@
     "target": "Telegram 故障排查"
   },
   {
+    "source": "iMessage setup",
+    "target": "iMessage 设置"
+  },
+  {
+    "source": "Enabling the imsg private API",
+    "target": "启用 imsg 私有 API"
+  },
+  {
+    "source": "iMessage access control and routing",
+    "target": "iMessage 访问控制与路由"
+  },
+  {
+    "source": "iMessage deployment patterns",
+    "target": "iMessage 部署模式"
+  },
+  {
+    "source": "iMessage media and attachments",
+    "target": "iMessage 媒体与附件"
+  },
+  {
+    "source": "iMessage private API actions",
+    "target": "iMessage 私有 API 操作"
+  },
+  {
+    "source": "iMessage message behavior",
+    "target": "iMessage 消息行为"
+  },
+  {
+    "source": "iMessage troubleshooting",
+    "target": "iMessage 故障排查"
+  },
+  {
     "source": "Microsoft Teams setup",
     "target": "Microsoft Teams 设置"
   },
@@ -3626,5 +3702,97 @@
   {
     "source": "OpenClaw and Hermes Agent",
     "target": "OpenClaw 与 Hermes Agent"
+  },
+  {
+    "source": "Matrix setup",
+    "target": "Matrix 设置"
+  },
+  {
+    "source": "Matrix access control",
+    "target": "Matrix 访问控制"
+  },
+  {
+    "source": "Matrix message behavior",
+    "target": "Matrix 消息行为"
+  },
+  {
+    "source": "Matrix rich messages and approvals",
+    "target": "Matrix 富消息与审批"
+  },
+  {
+    "source": "Matrix encryption and verification",
+    "target": "Matrix 加密与验证"
+  },
+  {
+    "source": "Matrix threads and sessions",
+    "target": "Matrix 话题与会话"
+  },
+  {
+    "source": "Matrix accounts and homeservers",
+    "target": "Matrix 账户与家庭服务器"
+  },
+  {
+    "source": "Other update methods",
+    "target": "其他更新方式"
+  },
+  {
+    "source": "Update methods",
+    "target": "更新方式"
+  },
+  {
+    "source": "Automatic updates",
+    "target": "自动更新"
+  },
+  {
+    "source": "Rollback and recovery",
+    "target": "回滚与恢复"
+  },
+  {
+    "source": "Standing orders",
+    "target": "常设指令"
+  },
+  {
+    "source": "Standing intents",
+    "target": "常设意图"
+  },
+  {
+    "source": "Multi-agent routing",
+    "target": "多智能体路由"
+  },
+  {
+    "source": "Agent bindings",
+    "target": "智能体绑定"
+  },
+  {
+    "source": "System prompt",
+    "target": "系统提示词"
+  },
+  {
+    "source": "Usage tracking",
+    "target": "用量追踪"
+  },
+  {
+    "source": "Honcho memory",
+    "target": "Honcho 记忆"
+  },
+  {
+    "source": "Managed worktrees",
+    "target": "托管工作树"
+  },
+  {
+    "source": "Typing indicators",
+    "target": "正在输入指示器"
+  },
+  {
+    "source": "Session management deep dive",
+    "target": "会话管理深入解析"
+  },
+  {
+    "source": "Personal agent benchmark pack",
+    "target": "个人智能体基准包"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
   }
 ]

@@ -138,6 +138,29 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
   );
 }
 
+function makeThreadBootstrapBinding(params: {
+  threadId: string;
+  cwd: string;
+  policyFingerprint: string;
+  epoch: string;
+}): Parameters<typeof writeCodexAppServerBinding>[1] {
+  return {
+    threadId: params.threadId,
+    cwd: params.cwd,
+    dynamicToolsFingerprint: "[]",
+    contextEngine: {
+      schemaVersion: 1,
+      engineId: "lossless-claw",
+      policyFingerprint: params.policyFingerprint,
+      projection: {
+        schemaVersion: 1,
+        mode: "thread_bootstrap",
+        epoch: params.epoch,
+      },
+    },
+  };
+}
+
 function toolResultMessage(payload: unknown, timestamp: number): AgentMessage {
   return {
     role: "toolResult",
@@ -695,22 +718,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-bootstrapped",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
+    await writeCodexAppServerBinding(
+      sessionFile,
+      makeThreadBootstrapBinding({
+        threadId: "thread-bootstrapped",
+        cwd: workspaceDir,
         policyFingerprint:
           '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-1",
-        },
-      },
-    });
+        epoch: "epoch-1",
+      }),
+    );
     await fs.writeFile(
       path.join(path.dirname(sessionFile), "sessions.json"),
       JSON.stringify({
@@ -786,22 +803,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-bootstrapped",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
+    await writeCodexAppServerBinding(
+      sessionFile,
+      makeThreadBootstrapBinding({
+        threadId: "thread-bootstrapped",
+        cwd: workspaceDir,
         policyFingerprint:
           '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-1",
-        },
-      },
-    });
+        epoch: "epoch-1",
+      }),
+    );
     await fs.writeFile(
       path.join(path.dirname(sessionFile), "sessions.json"),
       JSON.stringify({
@@ -878,22 +889,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     sessionManager.appendMessage(
       assistantMessage("previous stale-bootstrap answer", Date.now() + 1) as never,
     );
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-stale-bootstrap",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
+    await writeCodexAppServerBinding(
+      sessionFile,
+      makeThreadBootstrapBinding({
+        threadId: "thread-stale-bootstrap",
+        cwd: workspaceDir,
         policyFingerprint:
           '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-stale",
-        },
-      },
-    });
+        epoch: "epoch-stale",
+      }),
+    );
     await fs.writeFile(
       path.join(path.dirname(sessionFile), "sessions.json"),
       JSON.stringify({
@@ -1013,22 +1018,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-old",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
+    await writeCodexAppServerBinding(
+      sessionFile,
+      makeThreadBootstrapBinding({
+        threadId: "thread-old",
+        cwd: workspaceDir,
         policyFingerprint:
           '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-old",
-        },
-      },
-    });
+        epoch: "epoch-old",
+      }),
+    );
     const contextEngine = createContextEngine({
       assemble: vi.fn(async ({ prompt }) => ({
         messages: [assistantMessage("new epoch context", 10), userMessage(prompt ?? "", 11)],
@@ -1102,22 +1101,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("reprojects thread-bootstrap context when context-engine policy changes", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-old",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
+    await writeCodexAppServerBinding(
+      sessionFile,
+      makeThreadBootstrapBinding({
+        threadId: "thread-old",
+        cwd: workspaceDir,
         policyFingerprint:
           '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-1",
-        },
-      },
-    });
+        epoch: "epoch-1",
+      }),
+    );
     const contextEngine = createContextEngine({
       assemble: vi.fn(async ({ prompt }) => ({
         messages: [assistantMessage("policy changed context", 10), userMessage(prompt ?? "", 11)],
@@ -1186,22 +1179,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     try {
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-old",
-        cwd: workspaceDir,
-        dynamicToolsFingerprint: "[]",
-        contextEngine: {
-          schemaVersion: 1,
-          engineId: "lossless-claw",
+      await writeCodexAppServerBinding(
+        sessionFile,
+        makeThreadBootstrapBinding({
+          threadId: "thread-old",
+          cwd: workspaceDir,
           policyFingerprint:
             '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
-          projection: {
-            schemaVersion: 1,
-            mode: "thread_bootstrap",
-            epoch: "epoch-1",
-          },
-        },
-      });
+          epoch: "epoch-1",
+        }),
+      );
       const contextEngine = createContextEngine({
         assemble: vi.fn(async ({ prompt }) => ({
           messages: [
@@ -1274,22 +1261,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("starts a fresh Codex thread when thread-bootstrap projection falls back to per-turn projection", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-old",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
+    await writeCodexAppServerBinding(
+      sessionFile,
+      makeThreadBootstrapBinding({
+        threadId: "thread-old",
+        cwd: workspaceDir,
         policyFingerprint:
           '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-1",
-        },
-      },
-    });
+        epoch: "epoch-1",
+      }),
+    );
     const contextEngine = createContextEngine({
       assemble: vi.fn(async ({ prompt }) => ({
         messages: [assistantMessage("per-turn context", 10), userMessage(prompt ?? "", 11)],
@@ -1500,22 +1481,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-old",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
+    await writeCodexAppServerBinding(
+      sessionFile,
+      makeThreadBootstrapBinding({
+        threadId: "thread-old",
+        cwd: workspaceDir,
         policyFingerprint:
           '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-before",
-        },
-      },
-    });
+        epoch: "epoch-before",
+      }),
+    );
     const contextEngine = createContextEngine({
       assemble: async ({ messages, prompt }) => ({
         messages: [...messages, userMessage(prompt ?? "", 11)],
@@ -1587,22 +1562,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-old",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
+    await writeCodexAppServerBinding(
+      sessionFile,
+      makeThreadBootstrapBinding({
+        threadId: "thread-old",
+        cwd: workspaceDir,
         policyFingerprint:
           '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-before",
-        },
-      },
-    });
+        epoch: "epoch-before",
+      }),
+    );
     const compact = vi.fn<ContextEngine["compact"]>(async () => ({
       ok: true,
       compacted: true,
@@ -1862,22 +1831,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-old",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-      contextEngine: {
-        schemaVersion: 1,
-        engineId: "lossless-claw",
+    await writeCodexAppServerBinding(
+      sessionFile,
+      makeThreadBootstrapBinding({
+        threadId: "thread-old",
+        cwd: workspaceDir,
         policyFingerprint:
           '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-        projection: {
-          schemaVersion: 1,
-          mode: "thread_bootstrap",
-          epoch: "epoch-before",
-        },
-      },
-    });
+        epoch: "epoch-before",
+      }),
+    );
     const compact = vi.fn<ContextEngine["compact"]>(() => new Promise(() => {}));
     const assemble = vi.fn(
       async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({

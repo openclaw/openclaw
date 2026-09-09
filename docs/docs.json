@@ -1401,6 +1401,14 @@
                 "pages": [
                   "install/backups",
                   "install/updating",
+                  {
+                    "group": "Updating",
+                    "pages": [
+                      "install/updating/update-methods",
+                      "install/updating/automatic-updates",
+                      "install/updating/rollback-and-recovery"
+                    ]
+                  },
                   "install/update-troubleshooting",
                   {
                     "group": "Migrating",
@@ -1506,6 +1514,14 @@
                     "group": "iMessage",
                     "pages": [
                       "channels/imessage",
+                      "channels/imessage/setup",
+                      "channels/imessage/private-api",
+                      "channels/imessage/access-control",
+                      "channels/imessage/deployment",
+                      "channels/imessage/media",
+                      "channels/imessage/rich-messages",
+                      "channels/imessage/messaging",
+                      "channels/imessage/troubleshooting",
                       "channels/imessage-from-bluebubbles"
                     ]
                   },
@@ -1513,6 +1529,13 @@
                     "group": "Matrix",
                     "pages": [
                       "channels/matrix",
+                      "channels/matrix/setup",
+                      "channels/matrix/access-control",
+                      "channels/matrix/messaging",
+                      "channels/matrix/rich-messages",
+                      "channels/matrix/encryption",
+                      "channels/matrix/threads-and-sessions",
+                      "channels/matrix/accounts-and-homeservers",
                       "channels/matrix-migration",
                       "channels/matrix-presentation",
                       "channels/matrix-push-rules"
@@ -1870,7 +1893,17 @@
                   "automation/tasks",
                   "automation/taskflow",
                   "automation/standing-orders",
-                  "automation/hooks"
+                  "automation/hooks",
+                  {
+                    "group": "Hooks",
+                    "pages": [
+                      "automation/hooks/writing-hooks",
+                      "automation/hooks/configuration",
+                      "automation/hooks/bundled-hooks",
+                      "automation/hooks/event-types",
+                      "automation/hooks/troubleshooting"
+                    ]
+                  }
                 ]
               },
               {
@@ -3057,7 +3090,18 @@
                     ]
                   },
                   "help/testing-updates-plugins",
-                  "help/testing-live"
+                  "help/testing-live",
+                  {
+                    "group": "Live testing guide",
+                    "pages": [
+                      "help/testing-live/quick-smokes",
+                      "help/testing-live/model-smoke",
+                      "help/testing-live/cli-backends",
+                      "help/testing-live/acp-and-codex",
+                      "help/testing-live/long-context-and-matrix",
+                      "help/testing-live/media-providers"
+                    ]
+                  }
                 ]
               },
               {

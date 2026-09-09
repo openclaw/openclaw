@@ -10,7 +10,7 @@ When `channels.matrix.streaming.mode` is `"quiet"`, OpenClaw streams the reply b
 
 `streaming.mode: "progress"` finalizes its drafts through the same path, so the same rule also fires for progress-mode finalized edits.
 
-If you only want stock Matrix notification behavior, use `streaming.mode: "partial"` or leave streaming off. See [Matrix channel setup](/channels/matrix#streaming-previews).
+If you only want stock Matrix notification behavior, use `streaming.mode: "partial"` or leave streaming off. See [Matrix message behavior](/channels/matrix/messaging#streaming-previews).
 
 ## Prerequisites
 

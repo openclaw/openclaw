@@ -114,14 +114,14 @@ There is also a grounded historical backfill lane for review and recovery work:
 
 <AccordionGroup>
   <Accordion title="Backfill commands">
-    - `memory rem-harness --path ... --grounded` previews grounded diary output from historical `YYYY-MM-DD.md` notes.
-    - `memory rem-backfill --path ...` writes reversible grounded diary entries into `DREAMS.md`.
-    - `memory rem-backfill --path ... --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase uses.
-    - `memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
-    - `memory session-backfill --agent <id>` previews trusted candidates from the agent's retained session history, oldest unprocessed day first.
-    - `memory session-backfill --agent <id> --apply` stages those candidates through the normal short-term store and writes reversible diary blocks without changing `MEMORY.md` or `USER.md`.
-    - `memory session-backfill --agent <id> --rem` writes a deterministic grounded preview per day to `DREAMS.md` without staging candidates or calling a model.
-    - `memory session-backfill --agent <id> --rollback` clears the shared grounded backfill candidates and diary blocks, including artifacts created by `rem-backfill`.
+    - `openclaw memory rem-harness --path <path> --grounded` previews grounded diary output from historical `YYYY-MM-DD.md` notes.
+    - `openclaw memory rem-backfill --path <path>` writes reversible grounded diary entries into `DREAMS.md`.
+    - `openclaw memory rem-backfill --path <path> --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase uses.
+    - `openclaw memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
+    - `openclaw memory session-backfill --agent <id>` previews trusted candidates from the agent's retained session history, oldest unprocessed day first.
+    - `openclaw memory session-backfill --agent <id> --apply` stages those candidates through the normal short-term store and writes reversible diary blocks without changing `MEMORY.md` or `USER.md`.
+    - `openclaw memory session-backfill --agent <id> --rem` writes a deterministic grounded preview per day to `DREAMS.md` without staging candidates or calling a model.
+    - `openclaw memory session-backfill --agent <id> --rollback` clears the shared grounded backfill candidates and diary blocks, including artifacts created by `rem-backfill`.
 
   </Accordion>
 </AccordionGroup>
@@ -177,7 +177,7 @@ This selects the execution owner; it does not change any agent's workspace or li
 ## Quick start
 
 <Tabs>
-  <Tab title="Enable dreaming">
+  <Tab title="Disable dreaming">
     ```json
     {
       "plugins": {
@@ -185,7 +185,7 @@ This selects the execution owner; it does not change any agent's workspace or li
           "memory-core": {
             "config": {
               "dreaming": {
-                "enabled": true
+                "enabled": false
               }
             }
           }

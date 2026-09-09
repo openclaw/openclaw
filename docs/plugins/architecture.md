@@ -480,3 +480,4 @@ For the load pipeline, registry model, provider runtime hooks, Gateway HTTP rout
 - [Plugin manifest](/plugins/manifest)
 - [Plugin SDK setup](/plugins/sdk-setup)
 - [Context engines](/concepts/context-engine)
+- [Plugin Runtime](/plugins/sdk-runtime) - the `api.runtime` helpers plugins call

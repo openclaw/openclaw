@@ -141,6 +141,7 @@
       - any-glob-to-any-file:
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
+          - "docs/channels/imessage/**"
 "channel: line":
   - changed-files:
       - any-glob-to-any-file:
@@ -151,6 +152,7 @@
       - any-glob-to-any-file:
           - "extensions/matrix/**"
           - "docs/channels/matrix.md"
+          - "docs/channels/matrix/**"
 "channel: mattermost":
   - changed-files:
       - any-glob-to-any-file:

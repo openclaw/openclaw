@@ -188,20 +188,15 @@ flowchart TD
   A[OpenClaw is not working] --> B{What breaks first}
   B --> C[No replies]
   B --> D[Dashboard or Control UI will not connect]
-  B --> E[Gateway will not start or service not running]
+  B --> E[Gateway will not start or service installed but not running]
   B --> F[Channel connects but messages do not flow]
   B --> G[Cron or heartbeat did not fire or did not deliver]
-  B --> H[Node is paired but camera canvas screen exec fails]
-  B --> I[Browser tool fails]
-
-  C --> C1[/No replies section/]
-  D --> D1[/Control UI section/]
-  E --> E1[/Gateway section/]
-  F --> F1[/Channel flow section/]
-  G --> G1[/Automation section/]
-  H --> H1[/Node tools section/]
-  I --> I1[/Browser section/]
+  B --> H[Node is paired but tool fails camera canvas screen exec]
+  B --> I[Exec suddenly asks for approval]
+  B --> J[Browser tool fails]
 ```
+
+Each branch is the title of an accordion below.
 
 <AccordionGroup>
   <Accordion title="No replies">

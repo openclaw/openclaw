@@ -16,13 +16,18 @@ title: "Retry policy"
 
 These defaults apply to channel sends. Model requests use the recovery policy below.
 
-| Setting            | Default   |
-| ------------------ | --------- |
-| Attempts           | 3         |
-| Max delay cap      | 30000 ms  |
-| Jitter             | 0.1 (10%) |
-| Telegram min delay | 400 ms    |
-| Discord min delay  | 500 ms    |
+| Setting       | Default   | Applies to                                                             |
+| ------------- | --------- | ---------------------------------------------------------------------- |
+| Attempts      | 3         | Every envelope below                                                   |
+| Jitter        | 0.1 (10%) | Every envelope below                                                   |
+| Min delay     | 400 ms    | The shared channel envelope: Telegram and any channel with no override |
+| Min delay     | 500 ms    | Discord sends and Discord REST calls                                   |
+| Max delay cap | 30000 ms  | The shared channel envelope and Discord sends                          |
+| Max delay cap | 300000 ms | Discord REST API calls                                                 |
+
+These are per-request envelopes. The Discord Gateway WebSocket reconnect loop is
+separate and does not use them: it allows up to 50 reconnect attempts and backs
+off exponentially from 2000 ms to a 30000 ms cap, with no jitter.
 
 ## Behavior
 

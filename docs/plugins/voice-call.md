@@ -1076,3 +1076,4 @@ For realtime Twilio/Telnyx calls, also verify:
 - [Talk mode](/nodes/talk)
 - [Text-to-speech](/tools/tts)
 - [Voice wake](/nodes/voicewake)
+- [Google Meet plugin](/plugins/google-meet) - Meet calls, including Twilio sessions delegated through Voice Call

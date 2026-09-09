@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
+import type { Result } from "@openclaw/normalization-core/result";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -12,6 +13,8 @@ import {
   getPreparedMessageToolCatalogForRegistry,
 } from "../plugins/prepared-message-tool-catalog.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
@@ -191,17 +194,23 @@ export async function prepareWorkspaceBuildGroup(
   const preferBuiltPluginArtifacts =
     reusablePluginGeneration?.preferBuiltPluginArtifacts ??
     options.preferBuiltPluginArtifacts === true;
-  const { inboundPluginRegistry, runtimePluginRegistry } = prepareWorkspacePluginRegistries(
-    input,
-    pluginMetadataSnapshot,
-    loadInboundPluginRegistry,
-    preferBuiltPluginArtifacts,
-    reusablePluginGeneration,
-    options.getConfiguredHarnessRuntimes,
-    options.basePluginIds,
-  );
+  const { inboundPluginRegistry, runtimePluginRegistry, primaryRegistry } =
+    prepareWorkspacePluginRegistries(
+      input,
+      pluginMetadataSnapshot,
+      loadInboundPluginRegistry,
+      preferBuiltPluginArtifacts,
+      reusablePluginGeneration,
+      options.getConfiguredHarnessRuntimes,
+      options.basePluginIds,
+    );
   const reuseRuntimeFacts =
     reusablePluginGeneration && runtimePluginRegistry === reusablePluginGeneration.pluginRegistry;
+  const resources = primaryRegistry && getPluginRegistryInspectionResources(primaryRegistry);
+  const mediaCapabilityProviderSource =
+    primaryRegistry && resources
+      ? Object.freeze({ registry: primaryRegistry, resources })
+      : undefined;
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
   prepareOwnedPluginLoadContext(
     input,
@@ -452,6 +461,7 @@ export async function prepareWorkspaceBuildGroup(
       inboundPluginRegistry,
       inlineProviderModels,
       mediaCapabilityProviders,
+      mediaCapabilityProviderSource,
       messageToolCatalog,
       pluginMetadataSnapshot,
       preparedStaticProviderCatalog,
@@ -473,13 +483,54 @@ export async function prepareWorkspaceBuildGroup(
       pluginGeneration,
     };
   };
-  return await withPluginRuntimeGenerationScope(
-    {
-      metadataSnapshot: pluginMetadataSnapshot,
-      pluginRegistry: runtimePluginRegistry,
-    },
-    prepare,
+  const run = () =>
+    withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: pluginMetadataSnapshot,
+        pluginRegistry: runtimePluginRegistry,
+      },
+      prepare,
+    );
+  if (!mediaCapabilityProviderSource) {
+    return await run();
+  }
+  const isSourceCurrent = capturePluginLifecycleAuthority(
+    mediaCapabilityProviderSource.registry,
+    undefined,
+    { scopedRuntime: true },
   );
+  if (!isSourceCurrent?.()) {
+    throw new Error("Prepared media capability provider source is retired");
+  }
+  const claim = mediaCapabilityProviderSource.resources.retain();
+  let outcome: Result<Awaited<ReturnType<typeof prepare>>, unknown>;
+  try {
+    outcome = { ok: true, value: await run() };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+  try {
+    // The caller still owns the original inspection; construction owns its actual awaited work.
+    await claim.release();
+  } catch (cleanupError) {
+    outcome = {
+      ok: false,
+      error: outcome.ok
+        ? cleanupError
+        : new AggregateError(
+            [outcome.error, cleanupError],
+            "Prepared construction and registration cleanup failed",
+            { cause: outcome.error },
+          ),
+    };
+  }
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  if (!isSourceCurrent()) {
+    throw new Error("Prepared media capability provider source is retired");
+  }
+  return outcome.value;
 }
 
 export function captureModelsJsonContents(agentDir: string): string | null {
