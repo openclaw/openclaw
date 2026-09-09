@@ -423,13 +423,21 @@ export const OpenClawSchemaShape = {
           const overlap = mappingPaths.findIndex(
             (other, otherIndex) => otherIndex !== index && (!other || other === ownPath),
           );
+          const ownId = mapping.id?.trim() || undefined;
+          const duplicateId =
+            ownId !== undefined &&
+            (hooks.mappings ?? []).some(
+              (other, otherIndex) => otherIndex !== index && other?.id?.trim() === ownId,
+            );
           const issue = !ownPath
             ? "signed hook mappings require an explicit custom match.path"
-            : ownPath === "agent" || ownPath === "wake"
-              ? "hook mapping signatures cannot cover the built-in agent or wake endpoints"
-              : overlap >= 0
-                ? `hook mapping ${overlap} can also match this signed path; a signed path must belong to one mapping`
-                : undefined;
+            : duplicateId
+              ? "signed hook mappings need a unique id"
+              : ownPath === "agent" || ownPath === "wake"
+                ? "hook mapping signatures cannot cover the built-in agent or wake endpoints"
+                : overlap >= 0
+                  ? `hook mapping ${overlap} can also match this signed path; a signed path must belong to one mapping`
+                  : undefined;
           if (issue) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,

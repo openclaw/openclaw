@@ -21,7 +21,7 @@ export type HookSignatureFailureReason =
   | "signature-mismatch";
 
 export type HookSignatureVerification =
-  | { ok: true; deliveryId: string }
+  | { ok: true; deliveryId: string; timestamp: number }
   | { ok: false; reason: HookSignatureFailureReason };
 
 /** Decode a `whsec_<base64>` (or bare base64) Standard Webhooks secret; null when malformed. */
@@ -81,7 +81,7 @@ export function verifyStandardWebhooksSignature(params: {
     for (const candidate of provided) {
       const actual = Buffer.from(candidate);
       if (actual.length === expected.length && timingSafeEqual(actual, expected)) {
-        return { ok: true, deliveryId: id };
+        return { ok: true, deliveryId: id, timestamp: Number(timestamp) };
       }
     }
   }
@@ -116,6 +116,8 @@ export const HOOK_BUILT_IN_PATHS: ReadonlySet<string> = new Set(["agent", "wake"
 
 export type HookPathSignatureOwner = {
   mappingId: string;
+  /** Normalized `match.path`; part of the replay identity so signed paths never share state. */
+  matchPath: string;
   signature: HookMappingSignatureResolved;
 };
 
@@ -142,7 +144,9 @@ export function resolveHookPathSignature(
     if (mapping.matchPath && mapping.matchPath !== normalizedPath) {
       continue;
     }
-    return mapping.signature ? { mappingId: mapping.id, signature: mapping.signature } : undefined;
+    return mapping.signature && mapping.matchPath
+      ? { mappingId: mapping.id, matchPath: mapping.matchPath, signature: mapping.signature }
+      : undefined;
   }
   return undefined;
 }
@@ -167,6 +171,9 @@ export function findHookSignatureMappingConflict(
     }
     if (HOOK_BUILT_IN_PATHS.has(mapping.matchPath)) {
       return `Hook mapping "${mapping.id}" cannot sign the built-in hook path "${mapping.matchPath}"`;
+    }
+    if (mappings.some((other) => other !== mapping && other.id === mapping.id)) {
+      return `Hook mapping "${mapping.id}" declares a signature but its id is shared with another mapping; signed mapping ids must be unique`;
     }
     const overlap = mappings.find(
       (other) => other !== mapping && (!other.matchPath || other.matchPath === mapping.matchPath),

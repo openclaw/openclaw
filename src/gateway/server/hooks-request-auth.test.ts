@@ -97,7 +97,9 @@ describe("admitHookRequest signing authority", () => {
       signedDeliveryId: "msg_slow",
       signedMappingId: "mapping-1",
       signedToleranceSeconds: 300,
+      signedPath: "ambush",
     });
+    expect(admission.ok && admission.signedExpiresAtMs).toBeGreaterThan(Date.now() + 290_000);
     expect(admission.ok && admission.reverify?.()).toBe(true);
   });
 
@@ -156,6 +158,8 @@ describe("ensureSignedAuthorityCurrent", () => {
       signedDeliveryId: "msg_fence",
       signedMappingId: "mapping-1",
       signedToleranceSeconds: 300,
+      signedPath: "ambush",
+      signedExpiresAtMs: Date.now() + 300_000,
     },
     1_000,
   );
@@ -209,6 +213,23 @@ describe("ensureSignedAuthorityCurrent", () => {
       deliveryId: "msg_fence",
       item: 2,
     });
-    expect(signed.retentionMs).toBe(300_000);
+    expect(signed.retentionMs).toBeGreaterThanOrEqual(299_000);
+    expect(signed.authority).toBe("signature:mapping-1:ambush");
+  });
+
+  test("retention follows a future-dated signed timestamp, not just the tolerance", () => {
+    const scope = describeSignedAdmission(
+      {
+        ok: true,
+        body: { value: {}, raw: BODY },
+        signedDeliveryId: "msg_future",
+        signedMappingId: "mapping-1",
+        signedToleranceSeconds: 300,
+        signedPath: "ambush",
+        signedExpiresAtMs: Date.now() + 550_000,
+      },
+      1_000,
+    );
+    expect(scope?.retentionMs).toBeGreaterThan(540_000);
   });
 });

@@ -202,8 +202,10 @@ the body has arrived, so a request that outlives a secret rotation or a mapping
 removal is rejected. A signed delivery's replay identity is its verified
 `webhook-id` under that mapping, independent of the URL spelling; unsigned
 `Idempotency-Key` or bearer headers do not change it. For `wake` actions the
-same identity is remembered for at least the replay window, and a redelivery
-answers `eventOutcome: "duplicate"` without enqueueing again.
+same identity is remembered per fan-out item until the signed timestamp can no
+longer verify, and a redelivery answers `eventOutcome: "duplicate"` without
+enqueueing again. Signed mappings need unique ids; replay state is keyed by
+mapping id and path, so two signed paths never share it.
 
 Templates support `{{payload.field}}` or `{{field}}`, array indexing such as
 `{{messages[0].subject}}`, `{{headers.x-event-type}}`, `{{query.kind}}`, `{{path}}`,

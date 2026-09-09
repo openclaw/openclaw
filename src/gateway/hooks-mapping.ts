@@ -61,6 +61,8 @@ type HookAction =
   | {
       kind: "wake";
       mappingId: string;
+      /** Position of the source item in the fan-out array; single actions omit it. */
+      itemIndex?: number;
       text: string;
       mode: "now" | "next-heartbeat";
       agentId?: string;
@@ -70,6 +72,8 @@ type HookAction =
   | {
       kind: "agent";
       mappingId: string;
+      /** Position of the source item in the fan-out array; single actions omit it. */
+      itemIndex?: number;
       message: string;
       name?: string;
       agentId?: string;
@@ -297,7 +301,7 @@ async function applyFanOutMapping(
   const allItems = Array.isArray(raw) ? raw : [];
   const items = allItems.slice(0, HOOK_MAPPING_FAN_OUT_MAX_ITEMS);
   const actions: HookAction[] = [];
-  for (const item of items) {
+  for (const [itemIndex, item] of items.entries()) {
     // Each item renders against a payload where the fan-out array holds only
     // that item, so single-message templates like {{messages[0].id}} keep
     // working per item and transforms see a per-item payload.
@@ -313,7 +317,9 @@ async function applyFanOutMapping(
       return result;
     }
     if (result.action) {
-      actions.push(result.action);
+      // The original position survives transforms that drop earlier items, so a
+      // signed delivery's item identity does not shift between redeliveries.
+      actions.push({ ...result.action, itemIndex });
     }
   }
   return {

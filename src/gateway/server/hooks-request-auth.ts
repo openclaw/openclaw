@@ -50,6 +50,10 @@ export type HookRequestAdmission =
       signedMappingId?: string;
       /** Replay window the signed mapping accepts; bounds signed-delivery dedupe. */
       signedToleranceSeconds?: number;
+      /** Normalized path the signing mapping owns; part of the replay identity. */
+      signedPath?: string;
+      /** When the signed timestamp stops verifying (`webhook-timestamp` + tolerance), in ms. */
+      signedExpiresAtMs?: number;
       /** Configuration current at verification time; the handler continues with it. */
       hooksConfig?: HooksConfigResolved;
       /**
@@ -187,6 +191,8 @@ export async function admitHookRequest(params: {
     signedDeliveryId: verification.deliveryId,
     signedMappingId: mappingId,
     signedToleranceSeconds: currentSignature.toleranceSeconds,
+    signedPath: currentOwner.matchPath,
+    signedExpiresAtMs: (verification.timestamp + currentSignature.toleranceSeconds) * 1000,
     hooksConfig: current,
     reverify: () =>
       ensureSignedAuthorityCurrent({
@@ -244,7 +250,7 @@ export type SignedReplayScope = {
   pathKey: string;
   /** Ledger key for wake dedupe: mapping id plus verified delivery id. */
   wakeKey: string;
-  /** How long replay records for this delivery must live: never shorter than the replay window. */
+  /** How long replay records for this delivery must live: until the signed timestamp can no longer verify. */
   retentionMs: number;
 };
 
@@ -256,14 +262,21 @@ export function describeSignedAdmission(
   if (!admission.ok || !admission.signedMappingId || !admission.signedDeliveryId) {
     return undefined;
   }
+  const identity = `${admission.signedMappingId}:${admission.signedPath ?? ""}`;
   return {
     mappingId: admission.signedMappingId,
     deliveryId: admission.signedDeliveryId,
     rawBody: admission.body.raw ?? "",
-    authority: `signature:${admission.signedMappingId}`,
-    pathKey: `signed:${admission.signedMappingId}`,
-    wakeKey: `${admission.signedMappingId}:${admission.signedDeliveryId}`,
-    retentionMs: Math.max(minTtlMs, (admission.signedToleranceSeconds ?? 0) * 1000),
+    authority: `signature:${identity}`,
+    pathKey: `signed:${identity}`,
+    wakeKey: `${identity}:${admission.signedDeliveryId}`,
+    // A future-dated timestamp verifies until timestamp + tolerance, which can exceed
+    // one tolerance window from receipt; keep records until it cannot verify anymore.
+    retentionMs: Math.max(
+      minTtlMs,
+      (admission.signedExpiresAtMs ?? 0) - Date.now(),
+      (admission.signedToleranceSeconds ?? 0) * 1000,
+    ),
   };
 }
 

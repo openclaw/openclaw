@@ -55,7 +55,11 @@ describe("verifyStandardWebhooksSignature", () => {
       secrets: secrets(SECRET),
       nowMs: NOW_MS,
     });
-    expect(result).toEqual({ ok: true, deliveryId: "msg_2abc" });
+    expect(result).toEqual({
+      ok: true,
+      deliveryId: "msg_2abc",
+      timestamp: Math.floor(NOW_MS / 1000),
+    });
   });
 
   test("accepts any configured secret so rotation overlaps keep verifying", () => {
@@ -207,10 +211,12 @@ describe("resolveHookPathSignature", () => {
   test("returns the mapping that owns a signed custom path", () => {
     expect(resolveHookPathSignature(mappings, "ambush")).toEqual({
       mappingId: "ambush",
+      matchPath: "ambush",
       signature,
     });
     expect(resolveHookPathSignature(mappings, "/ambush/")).toEqual({
       mappingId: "ambush",
+      matchPath: "ambush",
       signature,
     });
     expect(resolveHookPathSignature(mappings, "open")).toBeUndefined();
@@ -240,6 +246,12 @@ describe("findHookSignatureMappingConflict", () => {
     expect(
       findHookSignatureMappingConflict([{ id: "a", matchPath: "agent", signature: {} }]),
     ).toMatch(/built-in/);
+  });
+
+  test("rejects signed mappings whose id is shared", () => {
+    expect(
+      findHookSignatureMappingConflict([signed, { id: "ambush", matchPath: "other" }]),
+    ).toMatch(/unique/);
   });
 
   test("rejects any other mapping that can match the signed path", () => {

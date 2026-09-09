@@ -90,6 +90,30 @@ describe("config hooks signature", () => {
     }
   });
 
+  it("rejects a signed mapping whose id another mapping reuses", () => {
+    const res = validateConfigObjectWithPlugins({
+      agents: { entries: { openclaw: {} } },
+      hooks: {
+        enabled: true,
+        token: "hook-secret",
+        mappings: [
+          {
+            id: "shared",
+            match: { path: "ambush" },
+            action: "agent",
+            messageTemplate: "x",
+            signature: { scheme: "standard-webhooks", secret: SECRET },
+          },
+          { id: "shared", match: { path: "other" }, action: "agent", messageTemplate: "y" },
+        ],
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.path)).toContain("hooks.mappings.0.signature");
+    }
+  });
+
   it("rejects an empty secret list", () => {
     const res = validateConfigObjectWithPlugins(
       hooksConfig({ scheme: "standard-webhooks", secret: [] }),

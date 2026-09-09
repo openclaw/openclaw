@@ -258,4 +258,35 @@ describe("gateway hook sender signatures", () => {
       }
     });
   });
+
+  test("dedupes each item of a signed fan-out wake delivery", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "batch" },
+          action: "wake",
+          forEach: "items",
+          textTemplate: "Batch: {{items[0].headline}}",
+          signature: { scheme: "standard-webhooks", secret: SECRET },
+        },
+      ],
+    };
+    testState.agentsConfig = { entries: { main: { default: true } } };
+
+    await withGatewayServer(async ({ port }) => {
+      const batch = JSON.stringify({ items: [{ headline: "one" }, { headline: "two" }] });
+      const first = await post(port, "/hooks/batch", batch, {
+        headers: signedHeaders("msg_b1", { body: batch }),
+      });
+      expect(first.status).toBe(200);
+      await expect(first.json()).resolves.toMatchObject({ ok: true, eventOutcome: "queued" });
+      const again = await post(port, "/hooks/batch", batch, {
+        headers: signedHeaders("msg_b1", { body: batch }),
+      });
+      expect(again.status).toBe(200);
+      await expect(again.json()).resolves.toMatchObject({ ok: true, eventOutcome: "duplicate" });
+    });
+  });
 });

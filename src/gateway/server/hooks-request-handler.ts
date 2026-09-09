@@ -568,7 +568,6 @@ export function createHooksRequestHandler(
           // claims both ran. Numbering repeated scopes keeps one replay entry
           // per occurrence, and identical redeliveries renumber identically.
           const fanOutScopeOccurrences = new Map<string, number>();
-          let signedItem = 0;
           // Resolves policy for one mapped agent action and returns its
           // dispatch closure; a null return means an error response was sent.
           const prepareMappedAgentDispatchOrRespond = (
@@ -643,7 +642,9 @@ export function createHooksRequestHandler(
               idempotencyKey: mapped.fanout
                 ? (idempotencyKey ?? HOOK_FAN_OUT_DERIVED_IDEMPOTENCY)
                 : idempotencyKey,
-              dispatchScope: signed ? signedDispatchScope(signed, signedItem++) : dispatchScope,
+              dispatchScope: signed
+                ? signedDispatchScope(signed, action.itemIndex ?? 0)
+                : dispatchScope,
             });
             return () =>
               dispatchAgentHookWithReplay(
@@ -686,11 +687,11 @@ export function createHooksRequestHandler(
             () => HookAgentDispatchResult | Promise<HookAgentDispatchResult>
           > = [];
           let wakeMode: "now" | "next-heartbeat" | undefined;
-          // Wake actions have no run to replay: remember consumed signed wakes for the replay window.
-          const signedWakeSeen = signed ? signedWakeDeliveries.has(signed.wakeKey) : false;
+          // Wake actions have no run to replay: remember each consumed signed wake item.
           for (const action of mapped.actions) {
             if (action.kind === "wake") {
-              if (signedWakeSeen) {
+              const wakeItemKey = signed ? `${signed.wakeKey}#${action.itemIndex ?? 0}` : undefined;
+              if (wakeItemKey && signedWakeDeliveries.has(wakeItemKey)) {
                 wakeResult = wakeResult ?? { eventOutcome: "duplicate" };
                 wakeMode = action.mode;
                 continue;
@@ -710,8 +711,8 @@ export function createHooksRequestHandler(
               if (!wakeResult || dispatched.eventOutcome === "queued") {
                 wakeResult = dispatched;
               }
-              if (signed) {
-                signedWakeDeliveries.record(signed.wakeKey, signed.retentionMs);
+              if (wakeItemKey && signed) {
+                signedWakeDeliveries.record(wakeItemKey, signed.retentionMs);
               }
               wakeMode = action.mode;
               continue;
