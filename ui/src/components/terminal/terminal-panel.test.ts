@@ -206,6 +206,38 @@ describe("OpenClawTerminalPanel", () => {
     },
   );
 
+  it("sends the session-key agent when the panel has no agentId", async () => {
+    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        return terminalOpenResult("session-1") as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.sessionKey = "agent:research:chat";
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+    await waitForFast(() => {
+      expect(requests.filter((entry) => entry.method === "terminal.open")).toEqual([
+        {
+          method: "terminal.open",
+          params: {
+            agentId: "research",
+            sessionKey: "agent:research:chat",
+            cols: 100,
+            rows: 30,
+          },
+        },
+      ]);
+    });
+  });
+
   it("opens new sessions for the selected agent", async () => {
     let createOptions: CreateOptions | undefined;
     createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {

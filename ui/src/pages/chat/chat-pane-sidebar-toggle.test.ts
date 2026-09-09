@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionDiscussionState } from "../../../../packages/gateway-protocol/src/index.js";
+import { terminalIntentQueue } from "../../components/terminal/terminal-pending-actions.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -71,6 +72,34 @@ describe("chat pane sidebar toggles", () => {
       "terminal",
     ]);
     expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
+  });
+
+  it("queues a terminal restore with the chat agent when the rail opens the panel", () => {
+    const queue = vi.spyOn(terminalIntentQueue, "queue").mockResolvedValue(undefined);
+    try {
+      const state = makeChatHost({ connected: false }) as unknown as ChatPageHost;
+      state.terminalAvailable = true;
+      const updateSidebarLayout = vi.fn((layout) => {
+        state.sidebarLayout = layout;
+      });
+      const rails = createChatPaneRails({
+        state,
+        sidebarLayout: { columns: [] },
+        presentationId: "pane-left",
+        presented: true,
+        gatewaySnapshot: { hello: null } as never,
+        setObserverVisibility: vi.fn(),
+        updateSidebarLayout,
+        agentId: "research",
+      });
+
+      rails.sessionWorkspace.onToggleTerminal?.();
+
+      expect(isSidebarSlotVisible(state.sidebarLayout, "terminal")).toBe(true);
+      expect(queue).toHaveBeenCalledWith({ kind: "restore", agentId: "research" });
+    } finally {
+      queue.mockRestore();
+    }
   });
 
   it.each([

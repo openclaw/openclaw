@@ -11,6 +11,7 @@ import {
 import {
   ErrorCodes,
   errorShape,
+  type ErrorShape,
   type TerminalOpenParams,
   type TerminalUploadResult,
   validateTerminalAttachParams,
@@ -183,6 +184,26 @@ type TerminalSessionOpenRequest = {
   failureHint?: string;
 };
 
+/** Prefer an explicit agentId; otherwise take the owner encoded in sessionKey. */
+function resolveTerminalOpenLaunchAgentId(
+  context: GatewayRequestHandlerOptions["context"],
+  request: Pick<TerminalSessionOpenRequest, "agentId" | "sessionKey">,
+): { ok: true; agentId?: string } | { ok: false; error: ErrorShape } {
+  const requested = request.agentId?.trim();
+  if (requested) {
+    return { ok: true, agentId: requested };
+  }
+  const sessionKey = request.sessionKey?.trim();
+  if (!sessionKey) {
+    return { ok: true };
+  }
+  const fromSession = resolveRequestedSessionAgentId(context.getRuntimeConfig(), sessionKey);
+  if (!fromSession.ok) {
+    return fromSession;
+  }
+  return { ok: true, agentId: fromSession.agentId };
+}
+
 /** Canonical terminal admission and launch path shared by shell, resume, and start RPCs. */
 export async function openTerminalSession(
   opts: GatewayRequestHandlerOptions,
@@ -198,7 +219,12 @@ export async function openTerminalSession(
     respondTerminalUnavailable(respond, "terminal is not available", request.failureHint);
     return;
   }
-  const launch = context.resolveTerminalLaunchPolicy(request.agentId);
+  const launchAgentId = resolveTerminalOpenLaunchAgentId(context, request);
+  if (!launchAgentId.ok) {
+    respond(false, undefined, launchAgentId.error);
+    return;
+  }
+  const launch = context.resolveTerminalLaunchPolicy(launchAgentId.agentId);
   if (!launch.ok) {
     respondLaunchBlocked(respond, launch.block, request.failureHint);
     return;
@@ -343,7 +369,7 @@ export async function openTerminalSession(
     respondTerminalUnavailable(respond, "terminal is disabled", request.failureHint);
     return;
   }
-  const refreshedLaunch = context.resolveTerminalLaunchPolicy(request.agentId);
+  const refreshedLaunch = context.resolveTerminalLaunchPolicy(launchAgentId.agentId);
   if (!refreshedLaunch.ok) {
     respondLaunchBlocked(respond, refreshedLaunch.block, request.failureHint);
     return;

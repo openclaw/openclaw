@@ -410,7 +410,13 @@ export class ShellChromeOwner {
       )
     ) {
       event.preventDefault();
-      window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT));
+      const agentId =
+        host.context.agentSelection?.state.selectedId?.trim() ||
+        host.context.gateway.snapshot.assistantAgentId?.trim() ||
+        "";
+      window.dispatchEvent(
+        new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, agentId ? { detail: { agentId } } : undefined),
+      );
       return;
     }
     if (isHomePanelShortcut(event) && isHomePanelAvailable(host.context?.gateway)) {
