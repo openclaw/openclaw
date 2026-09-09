@@ -112,8 +112,7 @@ const enSettings = {
   modelProviders: {
     title: "Configured providers",
     configureModels: "Configure Models",
-    subtitle:
-      "Inspect providers and credentials for the selected agent. The agent selector does not change global defaults.",
+    subtitle: "Providers and credentials for the selected agent.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
