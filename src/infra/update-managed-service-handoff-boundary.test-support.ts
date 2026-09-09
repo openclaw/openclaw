@@ -7,10 +7,8 @@ import { waitForFile } from "../../test/helpers/process-wait.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
 import { writeTriageUpdateFailure } from "../commands/triage-update.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { writeRestartSentinel } from "./restart-sentinel.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import {
@@ -35,15 +33,16 @@ import {
   releaseManagedRepairInference,
 } from "./update-managed-service-handoff-repair.test-support.js";
 import { prepareManagedServiceRuntimeFixture } from "./update-managed-service-handoff-runtime.test-support.js";
-import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+import {
+  managedServiceStateUpdateScript,
+  readRestartSentinelPayload,
+} from "./update-managed-service-handoff-state.test-support.js";
 import {
   createManagedServiceActivationScript,
   readNativeState,
   readSavedFailure,
 } from "./update-managed-service-native.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
-
-type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
 
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -52,21 +51,6 @@ export async function pathExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): unknown {
-  const { db } = openOpenClawStateDatabase({ env });
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("gateway_restart_sentinel")
-      .select(["version", "payload_json", "updated_at_ms"])
-      .where("sentinel_key", "=", key),
-  );
-  return row
-    ? { version: row.version, payload: JSON.parse(row.payload_json), revision: row.updated_at_ms }
-    : null;
 }
 
 export function createManagedServiceManagerBoundary({
@@ -174,6 +158,8 @@ export function createManagedServiceManagerBoundary({
     const env = {
       ...process.env,
       ...(kind === "launchd" ? LAUNCHD_GATEWAY_IDENTITY_ENV : {}),
+      // Source descendants run from the durable helper cwd, outside this checkout.
+      TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
       OPENCLAW_STATE_DIR: root,
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,

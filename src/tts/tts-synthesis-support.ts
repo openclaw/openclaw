@@ -3,6 +3,12 @@ import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
+import type { SpeechProviderPlugin } from "../plugins/types.js";
+import {
+  createSpeechProviderRegistry,
+  normalizeSpeechProviderId,
+} from "./provider-registry-core.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
 import type { SpeechProviderConfig, SpeechProviderOverrides } from "./provider-types.js";
 import {
@@ -13,10 +19,14 @@ import {
   resolveSpeechProviderTimeoutMs,
   resolveTtsProvider,
   resolveTtsProviderCandidates,
+  type TtsProviderRegistry,
 } from "./tts-provider-resolution.js";
 import type { TtsProviderAttempt } from "./tts-runtime-types.js";
 import {
   getTtsPersona,
+  readTtsPrefs,
+  normalizeConfiguredSpeechProviderId,
+  resolveTtsPersonaFromPrefs,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   resolveTtsRuntimeConfig,
@@ -92,8 +102,12 @@ function resolveReadySpeechProvider(params: {
   persona?: ResolvedTtsPersona;
   voiceModel?: VoiceModelRef;
   requireTelephony?: boolean;
+  providerRegistry?: TtsProviderRegistry;
 }): TtsProviderReadyResolution {
-  const resolvedProvider = getSpeechProvider(params.provider, params.cfg);
+  const resolvedProvider = (params.providerRegistry?.getSpeechProvider ?? getSpeechProvider)(
+    params.provider,
+    params.cfg,
+  );
   if (!resolvedProvider) {
     return {
       kind: "skip",
@@ -106,6 +120,7 @@ function resolveReadySpeechProvider(params: {
     providerId: resolvedProvider.id,
     cfg: params.cfg,
     voiceModel: params.voiceModel,
+    registry: params.providerRegistry,
   });
   const merged = mergeProviderConfigWithPersona({
     providerConfig,
@@ -199,7 +214,7 @@ async function prepareSpeechSynthesis(params: {
   };
 }
 
-export function resolveTtsRequestSetup(params: {
+type TtsRequestSetupParams = {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
@@ -208,16 +223,11 @@ export function resolveTtsRequestSetup(params: {
   agentId?: string;
   channelId?: string;
   accountId?: string;
-}):
-  | {
-      cfg: OpenClawConfig;
-      config: ResolvedTtsConfig;
-      persona?: ResolvedTtsPersona;
-      providers: VoiceProviderCandidate[];
-    }
-  | {
-      error: string;
-    } {
+};
+
+function resolveTtsRequestConfig(
+  params: TtsRequestSetupParams,
+): { cfg: OpenClawConfig; config: ResolvedTtsConfig; prefsPath: string } | { error: string } {
   const cfg = resolveTtsRuntimeConfig(params.cfg);
   const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
@@ -231,6 +241,25 @@ export function resolveTtsRequestSetup(params: {
     };
   }
 
+  return { cfg, config, prefsPath };
+}
+
+export function resolveTtsRequestSetup(params: TtsRequestSetupParams):
+  | {
+      cfg: OpenClawConfig;
+      config: ResolvedTtsConfig;
+      persona?: ResolvedTtsPersona;
+      providers: VoiceProviderCandidate[];
+    }
+  | {
+      error: string;
+    } {
+  const facts = resolveTtsRequestConfig(params);
+  if ("error" in facts) {
+    return facts;
+  }
+  const { cfg, config, prefsPath } = facts;
+
   const userProvider = resolveTtsProvider(config, prefsPath);
   const provider = canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
   return {
@@ -241,6 +270,118 @@ export function resolveTtsRequestSetup(params: {
       ? [resolvePrimaryTtsProviderCandidate(provider, cfg)]
       : resolveTtsProviderCandidates(provider, cfg),
   };
+}
+
+type OwnedTtsRequestSetup =
+  | { error: string }
+  | (Exclude<ReturnType<typeof resolveTtsRequestSetup>, { error: string }> & {
+      prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
+    });
+
+/** Keeps catalog and direct lookup selections separate for one finite speech request. */
+export async function withOwnedTtsRequest<T>(
+  params: TtsRequestSetupParams,
+  run: (setup: OwnedTtsRequestSetup) => T | Promise<T>,
+): Promise<T> {
+  const facts = resolveTtsRequestConfig(params);
+  if ("error" in facts) {
+    return await run(facts);
+  }
+  const { cfg, config, prefsPath } = facts;
+  const prefs = readTtsPrefs(prefsPath);
+  const persona = resolveTtsPersonaFromPrefs(config, prefs);
+  return await withAcquiredPluginCapabilityProviders(
+    { key: "speechProviders", cfg },
+    async (catalog, queries) => {
+      const defaultLookups = new Map<string, SpeechProviderPlugin | undefined>();
+      let defaultCatalog: SpeechProviderPlugin[] = [];
+      const preferred = normalizeSpeechProviderId(prefs.tts?.provider);
+      if (preferred) {
+        const provider = await queries.resolveProvider({ providerId: preferred });
+        defaultLookups.set(preferred, provider);
+        if (!provider) {
+          defaultCatalog = await queries.resolveProviders({});
+        }
+      }
+      const defaults = createSpeechProviderRegistry({
+        getProvider: (providerId) => defaultLookups.get(providerId),
+        listProviders: () => defaultCatalog,
+      });
+      const preferredProvider =
+        defaults.canonicalizeSpeechProviderId(prefs.tts?.provider) ??
+        normalizeConfiguredSpeechProviderId(prefs.tts?.provider);
+      const overrideProvider = normalizeSpeechProviderId(params.providerOverride);
+      const requestedInputs = [
+        overrideProvider,
+        !overrideProvider ? preferredProvider : undefined,
+        !preferredProvider ? persona?.provider : undefined,
+        !overrideProvider && !preferredProvider ? config.provider : undefined,
+        ...catalog.map((provider) => provider.id),
+      ];
+      const prepareView = async (
+        queryConfig: OpenClawConfig,
+        providers: SpeechProviderPlugin[],
+      ) => {
+        const lookups = new Map<string, SpeechProviderPlugin | undefined>();
+        const requested = new Set(
+          [...requestedInputs, ...providers.map((provider) => provider.id)].flatMap((id) => {
+            const normalized = normalizeSpeechProviderId(id);
+            return normalized ? [normalized] : [];
+          }),
+        );
+        for (const providerId of requested) {
+          const provider = await queries.resolveProvider({ providerId, cfg: queryConfig });
+          lookups.set(providerId, provider);
+          const canonical = normalizeSpeechProviderId(provider?.id);
+          if (canonical) {
+            requested.add(canonical);
+          }
+        }
+        return createSpeechProviderRegistry({
+          getProvider: (providerId) => lookups.get(providerId),
+          listProviders: () => providers,
+        });
+      };
+      const prepareProviderRegistry = async (): Promise<TtsProviderRegistry> => {
+        const inputView = await prepareView(cfg, await queries.resolveProviders({ cfg }));
+        const runtimeConfig = resolveTtsRuntimeConfig(cfg);
+        const runtimeView =
+          runtimeConfig === cfg
+            ? inputView
+            : await prepareView(
+                runtimeConfig,
+                await queries.resolveProviders({ cfg: runtimeConfig }),
+              );
+        // Policy helpers use the request config or the applicable config prepared for this phase.
+        const selectRegistry = (queryConfig: OpenClawConfig | undefined) => {
+          if (queryConfig === undefined) {
+            return defaults;
+          }
+          return queryConfig === cfg ? inputView : runtimeView;
+        };
+        return {
+          runtimeConfig,
+          getSpeechProvider: (id, queryConfig) => selectRegistry(queryConfig).getSpeechProvider(id),
+          canonicalizeSpeechProviderId: (id, queryConfig) =>
+            selectRegistry(queryConfig).canonicalizeSpeechProviderId(id),
+          listSpeechProviders: (queryConfig) => selectRegistry(queryConfig).listSpeechProviders(),
+        };
+      };
+      const providerRegistry = await prepareProviderRegistry();
+      const userProvider = resolveTtsProvider(config, prefsPath, providerRegistry, prefs);
+      const provider =
+        providerRegistry.canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
+      return await run({
+        cfg,
+        config,
+        persona,
+        providers: params.disableFallback
+          ? [resolvePrimaryTtsProviderCandidate(provider, cfg, providerRegistry)]
+          : resolveTtsProviderCandidates(provider, cfg, providerRegistry),
+        prepareProviderRegistry,
+      });
+    },
+  );
 }
 
 type ReadySpeechProvider = Extract<TtsProviderReadyResolution, { kind: "ready" }>;
@@ -283,6 +424,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   target: "audio-file" | "voice-note" | "telephony";
   logLabel: string;
   requireTelephony?: boolean;
+  prepareProviderRegistry?: () => Promise<TtsProviderRegistry>;
   selectOperation: (params: {
     provider: TtsProvider;
     resolvedProvider: ReadySpeechProvider;
@@ -307,6 +449,9 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
+      const providerRegistry = params.prepareProviderRegistry
+        ? await params.prepareProviderRegistry()
+        : undefined;
       const resolvedProvider = resolveReadySpeechProvider({
         provider,
         cfg,
@@ -314,6 +459,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         persona,
         voiceModel,
         requireTelephony: params.requireTelephony,
+        providerRegistry,
       });
       if (resolvedProvider.kind === "skip") {
         errors.push(resolvedProvider.message);

@@ -105,7 +105,13 @@ function fixture(alias = "!poll") {
   commandParams.ctx = ctx;
   commandParams.sessionKey = sessionKey;
   const replyResolver = vi.fn(async () => {
-    const result = await handleCommands(commandParams);
+    const result = await handleCommands({
+      ...commandParams,
+      resolveModelLevels: async () => ({
+        resolvedThinkLevel: commandParams.resolvedThinkLevel,
+        resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
+      }),
+    });
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Completed synthetic work");
     return markCommandReplyForDelivery(result.reply);

@@ -4873,6 +4873,15 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       );
       const root = tempDirs.make("openclaw-android-tier-");
       const callsPath = path.join(root, "gradle-calls.jsonl");
+      const clockPath = path.join(root, "clock-reads.jsonl");
+      writeExecutable(path.join(root, "date"), [
+        "#!/usr/bin/env node",
+        'const fs = require("node:fs");',
+        'const previous = fs.existsSync(process.env.CLOCK_READS) ? fs.readFileSync(process.env.CLOCK_READS, "utf8").trim().split("\\n") : [];',
+        "const instant = new Date(1700000000000 + previous.length * 1000).toISOString();",
+        'fs.appendFileSync(process.env.CLOCK_READS, instant + "\\n");',
+        "console.log(instant);",
+      ]);
       writeExecutable(path.join(root, "gradlew"), [
         "#!/usr/bin/env node",
         'require("node:fs").appendFileSync(process.env.GRADLE_CALLS, JSON.stringify(process.argv.slice(2)) + "\\n");',
@@ -4892,6 +4901,8 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
           OPENCLAW_ROBOLECTRIC_INIT: "robolectric.gradle",
           GRADLE_CALLS: callsPath,
           FAIL_GRADLE_TASK: failTask,
+          CLOCK_READS: clockPath,
+          PATH: `${root}${path.delimiter}${process.env.PATH}`,
         },
       });
       const calls: string[][] = existsSync(callsPath)
@@ -4900,8 +4911,35 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
             .split("\n")
             .map((line) => JSON.parse(line))
         : [];
-      return { ...result, calls, tasks: calls.flat().filter((arg) => arg.startsWith(":")) };
+      const clockReads = existsSync(clockPath)
+        ? readFileSync(clockPath, "utf8").trim().split("\n")
+        : [];
+      return {
+        ...result,
+        calls,
+        clockReads,
+        tasks: calls.flat().filter((arg) => arg.startsWith(":")),
+      };
     }
+
+    it.each(["test-play", "test-third-party"])(
+      "reuses one build instant across the %s unit and lint commands",
+      (task) => {
+        const result = runAndroidTask(
+          { task, lint: true },
+          { eventName: "pull_request", repository: "openclaw/openclaw", runAttempt: 1 },
+        );
+        expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+        expect(result.calls).toHaveLength(2);
+        const metadata = result.calls.map((call) =>
+          call.filter((arg) => arg.startsWith("-PopenclawBuildTimestamp=")),
+        );
+        expect(metadata[0]).toHaveLength(1);
+        expect(metadata[1]).toEqual(metadata[0]);
+        expect(result.clockReads).toHaveLength(1);
+        expect(metadata[0]).toEqual([`-PopenclawBuildTimestamp=${result.clockReads[0]}`]);
+      },
+    );
 
     it.each([
       { eventName: "pull_request", releaseGate: false, full: false, legacy: false },
@@ -4949,6 +4987,12 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
             expect(call).toContain("--build-cache");
             const testCall = call.some((arg) => arg.endsWith("UnitTest"));
             expect(call.includes("--init-script")).toBe(testCall);
+          }
+          if ((row.task !== "test-play" && row.task !== "test-third-party") || row.lint !== true) {
+            expect(result.clockReads).toEqual([]);
+            expect(
+              result.calls.flat().filter((arg) => arg.startsWith("-PopenclawBuildTimestamp=")),
+            ).toEqual([]);
           }
           if (row.task === "build-play") {
             expect(result.calls.map((call) => call.filter((arg) => arg.startsWith(":")))).toEqual([
@@ -5050,6 +5094,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
     it.each([
       ["test-play", ":app:testPlayDebugUnitTest"],
       ["test-play", ":app:lintPlayDebug"],
+      ["test-third-party", ":app:testThirdPartyDebugUnitTest"],
       ["test-third-party", ":app:lintThirdPartyDebug"],
       ["test-wear", ":wear:lintDebug"],
       ["ktlint", ":benchmark:assembleDebug"],

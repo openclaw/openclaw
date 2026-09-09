@@ -40,8 +40,29 @@ export async function finalizeRestartUpdateRun(
     }
     const runningVersion = resolveRuntimeServiceVersion();
     const runningBuildId = resolveRuntimeServiceBuildId();
-    const expectedVersion = updateRun.after.version ?? updateRun.target.version;
-    const expectedBuildId = updateRun.after.buildId;
+    // A failed update's restored boot serves the previous version. The restore
+    // owner already verified that identity against the restored disk state and
+    // recorded it; regrading this boot against the update target would
+    // overwrite the verified fact with a version mismatch. An empty
+    // after.version marks that path: target verification never succeeded, so
+    // the recorded versionMatch could only have come from the restore. Reuse
+    // it only for the exact binary the recorder verified — a boot serving the
+    // recorded version under a different (or unverifiable) build is another
+    // binary and must be regraded against the update target.
+    const recordedBuildId =
+      typeof updateRun.verification.runningBuildId === "string"
+        ? updateRun.verification.runningBuildId
+        : undefined;
+    const restoredVerification =
+      updateRun.verification.versionMatch === true &&
+      !updateRun.after.version &&
+      typeof updateRun.verification.runningVersion === "string" &&
+      updateRun.verification.runningVersion === runningVersion &&
+      (recordedBuildId === undefined || recordedBuildId === runningBuildId);
+    const expectedVersion = restoredVerification
+      ? runningVersion
+      : (updateRun.after.version ?? updateRun.target.version);
+    const expectedBuildId = restoredVerification ? undefined : updateRun.after.buildId;
     const pluginErrors = getActivePluginRegistry()
       ?.diagnostics.filter((entry) => entry.level === "error")
       .map((entry) => entry.message);

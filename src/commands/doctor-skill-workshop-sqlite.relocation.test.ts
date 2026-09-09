@@ -77,6 +77,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       inspectLegacySkillWorkshopMigration({ config: {}, env: testState.env }),
     ).resolves.toEqual({
       externalProposalCount: 1,
+      externalProposalDetails: expect.any(Array),
       externalProposalCountsByAgent: { main: 1 },
       legacyBackupRootCount: 0,
       preservedLegacyBackupRootCount: 0,
@@ -252,6 +253,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       inspectLegacySkillWorkshopMigration({ config, env: testState.env }),
     ).resolves.toEqual({
       externalProposalCount: 1,
+      externalProposalDetails: expect.any(Array),
       externalProposalCountsByAgent: { retired: 1 },
       legacyBackupRootCount: 0,
       preservedLegacyBackupRootCount: 0,

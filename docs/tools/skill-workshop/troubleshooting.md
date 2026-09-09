@@ -18,6 +18,29 @@ read_when:
 | Proposal does not show in list                 | Check the selected agent and `OPENCLAW_STATE_DIR`.                                                                                                                                                          |
 | Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
 
+### Legacy ownership warnings during an update
+
+Doctor leaves legacy proposal metadata and collection backups in place when
+their workspace has no configured owner or maps to more than one agent. The
+warning names the retained path and candidate agents. These ownership warnings
+do not stop the other migrations or later Doctor repairs.
+
+Review the retained proposal or backup manifest alongside the configured agent
+workspaces. Correct a workspace mapping only when it identifies the actual
+owner; do not assign an arbitrary agent or delete the artifacts to clear the
+warning. Rerun Doctor after resolving ownership. Invalid metadata, failed writes,
+and unfinished recovery remain migration failures.
+
+A retarget count describes proposals changed during that pass. Any remaining
+external targets can belong to different proposals whose migration is blocked.
+Review their identifiers, paths, and migration warnings before retrying the same
+repair.
+
+Package rollback does not reverse the state-schema migration or relocated skill
+files. An older package can therefore be incompatible with the retained state.
+See [Schema bumps and older updaters](/reference/database-schemas#schema-bumps-and-older-updaters)
+and [Downgrade recovery](/reference/database-schemas#downgrade-recovery).
+
 ### Tool-policy diagnostic
 
 In `propose` and `auto` modes, `openclaw doctor` runs the

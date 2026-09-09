@@ -5550,13 +5550,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          android_build_metadata=()
+          if [ "$RUN_LINT" = "true" ] && { [ "$TASK" = "test-play" ] || [ "$TASK" = "test-third-party" ]; }; then
+            # Separate unit/lint processes must not invalidate BuildConfig with a new timestamp.
+            android_build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            android_build_metadata=("-PopenclawBuildTimestamp=$android_build_timestamp")
+          fi
           case "$TASK" in
             test-play)
-              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testPlayDebugUnitTest \
                 :wear-shared:testDebugUnitTest
               if [ "$RUN_LINT" = "true" ]; then
-                ./gradlew --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
+                ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintPlayDebug :wear-shared:lintDebug
               fi
               ;;
             test-play-compat)
@@ -5566,10 +5572,10 @@ jobs:
                 :app:testPlayDebugUnitTest
               ;;
             test-third-party)
-              ./gradlew --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
+              ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache --init-script "$OPENCLAW_ROBOLECTRIC_INIT" \
                 :app:testThirdPartyDebugUnitTest
               if [ "$RUN_LINT" = "true" ]; then
-                ./gradlew --no-daemon --build-cache :app:lintThirdPartyDebug
+                ./gradlew "${android_build_metadata[@]}" --no-daemon --build-cache :app:lintThirdPartyDebug
               fi
               ;;
             test-wear)

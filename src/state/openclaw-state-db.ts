@@ -80,6 +80,7 @@ import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-f
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
+  readStateSchemaMigrationVersion,
 } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
@@ -150,7 +151,7 @@ function repairStateSchema(
       () => {
         assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
         const applied: string[] = [];
-        const previousVersion = readStateSchemaContentVersion(db);
+        const previousVersion = readStateSchemaMigrationVersion(db);
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           for (const name of verifyAndRepairCanonicalSqliteIndexes(
             db,
@@ -359,7 +360,7 @@ function ensureSchema(
           if (initializeNativeOnly && !isUninitializedNativeStartupDatabase(db)) {
             return [];
           }
-          const previousVersion = readStateSchemaContentVersion(db);
+          const previousVersion = readStateSchemaMigrationVersion(db);
           if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
             verifyAndRepairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
               allowMissingColumns: true,
