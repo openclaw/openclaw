@@ -199,6 +199,10 @@ describe("openclaw launcher", () => {
         import { syncBuiltinESMExports } from "node:module";
         if (process.env.OPENCLAW_NODE_UPDATE_RESPAWNED !== "1") {
           Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(params.version ?? "20.0.0")} });
+          if (process.versions.node.startsWith("20.")) {
+            const getBuiltinModule = process.getBuiltinModule;
+            process.getBuiltinModule = (id) => id === "node:sqlite" ? undefined : getBuiltinModule(id);
+          }
           Object.defineProperty(process.stdin, "isTTY", { value: ${params.tty ?? true} });
           Object.defineProperty(process.stderr, "isTTY", { value: ${params.tty ?? true} });
           const original = childProcess.spawnSync;
@@ -219,6 +223,7 @@ describe("openclaw launcher", () => {
       await fs.writeFile(
         path.join(root, "dist", "entry.js"),
         `
+        if (!process.getBuiltinModule?.("node:sqlite")) throw new Error("native diagnostic reader loaded without node:sqlite");
         process.stdout.write(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), path: process.env.PATH }));
         process.exitCode = 17;
       `,
@@ -305,7 +310,7 @@ describe("openclaw launcher", () => {
         env: {},
         exitCode: 1,
       },
-      { label: "yes flag", tty: true, args: ["update", "--yes"], env: {}, exitCode: 17 },
+      { label: "yes flag", tty: true, args: ["update", "--yes"], env: {}, exitCode: 1 },
       { label: "hook relay", tty: true, args: ["hooks", "relay"], env: {}, exitCode: 1 },
       {
         label: "Gmail foreground",
@@ -333,9 +338,13 @@ describe("openclaw launcher", () => {
       },
     );
 
-    it("reuses a previously approved runtime without prompting or installing", async () => {
-      const fixture = await prepareRecovery({ cached: true, tty: false });
-      const result = fixture.run("");
+    it.each([
+      { version: "20.0.0", args: ["status"] },
+      { version: "20.0.0", args: ["update", "status"] },
+      { version: "22.23.2", args: ["update", "status"] },
+    ])("reuses a previously approved runtime for $version $args", async ({ version, args }) => {
+      const fixture = await prepareRecovery({ cached: true, tty: false, version });
+      const result = fixture.run("", args);
       expect(result.status, result.stderr).toBe(17);
       expect(result.stderr).not.toContain("Update NodeJS:");
       expect(JSON.parse(result.stdout).path.split(path.delimiter)[0]).toBe(
@@ -344,8 +353,33 @@ describe("openclaw launcher", () => {
       await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
+    it("runs capable diagnostics without offering an installation when no runtime is cached", async () => {
+      const fixture = await prepareRecovery({ version: "22.23.2" });
+      const result = fixture.run("y\n", ["update", "status"]);
+      expect(result.status, result.stderr).toBe(17);
+      expect(result.stderr).not.toContain("Update NodeJS:");
+      expect(JSON.parse(result.stdout).path.split(path.delimiter)[0]).not.toBe(
+        path.dirname(fixture.nodePath),
+      );
+      await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it.each([false, true])(
+      "preserves Node 20 diagnostic recovery without a cache (TTY=%s)",
+      async (tty) => {
+        const fixture = await prepareRecovery({ tty });
+        const result = fixture.run("n\n", ["update", "status"]);
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("nvm install 26");
+        expect(result.stderr.includes("Update NodeJS:")).toBe(tty);
+        expect(result.stderr).not.toContain("native diagnostic reader loaded");
+        await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+
     it("does not repeat a declined Node offer when update startup respawns", async () => {
-      const fixture = await prepareRecovery();
+      const fixture = await prepareRecovery({ version: "22.23.2" });
       await fs.writeFile(
         path.join(fixture.root, "dist", "entry.js"),
         `import { spawnSync } from "node:child_process";

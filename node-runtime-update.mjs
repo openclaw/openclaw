@@ -56,7 +56,7 @@ function confirmNodeUpdate() {
 }
 
 /** Returns a verified private runtime, or null when recovery was declined/unavailable. */
-export async function resolveUpdatedNodeRuntime(homeDir) {
+export async function resolveUpdatedNodeRuntime(homeDir, { allowInstall = true } = {}) {
   if (process.env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1") {
     return null;
   }
@@ -72,6 +72,7 @@ export async function resolveUpdatedNodeRuntime(homeDir) {
     return nodePath;
   }
   if (
+    !allowInstall ||
     !process.stdin.isTTY ||
     !process.stderr.isTTY ||
     process.env.CI ||

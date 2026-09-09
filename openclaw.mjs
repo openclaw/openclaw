@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
   isSupportedOpenClawNodeVersion,
@@ -53,18 +54,20 @@ const ensureSupportedRuntimeVersion = async () => {
     return false;
   }
   const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
-  if (unsupportedCommand === "diagnostic") {
-    return false;
+  const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node);
+  const diagnosticExemption = unsupportedCommand === "diagnostic" && canRunDiagnostics;
+  if (!diagnosticExemption) {
+    process.stderr.write(`openclaw: ${failure}\n`);
   }
-
-  process.stderr.write(`openclaw: ${failure}\n`);
   // These invocations have an exact-PID contract and cannot acquire a wrapper process.
   if (
     !isForegroundGmailRunInvocation(process.argv) &&
     !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv))
   ) {
     const { resolveUpdatedNodeRuntime } = await import("./node-runtime-update.mjs");
-    const nodePath = await resolveUpdatedNodeRuntime(resolveLauncherHomeDir());
+    const nodePath = await resolveUpdatedNodeRuntime(resolveLauncherHomeDir(), {
+      allowInstall: !diagnosticExemption,
+    });
     if (nodePath) {
       const env = { ...process.env, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" };
       const pathKey =
@@ -79,13 +82,16 @@ const ensureSupportedRuntimeVersion = async () => {
       );
     }
   }
+  if (diagnosticExemption) {
+    return false;
+  }
   process.stderr.write(
     "If you use nvm, run:\n" +
       `  nvm install ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm use ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm alias default ${RECOMMENDED_NODE_MAJOR}\n`,
   );
-  if (unsupportedCommand === "update") {
+  if (unsupportedCommand === "update" && canRunDiagnostics) {
     // A later CLI startup respawn must not repeat this invocation's recovery offer.
     process.env.OPENCLAW_NODE_UPDATE_RESPAWNED = "1";
     return false;

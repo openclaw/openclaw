@@ -9,6 +9,7 @@ import {
   type SqliteCapabilities,
 } from "../../node-sqlite.mjs";
 import {
+  canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
   isNodeVersionAtLeast,
@@ -229,7 +230,12 @@ export async function assertSupportedRuntime(
     }
     return;
   }
-  if (details.kind === "node" && argv && classifyUnsupportedNodeCommand(argv)) {
+  if (
+    details.kind === "node" &&
+    canRunOpenClawNodeDiagnostics(details.version, details.hasNodeSqlite) &&
+    argv &&
+    classifyUnsupportedNodeCommand(argv)
+  ) {
     if (emitDiagnosticWarning && !diagnosticWarningPrinted) {
       const warning = formatUnsupportedNodeDiagnosticWarning(details.version);
       if (providedRuntime) {
