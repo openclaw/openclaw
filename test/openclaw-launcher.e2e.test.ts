@@ -199,6 +199,10 @@ describe("openclaw launcher", () => {
         import { syncBuiltinESMExports } from "node:module";
         if (process.env.OPENCLAW_NODE_UPDATE_RESPAWNED !== "1") {
           Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(params.version ?? "20.0.0")} });
+          if (process.versions.node.startsWith("20.")) {
+            const getBuiltinModule = process.getBuiltinModule;
+            process.getBuiltinModule = (id) => id === "node:sqlite" ? undefined : getBuiltinModule(id);
+          }
           Object.defineProperty(process.stdin, "isTTY", { value: ${params.tty ?? true} });
           Object.defineProperty(process.stderr, "isTTY", { value: ${params.tty ?? true} });
           const original = childProcess.spawnSync;
@@ -219,6 +223,7 @@ describe("openclaw launcher", () => {
       await fs.writeFile(
         path.join(root, "dist", "entry.js"),
         `
+        if (!process.getBuiltinModule?.("node:sqlite")) throw new Error("native diagnostic reader loaded without node:sqlite");
         process.stdout.write(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), path: process.env.PATH }));
         process.exitCode = 17;
       `,
@@ -295,17 +300,29 @@ describe("openclaw launcher", () => {
     );
 
     it.each([
-      { label: "non-TTY", tty: false, args: ["status"], env: {} },
-      { label: "CI", tty: true, args: ["status"], env: { CI: "1" } },
-      { label: "JSON", tty: true, args: ["status", "--json"], env: {} },
-      { label: "non-interactive", tty: true, args: ["onboard", "--non-interactive"], env: {} },
-      { label: "yes flag", tty: true, args: ["update", "--yes"], env: {} },
-      { label: "hook relay", tty: true, args: ["hooks", "relay"], env: {} },
-      { label: "Gmail foreground", tty: true, args: ["webhooks", "gmail", "run"], env: {} },
-    ])("does not prompt or install for $label", async ({ tty, args, env }) => {
+      { label: "non-TTY", tty: false, args: ["status"], env: {}, exitCode: 1 },
+      { label: "CI", tty: true, args: ["status"], env: { CI: "1" }, exitCode: 1 },
+      { label: "JSON", tty: true, args: ["status", "--json"], env: {}, exitCode: 1 },
+      {
+        label: "non-interactive",
+        tty: true,
+        args: ["onboard", "--non-interactive"],
+        env: {},
+        exitCode: 1,
+      },
+      { label: "yes flag", tty: true, args: ["update", "--yes"], env: {}, exitCode: 1 },
+      { label: "hook relay", tty: true, args: ["hooks", "relay"], env: {}, exitCode: 1 },
+      {
+        label: "Gmail foreground",
+        tty: true,
+        args: ["webhooks", "gmail", "run"],
+        env: {},
+        exitCode: 1,
+      },
+    ])("does not prompt or install for $label", async ({ tty, args, env, exitCode }) => {
       const fixture = await prepareRecovery({ tty });
       const result = fixture.run("y\n", args, env);
-      expect(result.status, result.stderr).toBe(1);
+      expect(result.status, result.stderr).toBe(exitCode);
       expect(result.stderr).not.toContain("Update NodeJS:");
       await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
     });
@@ -321,15 +338,98 @@ describe("openclaw launcher", () => {
       },
     );
 
-    it("reuses a previously approved runtime without prompting or installing", async () => {
-      const fixture = await prepareRecovery({ cached: true, tty: false });
-      const result = fixture.run("");
+    it.each([
+      { version: "20.0.0", args: ["status"] },
+      { version: "20.0.0", args: ["update", "status"] },
+      { version: "22.23.2", args: ["update", "status"] },
+    ])("reuses a previously approved runtime for $version $args", async ({ version, args }) => {
+      const fixture = await prepareRecovery({ cached: true, tty: false, version });
+      const result = fixture.run("", args);
       expect(result.status, result.stderr).toBe(17);
       expect(result.stderr).not.toContain("Update NodeJS:");
       expect(JSON.parse(result.stdout).path.split(path.delimiter)[0]).toBe(
         path.dirname(fixture.nodePath),
       );
       await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("runs capable diagnostics without offering an installation when no runtime is cached", async () => {
+      const fixture = await prepareRecovery({ version: "22.23.2" });
+      const result = fixture.run("y\n", ["update", "status"]);
+      expect(result.status, result.stderr).toBe(17);
+      expect(result.stderr).not.toContain("Update NodeJS:");
+      expect(JSON.parse(result.stdout).path.split(path.delimiter)[0]).not.toBe(
+        path.dirname(fixture.nodePath),
+      );
+      await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it.each([false, true])(
+      "preserves Node 20 diagnostic recovery without a cache (TTY=%s)",
+      async (tty) => {
+        const fixture = await prepareRecovery({ tty });
+        const result = fixture.run("n\n", ["update", "status"]);
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("nvm install 26");
+        expect(result.stderr.includes("Update NodeJS:")).toBe(tty);
+        expect(result.stderr).not.toContain("native diagnostic reader loaded");
+        await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+
+    it("does not repeat a declined Node offer when update startup respawns", async () => {
+      const fixture = await prepareRecovery({ version: "22.23.2" });
+      await fs.writeFile(
+        path.join(fixture.root, "dist", "entry.js"),
+        `import { spawnSync } from "node:child_process";
+        if (!process.env.OPENCLAW_TEST_CLI_RESPAWN) {
+          const child = spawnSync(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+            env: { ...process.env, OPENCLAW_TEST_CLI_RESPAWN: "1" }, stdio: "inherit",
+          });
+          process.exit(child.status ?? 1);
+        }
+        process.stdout.write("update-entry\\n");`,
+      );
+      const result = fixture.run("n\n", ["update"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("update-entry");
+      expect(result.stderr.match(/Update NodeJS:/g)).toHaveLength(1);
+      await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("runs pending lifecycle for an admitted build outside the release table", async () => {
+      const fixture = await prepareRecovery({
+        version: "24.15.0",
+        tty: false,
+        pendingLifecycle: true,
+      });
+      await fs.writeFile(
+        path.join(fixture.root, "dist/infra/package-lifecycle.js"),
+        'export function completePendingPackageLifecycle() { process.stdout.write("lifecycle-completed\\n"); }',
+      );
+      const result = fixture.run("", ["update", "status"]);
+      expect(result.status, result.stderr).toBe(17);
+      expect(result.stdout).toContain("lifecycle-completed");
+      expect(result.stderr).not.toContain("diagnostics may show truncated text");
+    });
+
+    it("skips pending lifecycle for a broken in-range SQLite runtime", async () => {
+      const fixture = await prepareRecovery({
+        version: "26.8.1",
+        tty: false,
+        pendingLifecycle: true,
+      });
+      const preload = path.join(fixture.root, "broken-sqlite.mjs");
+      await fs.writeFile(
+        preload,
+        'globalThis[Symbol.for("openclaw.sqliteCapabilities")] = { available: true, version: "3.53.4", text: false, blob: true, json: true };',
+      );
+      const result = fixture.run("", ["update", "status"], {
+        NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+      });
+      expect(result.status, result.stderr).toBe(17);
+      expect(result.stderr).not.toContain("legacy lifecycle loaded");
     });
 
     it("keeps a supported active Node even when a private runtime exists", async () => {
@@ -373,6 +473,45 @@ describe("openclaw launcher", () => {
     });
   });
 
+  it.each([
+    ["--version"],
+    ["-V"],
+    ["--help"],
+    ["gateway", "status", "--deep"],
+    ["doctor", "--lint"],
+    ["doctor"],
+    ["update", "status"],
+    ["update"],
+    ["triage", "--json"],
+    ["triage", "--non-interactive"],
+  ])("admits packaged diagnostics on unsupported Node: %j", async (...args) => {
+    const root = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
+    );
+    await fs.writeFile(
+      path.join(root, "dist", "entry.js"),
+      'process.stdout.write("diagnostic-entry\\n");',
+    );
+    const preload = path.join(root, "unsupported.mjs");
+    await fs.writeFile(
+      preload,
+      'Object.defineProperty(process.versions, "node", { value: "22.23.2" });',
+    );
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs"), ...args],
+      {
+        cwd: root,
+        env: launcherEnv({ HOME: root, OPENCLAW_HOME: root, NODE_DISABLE_COMPILE_CACHE: "1" }),
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toMatch(/OpenClaw 2026\.9\.3|diagnostic-entry/);
+  });
+
   it("admits lossless Node builds outside the support table while retaining the major floor", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
@@ -399,7 +538,8 @@ describe("openclaw launcher", () => {
           "--import",
           pathToFileURL(mockNodeVersionPath).href,
           path.join(fixtureRoot, "openclaw.mjs"),
-          "--help",
+          "gateway",
+          "start",
         ],
         {
           cwd: fixtureRoot,

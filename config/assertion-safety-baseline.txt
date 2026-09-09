@@ -506,7 +506,6 @@ extensions/google-meet/src/cli-space-commands.ts	3
 extensions/google-meet/src/meet-api.ts	1
 extensions/google-meet/src/plugin-registration.ts	1
 extensions/google-meet/src/transports/chrome-create.ts	4
-extensions/google-meet/src/transports/chrome.ts	2
 extensions/google-meet/src/transports/google-meet-platform-adapter.ts	1
 extensions/google/cli-backend-auth.runtime.ts	1
 extensions/google/cli-backend-isolated-auth.runtime.ts	5

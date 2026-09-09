@@ -89,6 +89,14 @@ do not cause unnecessary archive deletion. Full logical deletion with resumable
 physical cleanup remains a separate design; existing deletion visibility and rollback
 semantics are unchanged.
 
+Queued archive pruning prepares cold connections through the same asynchronous
+admission owner while retaining its existing writer section. Each page-drain
+pass keeps its checkpoints, freelist reads, and bounded vacuum in one synchronous
+phase on the admitted connection. Archive-row and unpublished-name reads follow
+validation. After removing a derived archive file, pruning reacquires before the
+canonical row-deletion transaction; an acquisition failure propagates without
+deleting that recovery row.
+
 ### Preserve the data and concurrency contracts
 
 An adapter must make these contracts explicit and verify them against a real

@@ -52,7 +52,6 @@ describeOfficialFallbackChannelCatalogContract({
   npmSpec: whatsappOfficialFallbackNpmSpec,
   meta: whatsappMeta,
   packageName: "@openclaw/whatsapp",
-  pluginId: "whatsapp",
   externalNpmSpec: "@vendor/whatsapp-fork",
   externalLabel: "WhatsApp Fork",
 });

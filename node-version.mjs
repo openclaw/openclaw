@@ -16,6 +16,132 @@ export const SUPPORTED_NODE_VERSIONS = `${NODE_RELEASE_FLOORS.map(
   .join(", ")
   .replace(/, ([^,]+)$/, ", or $1")} (Node 26 recommended)`;
 
+export function formatUnsupportedNodeVersionMessage(version) {
+  return [
+    `Node ${version ?? "unknown"} is unsupported; OpenClaw requires ${SUPPORTED_NODE_VERSIONS}.`,
+    "npm can finish installing OpenClaw without running its preinstall check; a successful install does not mean Node is supported.",
+    "Re-run the installer: curl -fsSL https://openclaw.ai/install.sh | bash",
+    "On Windows: iwr -useb https://openclaw.ai/install.ps1 | iex",
+    "Or with nvm: nvm install 26 && nvm use 26 && nvm alias default 26",
+    "Then rerun openclaw update. See https://docs.openclaw.ai/install/node",
+  ].join("\n");
+}
+
+export function formatUnsupportedNodeDiagnosticWarning(version) {
+  return `Running on an unsupported Node (${version}); diagnostics may show truncated text`;
+}
+
+const ROOT_BOOLEAN_OPTIONS = ["--dev", "--no-color"];
+const ROOT_VALUE_OPTIONS = ["--profile", "--log-level", "--container"];
+
+function consumeOption(args, index, booleanOptions, valueOptions) {
+  const arg = args[index];
+  if (booleanOptions.includes(arg)) {
+    return 1;
+  }
+  const equals = arg.indexOf("=");
+  if (valueOptions.includes(equals < 0 ? arg : arg.slice(0, equals))) {
+    return equals >= 0 ? 1 : args[index + 1] === undefined ? 0 : 2;
+  }
+  return 0;
+}
+
+function diagnosticOptions(args, booleanOptions, valueOptions = []) {
+  const flags = new Set();
+  for (let index = 0; index < args.length;) {
+    const consumed = consumeOption(
+      args,
+      index,
+      [...ROOT_BOOLEAN_OPTIONS, ...booleanOptions],
+      [...ROOT_VALUE_OPTIONS, ...valueOptions],
+    );
+    if (!consumed) {
+      return null;
+    }
+    flags.add(args[index]);
+    index += consumed;
+  }
+  return flags;
+}
+
+/** Shared by the packaged launcher and source guard before either loads command state. */
+export function classifyUnsupportedNodeCommand(argv) {
+  // On an unsupported runtime, a command may run only if it never opens a LIVE
+  // OpenClaw database writable and never starts a Gateway or a repair agent.
+  // Private-copy recovery is allowed; artifact-preserving readers never write the live file.
+  const args = argv.slice(2);
+  let index = 0;
+  while (index < args.length) {
+    const consumed = consumeOption(args, index, ROOT_BOOLEAN_OPTIONS, ROOT_VALUE_OPTIONS);
+    if (!consumed) {
+      break;
+    }
+    index += consumed;
+  }
+  const command = args[index++];
+  const tail = args.slice(index);
+  if (["--version", "-V", "--help"].includes(command)) {
+    return diagnosticOptions(tail, []) ? "diagnostic" : null;
+  }
+  if (command === "gateway") {
+    while (index < args.length) {
+      const consumed = consumeOption(args, index, ROOT_BOOLEAN_OPTIONS, ROOT_VALUE_OPTIONS);
+      if (!consumed) {
+        break;
+      }
+      index += consumed;
+    }
+    return args[index] === "status" ? "diagnostic" : null;
+  }
+  if (command === "doctor") {
+    return diagnosticOptions(
+      tail,
+      ["--lint", "--json", "--deep", "--all", "--non-interactive", "--no-workspace-suggestions"],
+      ["--only", "--skip", "--severity-min"],
+    )
+      ? "diagnostic"
+      : null;
+  }
+  if (command === "triage") {
+    const flags = diagnosticOptions(
+      tail,
+      ["--json", "--non-interactive", "--no-export"],
+      ["--update-result"],
+    );
+    return flags && (flags.has("--json") || flags.has("--non-interactive")) ? "diagnostic" : null;
+  }
+  if (command === "update") {
+    while (index < args.length) {
+      const consumed = consumeOption(args, index, ROOT_BOOLEAN_OPTIONS, ROOT_VALUE_OPTIONS);
+      if (!consumed) {
+        break;
+      }
+      index += consumed;
+    }
+    if (args[index] === "status") {
+      return diagnosticOptions(args.slice(index + 1), ["--json"], ["--timeout"])
+        ? "diagnostic"
+        : null;
+    }
+    return diagnosticOptions(
+      tail,
+      ["--json", "--yes", "--dry-run", "--no-restart", "--accept-capabilities"],
+      ["--channel", "--tag", "--timeout"],
+    )
+      ? "update"
+      : null;
+  }
+  return null;
+}
+
+/** Diagnostic bundles target Node 22 syntax and require the native SQLite reader. */
+export function canRunOpenClawNodeDiagnostics(value, hasNodeSqlite) {
+  return (
+    hasNodeSqlite &&
+    isNodeVersionAtLeast(parseNodeReleaseVersion(value), { major: 22, minor: 0, patch: 0 })
+  );
+}
+
 /** Parses an anchored release SemVer, allowing a leading v and valid build metadata. */
 export function parseNodeReleaseVersion(value) {
   if (typeof value !== "string") {

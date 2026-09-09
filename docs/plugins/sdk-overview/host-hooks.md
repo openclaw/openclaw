@@ -71,6 +71,15 @@ transcodes and saves those completed buffers after releasing the provider. The
 separate synchronous speech lookup and request-preparation APIs keep their
 existing caller lifetime; streaming speech is not part of this finite operation.
 
+Streaming speech owns its provider registrations until stream cleanup finishes.
+`api.runtime.tts.textToSpeechStream(...)` preserves an explicit provider
+`release()` callback's lifetime after EOF or a read error: callers must still
+invoke and await the returned `release()`. Without a provider release callback,
+EOF or a read error releases registrations automatically. Stream cancellation
+and explicit release start source cancellation and provider cleanup before
+joining both, including tracked producer work. Release also handles an unopened
+stream. Existing raw host registrations keep their host lifetime.
+
 For `image_generate`, `music_generate`, and `video_generate` tools prepared from an owned inspection,
 resources remain held through preflight and, once accepted, through generation, media saving, and
 any rollback. A `started` result acknowledges acceptance; it does not mean the
@@ -80,6 +89,13 @@ setup before retrying.
 An already accepted task keeps its captured resources until its work settles.
 Raw prepared registries retain their existing host lifetime; this does not enable
 automatic physical disposal for all prepared runtimes.
+
+When model-backed image understanding reports request timeout or cancellation,
+its prepared runtime borrow stays held until the actual provider operation and
+tracked transport cleanup settle.
+Supplied managed snapshots retain their original prepared resources, including
+adopted donors; raw snapshots keep their caller-owned lifetime. A timeout reports
+an unfinished request, not completed resource cleanup.
 
 Executable CLI command registration also uses an owned, uncached registry. Its
 resources remain available through asynchronous registration, command actions,

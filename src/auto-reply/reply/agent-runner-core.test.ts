@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -175,6 +176,23 @@ describe("buildSilentFallbackFailurePayload", () => {
   );
 
   it("uses the configured runtime alias when attributing a response", () => {
+    // Exercise attribution with setup metadata; the plugin registration test owns
+    // the real Claude CLI descriptor and its canonical provider binding.
+    onTestFinished(() => cliBackendsTesting.resetDepsForTest());
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+              },
+            }
+          : undefined,
+    });
     const cfg = { plugins: { allow: ["anthropic"], entries: { anthropic: { enabled: true } } } };
     const fallbackTransition = resolveFallbackTransition({
       selectedProvider: "anthropic",
