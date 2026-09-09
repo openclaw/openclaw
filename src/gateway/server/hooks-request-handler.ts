@@ -20,7 +20,6 @@ import {
   normalizeHookDispatchSessionKey,
   normalizeHookHeaders,
   normalizeWakePayload,
-  readJsonBody,
   resolveEffectiveHookTargetAgentId,
   resolveHookChannel,
   resolveHookDeliver,
@@ -37,7 +36,11 @@ import { sendJson } from "../http-common.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
-import { admitHookRequest, sendHookBodyError } from "./hooks-request-auth.js";
+import {
+  admitHookRequest,
+  createSignedWakeDeliveryLedger,
+  describeSignedAdmission,
+} from "./hooks-request-auth.js";
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
@@ -128,7 +131,7 @@ export type HookClientIpConfig = Readonly<{
 
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
-type WakeResult = { eventOutcome: "queued" | "coalesced" };
+type WakeResult = { eventOutcome: "queued" | "coalesced" | "duplicate" };
 
 type HookDispatchers = {
   dispatchWakeHook: (
@@ -218,6 +221,8 @@ export function createHooksRequestHandler(
     return normalizeRateLimitClientIp(clientIp);
   };
 
+  const signedWakeDeliveries = createSignedWakeDeliveryLedger(DEDUPE_MAX);
+
   const pruneHookReplayCache = (now: number) => {
     for (const [key, entry] of hookReplayCache) {
       if (entry.state === "terminal" && entry.ts < now - DEDUPE_TTL_MS) {
@@ -305,7 +310,7 @@ export function createHooksRequestHandler(
   };
 
   return async (req, res) => {
-    const hooksConfig = getHooksConfig();
+    let hooksConfig = getHooksConfig();
     if (!hooksConfig) {
       return false;
     }
@@ -337,8 +342,6 @@ export function createHooksRequestHandler(
     const token = extractHookToken(req);
     const clientKey = resolveHookClientKey(req);
     const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
-    // gmail-path mappings carry a producer-derived bound (gog batch contract);
-    // every other path keeps the shared default cap.
     const bodyLimit = resolveHookPathBodyLimit(hooksConfig, subPath);
     const headers = normalizeHookHeaders(req);
     const admission = await admitHookRequest({
@@ -352,10 +355,12 @@ export function createHooksRequestHandler(
       clientKey,
       limiter: hookAuthLimiter,
       warn: (message) => logHooks.warn(message),
+      resolveHooksConfig: getHooksConfig,
     });
     if (!admission.ok) {
       return true;
     }
+    hooksConfig = admission.hooksConfig ?? hooksConfig;
 
     if (!subPath) {
       res.statusCode = 404;
@@ -364,26 +369,10 @@ export function createHooksRequestHandler(
       return true;
     }
 
-    let parsedBody: unknown = admission.body?.value;
-    if (!admission.body) {
-      const body = await readJsonBody(req, bodyLimit);
-      if (!body.ok) {
-        await sendHookBodyError(req, res, body.error);
-        return true;
-      }
-      parsedBody = body.value;
-    }
-
-    const payload = asRecord(parsedBody);
-    // A signed delivery's replay identity is the verified webhook-id under the
-    // mapping that authenticated it. Unsigned headers (Idempotency-Key, a
-    // bearer token the signed path never validates) must not mint a fresh
-    // identity, or a captured request replays as a new run.
-    const signedAuthority = admission.signedMappingId
-      ? `signature:${admission.signedMappingId}`
-      : undefined;
-    const replayAuthority = signedAuthority ?? token;
-    const idempotencyKey = signedAuthority
+    const payload = asRecord(admission.body.value);
+    const signed = describeSignedAdmission(admission, DEDUPE_TTL_MS);
+    const replayAuthority = signed?.authority ?? token;
+    const idempotencyKey = signed
       ? admission.signedDeliveryId
       : resolveHookIdempotencyKey({ payload, headers });
     // Later mapped validation errors must report any wake outcome that already occurred.
@@ -654,7 +643,7 @@ export function createHooksRequestHandler(
               dispatchScope.occurrence = occurrence;
             }
             const replayKey = buildHookReplayCacheKey({
-              pathKey: subPath || "mapping",
+              pathKey: signed?.pathKey ?? (subPath || "mapping"),
               token: replayAuthority,
               // Fan-out producers (gog gmail) send no idempotency key, yet a
               // non-2xx batch response makes them redeliver the same batch.
@@ -703,8 +692,15 @@ export function createHooksRequestHandler(
             () => HookAgentDispatchResult | Promise<HookAgentDispatchResult>
           > = [];
           let wakeMode: "now" | "next-heartbeat" | undefined;
+          // Wake actions have no run to replay: remember consumed signed wakes for the replay window.
+          const signedWakeSeen = signed ? signedWakeDeliveries.has(signed.wakeKey) : false;
           for (const action of mapped.actions) {
             if (action.kind === "wake") {
+              if (signedWakeSeen) {
+                wakeResult = wakeResult ?? { eventOutcome: "duplicate" };
+                wakeMode = action.mode;
+                continue;
+              }
               const target = resolveTargetAgentOrRespond(action.agentId, "mapping");
               if (!target) {
                 return true;
@@ -719,6 +715,9 @@ export function createHooksRequestHandler(
               }
               if (!wakeResult || dispatched.eventOutcome === "queued") {
                 wakeResult = dispatched;
+              }
+              if (signed) {
+                signedWakeDeliveries.record(signed.wakeKey, signed.wakeTtlMs);
               }
               wakeMode = action.mode;
               continue;

@@ -174,7 +174,8 @@ required there:
 
 The Gateway verifies the HMAC-SHA256 over the exact request bytes, rejects
 timestamps outside `toleranceSeconds` (default 300) as replays, and uses the
-sender's `webhook-id` as the delivery's replay identity. Provide `secret` as an
+sender's `webhook-id` as the delivery's replay identity (agent runs replay, wake
+actions answer `eventOutcome: "duplicate"`). Provide `secret` as an
 array while the sender rotates its secret. Invalid or missing signatures return
 `401` and count against the same throttle as bad tokens. A signed mapping needs
 its own custom `match.path`; `/hooks/agent` and `/hooks/wake` always require the

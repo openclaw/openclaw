@@ -197,8 +197,13 @@ omitting one; config validation rejects such overlaps so the mapping that
 authenticates a request is the mapping that dispatches it. The signature is
 verified over the exact request bytes with HMAC-SHA256 (Standard Webhooks /
 Svix scheme); the shared hook token is neither required nor sufficient on that
-path. A signed delivery's replay identity is its verified `webhook-id` under
-that mapping; unsigned `Idempotency-Key` or bearer headers do not change it.
+path. The signing secret is looked up again from the live configuration once
+the body has arrived, so a request that outlives a secret rotation or a mapping
+removal is rejected. A signed delivery's replay identity is its verified
+`webhook-id` under that mapping, independent of the URL spelling; unsigned
+`Idempotency-Key` or bearer headers do not change it. For `wake` actions the
+same identity is remembered for at least the replay window, and a redelivery
+answers `eventOutcome: "duplicate"` without enqueueing again.
 
 Templates support `{{payload.field}}` or `{{field}}`, array indexing such as
 `{{messages[0].subject}}`, `{{headers.x-event-type}}`, `{{query.kind}}`, `{{path}}`,

@@ -105,6 +105,10 @@ describe("gateway hook sender signatures", () => {
         headers: signedHeaders("msg_1"),
       });
       expect(replayedNewBearer.status).toBe(200);
+      const replayedAlias = await post(port, "/hooks/ambush/", BODY, {
+        headers: signedHeaders("msg_1"),
+      });
+      expect(replayedAlias.status).toBe(200);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
       // The signature is mandatory on that path: the shared token alone is not enough.
@@ -144,6 +148,44 @@ describe("gateway hook sender signatures", () => {
       });
       expect(agentToken.status).toBe(200);
       await waitForCronRuns(2);
+    });
+  });
+
+  test("dedupes signed wake redeliveries, including path aliases", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "ambush" },
+          action: "wake",
+          textTemplate: "Ambush: {{payload.data.headline}}",
+          signature: { scheme: "standard-webhooks", secret: SECRET },
+        },
+      ],
+    };
+    testState.agentsConfig = { entries: { main: { default: true } } };
+
+    await withGatewayServer(async ({ port }) => {
+      const first = await post(port, "/hooks/ambush", BODY, { headers: signedHeaders("msg_w1") });
+      expect(first.status).toBe(200);
+      await expect(first.json()).resolves.toMatchObject({ ok: true, eventOutcome: "queued" });
+
+      const again = await post(port, "/hooks/ambush", BODY, { headers: signedHeaders("msg_w1") });
+      expect(again.status).toBe(200);
+      await expect(again.json()).resolves.toMatchObject({ ok: true, eventOutcome: "duplicate" });
+
+      const alias = await post(port, "/hooks/ambush/", BODY, { headers: signedHeaders("msg_w1") });
+      expect(alias.status).toBe(200);
+      await expect(alias.json()).resolves.toMatchObject({ ok: true, eventOutcome: "duplicate" });
+
+      // A new delivery id with a different payload is a new wake (identical text would coalesce).
+      const otherBody = BODY.replace("GPT-6", "GPT-7");
+      const fresh = await post(port, "/hooks/ambush", otherBody, {
+        headers: signedHeaders("msg_w2", { body: otherBody }),
+      });
+      expect(fresh.status).toBe(200);
+      await expect(fresh.json()).resolves.toMatchObject({ ok: true, eventOutcome: "queued" });
     });
   });
 });
