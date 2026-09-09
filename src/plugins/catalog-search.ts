@@ -1,21 +1,10 @@
-// ClawHub-backed discovery for installable plugin package families.
-import {
-  searchClawHubPackages,
-  type ClawHubPackageFamily,
-  type ClawHubPackageSearchResult,
-} from "../infra/clawhub-packages.js";
+// ClawHub owns ranking and limiting the combined installable plugin response.
+import type { PluginsSearchParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { fetchClawHubJson, isClawHubTelemetryDisabled } from "../infra/clawhub-client.js";
+import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
 
-const INSTALLABLE_PLUGIN_FAMILIES: readonly ClawHubPackageFamily[] = [
-  "code-plugin",
-  "bundle-plugin",
-];
 const DEFAULT_PLUGIN_SEARCH_LIMIT = 20;
 const MAX_PLUGIN_SEARCH_LIMIT = 100;
-
-type PluginCatalogSearchParams = {
-  query: string;
-  limit?: number;
-};
 
 function resolveSearchLimit(limit: number | undefined): number {
   if (!Number.isFinite(limit) || !limit || limit <= 0) {
@@ -24,34 +13,20 @@ function resolveSearchLimit(limit: number | undefined): number {
   return Math.min(Math.max(Math.trunc(limit), 1), MAX_PLUGIN_SEARCH_LIMIT);
 }
 
-function mergePackageSearchResults(
-  groups: readonly ClawHubPackageSearchResult[][],
-  limit: number,
-): ClawHubPackageSearchResult[] {
-  const byName = new Map<string, ClawHubPackageSearchResult>();
-  for (const entry of groups.flat()) {
-    const existing = byName.get(entry.package.name);
-    if (!existing || entry.score > existing.score) {
-      byName.set(entry.package.name, entry);
-    }
-  }
-  // Stable sorting preserves family query order when ClawHub scores tie.
-  return [...byName.values()].toSorted((left, right) => right.score - left.score).slice(0, limit);
-}
-
-/** Searches installable ClawHub plugin families and merges duplicate packages by best score. */
+/** Returns the exact combined ClawHub response without family fan-out or reranking. */
 export async function searchInstallablePluginPackages(
-  params: PluginCatalogSearchParams,
+  params: PluginsSearchParams,
 ): Promise<ClawHubPackageSearchResult[]> {
-  const limit = resolveSearchLimit(params.limit);
-  const groups = await Promise.all(
-    INSTALLABLE_PLUGIN_FAMILIES.map((family) =>
-      searchClawHubPackages({
-        query: params.query,
-        family,
-        limit,
-      }),
-    ),
-  );
-  return mergePackageSearchResults(groups, limit);
+  const searchSource = isClawHubTelemetryDisabled() ? undefined : params.searchSource;
+  const result = await fetchClawHubJson<{ results: ClawHubPackageSearchResult[] }>({
+    path: "/api/v1/plugins/search",
+    // A completed marked read records demand; replaying it could count twice.
+    retryTransientReads: searchSource === undefined,
+    search: {
+      q: params.query.trim(),
+      limit: String(resolveSearchLimit(params.limit)),
+      searchSource,
+    },
+  });
+  return result.results ?? [];
 }

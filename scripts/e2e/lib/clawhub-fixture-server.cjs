@@ -620,68 +620,50 @@ export default definePluginEntry({
 profiles["catalog-search"] = {
   ...profiles.plugins,
   catalogSearch: {
-    packages: {
-      "code-plugin": [
-        {
-          score: 4,
-          package: {
-            name: "@acme/calendar",
-            displayName: "Calendar",
-            family: "code-plugin",
-            channel: "community",
-            isOfficial: false,
-            summary: "Calendar integration",
-            createdAt: 1,
-            updatedAt: 2,
-            latestVersion: "1.2.3",
-          },
+    packages: [
+      {
+        score: 12,
+        package: {
+          name: "@acme/calendar",
+          displayName: "Calendar Bundle",
+          family: "bundle-plugin",
+          channel: "official",
+          isOfficial: true,
+          summary: "Official calendar bundle",
+          createdAt: 1,
+          updatedAt: 2,
+          latestVersion: "3.0.0",
         },
-        {
-          score: 8,
-          package: {
-            name: "@acme/calendar-code",
-            displayName: "Calendar Code Plugin",
-            family: "code-plugin",
-            channel: "community",
-            isOfficial: false,
-            summary: "Code-only calendar integration",
-            createdAt: 1,
-            updatedAt: 2,
-            latestVersion: "2.0.0",
-          },
+      },
+      {
+        score: 8,
+        package: {
+          name: "@acme/calendar-code",
+          displayName: "Calendar Code Plugin",
+          family: "code-plugin",
+          channel: "community",
+          isOfficial: false,
+          summary: "Code-only calendar integration",
+          createdAt: 1,
+          updatedAt: 2,
+          latestVersion: "2.0.0",
         },
-      ],
-      "bundle-plugin": [
-        {
-          score: 12,
-          package: {
-            name: "@acme/calendar",
-            displayName: "Calendar Bundle",
-            family: "bundle-plugin",
-            channel: "official",
-            isOfficial: true,
-            summary: "Official calendar bundle",
-            createdAt: 1,
-            updatedAt: 3,
-            latestVersion: "3.0.0",
-          },
+      },
+      {
+        score: 6,
+        package: {
+          name: "@acme/calendar-bundle",
+          displayName: "Calendar Bundle Plugin",
+          family: "bundle-plugin",
+          channel: "community",
+          isOfficial: false,
+          summary: "Community calendar bundle",
+          createdAt: 1,
+          updatedAt: 2,
+          latestVersion: "1.0.0",
         },
-        {
-          score: 6,
-          package: {
-            name: "@acme/calendar-bundle",
-            displayName: "Calendar Bundle Plugin",
-            family: "bundle-plugin",
-            channel: "community",
-            isOfficial: false,
-            summary: "Community calendar bundle",
-            createdAt: 1,
-            updatedAt: 2,
-            latestVersion: "1.0.0",
-          },
-        },
-      ],
-    },
+      },
+    ],
     skills: [
       {
         score: 99,
@@ -803,14 +785,12 @@ async function main() {
       return;
     }
     requestLog.push(`${request.method} ${url.pathname}${url.search}`);
-    if (fixture.catalogSearch && url.pathname === "/api/v1/packages/search") {
+    if (fixture.catalogSearch && url.pathname === "/api/v1/plugins/search") {
       if (url.searchParams.get("q") === "unavailable") {
         json(response, { error: "catalog unavailable" }, 503);
         return;
       }
-      const family = url.searchParams.get("family");
-      const results =
-        url.searchParams.get("q") === "empty" ? [] : (fixture.catalogSearch.packages[family] ?? []);
+      const results = url.searchParams.get("q") === "empty" ? [] : fixture.catalogSearch.packages;
       json(response, { results });
       return;
     }

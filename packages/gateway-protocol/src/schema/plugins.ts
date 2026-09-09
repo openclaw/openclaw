@@ -307,6 +307,7 @@ const PluginCapabilityAcknowledgmentSchema = closedObject({
 /** Request payload for searching installable ClawHub plugin families. */
 export const PluginsSearchParamsSchema = closedObject({
   query: NonEmptyString,
+  searchSource: Type.Optional(Type.Literal("openclaw-control-ui")),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
 });
 

@@ -153,19 +153,19 @@ class PluginsPage extends OpenClawLightDomElement {
     setRowMessage: (rowKey, message) => this.setMessage(rowKey, message),
   });
 
-  private readonly searchTask = new Task(this, {
-    args: () =>
-      [
-        this.gateway.connected && this.activeTab === "discover" ? this.gateway.client : null,
-        this.debouncedSearchQuery,
-      ] as const,
-    task: async ([client, query], { signal }) => {
+  private readonly searchTask = new Task<
+    readonly [GatewayBrowserClient | null, string, boolean],
+    PluginSearchResult[]
+  >(this, {
+    // Only the settled input owner dispatches searches; rerenders cannot replay attribution.
+    autoRun: false,
+    task: async ([client, query, manual], { signal }) => {
       if (!client || query.length < 2) {
         return initialState;
       }
       const response = await client.request<{ results: PluginSearchResult[] }>(
         "plugins.search",
-        { query, limit: 20 },
+        { query, limit: 20, ...(manual ? { searchSource: "openclaw-control-ui" } : {}) },
         { signal },
       );
       return response.results;
@@ -310,7 +310,7 @@ class PluginsPage extends OpenClawLightDomElement {
       void this.catalogTask.run([null]);
     }
     this.mcpController.invalidate();
-    void this.searchTask.run([null, ""]);
+    void this.searchTask.run([null, "", false]);
     // Inspection results belong to one connection epoch, including same-client reconnects.
     this.detail = null;
     this.consentController.reset();
@@ -524,13 +524,13 @@ class PluginsPage extends OpenClawLightDomElement {
     this.context.navigate(tab === "skills" ? "skills" : "skill-workshop");
   }
 
-  private changeTab(tab: PluginsTab) {
+  private changeTab(tab: PluginsTab, manual = false) {
     this.activeTab = tab;
     this.clearSearchTimer();
     this.debouncedSearchQuery = "";
-    void this.searchTask.run([null, ""]);
+    void this.searchTask.run([null, "", false]);
     if (tab === "discover") {
-      this.scheduleSearch();
+      this.scheduleSearch(manual);
     }
   }
 
@@ -538,35 +538,35 @@ class PluginsPage extends OpenClawLightDomElement {
     this.query = query;
     this.clearSearchTimer();
     this.debouncedSearchQuery = "";
-    void this.searchTask.run([null, ""]);
+    void this.searchTask.run([null, "", false]);
     if (this.activeTab === "discover") {
-      this.scheduleSearch();
+      this.scheduleSearch(true);
     }
   }
 
   private openClawHubSearch(query: string) {
     this.query = query;
-    this.changeTab("discover");
+    this.changeTab("discover", true);
   }
 
-  private scheduleSearch() {
+  private scheduleSearch(manual = false) {
     const query = this.query.trim();
     if (query.length < 2 || !this.gateway.connected || !this.gateway.client) {
       return;
     }
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
-      void this.searchClawHub(query);
+      void this.searchClawHub(query, manual);
     }, 300);
   }
 
-  private async searchClawHub(query: string) {
+  private async searchClawHub(query: string, manual: boolean) {
     const client = this.gateway.client;
     if (!client || !this.gateway.connected || query.length < 2) {
       return;
     }
     this.debouncedSearchQuery = query;
-    await this.searchTask.run([client, query]);
+    await this.searchTask.run([client, query, manual]);
   }
 
   private mutationBlockedReason(): string | null {

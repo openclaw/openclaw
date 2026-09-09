@@ -259,31 +259,10 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("maps plugin-only ClawHub search results to the public DTO", async () => {
-    searchMock.mockResolvedValue([
-      {
-        score: 0.91,
-        package: {
-          name: "@openclaw/diffs",
-          displayName: "Diffs",
-          family: "code-plugin",
-          channel: "official",
-          isOfficial: true,
-          summary: "Readable diffs",
-          latestVersion: "1.2.3",
-          runtimeId: "diffs",
-          ownerHandle: "openclaw",
-          verificationTier: "source-linked",
-          stats: { downloads: 149263, installs: 280, stars: 0, versions: 83 },
-        },
-      },
-    ]);
-
-    const result = await callHandler("plugins.search", { query: "diff", limit: 12 });
-
-    expect(searchMock).toHaveBeenCalledWith({ query: "diff", limit: 12 });
-    expect(result.response).toEqual({
-      results: [
+  it.each([undefined, "openclaw-control-ui"] as const)(
+    "maps plugin search results and preserves optional attribution: %s",
+    async (searchSource) => {
+      searchMock.mockResolvedValue([
         {
           score: 0.91,
           package: {
@@ -295,13 +274,39 @@ describe("plugin management Gateway handlers", () => {
             summary: "Readable diffs",
             latestVersion: "1.2.3",
             runtimeId: "diffs",
-            downloads: 149263,
+            ownerHandle: "openclaw",
             verificationTier: "source-linked",
+            stats: { downloads: 149263, installs: 280, stars: 0, versions: 83 },
           },
         },
-      ],
-    });
-  });
+      ]);
+
+      const params = { query: "diff", limit: 12, ...(searchSource ? { searchSource } : {}) };
+      const result = await callHandler("plugins.search", params);
+
+      expect(result.ok).toBe(true);
+      expect(searchMock).toHaveBeenCalledWith(params);
+      expect(result.response).toEqual({
+        results: [
+          {
+            score: 0.91,
+            package: {
+              name: "@openclaw/diffs",
+              displayName: "Diffs",
+              family: "code-plugin",
+              channel: "official",
+              isOfficial: true,
+              summary: "Readable diffs",
+              latestVersion: "1.2.3",
+              runtimeId: "diffs",
+              downloads: 149263,
+              verificationTier: "source-linked",
+            },
+          },
+        ],
+      });
+    },
+  );
 
   it("omits malformed ClawHub download stats from the public DTO", async () => {
     searchMock.mockResolvedValue([

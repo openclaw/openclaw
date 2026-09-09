@@ -122,6 +122,13 @@ describe("plugin lifecycle protocol validators", () => {
   it("validates bounded plugin search requests", () => {
     expect(validatePluginsSearchParams({ query: "memory", limit: 20 })).toBe(true);
     expect(validatePluginsSearchParams({ query: "memory", limit: 101 })).toBe(false);
+    expect(
+      validatePluginsSearchParams({ query: "memory", searchSource: "openclaw-control-ui" }),
+    ).toBe(true);
+    for (const searchSource of ["clawhub-web", "cli", "", true]) {
+      expect(validatePluginsSearchParams({ query: "memory", searchSource })).toBe(false);
+    }
+    expect(validatePluginsSearchParams({ query: "memory", userId: "synthetic-user" })).toBe(false);
   });
 
   it("keeps official and ClawHub install requests distinct", () => {

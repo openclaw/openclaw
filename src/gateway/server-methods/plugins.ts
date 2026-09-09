@@ -83,10 +83,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const results = await searchInstallablePluginPackages({
-        query: params.query,
-        limit: params.limit,
-      });
+      const results = await searchInstallablePluginPackages(params);
       respond(
         true,
         {

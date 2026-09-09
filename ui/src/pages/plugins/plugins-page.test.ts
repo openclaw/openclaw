@@ -220,11 +220,15 @@ describe("PluginsPage", () => {
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "w";
     search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(request).not.toHaveBeenCalled();
     search.value = "work";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     search.value = "workboard";
     search.dispatchEvent(new Event("input", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith(
@@ -232,9 +236,25 @@ describe("PluginsPage", () => {
       {
         query: "workboard",
         limit: 20,
+        searchSource: "openclaw-control-ui",
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+
+    // Empty input and leaving Discover cancel pending debounce work.
+    search.value = "";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    search.value = "calendar";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    clickHubTab(page, "installed");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    clickHubTab(page, "discover");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toEqual({ query: "calendar", limit: 20 });
   });
 
   it.each([0, 1, 3])(

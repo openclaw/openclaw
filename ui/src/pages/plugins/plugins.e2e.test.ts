@@ -32,6 +32,7 @@ const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/plugi
 const desktopViewport = { height: 1000, width: 1440 };
 const mobileViewport = { height: 852, width: 393 };
 const restartWarningPattern = /restarts the Gateway immediately[\s\S]*interrupts active sessions/u;
+const manualSearchOptions = { limit: 20, searchSource: "openclaw-control-ui" };
 const pluginMethods = [
   "plugins.list",
   "plugins.inspect",
@@ -500,7 +501,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
           const searchRequest = await gateway.waitForRequest("plugins.search");
           expect(requestParams(searchRequest)).toEqual({
             query: "@openclaw/workboard",
-            limit: 20,
+            ...manualSearchOptions,
           });
         }
       } finally {
@@ -588,7 +589,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       // Search is unified: results append below the discover shelves.
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
       const searchRequest = await gateway.waitForRequest("plugins.search");
-      expect(requestParams(searchRequest)).toEqual({ query: "calendar", limit: 20 });
+      expect(requestParams(searchRequest)).toEqual({ query: "calendar", ...manualSearchOptions });
       await page.getByRole("heading", { name: /^From ClawHub/u }).waitFor();
       const searchRow = page.locator('[data-package-name="calendar-plus"]');
       await searchRow.waitFor({ state: "visible" });
@@ -1015,7 +1016,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.getByRole("tab", { name: /^Discover/u }).click();
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
       const searchRequest = await gateway.waitForRequest("plugins.search");
-      expect(requestParams(searchRequest)).toEqual({ query: "calendar", limit: 20 });
+      expect(requestParams(searchRequest)).toEqual({ query: "calendar", ...manualSearchOptions });
       const installButton = page
         .locator('[data-package-name="calendar-plus"]')
         .getByRole("button", { name: "Install Calendar Plus", exact: true });

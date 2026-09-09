@@ -1,80 +1,98 @@
-// Plugin catalog search tests cover family queries, score merging, and bounded results.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Catalog boundary proof uses the real ClawHub HTTP client.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawHubFetch } from "../infra/clawhub-client.js";
+import { searchInstallablePluginPackages } from "./catalog-search.js";
 
-const mocks = vi.hoisted(() => ({
-  searchClawHubPackages: vi.fn(),
-}));
+beforeEach(() => {
+  vi.stubEnv("CLAWHUB_TOKEN", "synthetic-clawhub-token");
+  vi.stubEnv("CLAWHUB_DISABLE_TELEMETRY", "false");
+});
 
-vi.mock("../infra/clawhub-packages.js", () => ({
-  searchClawHubPackages: mocks.searchClawHubPackages,
-}));
-
-const { searchInstallablePluginPackages } = await import("./catalog-search.js");
-
-function searchResult(name: string, family: "code-plugin" | "bundle-plugin", score: number) {
-  return {
-    score,
-    package: {
-      name,
-      displayName: name,
-      family,
-      channel: "community" as const,
-      isOfficial: false,
-      createdAt: 1,
-      updatedAt: 1,
-    },
-  };
-}
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe("plugin catalog search", () => {
-  beforeEach(() => {
-    mocks.searchClawHubPackages.mockReset();
+  it("returns one combined response for a marked search without adding identity metadata", async () => {
+    const results = [
+      { score: 9, package: { name: "calendar-bundle", family: "bundle-plugin", isOfficial: true } },
+      { score: 4, package: { name: "calendar-code", family: "code-plugin", isOfficial: false } },
+    ];
+    const fetch = vi.fn<ClawHubFetch>(async () => Response.json({ results }));
+    vi.stubGlobal("fetch", fetch);
+
+    expect(
+      await searchInstallablePluginPackages({
+        query: " calendar ",
+        limit: 2,
+        searchSource: "openclaw-control-ui",
+      }),
+    ).toEqual(results);
+
+    expect(fetch).toHaveBeenCalledOnce();
+    const [input, init] = fetch.mock.calls[0]!;
+    const url = new URL(input instanceof Request ? input.url : input);
+    expect(url.pathname).toBe("/api/v1/plugins/search");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      q: "calendar",
+      limit: "2",
+      searchSource: "openclaw-control-ui",
+    });
+    expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
+      authorization: "Bearer synthetic-clawhub-token",
+    });
   });
 
-  it("queries both installable families and merges duplicate packages by best score", async () => {
-    mocks.searchClawHubPackages
-      .mockResolvedValueOnce([
-        searchResult("shared", "code-plugin", 4),
-        searchResult("code-only", "code-plugin", 8),
-      ])
-      .mockResolvedValueOnce([
-        searchResult("shared", "bundle-plugin", 9),
-        searchResult("bundle-only", "bundle-plugin", 6),
-      ]);
+  it("does not replay a marked search after a transport failure", async () => {
+    const fetch = vi
+      .fn<ClawHubFetch>()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue(Response.json({ results: [] }));
+    vi.stubGlobal("fetch", fetch);
 
-    const results = await searchInstallablePluginPackages({ query: "calendar", limit: 2 });
-
-    expect(mocks.searchClawHubPackages).toHaveBeenNthCalledWith(1, {
-      query: "calendar",
-      family: "code-plugin",
-      limit: 2,
-    });
-    expect(mocks.searchClawHubPackages).toHaveBeenNthCalledWith(2, {
-      query: "calendar",
-      family: "bundle-plugin",
-      limit: 2,
-    });
-    expect(results.map((entry) => [entry.package.name, entry.score])).toEqual([
-      ["shared", 9],
-      ["code-only", 8],
-    ]);
-    expect(results[0]?.package.family).toBe("bundle-plugin");
+    await expect(
+      searchInstallablePluginPackages({
+        query: "calendar",
+        searchSource: "openclaw-control-ui",
+      }),
+    ).rejects.toThrow("fetch failed");
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it("uses the default limit for invalid programmatic values", async () => {
-    mocks.searchClawHubPackages.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+  it.each([
+    [Number.NaN, "20"],
+    [101, "100"],
+  ] as const)(
+    "bounds unmarked programmatic limit %s without attributing demand",
+    async (limit, expected) => {
+      const fetch = vi.fn<ClawHubFetch>(async () => Response.json({ results: [] }));
+      vi.stubGlobal("fetch", fetch);
+      await searchInstallablePluginPackages({ query: "calendar", limit });
+      expect(fetch).toHaveBeenCalledOnce();
+      const [input] = fetch.mock.calls[0]!;
+      const url = new URL(input instanceof Request ? input.url : input);
+      expect(Object.fromEntries(url.searchParams)).toEqual({ q: "calendar", limit: expected });
+    },
+  );
 
-    await searchInstallablePluginPackages({ query: "calendar", limit: Number.NaN });
+  it("honors the existing telemetry opt-out without changing search results", async () => {
+    vi.stubEnv("CLAWHUB_DISABLE_TELEMETRY", "true");
+    const results = [
+      { score: 2, package: { name: "calendar", family: "code-plugin", isOfficial: false } },
+    ];
+    const fetch = vi.fn<ClawHubFetch>(async () => Response.json({ results }));
+    vi.stubGlobal("fetch", fetch);
 
-    expect(mocks.searchClawHubPackages).toHaveBeenCalledWith({
-      query: "calendar",
-      family: "code-plugin",
-      limit: 20,
-    });
-    expect(mocks.searchClawHubPackages).toHaveBeenCalledWith({
-      query: "calendar",
-      family: "bundle-plugin",
-      limit: 20,
-    });
+    expect(
+      await searchInstallablePluginPackages({
+        query: "calendar",
+        searchSource: "openclaw-control-ui",
+      }),
+    ).toEqual(results);
+    expect(fetch).toHaveBeenCalledOnce();
+    const [input] = fetch.mock.calls[0]!;
+    const url = new URL(input instanceof Request ? input.url : input);
+    expect(Object.fromEntries(url.searchParams)).toEqual({ q: "calendar", limit: "20" });
   });
 });

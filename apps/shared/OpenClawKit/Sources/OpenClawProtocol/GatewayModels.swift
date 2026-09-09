@@ -22317,14 +22317,23 @@ public struct PluginsRefreshResult: Codable, Sendable {
 
 public struct PluginsSearchParams: Codable, Sendable {
     public let query: String
+    public let searchsource: String?
     public let limit: Int?
 
     public init(
         query: String,
+        searchsource: String? = nil,
         limit: Int? = nil)
     {
         self.query = query
+        self.searchsource = searchsource
         self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case searchsource = "searchSource"
+        case limit
     }
 }
 

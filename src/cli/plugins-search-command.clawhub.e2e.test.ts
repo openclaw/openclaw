@@ -172,10 +172,13 @@ describe("openclaw plugins search ClawHub E2E", () => {
     expect(unavailable.errors.join("\n")).toContain("catalog unavailable");
 
     const requests = await readRequestLog(baseUrl);
+    expect(requests.filter((request) => request.includes("searchSource="))).toEqual([]);
+    expect(
+      requests.filter((request) => request === "GET /api/v1/plugins/search?q=calendar&limit=5"),
+    ).toHaveLength(2);
     expect(requests).toEqual(
       expect.arrayContaining([
-        "GET /api/v1/packages/search?q=calendar&family=code-plugin&limit=5",
-        "GET /api/v1/packages/search?q=calendar&family=bundle-plugin&limit=5",
+        "GET /api/v1/plugins/search?q=calendar&limit=5",
         "GET /api/v1/search?q=calendar&limit=5",
       ]),
     );

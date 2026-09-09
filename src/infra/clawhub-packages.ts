@@ -411,30 +411,6 @@ export async function fetchClawHubPackageSecurity(params: {
   return parseClawHubPackageSecurityResponse(response);
 }
 
-export async function searchClawHubPackages(params: {
-  query: string;
-  family?: ClawHubPackageFamily;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-  limit?: number;
-}): Promise<ClawHubPackageSearchResult[]> {
-  const result = await fetchClawHubJson<{ results: ClawHubPackageSearchResult[] }>({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/packages/search",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      q: params.query.trim(),
-      family: params.family,
-      limit: params.limit ? String(params.limit) : undefined,
-    },
-  });
-  return result.results ?? [];
-}
-
 export async function reportClawHubPluginInstallTelemetry(params: {
   baseUrl?: string;
   token?: string;
