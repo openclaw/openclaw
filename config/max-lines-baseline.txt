@@ -809,7 +809,6 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/lib/cron/index.test.ts
 ui/src/lib/cron/index.ts
-ui/src/lib/nodes/index.ts
 ui/src/lib/skills/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/dreaming.test.ts

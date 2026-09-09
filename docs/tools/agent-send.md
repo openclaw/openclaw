@@ -135,7 +135,7 @@ openclaw agent --agent ops --message-file ./task.md
 # Exact session key
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
 
-# Legacy key scoped to an agent
+# Bare key scoped to an agent
 openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
 
 # Deliver to a different channel than the session

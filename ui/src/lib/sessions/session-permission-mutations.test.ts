@@ -331,7 +331,7 @@ it.each(["success", "failure"])(
         key,
         permissionMode: "full",
         sessionId,
-        updatedAt: outcome === "failure" ? 3 : 2,
+        updatedAt: 3,
       }),
     ]);
     expect(sessions.state.error).toBeNull();

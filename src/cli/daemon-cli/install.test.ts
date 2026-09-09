@@ -1,5 +1,6 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
@@ -11,6 +12,7 @@ type DaemonActionResponse = Parameters<
 >[0];
 
 const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
+const runExecMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
@@ -82,12 +84,17 @@ const service = vi.hoisted(() => ({
   restart: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
   readDefinitionMutationCapability: vi.fn(async () => ({ kind: "writable" as const })),
-  readCommand: vi.fn(async () => null),
+  readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(async () => null),
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
 
 vi.mock("../../bootstrap/node-startup-env.js", () => ({
   resolveNodeStartupTlsEnvironment: resolveNodeStartupTlsEnvironmentMock,
+}));
+
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  runExec: runExecMock,
 }));
 
 vi.mock("../../config/io.js", () => ({
@@ -241,9 +248,15 @@ function mockResolvedGatewayTokenSecretRef() {
 const { runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
 
+function nodeProbeOutput(nodeVersion: string, sqliteVersion = "3.53.4") {
+  return { stdout: JSON.stringify({ nodeVersion, sqliteVersion }), stderr: "" };
+}
+
 describe("runDaemonInstall", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
+    runExecMock.mockReset();
+    runExecMock.mockResolvedValue(nodeProbeOutput("26.8.1"));
     resolveNodeStartupTlsEnvironmentMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     resolveGatewayPortMock.mockClear();
@@ -748,6 +761,50 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
     expectLastEmittedResult("already-installed");
   });
+
+  it.each(["3.53.4", "3.51.0"])(
+    "preserves a supported Node version with SQLite %s without force",
+    async (sqliteVersion) => {
+      service.isLoaded.mockResolvedValue(true);
+      service.readCommand.mockResolvedValue({
+        programArguments: ["/opt/supported/bin/node", "/opt/openclaw/dist/index.js", "gateway"],
+      });
+      runExecMock.mockResolvedValue(nodeProbeOutput("26.8.1", sqliteVersion));
+      await runDaemonInstall({ json: true });
+      expectLastEmittedResult("already-installed");
+      expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { failure: "probe", message: "openclaw gateway install --force" },
+    { failure: "no-replacement", message: "No supported Node runtime is available" },
+    { failure: "sealed-definition", message: "SERVICE_DEFINITION_UNKNOWN" },
+  ])(
+    "refuses runtime repair on $failure without claiming success",
+    async ({ failure, message }) => {
+      service.isLoaded.mockResolvedValue(true);
+      const oldNode = failure === "probe" ? process.execPath : "/opt/old/bin/node";
+      service.readCommand.mockResolvedValue({
+        programArguments: [oldNode, "/opt/openclaw/dist/index.js", "gateway"],
+      });
+      runExecMock.mockImplementation(async (file: string) => {
+        if (failure === "probe") {
+          throw new Error("runtime probe timed out");
+        }
+        return nodeProbeOutput(
+          failure === "sealed-definition" && file !== oldNode ? "26.8.1" : "22.23.1",
+        );
+      });
+      if (failure === "sealed-definition") {
+        service.readDefinitionMutationCapability.mockRejectedValue(new Error("sealed"));
+      }
+      await runDaemonInstall({ json: true });
+      expect(actionState.failed[0]?.message).toContain(message);
+      expect(actionState.emitted).toEqual([]);
+      expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("reinstalls when the loaded service still embeds OPENCLAW_GATEWAY_TOKEN", async () => {
     const programArguments = [

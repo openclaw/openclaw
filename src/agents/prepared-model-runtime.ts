@@ -58,6 +58,7 @@ import {
   resolveSafeRefreshAgentIds,
   updateOwnersForScopedRefresh,
 } from "./prepared-model-runtime.refresh-scope.js";
+import { closeEphemeralPreparedModelRuntimeResources } from "./prepared-model-runtime.resources.js";
 import { PreparedModelRuntimeOwnerRetention } from "./prepared-model-runtime.retention.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -121,16 +122,30 @@ async function closeModelRuntime(error: Error): Promise<void> {
   authPublication.reset(error);
   pendingModelRuntimeReplacement?.reject(error);
   pendingModelRuntimeReplacement = undefined;
+  const resourcesClosed = closeEphemeralPreparedModelRuntimeResources();
+  for (const owner of owners.values()) {
+    owner.resourceClaim?.release();
+    owner.resourceClaim = undefined;
+  }
   owners.clear();
   retainedDirectRunOwners.clear(owners);
   retainedGatewayRunOwners.clear(owners);
   gatewayLifecycleActive = false;
   replyDispatchPublication.clear();
-  await Promise.all([
+  const closed = await Promise.allSettled([
     refreshTail,
     ...agentBuildCompletions.values(),
     ...standaloneActivationTails.values(),
+    resourcesClosed,
   ]);
+  // A loader that settled after the close fence still owns its failed admission cleanup.
+  const lateResources = await Promise.allSettled([closeEphemeralPreparedModelRuntimeResources()]);
+  const failures = [...closed, ...lateResources].flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length) {
+    throw new AggregateError(failures, "Prepared model runtime resources failed to close");
+  }
   releaseProcessLifetime?.();
   releaseProcessLifetime = undefined;
 }

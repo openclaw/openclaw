@@ -116,16 +116,36 @@ never download timing artifacts or consult restored timing caches. Missing or
 invalid timing files, or `OPENCLAW_CI_TEST_TIMINGS=0`, use the cold-start estimates
 for the entire file; stale keys cannot change the discovered test inventory.
 
-With an authenticated `gh` CLI, run `pnpm ci:timings:refit` to regenerate the file
-from all attempts of the last five successful `ci.yml` push runs on `main`, plus
-the last five successful manual runs of each release-check workflow that owns
-Gateway E2E. The refit validates run metadata before reading job logs; ordinary
-manual CI dispatches are rejected because their measured target can differ from
-the workflow head. Release workflows validate their selected target before tests,
-and their temporary branch identifies tooling rather than the measured source.
-Use `--runs <n>` to change
-the sample window, `--repo <owner/repo>` to select a repository, `--out <path>` to
-write elsewhere, or `--dry-run` to print changed entries without writing.
+With an authenticated `gh` CLI, run `pnpm ci:timings:refit` to regenerate the file.
+Each invocation freezes one UTC upper bound and a lower bound seven days earlier.
+Every run-list page uses both bounds. Returned run timestamps and successful job
+timestamps outside that window fail validation.
+
+The refit seeks up to five successful `ci.yml` push runs on `main` with parsed
+compact measurements. Docs-only runs and unparseable logs do not fill that quota.
+It also samples up to five successful manual runs of each release-check workflow
+that owns Gateway E2E. Run searches remain bounded by 25 pages and GitHub's
+1,000-result filtered-query limit. Incomplete pagination fails without writing.
+
+For each selected run, the refit captures `run_attempt` and enumerates attempts
+one through that value. It verifies each job's run ID, attempt and workflow SHA
+before reading successful, completed jobs. This retains original successful jobs
+when a partial retry runs only failed jobs. Duplicate run and job IDs do not add
+samples. Ordinary manual CI dispatches remain excluded because their measured
+target can differ from the workflow head. Release workflows validate their
+selected target before tests. Their workflow SHA identifies tooling, not the
+measured source.
+
+Use `--runs <n>` to change the run quota, not the seven-day window.
+Use `--repo <owner/repo>` to select a repository, `--out <path>` to write elsewhere,
+or `--dry-run` to report changes without writing. The report separates main and
+release observations, including run IDs, attempts, workflow SHAs, creation dates,
+parsed profiles and timing-job counts.
+
+Fewer than two independent main compact contributors fails the invocation.
+It also fails if no compact key meets the existing independent-run sampling rules.
+Retained baseline weights and release measurements cannot satisfy these checks.
+Both failures leave the timing file unchanged.
 Measurements come only from successful UI E2E, Gateway E2E, and compact jobs; compact groups
 also require an `exit 0` marker. Each entry needs at least two run samples;
 multiple attempts within one run still contribute only one sample per key and

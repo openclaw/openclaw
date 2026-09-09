@@ -190,19 +190,21 @@ describe("prepared model runtime snapshots", () => {
     lease.release();
   });
 
-  it("loads provider runtime for an isolated native-harness probe", () => {
+  it("loads provider runtime for an isolated native-harness probe", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
 
     expect(
-      prepareWorkspacePluginRegistries(
-        {
-          config: {},
-          agentDir: "/tmp/native-provider-probe",
-          readOnly: true,
-          loadRuntimePlugins: true,
-        },
-        mocks.pluginMetadataSnapshot as never,
+      (
+        await prepareWorkspacePluginRegistries(
+          {
+            config: {},
+            agentDir: "/tmp/native-provider-probe",
+            readOnly: true,
+            loadRuntimePlugins: true,
+          },
+          mocks.pluginMetadataSnapshot as never,
+        )
       ).runtimePluginRegistry,
     ).toBe(pluginRegistry);
     expect(

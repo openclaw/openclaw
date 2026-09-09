@@ -144,4 +144,4 @@ as provided after trimming trailing slashes.
 
 - [Web Search overview](/tools/web) -- all providers and auto-detection
 - [Brave Search](/tools/brave-search) -- structured results with snippets
-- [Perplexity Search](/tools/perplexity-search) -- structured results + content extraction
+- [Perplexity Search](/tools/perplexity-search) -- structured results with domain filtering

@@ -180,9 +180,11 @@ Commands come from three sources:
 
 - **Core built-ins:** `src/auto-reply/commands-registry.shared.ts`
 - **Plugin commands:** plugin `registerCommand()` calls
+- **Skill commands:** commands exported by installed skills, assembled in
+  `src/auto-reply/commands-registry-list.ts`
 
-Availability depends on config flags, channel surface, and installed/enabled
-plugins.
+Availability depends on config flags, channel surface, installed/enabled
+plugins, and installed skills.
 
 ### Core commands
 

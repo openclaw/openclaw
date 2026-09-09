@@ -4,7 +4,7 @@ read_when:
   - Configuring exec approvals or allowlists
   - Inspecting or revoking durable MCP tool grants
   - Implementing exec approval UX in the macOS app
-  - Reviewing sandbox-escape prompts and their implications
+  - Reviewing host-execution approval prompts from a sandboxed agent and their implications
 title: "Exec approvals"
 sidebarTitle: "Exec approvals"
 ---
@@ -121,9 +121,9 @@ The default approval socket follows the same root:
 State directories are independent trust scopes. When `OPENCLAW_STATE_DIR`
 points somewhere else, OpenClaw never imports or archives approvals from the
 default state directory; configure approvals separately for the custom state
-directory. After upgrading from a file-backed release, stop the Gateway and run
-`openclaw doctor --fix` once to import the active state directory's retired
-`exec-approvals.json`. Doctor also imports legacy
+directory. If the active state directory still contains a legacy
+`exec-approvals.json`, stop the Gateway and run `openclaw doctor --fix` once to
+import it. Doctor also imports legacy
 `plugin-binding-approvals.json` only when it belongs to the active state
 directory.
 

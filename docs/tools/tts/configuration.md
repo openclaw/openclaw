@@ -410,7 +410,13 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\speech_download_models.ps1
 ```
 
-Then point Local CLI at the packaged Kokoro executable:
+`Set-ExecutionPolicy -Scope Process Bypass` lets the unsigned
+`speech_download_models.ps1` run in this shell only. `-Scope Process` does not
+change the machine or user execution policy, and the relaxation ends when the
+shell exits.
+
+Then point Local CLI at the packaged Kokoro executable. Replace `C:\path\to`
+with your extraction directory, and `0.0.11` with the `$Version` you downloaded:
 
 ```json5
 {
@@ -469,7 +475,8 @@ To pin a per-agent persona, set `agents.entries.*.tts.persona` alongside provide
 config — it overrides the global `tts.persona` for that agent only.
 
 Precedence order for automatic replies, `/tts audio`, `/tts status`, and the
-`tts` agent tool:
+`tts` agent tool. Later layers win: each layer deep-merges over the ones above
+it, so the last layer that sets a field decides its value.
 
 1. `tts`
 2. active `agents.entries.*.tts`
