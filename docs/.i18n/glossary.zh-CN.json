@@ -2284,6 +2284,22 @@
     "target": "CI 范围与路由"
   },
   {
+    "source": "Scope selection",
+    "target": "范围选择"
+  },
+  {
+    "source": "Node test lanes",
+    "target": "Node 测试通道"
+  },
+  {
+    "source": "Job budgets and platform lanes",
+    "target": "作业预算与平台通道"
+  },
+  {
+    "source": "Manual dispatches",
+    "target": "手动触发"
+  },
+  {
     "source": "CI runner classes",
     "target": "CI 运行器类型"
   },

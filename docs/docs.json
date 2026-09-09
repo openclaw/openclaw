@@ -3028,6 +3028,15 @@
                       "ci/watching-runs",
                       "ci/checkout",
                       "ci/scope-and-routing",
+                      {
+                        "group": "Scope and routing",
+                        "pages": [
+                          "ci/scope-and-routing/selection",
+                          "ci/scope-and-routing/node-test-lanes",
+                          "ci/scope-and-routing/job-budgets",
+                          "ci/scope-and-routing/manual-dispatches"
+                        ]
+                      },
                       "ci/runners",
                       "ci/capacity",
                       "ci/release-validation",
