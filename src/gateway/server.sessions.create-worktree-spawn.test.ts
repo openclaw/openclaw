@@ -162,6 +162,37 @@ test("trusted same-agent worktree spawns inherit the parent's selected project",
   await expect(fs.stat(path.join(childPath, "setup-marker.txt"))).rejects.toThrow();
 });
 
+test("sandbox-originated worktree preparation does not execute repository SSH commands on the Gateway", async () => {
+  testState.agentConfig = {
+    workspace: repository,
+    sandbox: { mode: "all", workspaceAccess: "rw" },
+  };
+  const config = await getGatewayConfigModule();
+  config.clearRuntimeConfigSnapshot();
+  config.clearConfigCache();
+  const marker = path.join(state.root, "gateway-host-marker");
+  const sshCommand = path.join(state.root, "repository-ssh-command.sh");
+  await fs.writeFile(
+    sshCommand,
+    `#!/bin/sh\nprintf '%s\\n' 'executed-on-gateway' > ${JSON.stringify(marker)}\nexit 1\n`,
+    { mode: 0o755 },
+  );
+  await execFileAsync("git", ["-C", repository, "config", "core.sshCommand", sshCommand]);
+  await execFileAsync("git", [
+    "-C",
+    repository,
+    "remote",
+    "add",
+    "origin",
+    "ssh://invalid@127.0.0.1:1/does-not-exist",
+  ]);
+
+  const created = await createChild({ worktreeName: "sandbox-boundary-proof" });
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(managedWorktrees.findLiveByOwner("session", created.payload!.key)?.baseRef).toBe("HEAD");
+  await expect(fs.stat(marker)).rejects.toThrow();
+});
+
 test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {
   const params = { ...parentCreateParams, cwd: repository };
   closeOpenClawStateDatabaseForTest();

@@ -10,6 +10,7 @@ import {
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
@@ -455,6 +456,26 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         requestedCwd ??
         inheritedSource?.workspace ??
         resolveAgentWorkspaceDir(cfg, target.agentId);
+      const requesterWorkspaceAuthority =
+        spawnRequesterSessionKey &&
+        sessionCreation.actor?.type === "agent" &&
+        normalizeAgentId(sessionCreation.actor.id) === target.agentId
+          ? resolveSandboxWorkspaceAuthority({
+              config: cfg,
+              agentId: target.agentId,
+              sessionKey: spawnRequesterSessionKey,
+            })
+          : undefined;
+      // A sandbox-writable source may contain command-bearing Git configuration.
+      // Keep agent-originated worktree creation local instead of letting Gateway
+      // default-base resolution fetch through repository-selected transports.
+      const effectiveWorktreeBaseRef =
+        worktreeBaseRef ??
+        (!existingTargetEntry?.worktree &&
+        requesterWorkspaceAuthority?.sandboxed === true &&
+        requesterWorkspaceAuthority.workspaceAccess === "rw"
+          ? "HEAD"
+          : undefined);
       // Git discovery permits subdirectory workspaces with an ancestor .git entry.
       if (!requestedProjectGitUrl && !insideGitCheckout(workspace)) {
         respond(
@@ -466,8 +487,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       }
       // Reuse validates the binding, not a selected ref that may have since disappeared.
       const resolvedBase =
-        worktreeBaseRef && !requestedProjectGitUrl && !existingTargetEntry?.worktree
-          ? await resolveSessionWorktreeBase(workspace, worktreeBaseRef, signal)
+        effectiveWorktreeBaseRef && !requestedProjectGitUrl && !existingTargetEntry?.worktree
+          ? await resolveSessionWorktreeBase(workspace, effectiveWorktreeBaseRef, signal)
           : undefined;
       if (resolvedBase && !resolvedBase.ok) {
         return respond(false, undefined, resolvedBase.error);
@@ -478,7 +499,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         pendingWorktree = {
           ...(requestedProjectGitUrl ? {} : { workspace }),
           name: requestedWorktreeName,
-          baseRef: worktreeBaseRef,
+          baseRef: effectiveWorktreeBaseRef,
           baseCommit,
           titleSource: buildDashboardSessionTitleSource({
             message: initialMessage ?? "",
@@ -526,7 +547,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             target: lifecycleTarget,
             workspace,
             name: requestedWorktreeName,
-            baseRef: worktreeBaseRef,
+            baseRef: effectiveWorktreeBaseRef,
             checkoutCommit: baseCommit,
             label:
               explicitSessionLabel ??
