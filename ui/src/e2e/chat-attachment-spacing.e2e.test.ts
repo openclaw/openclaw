@@ -211,7 +211,8 @@ suite.define(() => {
         ];
         const scenarios = users.flatMap((user) =>
           cases.map((item) => ({
-            ...item,
+            name: item.name,
+            media: item.media,
             user,
             text: `${user.name}: ${item.name}. Please compare the completed update steps with the expected release notes.`,
           })),
