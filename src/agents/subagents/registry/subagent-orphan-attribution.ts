@@ -49,11 +49,11 @@ export type SubagentOrphanAttribution = {
   /** Lifetime measured from the death, never from the reap. */
   elapsedMs: number;
   elapsedBound: SubagentOrphanElapsedBound;
-  /** How long the gateway was absent before it could reap the run. */
-  downtimeMs: number;
+  /** Interval between the death bound and restart, not measured downtime. */
+  restartGapMs: number;
   /** True when uptime-derived boot evidence forces a generic restart cause. */
   hostContinuityInferred: boolean;
-  assistantMessageCount: number;
+  hasRecordedOutput: boolean;
 };
 
 /**
@@ -128,7 +128,7 @@ function resolveDeathEvidence(params: {
 export function resolveSubagentOrphanAttribution(params: {
   runStartedAtMs: number;
   lastActivityAtMs?: number;
-  assistantMessageCount?: number;
+  hasRecordedOutput?: boolean;
   boots: readonly GatewayBootLifecycleSegment[];
   currentBootId?: string;
 }): SubagentOrphanAttribution | null {
@@ -181,9 +181,9 @@ export function resolveSubagentOrphanAttribution(params: {
     diedAtEvidence: death.evidence,
     elapsedMs: Math.max(0, death.diedAtMs - params.runStartedAtMs),
     elapsedBound: death.bound,
-    downtimeMs: Math.max(0, successor.startedAtMs - death.diedAtMs),
+    restartGapMs: Math.max(0, successor.startedAtMs - death.diedAtMs),
     hostContinuityInferred: continuity.inferred,
-    assistantMessageCount: Math.max(0, params.assistantMessageCount ?? 0),
+    hasRecordedOutput: params.hasRecordedOutput === true,
   };
 }
 
@@ -226,27 +226,26 @@ function describeEvidence(attribution: SubagentOrphanAttribution): string {
 /**
  * Renders the attribution as the run's recorded error. Every clause is
  * something the database can back: the cause, when the gateway came back, which
- * boot died, how long the run really lived, and how much of the apparent delay
- * was the gateway simply being absent.
+ * boot died, the bounded run lifetime, and the interval from its last recorded
+ * activity to the restart. Neither message cardinality nor exact downtime is known.
  */
 export function formatSubagentOrphanErrorMessage(attribution: SubagentOrphanAttribution): string {
   const restartedAt = new Date(attribution.restartedAtMs).toISOString();
   const inferredNote = attribution.hostContinuityInferred
     ? " [host boot identity derived from uptime; restart cause kept generic]"
     : "";
-  const messages =
-    attribution.assistantMessageCount === 1
-      ? "1 assistant message recorded"
-      : `${attribution.assistantMessageCount} assistant messages recorded`;
-  const downtime =
+  const output = attribution.hasRecordedOutput
+    ? "output recorded in the run registry"
+    : "no output recorded in the run registry";
+  const restartGap =
     attribution.diedAtEvidence === "successor_boot_start"
       ? ""
-      : `; gateway absent ${describeDuration(attribution.downtimeMs)} before the run could be reaped`;
+      : `; gateway restarted ${describeDuration(attribution.restartGapMs)} after the run's last recorded activity`;
   return (
     `${describeCause(attribution)} at ${restartedAt} ` +
     `(previous boot ${attribution.priorBootId} ended without a clean stop); ` +
     `run orphaned after ${describeElapsed(attribution)} ${describeEvidence(attribution)}, ` +
-    `${messages}${downtime}${inferredNote}`
+    `${output}${restartGap}${inferredNote}`
   );
 }
 
@@ -298,21 +297,11 @@ export function resolveSubagentRunLastActivityMs(entry: SubagentRunRecord): numb
 }
 
 /**
- * Counts what the run is recorded as having produced.
- *
- * The registry persists captured result text rather than a transcript, so this
- * distinguishes "produced something" from "produced nothing" and does not claim
- * a precise count it cannot support. Zero here is the fact the notification
- * path gates on: a run that died having said nothing is the one case the
- * spawning session cannot recover from on its own.
+ * Captured primary and fallback text are alternative snapshots, not message
+ * records. Their absence says nothing about uncaptured transcript output.
  */
-export function countRecordedSubagentAssistantMessages(entry: SubagentRunRecord): number {
-  let count = 0;
-  if (entry.completion?.resultText?.trim()) {
-    count += 1;
-  }
-  if (entry.completion?.fallbackResultText?.trim()) {
-    count += 1;
-  }
-  return count;
+export function hasRecordedSubagentOutput(entry: SubagentRunRecord): boolean {
+  return Boolean(
+    entry.completion?.resultText?.trim() || entry.completion?.fallbackResultText?.trim(),
+  );
 }

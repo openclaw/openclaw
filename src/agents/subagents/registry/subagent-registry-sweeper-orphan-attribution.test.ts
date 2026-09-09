@@ -165,7 +165,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     expect(completion.outcome.status).toBe("error");
     expect(completion.outcome.error).toContain("host rebooted under the gateway");
     expect(completion.outcome.error).toContain("boot-minus-5 ended without a clean stop");
-    expect(completion.outcome.error).toContain("0 assistant messages recorded");
+    expect(completion.outcome.error).toContain("no output recorded in the run registry");
     expect(completion.outcome.error).not.toContain("lost active execution context");
     // The row is completed rather than deleted out from under the requester.
     expect(runs.has("orphaned-run")).toBe(true);

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBootLifecycleSegment } from "../../../infra/gateway-boot-lifecycle.js";
 import {
-  countRecordedSubagentAssistantMessages,
   formatSubagentOrphanErrorMessage,
+  hasRecordedSubagentOutput,
   resolveSubagentOrphanAttribution,
   resolveSubagentRunLastActivityMs,
 } from "./subagent-orphan-attribution.js";
@@ -63,7 +63,7 @@ describe("resolveSubagentOrphanAttribution", () => {
     const attribution = resolveSubagentOrphanAttribution({
       runStartedAtMs: RUN_STARTED_AT,
       lastActivityAtMs: RUN_DIED_AT,
-      assistantMessageCount: 0,
+      hasRecordedOutput: false,
       boots: [
         bootSegment({ bootId: "boot-minus-5", startedAtMs: RUN_STARTED_AT - 60_000 }),
         bootSegment({ bootId: "boot-minus-4", startedAtMs: GATEWAY_RESTARTED_AT }),
@@ -72,7 +72,7 @@ describe("resolveSubagentOrphanAttribution", () => {
     expect(attribution).not.toBeNull();
     expect(attribution?.priorBootId).toBe("boot-minus-5");
     expect(attribution?.restartedAtMs).toBe(GATEWAY_RESTARTED_AT);
-    expect(attribution?.assistantMessageCount).toBe(0);
+    expect(attribution?.hasRecordedOutput).toBe(false);
   });
 
   it("measures elapsed lifetime from the death, not from the reap", () => {
@@ -90,8 +90,8 @@ describe("resolveSubagentOrphanAttribution", () => {
     expect(attribution?.elapsedMs).not.toBe(RUN_REAPED_AT - RUN_STARTED_AT);
     expect(attribution?.diedAtEvidence).toBe("last_activity");
     expect(attribution?.elapsedBound).toBe("at_least");
-    // The 33m38s outage is reported as downtime rather than as run lifetime.
-    expect(attribution?.downtimeMs).toBe(GATEWAY_RESTARTED_AT - RUN_DIED_AT);
+    // The gap starts at last activity; execution may have continued before the crash.
+    expect(attribution?.restartGapMs).toBe(GATEWAY_RESTARTED_AT - RUN_DIED_AT);
   });
 
   it("falls back to the successor boot start as an upper bound when activity is unknown", () => {
@@ -241,11 +241,11 @@ describe("resolveSubagentOrphanAttribution", () => {
 });
 
 describe("formatSubagentOrphanErrorMessage", () => {
-  it("names the cause, the restart, the prior boot, the true lifetime and the message count", () => {
+  it("names the cause, the restart, the prior boot, bounded lifetime and recorded-output presence", () => {
     const attribution = resolveSubagentOrphanAttribution({
       runStartedAtMs: RUN_STARTED_AT,
       lastActivityAtMs: RUN_DIED_AT,
-      assistantMessageCount: 0,
+      hasRecordedOutput: false,
       boots: [
         bootSegment({
           bootId: "boot-minus-5",
@@ -263,9 +263,9 @@ describe("formatSubagentOrphanErrorMessage", () => {
     expect(message).toContain("host rebooted under the gateway");
     expect(message).toContain("2026-08-26T23:28:30.000Z");
     expect(message).toContain("previous boot boot-minus-5 ended without a clean stop");
-    expect(message).toContain("0 assistant messages recorded");
+    expect(message).toContain("no output recorded in the run registry");
     expect(message).toContain("at least 5m36s");
-    expect(message).toContain("gateway absent 33m38s");
+    expect(message).toContain("gateway restarted 33m38s after the run's last recorded activity");
     // The misleading 40-minute apparent lifetime must not appear anywhere.
     expect(message).not.toContain("40m");
   });
@@ -305,17 +305,17 @@ describe("formatSubagentOrphanErrorMessage", () => {
     );
   });
 
-  it("uses singular wording for a single recorded assistant message", () => {
+  it("reports output presence without claiming a transcript message count", () => {
     const attribution = resolveSubagentOrphanAttribution({
       runStartedAtMs: RUN_STARTED_AT,
-      assistantMessageCount: 1,
+      hasRecordedOutput: true,
       boots: [
         bootSegment({ bootId: "boot-a", startedAtMs: RUN_STARTED_AT - 60_000 }),
         bootSegment({ bootId: "boot-b", startedAtMs: GATEWAY_RESTARTED_AT }),
       ],
     });
     expect(formatSubagentOrphanErrorMessage(attribution!)).toContain(
-      "1 assistant message recorded",
+      "output recorded in the run registry",
     );
   });
 });
@@ -334,30 +334,36 @@ function runRecord(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   } as SubagentRunRecord;
 }
 
-describe("countRecordedSubagentAssistantMessages", () => {
-  it("counts a run that recorded nothing as zero", () => {
-    expect(countRecordedSubagentAssistantMessages(runRecord({}))).toBe(0);
-    expect(
-      countRecordedSubagentAssistantMessages(
-        runRecord({ completion: { required: true, resultText: "   " } }),
-      ),
-    ).toBe(0);
-  });
-
-  it("counts captured and fallback result text", () => {
-    expect(
-      countRecordedSubagentAssistantMessages(
-        runRecord({ completion: { required: true, resultText: "done" } }),
-      ),
-    ).toBe(1);
-    expect(
-      countRecordedSubagentAssistantMessages(
-        runRecord({
-          completion: { required: true, resultText: "done", fallbackResultText: "partial" },
-        }),
-      ),
-    ).toBe(2);
-  });
+describe("hasRecordedSubagentOutput", () => {
+  it.each([
+    { resultText: undefined, fallbackResultText: undefined, recorded: false },
+    { resultText: "   ", fallbackResultText: "\n", recorded: false },
+    { resultText: "done", fallbackResultText: undefined, recorded: true },
+    { resultText: undefined, fallbackResultText: "partial", recorded: true },
+    { resultText: "done", fallbackResultText: "partial", recorded: true },
+  ])(
+    "describes primary=$resultText fallback=$fallbackResultText as recorded=$recorded",
+    (testCase) => {
+      const { resultText, fallbackResultText, recorded } = testCase;
+      const entry = runRecord({ completion: { required: true, resultText, fallbackResultText } });
+      const attribution = resolveSubagentOrphanAttribution({
+        runStartedAtMs: RUN_STARTED_AT,
+        hasRecordedOutput: hasRecordedSubagentOutput(entry),
+        boots: [
+          bootSegment({ bootId: "boot-a", startedAtMs: RUN_STARTED_AT - 60_000 }),
+          bootSegment({ bootId: "boot-b", startedAtMs: GATEWAY_RESTARTED_AT }),
+        ],
+      });
+      expect(hasRecordedSubagentOutput(entry)).toBe(recorded);
+      const message = formatSubagentOrphanErrorMessage(attribution!);
+      expect(message).toContain(
+        recorded
+          ? ", output recorded in the run registry"
+          : ", no output recorded in the run registry",
+      );
+      expect(message).not.toContain("assistant message");
+    },
+  );
 });
 
 describe("resolveSubagentRunLastActivityMs", () => {

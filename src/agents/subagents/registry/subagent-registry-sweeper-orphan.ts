@@ -8,8 +8,8 @@
  */
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import {
-  countRecordedSubagentAssistantMessages,
   formatSubagentOrphanErrorMessage,
+  hasRecordedSubagentOutput,
   loadGatewayBootSegmentsForAttribution,
   resolveSubagentOrphanAttribution,
   resolveSubagentRunLastActivityMs,
@@ -59,6 +59,7 @@ export async function reconcileStaleActiveSubagentRun(params: {
     await params.completeSubagentRunWithRecovery(
       {
         runId,
+        expectedEntry: entry,
         startedAt: persistedCompletion.startedAt,
         endedAt: persistedCompletion.endedAt,
         outcome: persistedCompletion.outcome,
@@ -74,7 +75,7 @@ export async function reconcileStaleActiveSubagentRun(params: {
   // The reap happens arbitrarily long after the death — it includes however
   // long the host stayed down. Correlate against boot history before writing
   // anything about this run: the reap clock is not evidence of its lifetime.
-  const assistantMessageCount = countRecordedSubagentAssistantMessages(entry);
+  const hasRecordedOutput = hasRecordedSubagentOutput(entry);
   const boots = loadGatewayBootSegmentsForAttribution(now);
   const currentBootId = boots
     .toReversed()
@@ -84,7 +85,7 @@ export async function reconcileStaleActiveSubagentRun(params: {
   const attribution = resolveSubagentOrphanAttribution({
     runStartedAtMs,
     lastActivityAtMs: resolveSubagentRunLastActivityMs(entry),
-    assistantMessageCount,
+    hasRecordedOutput,
     boots,
     currentBootId,
   });
@@ -92,14 +93,14 @@ export async function reconcileStaleActiveSubagentRun(params: {
 
   const orphanReason = resolveSubagentRunOrphanReason({ entry });
   if (orphanReason) {
-    // Pruning is silent, and a run that died having produced nothing is exactly
-    // the case only the spawning session can act on. When the death is
-    // attributable, complete it instead so the existing announce path carries
-    // the cause back to the requester rather than dropping the row.
-    if (attribution && attributedError && assistantMessageCount === 0) {
+    // Notify the requester when an attributed orphan has no captured output
+    // instead of silently pruning it. Snapshot absence is not evidence that
+    // the transcript is empty.
+    if (attribution && attributedError && !hasRecordedOutput) {
       await params.completeSubagentRunWithRecovery(
         {
           runId,
+          expectedEntry: entry,
           endedAt: attribution.diedAtMs,
           outcome: { status: "error", error: attributedError },
           reason: SUBAGENT_ENDED_REASON_ERROR,
@@ -125,6 +126,7 @@ export async function reconcileStaleActiveSubagentRun(params: {
   await params.completeSubagentRunWithRecovery(
     {
       runId,
+      expectedEntry: entry,
       // An attributed death ended when the run died, not when it was found.
       endedAt: attribution?.diedAtMs ?? now,
       outcome: { status: "error", error: attributedError ?? LOST_CONTEXT_ERROR },
