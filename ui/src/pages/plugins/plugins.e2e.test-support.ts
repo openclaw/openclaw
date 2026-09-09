@@ -129,91 +129,6 @@ const telegramPlugin = {
   removable: false,
 } satisfies PluginCatalogItem;
 
-type InstalledInventoryPlugin = PluginCatalogItem & { categories: string[] };
-
-function installedInventoryPlugin(
-  id: string,
-  overrides: Partial<InstalledInventoryPlugin> = {},
-): InstalledInventoryPlugin {
-  return {
-    id,
-    name: id
-      .split("-")
-      .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-      .join(" "),
-    description: `Operator-visible capability for ${id}.`,
-    kind: ["productivity"],
-    origin: "bundled",
-    installed: true,
-    enabled: false,
-    state: "disabled",
-    categories: [],
-    removable: false,
-    ...overrides,
-  };
-}
-
-const installedPluginsItems = [
-  installedInventoryPlugin("attention-b", {
-    state: "error",
-    error: "Manifest B failed",
-    order: 20,
-    categories: ["channels"],
-  }),
-  installedInventoryPlugin("enabled-b", {
-    enabled: true,
-    state: "enabled",
-    order: 20,
-    categories: ["memory"],
-  }),
-  installedInventoryPlugin("needs-setup", {
-    state: "needs-setup",
-    order: 5,
-    categories: ["models"],
-  }),
-  ...Array.from({ length: 11 }, (_, index) =>
-    installedInventoryPlugin(
-      index === 0 ? "workboard" : `disabled-${String(index).padStart(2, "0")}`,
-      {
-        ...(index === 0
-          ? {
-              name: "Workboard",
-              description: "Dashboard workboard for agent-owned issues and sessions.",
-            }
-          : {}),
-        order: index,
-        categories: [
-          ["context"],
-          ["channels"],
-          ["channels"],
-          ["models"],
-          ["models"],
-          ["models"],
-          ["memory"],
-          ["memory"],
-          ["web"],
-          ["voice"],
-          [],
-        ][index],
-      },
-    ),
-  ),
-  installedInventoryPlugin("attention-a", {
-    state: "error",
-    error: "Manifest A failed",
-    order: 10,
-    categories: ["channels", "web"],
-  }),
-  installedInventoryPlugin("enabled-a", {
-    enabled: true,
-    state: "enabled",
-    order: 10,
-    categories: ["memory"],
-  }),
-];
-
-const installedPluginsInventory = inventory(installedPluginsItems);
-
 const initialInventory = inventory([
   workboardDisabled,
   telegramPlugin,
@@ -651,12 +566,10 @@ export async function teardownPluginsE2e(): Promise<void> {
 
 export {
   captureScreenshot,
-  desktopViewport,
   describeControlUiE2e,
   discoveryResult,
   initialInventory,
   installMockGateway,
-  installedPluginsInventory,
   inventory,
   localCalendarDisabled,
   localCalendarEnabled,
