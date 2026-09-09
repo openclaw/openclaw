@@ -447,7 +447,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - [Compaction](/concepts/compaction) - summarizing long conversations
 - [Context](/concepts/context) - how context is built for agent turns
-- [Honcho memory](/concepts/memory-honcho) - the Honcho-backed context engine
+- [Honcho memory](/concepts/memory-honcho) - a memory plugin a context engine can draw on
 - [Plugin Architecture](/plugins/architecture) - registering context engine plugins
 - [Plugin manifest](/plugins/manifest) - plugin manifest fields
 - [Plugins](/tools/plugin) - plugin overview
