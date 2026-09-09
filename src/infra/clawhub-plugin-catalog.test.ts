@@ -216,6 +216,29 @@ describe("ClawHub plugin catalog client", () => {
     expect(categories.map((category) => category.slug)).toEqual(["channels", "models"]);
   });
 
+  it.each([
+    ["integrations", "plug"],
+    ["developer-tools", "code-xml"],
+    ["infrastructure", "server"],
+    ["documents-files", "files"],
+    ["inbox-collaboration", "inbox"],
+    ["productivity", "list-todo"],
+    ["scheduling", "calendar-days"],
+    ["finance-payments", "wallet-cards"],
+    ["sales-marketing", "megaphone"],
+    ["data-analytics", "chart-no-axes-combined"],
+    ["agent-orchestration", "workflow"],
+    ["research", "search"],
+  ])("preserves the registry icon for %s", async (slug, icon) => {
+    const category = { slug, label: slug, description: "Plugin category.", icon, order: 0 };
+    await expect(
+      fetchClawHubPluginCategories({
+        baseUrl: "https://example.com",
+        fetchImpl: async () => jsonResponse({ categories: [category] }),
+      }),
+    ).resolves.toEqual([category]);
+  });
+
   it("rejects arbitrary category icon values", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({
@@ -264,43 +287,50 @@ describe("ClawHub plugin catalog client", () => {
     ]);
   });
 
-  it("batch-reads categories for exact package versions", async () => {
-    let request: Request | undefined;
-    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      request = new Request(input, init);
-      return jsonResponse({
+  it.each([
+    ["memory", "tools"],
+    ["documents-files", "research"],
+    ["tools", "runtime", "gateway"],
+  ])(
+    "batch-reads current and legacy categories for exact package versions: %j",
+    async (...categories) => {
+      let request: Request | undefined;
+      const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        request = new Request(input, init);
+        return jsonResponse({
+          packages: [
+            { name: "@openclaw/memory", version: "1.2.3", categories },
+            { name: "@openclaw/missing", version: "4.5.6", categories: null },
+          ],
+        });
+      });
+
+      const result = await fetchClawHubPluginVersionCategories({
+        baseUrl: "https://example.com",
+        token: "private-token",
+        skipAuth: true,
         packages: [
-          { name: "@openclaw/memory", version: "1.2.3", categories: ["memory", "tools"] },
-          { name: "@openclaw/missing", version: "4.5.6", categories: null },
+          { name: "@openclaw/memory", version: "1.2.3" },
+          { name: "@openclaw/missing", version: "4.5.6" },
+        ],
+        fetchImpl,
+      });
+
+      expect(request?.method).toBe("POST");
+      expect(request?.headers.has("authorization")).toBe(false);
+      expect(new URL(request?.url ?? "").pathname).toBe("/api/v1/packages/categories:batch");
+      await expect(request?.json()).resolves.toEqual({
+        packages: [
+          { name: "@openclaw/memory", version: "1.2.3" },
+          { name: "@openclaw/missing", version: "4.5.6" },
         ],
       });
-    });
-
-    const result = await fetchClawHubPluginVersionCategories({
-      baseUrl: "https://example.com",
-      token: "private-token",
-      skipAuth: true,
-      packages: [
-        { name: "@openclaw/memory", version: "1.2.3" },
-        { name: "@openclaw/missing", version: "4.5.6" },
-      ],
-      fetchImpl,
-    });
-
-    expect(request?.method).toBe("POST");
-    expect(request?.headers.has("authorization")).toBe(false);
-    expect(new URL(request?.url ?? "").pathname).toBe("/api/v1/packages/categories:batch");
-    await expect(request?.json()).resolves.toEqual({
-      packages: [
-        { name: "@openclaw/memory", version: "1.2.3" },
-        { name: "@openclaw/missing", version: "4.5.6" },
-      ],
-    });
-    expect(result).toEqual([
-      { name: "@openclaw/memory", version: "1.2.3", categories: ["memory", "tools"] },
-      { name: "@openclaw/missing", version: "4.5.6", categories: null },
-    ]);
-  });
+      expect(result).toEqual([
+        { name: "@openclaw/memory", version: "1.2.3", categories },
+        { name: "@openclaw/missing", version: "4.5.6", categories: null },
+      ]);
+    },
+  );
 
   it("assembles normalized detail from ClawHub package metadata and release endpoints", async () => {
     const requestedUrls: string[] = [];

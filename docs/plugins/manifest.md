@@ -278,20 +278,41 @@ package-owned classification. The array accepts one to three unique slugs. Put t
 primary category first; catalog surfaces can group it there while still matching every declared
 category in search and filters.
 
-| Slug       | Use for                                                          |
-| ---------- | ---------------------------------------------------------------- |
-| `channels` | Messaging and channel transports                                 |
-| `models`   | Model providers, inference engines, and model routing            |
-| `memory`   | Long-term memory, retrieval, and memory stores                   |
-| `context`  | Context engines, extraction, and context management              |
-| `voice`    | Speech, transcription, and calling                               |
-| `media`    | Image, video, music, and other media generation or understanding |
-| `web`      | Web search, browsing, fetching, and research                     |
-| `tools`    | Agent tools, actions, and workflows                              |
-| `runtime`  | Agent runtimes, execution backends, and development integrations |
-| `gateway`  | Gateway discovery, administration, and observability             |
-| `security` | Authentication, policy, secrets, and sandboxing                  |
-| `other`    | Plugins that do not fit a more specific controlled category      |
+The active categories below are listed in browse order. Choose the work the plugin
+helps with, rather than adding a category merely because it exposes tools.
+
+| Slug                  | Use for                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `channels`            | Messaging and channel transports                                 |
+| `models`              | Model providers, inference engines, and model routing            |
+| `memory`              | Long-term memory, retrieval, and memory stores                   |
+| `context`             | Context engines, extraction, and context management              |
+| `voice`               | Speech, transcription, and calling                               |
+| `web`                 | Web search, browsing, and fetching                               |
+| `media`               | Image, video, music, and other media generation or understanding |
+| `security`            | Authentication, policy, secrets, and sandboxing                  |
+| `integrations`        | General service connectors and integration platforms             |
+| `developer-tools`     | Coding, debugging, testing, and software development             |
+| `infrastructure`      | Hosting, deployment, systems administration, and observability   |
+| `documents-files`     | Reading, writing, organizing, and exchanging documents and files |
+| `inbox-collaboration` | Email, shared inboxes, meetings, and team collaboration          |
+| `productivity`        | Tasks, projects, notes, and personal work organization           |
+| `scheduling`          | Calendars, appointments, and booking                             |
+| `finance-payments`    | Financial analysis, accounting, billing, and payments            |
+| `sales-marketing`     | CRM, sales, marketing, and customer outreach                     |
+| `data-analytics`      | Databases, data processing, analytics, and reporting             |
+| `agent-orchestration` | Coordinating agents, delegated tasks, and approval workflows     |
+| `research`            | Research workflows, source discovery, and evidence synthesis     |
+| `other`               | Plugins that do not fit a more specific controlled category      |
+
+For example, a document extraction plugin can declare `documents-files` first and
+`context` second. A general connector belongs in `integrations`; a calendar connector
+usually belongs in `scheduling`.
+
+Legacy `tools`, `runtime`, and `gateway` declarations remain valid so existing
+packages keep loading. They are retired from the active browse taxonomy. Choose
+active categories for new declarations; legacy values are not automatically
+translated into a different category.
 
 Omission remains valid for external plugin compatibility. When an external catalog supplies a
 derived fallback, an explicit package declaration takes precedence. Bundled OpenClaw plugins must
