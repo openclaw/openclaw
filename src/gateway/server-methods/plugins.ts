@@ -184,7 +184,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const query = params.query?.trim();
       const intent = params.intent ?? "all";
-      const includeBundledOnly = intent === "bundled" || intent === "all";
+      const includeBundledOnly = intent === "bundled" || (intent === "all" && Boolean(query));
       let published: Awaited<ReturnType<typeof fetchAllOfficialClawHubPlugins>> = [];
       let publicationError: string | undefined;
       if (includeBundledOnly) {
@@ -237,14 +237,20 @@ export const pluginsHandlers: GatewayRequestHandlers = {
               published,
               local,
               includeBundledOnly: canIncludeBundledOnly,
-              intent: params.intent,
+              intent,
               category: params.category,
               query: params.query,
               cursor: params.cursor,
             }),
             remoteError: [
               publicationError,
-              `ClawHub is unavailable: ${formatErrorMessage(error)}.${canIncludeBundledOnly ? " Bundled plugins remain available." : ""}`,
+              `ClawHub is unavailable: ${formatErrorMessage(error)}.${
+                canIncludeBundledOnly
+                  ? " Bundled plugins remain available."
+                  : intent === "all"
+                    ? " Installed plugins remain available."
+                    : ""
+              }`,
             ]
               .filter(Boolean)
               .join(" "),

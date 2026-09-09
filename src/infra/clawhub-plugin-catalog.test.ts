@@ -440,4 +440,42 @@ describe("ClawHub plugin catalog client", () => {
       },
     });
   });
+
+  it("keeps plugin detail available when optional security metadata fails", async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(requestUrl(input));
+      if (url.pathname.endsWith("/security")) {
+        return jsonResponse({});
+      }
+      if (url.pathname.endsWith("/versions")) {
+        return jsonResponse({ items: [] });
+      }
+      if (url.pathname.endsWith("/versions/1.0.0")) {
+        return jsonResponse({ version: { version: "1.0.0" } });
+      }
+      if (url.pathname.endsWith("/file")) {
+        return new Response("", { status: 404 });
+      }
+      return jsonResponse({
+        package: {
+          name: "memory-plus",
+          displayName: "Memory Plus",
+          family: "code-plugin",
+          isOfficial: false,
+          categories: ["memory"],
+          latestVersion: "1.0.0",
+        },
+      });
+    });
+
+    const detail = await fetchClawHubPluginDetail({
+      baseUrl: "https://example.com",
+      packageName: "memory-plus",
+      version: "1.0.0",
+      fetchImpl,
+    });
+
+    expect(detail.packageName).toBe("memory-plus");
+    expect(detail.security).toBeUndefined();
+  });
 });

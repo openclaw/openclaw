@@ -492,6 +492,21 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
+  it("does not exhaust the official catalog for the initial All view", async () => {
+    catalogMocks.browse.mockResolvedValue({ items: [] });
+    managementMocks.list.mockResolvedValue({
+      plugins: [],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    const result = await callHandler("plugins.catalog.browse", { intent: "all" });
+
+    expect(result.ok).toBe(true);
+    expect(catalogMocks.allOfficial).not.toHaveBeenCalled();
+    expect(catalogMocks.browse).toHaveBeenCalledOnce();
+  });
+
   it("returns canonical ClawHub categories unchanged", async () => {
     const categories = [
       {
@@ -565,9 +580,9 @@ describe("plugin management Gateway handlers", () => {
       ok: true,
       error: undefined,
       response: {
-        items: [],
+        items: [expect.objectContaining({ local: expect.objectContaining({ installed: true }) })],
         remoteError:
-          "ClawHub is unavailable: service unavailable. Bundled plugins remain available.",
+          "ClawHub is unavailable: service unavailable. Installed plugins remain available.",
       },
     });
   });

@@ -675,7 +675,9 @@ export async function fetchClawHubPluginDetail(
           ...shared,
           name: params.packageName,
           version,
-        }).then(projectSecurity)
+        })
+          .then(projectSecurity)
+          .catch(() => undefined)
       : Promise.resolve(undefined),
   ]);
   if (versionValue !== undefined && !isRecord(versionValue)) {
