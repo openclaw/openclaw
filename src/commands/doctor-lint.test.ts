@@ -9,7 +9,10 @@ import { CORE_HEALTH_CHECKS } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import {
@@ -801,6 +804,146 @@ describe("runDoctorLintCli", () => {
     } finally {
       stdout.mockRestore();
       restoreDoctorLintTestEnv(originalEnv);
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === "win32")(
+    "closes state opened by runtime tool schema checks before snapshot cleanup",
+    async () => {
+      const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-runtime-db-"));
+      const stateDir = path.join(rootDir, "operator-state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const config = {
+        gateway: { mode: "local" },
+      } satisfies OpenClawConfig;
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(configPath, `${JSON.stringify(config)}\n`);
+      const env = {
+        ...process.env,
+        HOME: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      await writePersistedInstalledPluginIndexInstallRecords(
+        {},
+        { config, env, stateDir, workspaceDir: rootDir },
+      );
+      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+      const originalEnv = {
+        HOME: process.env.HOME,
+        OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+        OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+      };
+      process.env.HOME = stateDir;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
+        mocks.actualReadConfigFileSnapshot(...args),
+      );
+      const previousResolveChecks =
+        mocks.resolveDoctorContributionHealthChecks.getMockImplementation();
+      mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+        {
+          id: "core/doctor/runtime-tool-schemas",
+          kind: "core",
+          description: "opens the private state database",
+          async detect() {
+            openOpenClawStateDatabase({ env: process.env });
+            return [];
+          },
+        },
+      ]);
+      const registerChecks = vi
+        .spyOn(bundledHealthChecks, "registerBundledHealthChecks")
+        .mockImplementation(() => {});
+
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        await expect(
+          runDoctorLintCli(runtime, {
+            json: true,
+            severityMin: "error",
+            onlyIds: ["core/doctor/runtime-tool-schemas"],
+          }),
+        ).resolves.toBe(0);
+        expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+          ok: true,
+          checksRun: 1,
+          findings: [],
+        });
+      } finally {
+        stdout.mockRestore();
+        registerChecks.mockRestore();
+        if (previousResolveChecks) {
+          mocks.resolveDoctorContributionHealthChecks.mockImplementation(previousResolveChecks);
+        }
+        restoreDoctorLintTestEnv(originalEnv);
+        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(env));
+        fs.rmSync(rootDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps caller-owned source state open after auth checks", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-source-db-"));
+    const stateDir = path.join(rootDir, "operator-state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const config = { gateway: { mode: "local" } } satisfies OpenClawConfig;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, `${JSON.stringify(config)}\n`);
+    const env = {
+      ...process.env,
+      HOME: stateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const database = openOpenClawStateDatabase({ env });
+    const originalEnv = {
+      HOME: process.env.HOME,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    };
+    process.env.HOME = stateDir;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
+      mocks.actualReadConfigFileSnapshot(...args),
+    );
+    const previousResolveChecks =
+      mocks.resolveDoctorContributionHealthChecks.getMockImplementation();
+    mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+      {
+        id: "core/doctor/auth-profiles",
+        kind: "core",
+        description: "reads source auth state",
+        async detect() {
+          return [];
+        },
+      },
+    ]);
+    const registerChecks = vi
+      .spyOn(bundledHealthChecks, "registerBundledHealthChecks")
+      .mockImplementation(() => {});
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await expect(
+        runDoctorLintCli(runtime, {
+          json: true,
+          severityMin: "error",
+          onlyIds: ["core/doctor/auth-profiles"],
+        }),
+      ).resolves.toBe(0);
+      expect(database.db.isOpen).toBe(true);
+      expect(database.db.prepare("SELECT 1 AS value").get()).toEqual({ value: 1 });
+    } finally {
+      stdout.mockRestore();
+      registerChecks.mockRestore();
+      if (previousResolveChecks) {
+        mocks.resolveDoctorContributionHealthChecks.mockImplementation(previousResolveChecks);
+      }
+      restoreDoctorLintTestEnv(originalEnv);
+      closeOpenClawStateDatabaseByPath(database.path);
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });

@@ -33,6 +33,7 @@ import {
   withPluginInstallRoots,
 } from "../plugins/install-root-context.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isPostCoreConvergencePass } from "./doctor/shared/update-phase.js";
 
@@ -330,11 +331,14 @@ async function withReadOnlyPluginStateSnapshot<T>(
     // Global readers and OAuth refresh/challenge writers share the private state view.
     outcome = {
       ok: true,
-      value: await withDoctorLintStateEnv(privateEnv, () =>
-        withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
-          runStarted = true;
-          return await run(privateEnv);
-        }),
+      value: await withDoctorLintStateEnv(
+        privateEnv,
+        () =>
+          withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
+            runStarted = true;
+            return await run(privateEnv);
+          }),
+        { closeStateDatabase: true },
       ),
     };
   } catch (error) {
@@ -354,6 +358,7 @@ async function withReadOnlyPluginStateSnapshot<T>(
 async function withDoctorLintStateEnv<T>(
   env: NodeJS.ProcessEnv,
   run: () => Promise<T>,
+  options: { closeStateDatabase?: boolean } = {},
 ): Promise<T> {
   const stateDir = resolveStateDir(env);
   const overrides = {
@@ -367,11 +372,17 @@ async function withDoctorLintStateEnv<T>(
   try {
     return await run();
   } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
+    try {
+      if (options.closeStateDatabase === true) {
+        closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(overrides));
+      }
+    } finally {
+      for (const [key, value] of previous) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
       }
     }
   }
