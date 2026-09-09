@@ -95,6 +95,13 @@ function loadStylesheet(id: string, asset: TypefaceStylesheetAsset | undefined):
   document.head.append(link);
 }
 
+// The Vietnamese subset backs bundled selections only; while System owns both
+// faces the registration goes with it, so a leftover @font-face can never
+// satisfy a System-mode code span through the scoped --mono rule in base.css.
+function unloadStylesheet(id: string): void {
+  document.getElementById(`openclaw-typeface-${id}`)?.remove();
+}
+
 function loadTypefaceStylesheet(face: TypefaceId): void {
   loadStylesheet(face, TYPEFACES[face].asset);
 }
@@ -105,8 +112,13 @@ export function syncTypefaceStylesheets(faces: TypefacePair): void {
   }
   loadTypefaceStylesheet(faces.ui);
   loadTypefaceStylesheet(faces.chat);
-  if (faces.ui !== "system" || faces.chat !== "system") {
+  const bundled = faces.ui !== "system" || faces.chat !== "system";
+  if (bundled) {
     loadStylesheet(VIETNAMESE_FALLBACK.id, VIETNAMESE_FALLBACK.asset);
+    document.documentElement.dataset.typefaceBundled = "true";
+  } else {
+    unloadStylesheet(VIETNAMESE_FALLBACK.id);
+    delete document.documentElement.dataset.typefaceBundled;
   }
   // base.css --mono names JetBrains Mono for every theme's code spans, but only
   // the @font-face declaration here makes that true; the woff2 itself downloads

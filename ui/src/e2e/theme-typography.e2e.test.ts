@@ -264,6 +264,47 @@ suite.define(() => {
     },
   );
 
+  it("returns the mono stack and Vietnamese fallback to System ownership", async () => {
+    const { page } = await openThemedChat("dash", "dark");
+    await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    await waitForControlUiSettingsTakeover(page);
+    const ui = page.locator("openclaw-select-picker:has(#settings-font-ui)");
+    const chat = page.locator("openclaw-select-picker:has(#settings-font-chat)");
+    const preview = page.locator(".settings-typography-preview");
+    const monoStack = () =>
+      page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--mono"));
+    const fallbackLinked = () =>
+      page.evaluate(
+        () => document.getElementById("openclaw-typeface-noto-sans-vietnamese") !== null,
+      );
+    const codeFamily = () =>
+      preview.evaluate((panel) => getComputedStyle(panel.querySelector("code")!).fontFamily);
+
+    // Bundled selections pull the bundled subset into the code-span stack.
+    await expect.poll(monoStack).toContain("Noto Sans");
+    await expect.poll(fallbackLinked).toBe(true);
+    await expect.poll(codeFamily).toContain("Noto Sans");
+
+    // One System face is not enough: the bundled chat face still needs it.
+    await selectPickerValue(ui, "system");
+    await expect.poll(async () => (await monoStack()).startsWith('"JetBrains Mono"')).toBe(true);
+    await expect.poll(monoStack).toContain("Noto Sans");
+    await expect.poll(fallbackLinked).toBe(true);
+
+    // System/System hands every face back to the platform: the global stack
+    // owns --mono again and the Noto registration is unloaded.
+    await selectPickerValue(chat, "system");
+    await expect.poll(monoStack).not.toContain("Noto Sans");
+    await expect.poll(codeFamily).not.toContain("Noto Sans");
+    await expect.poll(fallbackLinked).toBe(false);
+
+    // Restoring the theme's bundled faces loads the subset again.
+    await selectPickerValue(ui, "theme");
+    await selectPickerValue(chat, "theme");
+    await expect.poll(monoStack).toContain("Noto Sans");
+    await expect.poll(fallbackLinked).toBe(true);
+  });
+
   it.each([
     ["claw", "Instrument Sans", "Instrument Sans", ["instrument-sans"], "antialiased"],
     ["knot", "Geist", "Geist", ["geist"], "antialiased"],

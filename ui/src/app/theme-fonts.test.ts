@@ -24,6 +24,7 @@ describe("typeface presentation", () => {
     }
     applyTypefaceOverrides();
     applyChatFontSmoothing("system");
+    delete document.documentElement.dataset.typefaceBundled;
   });
 
   it.each([
@@ -55,7 +56,7 @@ describe("typeface presentation", () => {
     ]);
   });
 
-  it("loads overrides once, retaining them without fetching for system or custom defaults", () => {
+  it("unloads the Vietnamese fallback when both faces return to System", () => {
     syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
     expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css"]);
     const faces = resolveTypefaces("dash", "geist", "lora");
@@ -72,13 +73,48 @@ describe("typeface presentation", () => {
     for (const next of [
       faces,
       resolveTypefaces("dash", "geist", "geist"),
-      resolveTypefaces("dash", "system", "system"),
       resolveTypefaces("custom", "lora"),
-      resolveTypefaces("custom"),
     ]) {
       syncTypefaceStylesheets(next);
       expect(fontLinks()).toEqual(loaded);
     }
+    // System/System hands the subset back: its registration is removed (the
+    // selected faces stay loaded per the load-only-when-selected contract),
+    // and a later bundled selection loads it again.
+    syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
+    expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css", "/fonts/geist.css", "/fonts/lora.css"]);
+    syncTypefaceStylesheets(resolveTypefaces("custom", "lora"));
+    expect(hrefs()).toEqual([
+      "/fonts/jetbrains-mono.css",
+      "/fonts/geist.css",
+      "/fonts/lora.css",
+      "/fonts/noto-sans-vietnamese.css",
+    ]);
+  });
+
+  it("scopes the bundled-mono attribute to non-System selections", () => {
+    const root = document.documentElement;
+    syncTypefaceStylesheets(resolveTypefaces("dash"));
+    expect(root.dataset.typefaceBundled).toBe("true");
+    syncTypefaceStylesheets(resolveTypefaces("dash", "system", "lora"));
+    expect(root.dataset.typefaceBundled).toBe("true");
+    syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
+    expect(root.dataset.typefaceBundled).toBeUndefined();
+    syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
+    expect(root.dataset.typefaceBundled).toBeUndefined();
+  });
+
+  it("keeps the global mono stack System-owned and scopes Noto to bundled selections", () => {
+    const css = readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../src/styles/base.css"),
+      "utf8",
+    );
+    const globalMono = css.match(/--mono:\s*([^;]+);/u)?.[1] ?? "";
+    expect(globalMono).toContain("JetBrains Mono");
+    expect(globalMono).not.toContain("Noto Sans");
+    const scoped = css.match(/:root\[data-typeface-bundled="true"\]\s*\{[^}]+\}/u)?.[0] ?? "";
+    expect(scoped).toContain("--mono");
+    expect(scoped).toContain('"Noto Sans"');
   });
 
   it("reuses active faces when specimens are requested and never duplicates them on switches", () => {

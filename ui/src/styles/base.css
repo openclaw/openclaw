@@ -225,10 +225,11 @@
   --theme-switch-x: 50%;
   --theme-switch-y: 50%;
 
-  /* Typography */
+  /* Typography. System-owned: the bundled Noto subset joins --mono only via
+     the html[data-typeface-bundled] rule below, while a bundled typeface
+     selection is active (typography.ts toggles the attribute). */
   --mono:
-    "JetBrains Mono", "Noto Sans", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
-    monospace;
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-shortcut: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Symbol", sans-serif;
   /* Claw's own face (fonts/instrument-sans.css, loaded by app/typography.ts); the
      bundled Noto subset keeps Vietnamese deterministic before system fallbacks. */
@@ -335,6 +336,16 @@
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: dark;
+}
+
+/* Bundled typeface selections (any face not "system") back code spans with
+   the bundled Vietnamese Noto subset; once both faces return to System the
+   attribute goes away and --mono above is system-owned again, so a leftover
+   Noto registration can never satisfy a System-mode code span. */
+:root[data-typeface-bundled="true"] {
+  --mono:
+    "JetBrains Mono", "Noto Sans", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    monospace;
 }
 
 /* Menu actions follow the platform 44px touch-target contract for coarse pointers. */
