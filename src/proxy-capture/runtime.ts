@@ -1,7 +1,6 @@
 // Proxy capture runtime coordinates capture sessions, proxy startup, and storage.
 import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { writeSync } from "node:fs";
 import { URL } from "node:url";
 import {
   isHeadersLike,
@@ -15,8 +14,18 @@ import {
 } from "../logging/secret-redaction-registry.js";
 import { resolveEnabledDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
-import { registerCaptureStoreFinalizer } from "./store-lifecycle.js";
-import { getDebugProxyCaptureStore, persistEventPayload, safeJsonString } from "./store.sqlite.js";
+import {
+  hasDebugProxyFetchPatch,
+  registerDebugProxyFetchPatch,
+  reportCapturePersistenceFailure,
+  resolveCaptureOwner,
+  resolveDebugProxyFetchTransport,
+  resolveRuntimeDeps,
+  uninstallDebugProxyGlobalFetchPatch,
+  type CaptureOwner,
+  type DebugProxyCaptureRuntimeDeps,
+} from "./runtime-owner.js";
+import { safeJsonString } from "./store.sqlite.js";
 import type {
   CaptureDirection,
   CaptureEventKind,
@@ -24,7 +33,13 @@ import type {
   CaptureProtocol,
 } from "./types.js";
 
-const DEBUG_PROXY_FETCH_PATCH_KEY = Symbol.for("openclaw.debugProxy.fetchPatch");
+export {
+  finalizeDebugProxyCapture,
+  isDebugProxyGlobalFetchPatchInstalled,
+  resolveDebugProxyFetchTransport,
+  type DebugProxyCaptureRuntimeDeps,
+} from "./runtime-owner.js";
+
 const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]", "utf8");
 // Cap captured response bodies so debug proxy capture cannot be turned into an
 // out-of-memory vector. The patched global fetch tees every outbound response
@@ -124,7 +139,10 @@ function readCapturedResponseBodyBounded(
         return;
       }
       reader = body.getReader();
-      while (!finished && owner.active) {
+      for (;;) {
+        if (finished || !owner.active) {
+          return;
+        }
         const { done, value } = await withResponseBodyTimeout({
           timeoutMs: CAPTURED_RESPONSE_BODY_IDLE_TIMEOUT_MS,
           onTimeout: ({ timeoutMs }) =>
@@ -173,179 +191,6 @@ function parseDeclaredCaptureContentLength(raw: string | null | undefined): bigi
     return undefined;
   }
   return BigInt(trimmed);
-}
-
-// Runtime capture records HTTP/fetch and websocket events into the SQLite store,
-// redacting sensitive headers and persisting bodies in capture_blobs.
-type GlobalFetchPatchedState = {
-  originalFetch: typeof globalThis.fetch;
-  admission: CaptureAdmission;
-};
-
-type GlobalFetchPatchTarget = typeof globalThis & {
-  [DEBUG_PROXY_FETCH_PATCH_KEY]?: GlobalFetchPatchedState;
-};
-
-const globalFetchPatches = new WeakMap<typeof globalThis.fetch, GlobalFetchPatchedState>();
-
-/** Guarded requests own capture admission, including when given a saved patch. */
-export function resolveDebugProxyFetchTransport(
-  fetchImpl: typeof globalThis.fetch,
-): typeof globalThis.fetch {
-  return globalFetchPatches.get(fetchImpl)?.originalFetch ?? fetchImpl;
-}
-
-type DebugProxyCaptureStoreLike = Pick<
-  ReturnType<typeof getDebugProxyCaptureStore>,
-  "upsertSession" | "endSession" | "recordEvent"
-> &
-  Partial<Pick<ReturnType<typeof getDebugProxyCaptureStore>, "close" | "isClosed">>;
-
-export type DebugProxyCaptureRuntimeDeps = {
-  getStore?: () => DebugProxyCaptureStoreLike;
-  closeStore?: () => void;
-  persistEventPayload?: (
-    store: DebugProxyCaptureStoreLike,
-    payload: Parameters<typeof persistEventPayload>[1],
-  ) => ReturnType<typeof persistEventPayload>;
-  safeJsonString?: typeof safeJsonString;
-  fetchTarget?: typeof globalThis;
-};
-
-function resolveRuntimeDeps(deps: DebugProxyCaptureRuntimeDeps = {}) {
-  return {
-    getStore: deps.getStore ?? getDebugProxyCaptureStore,
-    closeStore: deps.closeStore,
-    persistEventPayload:
-      deps.persistEventPayload ??
-      ((store, payload) =>
-        persistEventPayload(store as ReturnType<typeof getDebugProxyCaptureStore>, payload)),
-    safeJsonString: deps.safeJsonString ?? safeJsonString,
-    fetchTarget: deps.fetchTarget ?? globalThis,
-  };
-}
-
-type CaptureOwner = {
-  settings: DebugProxySettings;
-  runtime: ReturnType<typeof resolveRuntimeDeps>;
-  store: DebugProxyCaptureStoreLike;
-  active: boolean;
-  pending: Set<() => void>;
-  errors: unknown[];
-  unregister: () => void;
-  admission: CaptureAdmission;
-};
-type CaptureAdmission = { current?: CaptureOwner };
-type CaptureRegistry = {
-  owners: Map<string, CaptureOwner>;
-  resolved: WeakMap<DebugProxySettings, CaptureAdmission>;
-  ambient?: { sessionId: string; dbPath: string; admission: CaptureAdmission };
-};
-const captureOwners = new WeakMap<
-  ReturnType<typeof resolveRuntimeDeps>["getStore"],
-  CaptureRegistry
->();
-
-function captureOwnerKey(settings: DebugProxySettings): string {
-  // dbPath is the root-derived capture locator, not the shared database route.
-  // Implicit session IDs survive state-root changes, so both identify an owner.
-  return JSON.stringify([settings.dbPath, settings.sessionId]);
-}
-
-function reportCapturePersistenceFailure(owner: CaptureOwner, error: unknown): void {
-  owner.errors.push(error);
-  // The earlier SQLite exit hook swallows close errors. Report synchronously
-  // here before it closes the store; diagnostics must not interrupt settlement.
-  try {
-    writeSync(
-      2,
-      `[proxy-capture] Capture persistence failed: ${redactCaptureText(error instanceof Error ? error.message : String(error))}\n`,
-    );
-  } catch {
-    // Preserve the original failure even if the diagnostic sink is unavailable.
-  }
-}
-
-function finishCaptureOwner(owner: CaptureOwner): void {
-  if (!owner.active) {
-    return;
-  }
-  owner.active = false;
-  owner.admission.current = undefined;
-  const registry = captureOwners.get(owner.runtime.getStore)!;
-  registry.owners.delete(captureOwnerKey(owner.settings));
-  uninstallDebugProxyGlobalFetchPatch(owner.runtime, owner.admission);
-  owner.unregister();
-  for (const finish of owner.pending) {
-    finish();
-  }
-  try {
-    if (!owner.store.isClosed) {
-      owner.store.endSession(owner.settings.sessionId);
-    }
-  } catch (error) {
-    reportCapturePersistenceFailure(owner, error);
-  }
-  if (owner.errors.length) {
-    throw new AggregateError(owner.errors.splice(0), "Capture session finalization failed.");
-  }
-}
-
-function resolveCaptureOwner(
-  settings: DebugProxySettings,
-  runtime: ReturnType<typeof resolveRuntimeDeps>,
-  options: { initialize?: boolean; explicit?: boolean } = {},
-): CaptureOwner | undefined {
-  let registry = captureOwners.get(runtime.getStore);
-  if (!registry) {
-    registry = { owners: new Map(), resolved: new WeakMap() };
-    captureOwners.set(runtime.getStore, registry);
-  }
-  const key = captureOwnerKey(settings);
-  let owner = registry.owners.get(key);
-  if (!owner) {
-    // Explicit settings own their lifetime; ambient capture observes current
-    // configuration. Keep only its current marker, not retired IDs or stores.
-    const prior = options.explicit
-      ? registry.resolved.get(settings)
-      : registry.ambient?.sessionId === settings.sessionId &&
-          registry.ambient.dbPath === settings.dbPath
-        ? registry.ambient.admission
-        : undefined;
-    if (!options.initialize && prior) {
-      return prior.current;
-    }
-    const store = runtime.getStore();
-    if (store.isClosed) {
-      return undefined;
-    }
-    owner = {
-      settings,
-      runtime,
-      store,
-      active: true,
-      pending: new Set(),
-      errors: [],
-      unregister: () => {},
-      admission: {},
-    };
-    owner.admission.current = owner;
-    const retainedOwner = owner;
-    owner.unregister = registerCaptureStoreFinalizer(store, () =>
-      finishCaptureOwner(retainedOwner),
-    );
-    registry.owners.set(key, owner);
-  }
-  if (options.explicit) {
-    registry.resolved.set(settings, owner.admission);
-  } else {
-    registry.ambient = {
-      sessionId: settings.sessionId,
-      dbPath: settings.dbPath,
-      admission: owner.admission,
-    };
-  }
-  return owner;
 }
 
 function protocolFromUrl(rawUrl: string): CaptureProtocol {
@@ -501,11 +346,11 @@ function installDebugProxyGlobalFetchPatch(
 ): void {
   const runtime = resolveRuntimeDeps(deps);
   const admission = owner.admission;
-  const fetchTarget = runtime.fetchTarget as GlobalFetchPatchTarget;
+  const fetchTarget = runtime.fetchTarget;
   if (typeof fetchTarget.fetch !== "function") {
     return;
   }
-  if (fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]?.admission === admission) {
+  if (hasDebugProxyFetchPatch(fetchTarget, admission)) {
     return;
   }
   uninstallDebugProxyGlobalFetchPatch(deps);
@@ -513,8 +358,6 @@ function installDebugProxyGlobalFetchPatch(
   // teardown in tests and nested capture sessions.
   const fetchImpl = fetchTarget.fetch;
   const originalFetch = resolveDebugProxyFetchTransport(fetchImpl).bind(fetchTarget);
-  const patch = { originalFetch, admission };
-  fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = patch;
   const patchedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrlString(input);
     const normalizedInit = normalizeRequestInitHeadersForFetch(init);
@@ -583,25 +426,7 @@ function installDebugProxyGlobalFetchPatch(
     // Preserve Vitest mock metadata when patching mocked fetch targets.
     (patchedFetch as typeof globalThis.fetch & { mock?: unknown }).mock = mockState;
   }
-  globalFetchPatches.set(patchedFetch, patch);
-  fetchTarget.fetch = patchedFetch as typeof globalThis.fetch;
-}
-
-function uninstallDebugProxyGlobalFetchPatch(
-  deps: DebugProxyCaptureRuntimeDeps = {},
-  admission?: CaptureAdmission,
-): void {
-  const fetchTarget = resolveRuntimeDeps(deps).fetchTarget as GlobalFetchPatchTarget;
-  const state = fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY];
-  if (!state || (admission && state.admission !== admission)) {
-    return;
-  }
-  fetchTarget.fetch = state.originalFetch;
-  delete fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY];
-}
-
-export function isDebugProxyGlobalFetchPatchInstalled(): boolean {
-  return Boolean((globalThis as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY]);
+  registerDebugProxyFetchPatch(fetchTarget, originalFetch, patchedFetch, admission);
 }
 
 export function initializeDebugProxyCapture(
@@ -631,44 +456,6 @@ export function initializeDebugProxyCapture(
   installDebugProxyGlobalFetchPatch(owner, deps);
 }
 
-// Finalization closes the session and restores the fetch patch before closing
-// the cached store, preventing later normal requests from being captured.
-export function finalizeDebugProxyCapture(
-  resolved?: DebugProxySettings,
-  deps: DebugProxyCaptureRuntimeDeps = {},
-): void {
-  const settings = resolveEnabledDebugProxySettings(resolved);
-  if (!settings) {
-    return;
-  }
-  const runtime = resolveRuntimeDeps(deps);
-  const owner = captureOwners.get(runtime.getStore)?.owners.get(captureOwnerKey(settings));
-  if (owner) {
-    uninstallDebugProxyGlobalFetchPatch(deps, owner.admission);
-  }
-  if (!owner?.active) {
-    return;
-  }
-  const errors: unknown[] = [];
-  try {
-    finishCaptureOwner(owner);
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    if (owner.runtime.closeStore) {
-      owner.runtime.closeStore();
-    } else {
-      owner.store.close?.();
-    }
-  } catch (error) {
-    errors.push(error);
-  }
-  if (errors.length) {
-    throw new AggregateError(errors, "Capture finalization failed.");
-  }
-}
-
 type HttpCaptureParams = {
   url: string;
   method: string;
@@ -689,7 +476,7 @@ export function prepareHttpCapture(
 ) {
   const settings = resolveEnabledDebugProxySettings(resolved);
   if (!settings) {
-    return;
+    return undefined;
   }
   const admission = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
     explicit: resolved !== undefined,

@@ -106,7 +106,7 @@ describe("guarded capture ownership", () => {
       // Disabling the guard recorder leaves an installed global recorder in control.
       const expected = mode === "capture-disabled" || mode === "same-owner" ? [2, 0] : [0, 2];
       expect(events.map((rows) => rows.length)).toEqual(expected);
-      for (const rows of events.filter((rows) => rows.length > 0)) {
+      for (const rows of events.filter((captured) => captured.length > 0)) {
         expect(rows[0]).toMatchObject({ kind: "request", dataText: "loopback request" });
         expect(rows[1]).toMatchObject({ status: 200, flowId: rows[0]!.flowId });
         expect(["response", "error"]).toContain(rows[1]!.kind);
