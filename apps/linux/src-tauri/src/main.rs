@@ -3,7 +3,7 @@ mod discovery;
 mod gateway;
 mod gateway_device_identity;
 mod gateway_operation_queue;
-#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+#[cfg(any(target_os = "linux", test))]
 mod gateway_sleep;
 #[cfg(target_os = "linux")]
 mod gateway_sleep_logind;
@@ -84,6 +84,23 @@ fn native_auth_initialization_script(
   }} catch {{}}
 }})();"#
     ))
+}
+
+fn remote_ws_config(
+    request: &RemoteGatewayRequest,
+    gateway_url: &Url,
+) -> gateway_ws::GatewayWsConfig {
+    gateway_ws::GatewayWsConfig::new(
+        gateway_url.to_string(),
+        request.token.clone(),
+        request.password.clone(),
+        if gateway_url.scheme() == "wss" {
+            request.tls_fingerprint.clone()
+        } else {
+            None
+        },
+        gateway_ws::GatewayOwnership::Remote,
+    )
 }
 
 fn open_external_browser(app: &AppHandle, url: &Url) {
@@ -625,19 +642,8 @@ impl DesktopState {
         *active_tunnel = tunnel;
         drop(active_tunnel);
 
-        app.state::<gateway_ws::GatewayClient>().configure(
-            app,
-            gateway_ws::GatewayWsConfig::new(
-                gateway_url.to_string(),
-                request.token.clone(),
-                request.password.clone(),
-                if gateway_url.scheme() == "wss" {
-                    request.tls_fingerprint.clone()
-                } else {
-                    None
-                },
-            ),
-        );
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, remote_ws_config(&request, &gateway_url));
         self.navigate_authenticated_remote(app, target, script)?;
         let snapshot = GatewaySnapshot {
             phase: "connected",
