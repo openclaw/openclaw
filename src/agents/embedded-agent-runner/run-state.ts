@@ -77,7 +77,7 @@ export type EmbeddedAgentQueueHandle = {
   /** True only when queueMessage preserves images supplied in its options. */
   supportsQueueMessageImages?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
-  abort: (reason?: "restart") => void;
+  abort: (reason?: "user_abort" | "restart" | "superseded" | "cron_timeout") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
 };

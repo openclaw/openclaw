@@ -899,14 +899,17 @@ function revokeCompletionClaim(sessionId: string, runId?: string): void {
  * - With a sessionId, aborts that single run.
  * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
  */
-export function abortEmbeddedAgentRun(sessionId: string): boolean;
+export function abortEmbeddedAgentRun(
+  sessionId: string,
+  opts?: { reason?: "restart" | "cron_timeout" },
+): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
-  opts: { mode: "all" | "compacting"; reason?: "restart" },
+  opts: { mode: "all" | "compacting"; reason?: "restart" | "cron_timeout" },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  opts?: { mode?: "all" | "compacting"; reason?: "restart" | "cron_timeout" },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
@@ -1497,7 +1500,11 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
         setImmediate(resolve);
       });
     }
-    let aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
+    let aborted =
+      abortEmbeddedAgentRun(
+        params.sessionId,
+        params.reason === "cron_timeout" ? { reason: "cron_timeout" } : undefined,
+      ) || expiredReplyRun;
     const embeddedDrained =
       aborted || stampedStaleReplyRun
         ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs)

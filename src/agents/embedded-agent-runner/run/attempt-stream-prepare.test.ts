@@ -731,6 +731,27 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(isAgentRunRestartAbortReason(abortRun.mock.calls[0]?.[1])).toBe(true);
   });
 
+  it("processes cron_timeout abort through external-abort sequence as a timeout", () => {
+    const markExternalAbort = vi.fn();
+    const onAttemptAbort = vi.fn();
+    const abortRun = vi.fn();
+    const prepared = prepareCatalogExecutor([], {
+      markExternalAbort,
+      onAttemptAbort,
+      abortRun,
+    });
+
+    prepared.queueHandle.abort("cron_timeout");
+
+    expect(markExternalAbort).toHaveBeenCalledOnce();
+    expect(onAttemptAbort).toHaveBeenCalledOnce();
+    expect(abortRun).toHaveBeenCalledOnce();
+    const [isTimeout, abortReason] = abortRun.mock.calls[0] ?? [];
+    expect(isTimeout).toBe(true);
+    expect(abortReason).toBeInstanceOf(Error);
+    expect((abortReason as Error).name).toBe("TimeoutError");
+  });
+
   it("runs attempt cleanup once when reply cancellation re-enters through its abort signal", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
