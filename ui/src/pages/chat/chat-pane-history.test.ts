@@ -7,7 +7,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -244,7 +243,7 @@ describe("chat pane native history pagination", () => {
 
   it("does not request older rows from a complete imported snapshot", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.chatHistoryPagination = {
       hasMore: false,
       totalMessages: 107,
@@ -363,7 +362,7 @@ describe("chat pane native history pagination", () => {
       items: [{ id: "u1", type: "userMessage", text: "oldest catalog message" }],
     }));
     const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     const key = "catalog:claude:gateway%3Alocal:thread-1";
     state.sessionKey = key;
     pane.sessionKey = key;
@@ -436,7 +435,7 @@ describe("chat pane native history pagination", () => {
 
   it("does not navigate a replacement session after an older load settles", async () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
     appendChatThread(pane);
     const loaded = createDeferred<boolean>();
@@ -462,7 +461,7 @@ describe("chat pane native history pagination", () => {
       totalMessages: 4,
     }));
     const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
     const thread = document.createElement("div");
@@ -510,7 +509,7 @@ describe("chat pane native history pagination", () => {
       totalMessages: 4,
     }));
     const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.handleChatScroll = vi.fn();
     state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
@@ -724,7 +723,7 @@ describe("chat pane native history pagination", () => {
 
   it("does not consume bootstrap history while disconnected", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.connected = false;
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
     const construct = vi.fn();
@@ -746,7 +745,7 @@ describe("chat pane native history pagination", () => {
   it("reuses an armed history observer and ignores its queued callback after reset", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
     pane.historyObserverArmed = true;
     const thread = document.createElement("div");
@@ -795,7 +794,7 @@ describe("chat pane native history pagination", () => {
 
   it("keeps multiple projected messages from the same transcript sequence", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane } = createTestChatPane({ client });
     const projected = [
       {
         ...nativeHistoryMessage(1, "Same routed send"),
@@ -819,7 +818,7 @@ describe("chat pane native history pagination", () => {
 
   it("deduplicates byte-different live-event and history projections of one transcript row", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane } = createTestChatPane({ client });
     const liveEventProjection = {
       role: "assistant",
       content: [{ type: "text", text: "One stored reply" }],
@@ -850,7 +849,7 @@ describe("chat pane native history pagination", () => {
 
   it("deduplicates projected catalog transcript records by catalog message id", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane } = createTestChatPane({ client });
     const current = pane.catalogItemMessage({
       id: "catalog-item-1",
       type: "userMessage",
@@ -876,7 +875,7 @@ describe("chat pane native history pagination", () => {
       totalMessages: 4,
     }));
     const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
     await pane.loadOlderMessages();
@@ -903,7 +902,7 @@ describe("chat pane native history pagination", () => {
     }>();
     const request = vi.fn(() => deferred.promise);
     const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
 
@@ -934,7 +933,7 @@ describe("chat pane native history pagination", () => {
         sessionInfo: { sessionId: "session-new" },
       });
     const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.currentSessionId = "session-old";
     state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
@@ -964,7 +963,7 @@ describe("chat pane native history pagination", () => {
       sessionInfo: { sessionId: "session-current" },
     }));
     const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({ client });
     state.currentSessionId = "session-current";
     state.chatMessages = [
       nativeHistoryMessage(1),
@@ -994,7 +993,7 @@ describe("chat pane native history pagination", () => {
       sessionInfo: { sessionId: "session-current" },
     }));
     const client = { request } as unknown as GatewayBrowserClient;
-    const { state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { state } = createTestChatPane({ client });
     state.currentSessionId = "session-current";
     state.chatMessages = [
       nativeHistoryMessage(1),
@@ -1024,7 +1023,7 @@ describe("chat pane native history pagination", () => {
       sessionInfo: { sessionId: "session-current" },
     }));
     const client = { request } as unknown as GatewayBrowserClient;
-    const { state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { state } = createTestChatPane({ client });
     state.currentSessionId = "session-current";
     state.chatMessages = [
       nativeHistoryMessage(1),
@@ -1053,7 +1052,7 @@ describe("chat pane native history pagination", () => {
       sessionInfo: { sessionId: "session-current" },
     }));
     const client = { request } as unknown as GatewayBrowserClient;
-    const { state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { state } = createTestChatPane({ client });
     state.currentSessionId = "session-current";
     state.chatMessages = [
       nativeHistoryMessage(1),
@@ -1078,7 +1077,7 @@ describe("chat pane native history pagination", () => {
         throw new Error("gateway unavailable");
       }),
     } as unknown as GatewayBrowserClient;
-    const { state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { state } = createTestChatPane({ client });
     const pagination = { hasMore: true as const, nextOffset: 2, totalMessages: 4 };
     state.chatHistoryPagination = pagination;
 

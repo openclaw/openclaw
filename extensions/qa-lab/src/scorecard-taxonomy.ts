@@ -4,6 +4,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { qaCoverageIdSchema } from "./coverage-id.js";
+import { parseQaYamlWithContext } from "./qa-yaml.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -508,34 +509,12 @@ function repoRootFromPath(filePath: string) {
   return path.dirname(filePath);
 }
 
-function formatZodIssuePath(pathLocal: PropertyKey[]) {
-  return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
-}
-
-function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
-  const parsed = qaMaturityTaxonomySchema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issues = parsed.error.issues
-    .map((issue) => `${formatZodIssuePath(issue.path)}: ${issue.message}`)
-    .join("; ");
-  throw new Error(`${label}: ${issues}`);
-}
-
-function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
-  const parsed = qaMaturityScoresSchema.safeParse(value);
-  if (parsed.success) {
-    return parsed.data;
-  }
-  const issues = parsed.error.issues
-    .map((issue) => `${formatZodIssuePath(issue.path)}: ${issue.message}`)
-    .join("; ");
-  throw new Error(`${label}: ${issues}`);
-}
-
 export function readQaMaturityTaxonomySource(taxonomyPath = QA_MATURITY_TAXONOMY_PATH) {
-  return parseQaMaturityTaxonomy(YAML.parse(fs.readFileSync(taxonomyPath, "utf8")), taxonomyPath);
+  return parseQaYamlWithContext(
+    qaMaturityTaxonomySchema,
+    YAML.parse(fs.readFileSync(taxonomyPath, "utf8")),
+    taxonomyPath,
+  );
 }
 
 export function readValidatedQaMaturityScoreSources(params?: {
@@ -547,7 +526,11 @@ export function readValidatedQaMaturityScoreSources(params?: {
   const taxonomyPath = params?.taxonomyPath ?? QA_MATURITY_TAXONOMY_PATH;
   const scoresPath = params?.scoresPath ?? QA_MATURITY_SCORES_PATH;
   const taxonomy = params?.taxonomy ?? readQaMaturityTaxonomySource(taxonomyPath);
-  const scores = parseQaMaturityScores(YAML.parse(fs.readFileSync(scoresPath, "utf8")), scoresPath);
+  const scores = parseQaYamlWithContext(
+    qaMaturityScoresSchema,
+    YAML.parse(fs.readFileSync(scoresPath, "utf8")),
+    scoresPath,
+  );
   const warnings = validateQaMaturityScoresAgainstTaxonomy({
     coverageScores: params?.coverageScores,
     scores,
@@ -564,7 +547,8 @@ function readQaMaturityTaxonomy(repoRoot: string | undefined) {
   if (!taxonomyPath || !fs.existsSync(taxonomyPath)) {
     return null;
   }
-  return parseQaMaturityTaxonomy(
+  return parseQaYamlWithContext(
+    qaMaturityTaxonomySchema,
     YAML.parse(fs.readFileSync(taxonomyPath, "utf8")) as unknown,
     QA_MATURITY_TAXONOMY_PATH,
   );

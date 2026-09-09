@@ -105,6 +105,14 @@ type PluginDoctorStateMigrationInput = {
   context: PluginDoctorStateMigrationContext;
 };
 
+type PluginDoctorStateMigrationResult = {
+  changes: string[];
+  warnings: string[];
+  notices?: string[];
+  /** Every warning is advisory; required state remains safe for later repairs. */
+  warningDisposition?: "recoverable";
+};
+
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
@@ -119,9 +127,7 @@ export type PluginDoctorStateMigration = {
     | null;
   migrateLegacyState: (
     params: PluginDoctorStateMigrationInput,
-  ) =>
-    | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
-    | { changes: string[]; warnings: string[]; notices?: string[] };
+  ) => Promise<PluginDoctorStateMigrationResult> | PluginDoctorStateMigrationResult;
 };
 
 export type PluginDoctorContractModule = {

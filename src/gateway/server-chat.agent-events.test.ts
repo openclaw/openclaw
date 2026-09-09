@@ -4053,8 +4053,8 @@ describe("agent event handler", () => {
     expectPayloadFields(payload, {
       status: "running",
       abortedLastRun: true,
-      endedAt: undefined,
-      runtimeMs: undefined,
+      endedAt: null,
+      runtimeMs: null,
     });
   });
 

@@ -3,7 +3,7 @@
  *
  * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
  */
-import { decodeTextPrefix } from "@openclaw/normalization-core";
+import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
   MAX_TIMER_TIMEOUT_SECONDS,
@@ -221,51 +221,17 @@ export async function readResponseText(
     const parts: Uint8Array[] = [];
 
     try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (!value || value.byteLength === 0) {
-          continue;
-        }
-
-        let chunk = value;
-        if (bytesRead + chunk.byteLength > maxBytes) {
-          const remaining = Math.max(0, maxBytes - bytesRead);
-          if (remaining <= 0) {
-            truncated = true;
-            break;
-          }
-          chunk = chunk.subarray(0, remaining);
-          truncated = true;
-        }
-
-        bytesRead += chunk.byteLength;
-        parts.push(chunk);
-
-        if (truncated) {
-          break;
-        }
-        if (bytesRead >= maxBytes) {
-          // Reached the byte cap. A body that is exactly maxBytes bytes is
-          // complete only once EOF confirms it. Keep the conservative result
-          // if that confirming read fails or the body continues.
-          truncated = true;
-          while (true) {
-            const { done: atEnd, value: extra } = await reader.read();
-            if (atEnd) {
-              truncated = false;
-              break;
-            }
-            if (extra && extra.byteLength > 0) {
-              truncated = true;
-              break;
-            }
-          }
-          break;
-        }
-      }
+      const result = await consumeResponseBytes({
+        maxBytes,
+        read: () => reader.read(),
+        onChunk: (chunk) => {
+          // The shared size includes overflow; report only the retained bytes.
+          bytesRead += chunk.byteLength;
+          parts.push(chunk);
+        },
+        onLimit: () => undefined,
+      });
+      truncated = result.truncated;
     } catch {
       // Stream errors mean the accumulated bytes are only a partial body.
       truncated = true;

@@ -12,7 +12,10 @@ import { formatNextRun } from "../../lib/presenter.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
-import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
+import {
+  createAgentViewTestProps as createProps,
+  inertAgentFileControls,
+} from "./agents-view.test-helpers.ts";
 import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
 
@@ -727,11 +730,8 @@ describe("renderAgentFiles", () => {
         agentFileContents: { "AGENTS.md": "# Instructions" },
         agentFileDrafts: { "AGENTS.md": "# Instructions" },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
+        ...inertAgentFileControls,
         onSelectFile,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
       }),
       container,
     );
@@ -777,11 +777,8 @@ describe("renderAgentFiles", () => {
         agentFileContents: { "AGENTS.md": "" },
         agentFileDrafts: { "AGENTS.md": "" },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
+        ...inertAgentFileControls,
         onSelectFile,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
       }),
       container,
     );
@@ -840,11 +837,8 @@ describe("renderAgentFiles", () => {
         agentFileContents: { "SOUL.md": "" },
         agentFileDrafts: { "SOUL.md": "" },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
+        ...inertAgentFileControls,
         onSelectFile,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
       }),
       container,
     );
@@ -896,11 +890,7 @@ describe("renderAgentFiles", () => {
         },
         agentFileDrafts: {},
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
-        onSelectFile: () => undefined,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
+        ...inertAgentFileControls,
       }),
       container,
     );
@@ -950,11 +940,7 @@ describe("renderAgentFiles", () => {
           "USER.md": "# User Profile\n\nHello world",
         },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
-        onSelectFile: () => undefined,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
+        ...inertAgentFileControls,
       }),
       container,
     );
@@ -1002,11 +988,7 @@ describe("renderAgentFiles", () => {
           "USER.md": "# User Profile\n\nHello world",
         },
         agentFileSaving: false,
-        onLoadFiles: () => undefined,
-        onSelectFile: () => undefined,
-        onFileDraftChange: () => undefined,
-        onFileReset: () => undefined,
-        onFileSave: () => undefined,
+        ...inertAgentFileControls,
       }),
       container,
     );

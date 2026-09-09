@@ -137,6 +137,8 @@ function createFilteredSessionController(
   const host = {
     isConnected: true,
     connected: true,
+    activeRouteId: "sessions",
+    getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
     sessionDataContext: context,
     addController: () => undefined,
     removeController: () => undefined,

@@ -16,6 +16,28 @@ import { collectSecurityAuditFindings } from "./audit.test-support.js";
 
 const execFileAsync = promisify(execFile);
 
+function createMcporterAuditOptions(stateDir: string): Parameters<typeof runSecurityAuditCore>[0] {
+  return {
+    config: {
+      agents: {
+        list: [
+          {
+            id: "asset-agent",
+            default: true,
+            skills: ["asset-lifecycle-tracking"],
+            tools: { exec: { host: "gateway", mode: "full" } },
+          },
+        ],
+      },
+    },
+    sourceConfig: {},
+    env: { OPENCLAW_STATE_DIR: stateDir },
+    stateDir,
+    includeFilesystem: false,
+    includeChannelSecurity: false,
+  };
+}
+
 function captureSecurityEvents(): {
   events: DiagnosticSecurityEvent[];
   stop: () => void;
@@ -96,25 +118,7 @@ describe("security audit config basics", () => {
         "utf8",
       );
 
-      const report = await runSecurityAuditCore({
-        config: {
-          agents: {
-            list: [
-              {
-                id: "asset-agent",
-                default: true,
-                skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", mode: "full" } },
-              },
-            ],
-          },
-        },
-        sourceConfig: {},
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        stateDir,
-        includeFilesystem: false,
-        includeChannelSecurity: false,
-      });
+      const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
 
       expect(report.findings).toEqual(
         expect.arrayContaining([
@@ -144,25 +148,7 @@ describe("security audit config basics", () => {
         Buffer.alloc(16 * 1024 * 1024 + 1, 0x20),
       );
 
-      const report = await runSecurityAuditCore({
-        config: {
-          agents: {
-            list: [
-              {
-                id: "asset-agent",
-                default: true,
-                skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", mode: "full" } },
-              },
-            ],
-          },
-        },
-        sourceConfig: {},
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        stateDir,
-        includeFilesystem: false,
-        includeChannelSecurity: false,
-      });
+      const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
 
       const checkIds = report.findings.map((finding) => finding.checkId);
       expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
@@ -182,25 +168,7 @@ describe("security audit config basics", () => {
   it("does not flag mcporter registry inspection when the registry is missing", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-missing-"));
     try {
-      const report = await runSecurityAuditCore({
-        config: {
-          agents: {
-            list: [
-              {
-                id: "asset-agent",
-                default: true,
-                skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", mode: "full" } },
-              },
-            ],
-          },
-        },
-        sourceConfig: {},
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        stateDir,
-        includeFilesystem: false,
-        includeChannelSecurity: false,
-      });
+      const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
 
       const checkIds = report.findings.map((finding) => finding.checkId);
       expect(checkIds).not.toContain("tools.exec.mcporter_registry_inspection_incomplete");
@@ -220,25 +188,7 @@ describe("security audit config basics", () => {
         "utf8",
       );
 
-      const report = await runSecurityAuditCore({
-        config: {
-          agents: {
-            list: [
-              {
-                id: "asset-agent",
-                default: true,
-                skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", mode: "full" } },
-              },
-            ],
-          },
-        },
-        sourceConfig: {},
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        stateDir,
-        includeFilesystem: false,
-        includeChannelSecurity: false,
-      });
+      const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
 
       const checkIds = report.findings.map((finding) => finding.checkId);
       expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
@@ -284,25 +234,7 @@ describe("security audit config basics", () => {
         recursive: true,
       });
 
-      const report = await runSecurityAuditCore({
-        config: {
-          agents: {
-            list: [
-              {
-                id: "asset-agent",
-                default: true,
-                skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", mode: "full" } },
-              },
-            ],
-          },
-        },
-        sourceConfig: {},
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        stateDir,
-        includeFilesystem: false,
-        includeChannelSecurity: false,
-      });
+      const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
 
       const checkIds = report.findings.map((finding) => finding.checkId);
       expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
@@ -323,25 +255,7 @@ describe("security audit config basics", () => {
         await fs.mkdir(configDir, { recursive: true });
         await execFileAsync("mkfifo", [path.join(configDir, "mcporter.json")]);
 
-        const report = await runSecurityAuditCore({
-          config: {
-            agents: {
-              list: [
-                {
-                  id: "asset-agent",
-                  default: true,
-                  skills: ["asset-lifecycle-tracking"],
-                  tools: { exec: { host: "gateway", mode: "full" } },
-                },
-              ],
-            },
-          },
-          sourceConfig: {},
-          env: { OPENCLAW_STATE_DIR: stateDir },
-          stateDir,
-          includeFilesystem: false,
-          includeChannelSecurity: false,
-        });
+        const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
 
         const checkIds = report.findings.map((finding) => finding.checkId);
         expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
@@ -369,25 +283,7 @@ describe("security audit config basics", () => {
       );
       await fs.symlink(targetPath, path.join(configDir, "mcporter.json"));
 
-      const report = await runSecurityAuditCore({
-        config: {
-          agents: {
-            list: [
-              {
-                id: "asset-agent",
-                default: true,
-                skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", mode: "full" } },
-              },
-            ],
-          },
-        },
-        sourceConfig: {},
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        stateDir,
-        includeFilesystem: false,
-        includeChannelSecurity: false,
-      });
+      const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
 
       expect(report.findings.map((finding) => finding.checkId)).toContain(
         "tools.exec.agent_skill_mcp_boundary_drift",
@@ -411,25 +307,7 @@ describe("security audit config basics", () => {
       await fs.writeFile(targetPath, Buffer.alloc(16 * 1024 * 1024 + 1, 0x20));
       await fs.symlink(targetPath, path.join(configDir, "mcporter.json"));
 
-      const report = await runSecurityAuditCore({
-        config: {
-          agents: {
-            list: [
-              {
-                id: "asset-agent",
-                default: true,
-                skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", mode: "full" } },
-              },
-            ],
-          },
-        },
-        sourceConfig: {},
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        stateDir,
-        includeFilesystem: false,
-        includeChannelSecurity: false,
-      });
+      const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
 
       const checkIds = report.findings.map((finding) => finding.checkId);
       expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");

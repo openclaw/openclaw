@@ -35,18 +35,61 @@ internal fun gatewayStatusLabel(
 ): String {
   val status = statusText.trim().lowercase()
   return when {
-    status == "connected (node offline)" -> nativeString("Connected (node offline)")
-    status == "connected (operator offline)" -> nativeString("Connected (operator offline)")
-    isConnected -> nativeString("Ready")
-    status == "offline" -> nativeString("Offline")
-    status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
-    status.contains("pair") -> nativeString("Pairing needed")
-    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
-    status.contains("fingerprint verification timed out") -> nativeString("TLS timed out")
-    status.contains("no tls endpoint") -> nativeString("No TLS endpoint")
-    status.contains("certificate") || status.contains("tls") -> nativeString("Certificate review needed")
-    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> nativeString("Cannot reach gateway")
-    else -> nativeString("Not connected")
+    status == "connected (node offline)" -> {
+      nativeString("Connected (node offline)")
+    }
+
+    status == "connected (operator offline)" -> {
+      nativeString("Connected (operator offline)")
+    }
+
+    isConnected -> {
+      nativeString("Ready")
+    }
+
+    status == "offline" -> {
+      nativeString("Offline")
+    }
+
+    gatewayConnectionProblem?.isNetworkFailure == true && gatewayConnectionProblem.reason == "transport-cleanup" -> {
+      nativeString("Stopping previous connection")
+    }
+
+    gatewayConnectionProblem?.isNetworkFailure == true -> {
+      nativeString("Cannot reach gateway")
+    }
+
+    status.contains("connecting") || status.contains("reconnecting") -> {
+      nativeString("Connecting...")
+    }
+
+    status.contains("pair") -> {
+      nativeString("Pairing needed")
+    }
+
+    status.contains("auth") || status.contains("device identity") -> {
+      gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
+    }
+
+    status.contains("fingerprint verification timed out") -> {
+      nativeString("TLS timed out")
+    }
+
+    status.contains("no tls endpoint") -> {
+      nativeString("No TLS endpoint")
+    }
+
+    status.contains("certificate") || status.contains("tls") -> {
+      nativeString("Certificate review needed")
+    }
+
+    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> {
+      nativeString("Cannot reach gateway")
+    }
+
+    else -> {
+      nativeString("Not connected")
+    }
   }
 }
 

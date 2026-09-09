@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   installMockGateway,
   type MockGatewayRequest,
@@ -215,11 +216,18 @@ suite.define(() => {
       );
       expect(await machineClass.getAttribute("list")).toBeNull();
       const saveButton = page.getByRole("button", { name: "Save" });
-      // The patch schedules an applied-revision poll. Let it settle before
-      // deferring config.get so the background read cannot consume the gate.
+      // Saved temporarily hides Apply changes; wait for the applied revision so
+      // its background config.get cannot consume the foreground refresh gate.
       await expect
-        .poll(() => page.getByRole("button", { name: "Apply changes", exact: true }).count())
-        .toBe(0);
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as
+              | (HTMLElement & { runtime?: { context: ApplicationContext } })
+              | null;
+            return app?.runtime?.context.runtimeConfig.state.configSnapshot?.appliedConfigHash;
+          }),
+        )
+        .toBe("cloud-workers-2");
       const configGetCount = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.get");
       await gateway.emitGatewayEvent("config.changed", {

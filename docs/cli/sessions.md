@@ -27,6 +27,9 @@ openclaw sessions --store ./tmp/sessions.json
 openclaw sessions --json
 ```
 
+`openclaw sessions list` is an explicit spelling of the default listing action and
+accepts the same flags.
+
 Human-readable lists and cleanup previews use terminal-width tables. Long model
 names and flags wrap without being truncated, and Unicode keys stay aligned.
 Long keys show their beginning and end; use `openclaw sessions --json` for complete
@@ -320,7 +323,7 @@ check filesystem permissions and retry after resolving the deletion failure.
   "stores": [
     {
       "agentId": "main",
-      "storePath": "/home/user/.openclaw/agents/main/sessions/sessions.json",
+      "storePath": "/home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite",
       "beforeCount": 120,
       "afterCount": 80,
       "missing": 0,
@@ -330,7 +333,7 @@ check filesystem permissions and retry after resolving the deletion failure.
     },
     {
       "agentId": "work",
-      "storePath": "/home/user/.openclaw/agents/work/sessions/sessions.json",
+      "storePath": "/home/user/.openclaw/agents/work/agent/openclaw-agent.sqlite",
       "beforeCount": 18,
       "afterCount": 18,
       "missing": 0,

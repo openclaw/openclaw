@@ -138,3 +138,4 @@ the originating room. See [Session management](/concepts/session#group-and-room-
 - [Channel routing](/channels/channel-routing) — how agents and sessions are selected
 - [Memory](/concepts/memory) — durable memory layers
 - [Multi-agent](/concepts/multi-agent) — running several isolated agents
+- [Session management deep dive](/reference/session-management-compaction) — the disk budget, archival, and compaction keys

@@ -657,6 +657,7 @@ async function runCliBtwSideQuestion(params: {
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: params.cfg,
     overrideSeconds: params.opts?.timeoutOverrideSeconds,
+    overrideMs: params.opts?.timeoutOverrideMs,
   });
   const runId = params.authorityRunId;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(

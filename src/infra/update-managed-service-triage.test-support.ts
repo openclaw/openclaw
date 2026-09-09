@@ -1,11 +1,13 @@
 // Synthetic native boundary only: real Node helpers, IPC, leases and descendants.
 import { spawn } from "node:child_process";
+import { readFileSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { vi } from "vitest";
+import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
@@ -64,7 +66,8 @@ export async function createTriageBoundary(
   // The installed candidate can be ESM; native command fixtures remain CommonJS.
   await fs.writeFile(path.join(bin, "package.json"), '{"type":"commonjs"}');
   await fs.mkdir(path.join(root, "members"));
-  await fs.mkdir(path.join(root, "controllers"));
+  const groups = path.join(root, "groups");
+  await fs.mkdir(groups);
   const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
@@ -84,11 +87,6 @@ export async function createTriageBoundary(
 const root = ${JSON.stringify(root)};
 const scopeFile = ${JSON.stringify(scopeFile)};
 const primaryFile = ${JSON.stringify(primaryFile)};
-if (/systemctl$|systemd-run$|launchctl$/.test(process.argv[1] || '')) {
-  const controller = root + '/controllers/' + process.pid;
-  fs.writeFileSync(controller, '');
-  process.once('exit', () => fs.rmSync(controller, {force:true}));
-}
 const event = (kind, data = {}) => fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify({kind, pid:process.pid, handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null, sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null, ...data})+'\\n');
 `;
   // HOME does not fence macOS's gui/UID namespace if a service mock misses.
@@ -108,6 +106,23 @@ const read = fs.readFileSync;
 const native = /systemctl$|systemd-run$|launchctl$/.test(process.argv[1] || '');
 if (/maintenance.mjs$/.test(process.argv[1] || '')) event('maintenance-phase', {phase:'preload',ppid:process.ppid,sequence:0,elapsedMs:0});
 if (!native) fs.writeFileSync(root + '/members/' + process.pid, String(process.pid));
+if (!native) {
+  const childProcess = require('node:child_process'), originalSpawn = childProcess.spawn;
+  childProcess.spawn = function(command, args, options) {
+    if (!options?.detached) return originalSpawn.apply(this, arguments);
+    // Claim before spawn. An open descriptor publishes into the sealed registry
+    // even if cleanup closes admission while this native spawn returns.
+    const receipt = fs.openSync(root + '/groups/' + require('node:crypto').randomUUID(), 'wx');
+    try {
+      const child = originalSpawn.apply(this, arguments);
+      fs.writeSync(receipt, String(child.pid ?? 0));
+      return child;
+    } finally {
+      fs.closeSync(receipt);
+    }
+  };
+  require('node:module').syncBuiltinESMExports();
+}
 fs.readFileSync = function(file, ...args) {
   if (typeof file === 'string' && /^\\/proc\\/(self|[0-9]+)\\/cgroup$/.test(file)) {
     const scope = JSON.parse(read(scopeFile, 'utf8'));
@@ -323,6 +338,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
   }
   const helper = spawn(process.execPath, [helperFile, paramsFile], {
     env,
+    detached: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
   let output = "",
@@ -462,28 +478,79 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
         })),
       ),
     cleanup: async () => {
-      for (const pid of await fs.readdir(path.join(root, "members"))) {
+      const deadline = Date.now() + 5000;
+      // Close descendant admission before taking the census. Controllers inherit
+      // their creator's group, including children still starting before registration.
+      const closingGroups = path.join(root, "closing-groups");
+      await fs.rename(groups, closingGroups);
+      const groupIds = new Set([helper.pid!]);
+      const failures: unknown[] = [];
+      try {
+        await vi.waitFor(
+          () => {
+            const pending: string[] = [];
+            for (const entry of readdirSync(closingGroups)) {
+              const value = readFileSync(path.join(closingGroups, entry), "utf8");
+              if (!/^\d+$/u.test(value)) {
+                pending.push(entry);
+              } else if (Number(value) > 0) {
+                groupIds.add(Number(value));
+              }
+            }
+            if (pending.length) {
+              throw new Error(
+                `detached fixture launches have not published: ${pending.join(", ")}`,
+              );
+            }
+          },
+          { timeout: Math.max(1, deadline - Date.now()), interval: 20 },
+        );
+      } catch (error) {
+        failures.push(error);
+      }
+      // An unpublished launch retains the files, but known actors still need joining.
+      for (const pid of groupIds) {
         try {
-          process.kill(Number(pid), "SIGKILL");
-        } catch {}
+          process.kill(-pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            failures.push(error);
+          }
+        }
       }
       for (const child of [helper, parent]) {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
+        try {
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGKILL");
+          }
+        } catch (error) {
+          failures.push(error);
         }
       }
       await Promise.all([exit, parentExit]);
-      // Native control children are outside the synthetic scope they stop.
-      await vi.waitFor(
-        async () => {
-          const controllers = await fs.readdir(path.join(root, "controllers"));
-          if (controllers.some((pid) => isPidAlive(Number(pid)))) {
-            throw new Error("native fixture controllers are still running");
-          }
-        },
-        { timeout: 5000, interval: 20 },
-      );
+      try {
+        await vi.waitFor(
+          () => {
+            for (const pid of groupIds) {
+              if (
+                inspectManagedProcessGroup(
+                  { pid, exitCode: 0 },
+                  { errorPolicy: "indeterminate" },
+                ) !== "dead"
+              ) {
+                throw new Error(`native fixture process group ${pid} has not exited`);
+              }
+            }
+          },
+          { timeout: Math.max(1, deadline - Date.now()), interval: 20 },
+        );
+      } catch (error) {
+        failures.push(error);
+      }
       lines.close();
+      if (failures.length) {
+        throw new AggregateError(failures, "Could not join all native fixture process groups");
+      }
       const finalEvents = await readEvents();
       const db = new DatabaseSync(databasePath);
       try {

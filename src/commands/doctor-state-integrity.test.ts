@@ -257,6 +257,41 @@ describe("structured state integrity findings", () => {
     );
   });
 
+  it.each([undefined, "~/custom-store/sessions.json"])(
+    "checks the source session store when process state is isolated (store=%s)",
+    (store) => {
+      const sourceHome = path.join(tempHome, "source-home");
+      const sourceState = path.join(sourceHome, ".openclaw");
+      const storeDir = store
+        ? path.join(sourceHome, "custom-store")
+        : path.join(sourceState, "agents", "main", "sessions");
+      fs.mkdirSync(sourceState, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+      const accessSync = fs.accessSync;
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+        if (target === storeDir) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        return accessSync(target, mode);
+      });
+      try {
+        const issues = detectStateIntegrityHealthIssues(
+          withMainAgentRoster({ session: { store } }),
+          { env: { HOME: sourceHome, OPENCLAW_STATE_DIR: sourceState } },
+        );
+        expect(issues).toEqual([
+          expect.objectContaining({
+            kind: "runtime-dir-not-writable",
+            label: "Session store dir",
+            path: storeDir,
+          }),
+        ]);
+      } finally {
+        accessSpy.mockRestore();
+      }
+    },
+  );
+
   it("reports an existing session directory that is not writable", () => {
     const stateDir = path.join(tempHome, ".openclaw");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);

@@ -127,17 +127,24 @@ describe("agent runtime plugin registries", () => {
 
   it("adopts full-only runtime capabilities from the active composition-root registry", () => {
     const activeRegistry = createEmptyPluginRegistry();
+    const primaryRegistry = createEmptyPluginRegistry();
     const contextEnginesAdopted = { handle: "context-engines" };
     const presentersAdopted = { handle: "presenters" };
+    const onPrimaryRegistry = vi.fn();
+    hoisted.loadPluginRegistryHandle.mockReturnValue(primaryRegistry);
     hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
     hoisted.adoptRuntimeContextEngineRegistrations.mockReturnValue(contextEnginesAdopted);
     hoisted.adoptRuntimeWidgetPresenterRegistrations.mockReturnValue(presentersAdopted);
 
     expect(
-      loadAgentRuntimePluginRegistryHandle({ config: {} as never, workspaceDir: "/tmp/workspace" }),
+      loadAgentRuntimePluginRegistryHandle(
+        { config: {}, workspaceDir: "/tmp/workspace" },
+        onPrimaryRegistry,
+      ),
     ).toBe(presentersAdopted);
+    expect(onPrimaryRegistry).toHaveBeenCalledExactlyOnceWith(primaryRegistry);
     expect(hoisted.adoptRuntimeContextEngineRegistrations).toHaveBeenCalledWith(
-      { handle: true },
+      primaryRegistry,
       activeRegistry,
     );
     expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).toHaveBeenCalledWith(
@@ -234,7 +241,7 @@ describe("agent runtime plugin registries", () => {
     }
   });
 
-  it("reuses the current Gateway generation and loads only the imported-plugin delta", () => {
+  it("reuses the current Gateway generation and loads only the imported-plugin delta", async () => {
     const config = {} as never;
     const workspaceDir = "/tmp/default-workspace";
     const metadataSnapshot = createPluginMetadataSnapshot({
@@ -276,7 +283,7 @@ describe("agent runtime plugin registries", () => {
       pluginIds: [...(basePluginIds ?? []), "selected-provider"],
     }));
 
-    const prepared = prepareWorkspacePluginRegistries(
+    const prepared = await prepareWorkspacePluginRegistries(
       {
         agentDir: "/tmp/agent",
         allowGatewaySubagentBinding: true,

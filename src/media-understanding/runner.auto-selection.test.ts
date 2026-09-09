@@ -29,7 +29,7 @@ vi.mock("../plugins/capability-provider-runtime.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: async () => [],
-  loadPreparedModelCatalog: async () => [],
+  readPreparedModelCatalog: async () => [],
 }));
 
 beforeEach(() => {

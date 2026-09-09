@@ -1,6 +1,7 @@
 // Focused lifecycle coverage for explicit auth-profile pins.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   createAuthStoreWithProfiles,
@@ -12,16 +13,8 @@ import {
 function createStore(order: string[]) {
   return createAuthStoreWithProfiles({
     profiles: {
-      [TEST_PRIMARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-primary",
-      },
-      [TEST_SECONDARY_PROFILE_ID]: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-secondary",
-      },
+      [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+      [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-secondary"),
     },
     order: { openai: order },
   });

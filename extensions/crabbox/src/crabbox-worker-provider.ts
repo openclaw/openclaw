@@ -18,6 +18,11 @@ import {
   createCrabboxWorkerDesktopEndpoint,
   createCrabboxWorkerDesktopSetup,
 } from "./crabbox-worker-desktop-setup.js";
+import {
+  createCrabboxVersionResolver,
+  CRABBOX_WSL2_MIN_VERSION,
+  supportsCrabboxWsl2,
+} from "./crabbox-worker-doctor-runtime.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
 import { collectCrabboxNodeEnrollmentEvidence } from "./crabbox-worker-node-enrollment-diagnostics.js";
@@ -188,9 +193,11 @@ export function createCrabboxWorkerProvider(
     });
     return defaultBinary;
   };
+  const resolveVersion = createCrabboxVersionResolver(runCommand);
   const machineOptions = createCrabboxMachineOptionsResolver({
     resolveBinary,
     runCommand,
+    resolveVersion,
     warn,
   });
   const warmImages = createCrabboxWarmImageManager({ runCommand, runArgs: leaseRunArgs, warn });
@@ -272,6 +279,15 @@ export function createCrabboxWorkerProvider(
     const allocation = await resolveAllocation(profile, operationId);
     signal?.throwIfAborted();
     const binary = resolveBinary(parsed.binary);
+    if (parsed.target === "windows/wsl2") {
+      const version = await resolveVersion(binary);
+      signal?.throwIfAborted();
+      if (version.status === "indeterminate" || !supportsCrabboxWsl2(version.version)) {
+        throw new WorkerProviderError(
+          `Crabbox Windows (WSL2) cloud workers require Crabbox ${CRABBOX_WSL2_MIN_VERSION} or newer; ${version.status === "indeterminate" ? version.reason : `found ${version.version}`}. Upgrade ${binary} and restart the Gateway.`,
+        );
+      }
+    }
     const context = { binary, provider: parsed.provider };
     const leaseId = allocation.leaseId;
     if (parsed.desktop && parsed.provider === "hetzner") {

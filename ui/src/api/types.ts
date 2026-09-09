@@ -287,6 +287,11 @@ export type SessionsBranchesSwitchResult =
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  createdAt?: number;
+  pinnedAt?: number;
+  lastReadAt?: number;
+  lastActivityAt?: number;
+  lastInteractionAt?: number;
   permissionMode?: GatewaySessionRow["permissionMode"];
   archivedAt?: number;
   archiveReason?: SessionEntryArchiveReason;

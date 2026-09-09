@@ -23,18 +23,6 @@ export function resolveApiKeyForProfileInTest(
   return resolver({ cfg: {}, ...params });
 }
 
-/** Build an OAuth credential fixture. */
-export function oauthCred(params: {
-  provider: string;
-  access: string;
-  refresh: string;
-  expires: number;
-  accountId?: string;
-  email?: string;
-}): OAuthCredential {
-  return { type: "oauth", ...params };
-}
-
 /** Build an auth profile store containing one credential. */
 export function storeWith(profileId: string, cred: OAuthCredential): AuthProfileStore {
   return { version: 1, profiles: { [profileId]: cred } };
@@ -48,6 +36,7 @@ export function createExpiredOauthStore(params: {
   refresh?: string;
   accountId?: string;
   email?: string;
+  authFlow?: string;
 }): AuthProfileStore {
   return {
     version: 1,
@@ -60,6 +49,7 @@ export function createExpiredOauthStore(params: {
         expires: Date.now() - 60_000,
         accountId: params.accountId,
         email: params.email,
+        authFlow: params.authFlow,
       } satisfies OAuthCredential,
     },
   };

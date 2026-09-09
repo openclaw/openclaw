@@ -57,13 +57,6 @@ const methodResponses = {
     diagnostics: [],
     mutationAllowed: true,
   },
-  "skills.proposals.historyStatus": {
-    hasScanned: false,
-    hasMore: false,
-    ideasFound: 0,
-    reviewedSessions: 0,
-    lastScanReviewed: 0,
-  },
   "skills.proposals.list": {
     proposals: [],
     schema: "openclaw.skill-workshop.proposals-manifest.v1",
@@ -227,7 +220,6 @@ suite.define(() => {
           "agents.list",
           "config.get",
           "plugins.list",
-          "skills.proposals.historyStatus",
           "skills.proposals.list",
           "skills.status",
         ],

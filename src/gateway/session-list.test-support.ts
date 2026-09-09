@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { listSessionsFromStoreAsync } from "./session-utils-list.js";
@@ -26,6 +27,28 @@ export function buildSessionRowFixture(
   });
 }
 
+export function sessionStoreTargetsFixture(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  agentId?: string;
+}) {
+  const loadSessionEntry = (key: string) => params.store[key];
+  return new Map(
+    Object.entries(params.store).map(([key, entry]) => {
+      const agentId = fixtureOwner(params.cfg, key, params.agentId);
+      return [
+        key,
+        {
+          agentId,
+          storeTarget: { agentId, storePath: params.storePath },
+          modelSource: { entry, loadSessionEntry },
+        },
+      ] as const;
+    }),
+  );
+}
+
 /** Synthetic stores have no loader; declare their unqualified row owner in the fixture. */
 export function listSessionFixture(
   params: Omit<Parameters<typeof listSessionsFromStoreAsync>[0], "targetsBySessionKey"> & {
@@ -33,11 +56,9 @@ export function listSessionFixture(
   },
 ) {
   const { fixtureAgentId, ...input } = params;
-  const targetsBySessionKey = new Map(
-    Object.keys(input.store).map((key) => {
-      const agentId = fixtureOwner(input.cfg, key, input.opts.agentId ?? fixtureAgentId);
-      return [key, { agentId, storeTarget: { agentId, storePath: input.storePath } }] as const;
-    }),
-  );
+  const targetsBySessionKey = sessionStoreTargetsFixture({
+    ...input,
+    agentId: input.opts.agentId ?? fixtureAgentId,
+  });
   return listSessionsFromStoreAsync({ ...input, targetsBySessionKey });
 }

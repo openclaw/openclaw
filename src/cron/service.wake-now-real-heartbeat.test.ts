@@ -1,7 +1,8 @@
 // Exercise the scheduler's active marker against the real heartbeat busy guard.
 // Stubbing runHeartbeatOnce hides this cross-owner interaction.
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -31,7 +32,12 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { resetCronActiveJobs, waitForActiveCronJobs } from "./active-jobs.js";
+import * as cronActiveJobs from "./active-jobs.js";
+import {
+  getActiveCronJobCount,
+  resetCronActiveJobs,
+  waitForActiveCronJobs,
+} from "./active-jobs.js";
 import { CronService, type CronEvent } from "./service.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronJobsStoreSync } from "./store.js";
@@ -63,6 +69,12 @@ function makeSandbox() {
 }
 
 type WakeNowRunMode = "direct" | "queued" | "scheduled";
+type MainCronReply = ReturnType<typeof createHeartbeatToolResponsePayload> | { text: string };
+type MainCronFixture = {
+  cron: CronService;
+  heartbeatRunner: ReturnType<typeof startHeartbeatRunner>;
+  getReplySpy: Mock<(ctx: MsgContext) => Promise<MainCronReply>>;
+};
 
 async function runMainCronCase(
   mode: WakeNowRunMode,
@@ -79,10 +91,11 @@ async function runMainCronCase(
     heartbeatResponse?: ReturnType<typeof createHeartbeatToolResponsePayload>;
     mixedExec?: boolean;
   } = {},
+  exercise?: (fixture: MainCronFixture) => Promise<void>,
 ) {
   const sandbox = makeSandbox();
   const wakeSignals: Array<AbortSignal | undefined> = [];
-  const getReplySpy = vi.fn().mockImplementation(async (ctx: MsgContext) => {
+  const getReplySpy = vi.fn<(ctx: MsgContext) => Promise<MainCronReply>>(async (ctx) => {
     wakeSignals.push(getHeartbeatWakeAbortSignal());
     if (options.mixedExec && ctx.InternalTurnSource === "cron") {
       enqueueSystemEventWithReceipt("Reminder: Late arrival", {
@@ -179,7 +192,12 @@ async function runMainCronCase(
   });
   await cron.start();
 
-  try {
+  const runBody = async () => {
+    // Fault cases must unwind the same fixture owner as the normal scheduler cases.
+    if (exercise) {
+      await exercise({ cron, heartbeatRunner, getReplySpy });
+      return undefined;
+    }
     if (options.heartbeatPaused) {
       setHeartbeatsEnabled(false);
     }
@@ -306,13 +324,41 @@ async function runMainCronCase(
       expect(cron.getJob(job.id)).toBeUndefined();
     }
     return { expectedMainSessionKey, sandbox, terminal };
-  } finally {
+  };
+  let result: Awaited<ReturnType<typeof runBody>>;
+  let bodyFailure: { error: unknown } | undefined;
+  try {
+    result = await runBody();
+  } catch (error) {
+    bodyFailure = { error };
+  }
+  let cleanupFailure: { error: unknown } | undefined;
+  try {
     cron.stop();
-    heartbeatRunner.stop();
+    // In-flight cron runs still need their heartbeat waiter. Stopping its
+    // owner first aborts and retains that wake instead of settling the run.
     const drained = await waitForActiveCronJobs(5_000);
     expect(drained).toEqual({ drained: true, active: 0 });
     await vi.waitFor(() => expect(getQueueSize(CommandLane.Cron)).toBe(0), { timeout: 5_000 });
+  } catch (error) {
+    cleanupFailure = { error };
+  } finally {
+    heartbeatRunner.stop();
   }
+  if (bodyFailure && cleanupFailure) {
+    throw new AggregateError(
+      [bodyFailure.error, cleanupFailure.error],
+      "Cron fixture and cleanup failed",
+      { cause: bodyFailure.error },
+    );
+  }
+  if (bodyFailure) {
+    throw bodyFailure.error;
+  }
+  if (cleanupFailure) {
+    throw cleanupFailure.error;
+  }
+  return result;
 }
 
 describe("main cron with the real heartbeat runner", () => {
@@ -406,4 +452,101 @@ describe("main cron with the real heartbeat runner", () => {
     });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
+
+  it("drains an in-flight heartbeat before disposing it after a fixture failure", async () => {
+    const replyStarted = createDeferred<AbortSignal>();
+    const releaseReply = createDeferred();
+    const cleanupStarted = createDeferred();
+    const bodyError = new Error("fixture body failed");
+    let stopHeartbeat: (() => void) | undefined;
+    const outcome = runMainCronCase("queued", "now", {}, async (fixture) => {
+      const { cron, heartbeatRunner, getReplySpy } = fixture;
+      vi.spyOn(heartbeatRunner, "stop");
+      stopHeartbeat = heartbeatRunner.stop;
+      const stopCron = cron.stop.bind(cron);
+      vi.spyOn(cron, "stop").mockImplementation(() => {
+        stopCron();
+        cleanupStarted.resolve();
+      });
+      getReplySpy.mockImplementationOnce(async () => {
+        const signal = getHeartbeatWakeAbortSignal();
+        if (!signal) {
+          throw new Error("expected the real heartbeat wake signal");
+        }
+        replyStarted.resolve(signal);
+        await releaseReply.promise;
+        return { text: "Handled the reminder" };
+      });
+      const job = await cron.add({
+        enabled: true,
+        name: "fixture cleanup",
+        schedule: { kind: "at", at: new Date(Date.now() + 60 * 60_000).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "Reminder: Finish before fixture cleanup" },
+      });
+      await expect(cron.enqueueRun(job.id, "force")).resolves.toMatchObject({
+        ok: true,
+        enqueued: true,
+      });
+      await withTestTimeout(
+        replyStarted.promise,
+        10_000,
+        "real heartbeat did not reach the reply gate",
+      );
+      expect(getActiveCronJobCount()).toBe(1);
+      expect(getQueueSize(CommandLane.Cron)).toBe(1);
+      throw bodyError;
+    }).catch((error: unknown) => error);
+    try {
+      await Promise.race([
+        cleanupStarted.promise,
+        outcome.then((error) => {
+          throw error;
+        }),
+      ]);
+      const signal = await Promise.race([
+        replyStarted.promise,
+        outcome.then((error) => {
+          throw error;
+        }),
+      ]);
+      const abortedDuringDrain = signal.aborted;
+      releaseReply.resolve();
+      const error = await outcome;
+      expect(abortedDuringDrain).toBe(false);
+      expect(error).toBe(bodyError);
+      expect(getActiveCronJobCount()).toBe(0);
+      expect(getQueueSize(CommandLane.Cron)).toBe(0);
+      expect(stopHeartbeat).toHaveBeenCalledOnce();
+    } finally {
+      releaseReply.resolve();
+      await outcome;
+    }
+  });
+
+  it.each([false, true])(
+    "always disposes the heartbeat and preserves errors when draining fails (bodyFailed=%s)",
+    async (bodyFailed) => {
+      const bodyError = new Error("fixture body failed");
+      const drainError = new Error("fixture drain failed");
+      let stopHeartbeat: (() => void) | undefined;
+      const error = await runMainCronCase("queued", "now", {}, async ({ heartbeatRunner }) => {
+        vi.spyOn(heartbeatRunner, "stop");
+        stopHeartbeat = heartbeatRunner.stop;
+        vi.spyOn(cronActiveJobs, "waitForActiveCronJobs").mockRejectedValueOnce(drainError);
+        if (bodyFailed) {
+          throw bodyError;
+        }
+      }).catch((caughtError: unknown) => caughtError);
+      expect(stopHeartbeat).toHaveBeenCalledOnce();
+      if (bodyFailed) {
+        expect(error).toBeInstanceOf(AggregateError);
+        expect((error as AggregateError).errors).toEqual([bodyError, drainError]);
+        expect((error as AggregateError).cause).toBe(bodyError);
+      } else {
+        expect(error).toBe(drainError);
+      }
+    },
+  );
 });

@@ -1034,17 +1034,12 @@ internal fun overviewMetricCardSpecs(
   return listOf(
     OverviewMetricCardSpec(
       title = nativeString("Gateway"),
-      value =
-        when {
-          !isConnected -> nativeString("Offline")
-          hasAttention -> nativeString("Online")
-          else -> nativeString("Healthy")
-        },
+      value = if (isConnected) nativeString("Online") else nativeString("Offline"),
       subtitle =
         when {
           !isConnected -> nativeString("Reconnect to continue")
           hasAttention -> nativeString("Review highlighted items")
-          else -> nativeString("All systems nominal")
+          else -> nativeString("No highlighted items")
         },
       icon = Icons.Default.Favorite,
       status =
@@ -1667,21 +1662,13 @@ private fun SettingsShellScreen(
       }
 
       item {
-        Column(
+        Text(
           modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-          Text(text = nativeString("OpenClaw \${BuildConfig.VERSION_NAME} (\${BuildConfig.VERSION_CODE})", BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
-          Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-              text = if (isConnected) nativeString("All systems operational") else nativeString("Gateway not connected"),
-              style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
-              color = ClawTheme.colors.textSubtle,
-            )
-            Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (isConnected) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
-          }
-        }
+          text = nativeString("OpenClaw \${BuildConfig.VERSION_NAME} (\${BuildConfig.VERSION_CODE})", BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
+          style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+          color = ClawTheme.colors.textMuted,
+          textAlign = TextAlign.Center,
+        )
       }
     }
   }

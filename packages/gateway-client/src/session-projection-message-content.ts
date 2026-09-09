@@ -35,6 +35,12 @@ export function readSessionMessageDisplayContent(message: unknown): {
   return { text: fallback ?? texts.join("\n"), hasNonText, usesFallbackText: fallback !== null };
 }
 
+/** Check whether a projected message has text or another displayable block. */
+export function hasDisplayableSessionMessage(message: unknown): boolean {
+  const { text, hasNonText } = readSessionMessageDisplayContent(message);
+  return Boolean(text) || hasNonText;
+}
+
 function normalizeChatErrorComparisonText(text: string): string {
   return text
     .trim()

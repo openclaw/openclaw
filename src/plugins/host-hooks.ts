@@ -156,7 +156,7 @@ export type PluginRuntimeLifecycleRegistration = {
   id: string;
   description?: string;
   /**
-   * Releases this registration's resources after an explicitly owned inspection.
+   * Releases this registration's resources after an owned inspection or ephemeral prepared runtime.
    * Raw loaders do not invoke this callback. Host cleanup notifications stay separate.
    */
   dispose?: () => void | Promise<void>;

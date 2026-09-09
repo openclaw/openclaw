@@ -7,10 +7,10 @@ import {
   uiConversationMatches,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { clearChatPendingInputs } from "./chat-pending-inputs.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { peekChatRouteStartup } from "./route-startup.ts";
 
@@ -28,10 +28,12 @@ type ChatHistoryLoadState =
       client: GatewayBrowserClient;
       connectionEpoch: number;
       key: string;
-      promise: Promise<ChatHistoryResult | undefined>;
+      sessions: ChatHistorySessions;
+      promise: Promise<ObservedChatHistoryResult | undefined>;
     } & ChatHistoryLoadRequest)
   | {
       phase: "committed";
+      sessions: ChatHistorySessions;
       client: GatewayBrowserClient;
       connectionEpoch: number;
       sessionKey: string;
@@ -96,7 +98,7 @@ export function synchronizeInitialChatSnapshotConnection(state: ChatState): void
   }
 }
 
-export function waitForInitialChatSnapshot(state: ChatState): Promise<boolean> | undefined {
+export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<boolean> | undefined {
   const requests = chatHistoryRequests(state);
   const hydration = requests.initialSnapshotHydration;
   if (!hydration) {
@@ -104,7 +106,7 @@ export function waitForInitialChatSnapshot(state: ChatState): Promise<boolean> |
   }
   if (
     !hydration.startedBeforeReady ||
-    (state.client && peekChatRouteStartup(state.client, state.sessionKey)) ||
+    (state.client && peekChatRouteStartup(state.client, state.sessionKey, state.sessions)) ||
     !areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)
   ) {
     retireInitialChatSnapshot(state);
@@ -174,6 +176,7 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
     load.phase === "in-flight" &&
     (!state.connected ||
       load.client !== state.client ||
+      load.sessions !== state.sessions ||
       load.connectionEpoch !== state.connectionEpoch)
   ) {
     // Reconnect can finish before stale work settles, so transfer its intent
@@ -196,6 +199,7 @@ export function getAcceptedChatHistorySession(state: ChatState) {
   return accepted &&
     state.connected &&
     state.client === accepted.client &&
+    state.sessions === accepted.sessions &&
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === accepted.sessionKey &&
     (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
@@ -208,6 +212,7 @@ export function getAcceptedChatHistorySession(state: ChatState) {
 
 type ChatHistoryRequestOwnership = {
   version: number;
+  sessions: ChatState["sessions"];
   client: GatewayBrowserClient;
   connectionEpoch: number;
   sessionKey: string;
@@ -223,6 +228,7 @@ export function beginHistoryRequest(
 ): ChatHistoryRequestOwnership {
   return {
     version: ++chatHistoryRequests(state).historyVersion,
+    sessions: state.sessions,
     client,
     connectionEpoch,
     sessionKey,
@@ -237,6 +243,7 @@ export function ownsHistoryRequest(
   return (
     chatHistoryRequests(state).historyVersion === ownership.version &&
     state.client === ownership.client &&
+    state.sessions === ownership.sessions &&
     state.connected &&
     state.connectionEpoch === ownership.connectionEpoch
   );

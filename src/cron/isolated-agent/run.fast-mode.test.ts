@@ -17,6 +17,8 @@ import {
   resolveFastModeStateMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
+  runCliAgentMock,
+  isCliProviderMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -54,6 +56,7 @@ async function runFastModeCase(params: {
   sessionId?: string;
   sessionFastMode?: boolean | "auto";
   sessionTarget?: string;
+  cli?: boolean;
 }) {
   const baseSession = makeCronSession();
   resolveCronSessionMock.mockReturnValue(
@@ -68,6 +71,10 @@ async function runFastModeCase(params: {
     }),
   );
   mockSuccessfulModelFallback();
+  if (params.cli) {
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { agentMeta: {} } });
+  }
   resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
     const sessionFastMode = sessionEntry?.fastMode;
     if (typeof sessionFastMode === "boolean" || sessionFastMode === "auto") {
@@ -117,19 +124,19 @@ async function runFastModeCase(params: {
   );
 
   expect(result.status).toBe("ok");
-  expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  const [embeddedRunParams] = expectDefined(
-    runEmbeddedAgentMock.mock.calls[0],
-    "embedded run call",
-  );
+  const selectedRunner = params.cli ? runCliAgentMock : runEmbeddedAgentMock;
+  expect(selectedRunner).toHaveBeenCalledOnce();
+  const [embeddedRunParams] = expectDefined(selectedRunner.mock.calls[0], "embedded run call");
   expect(embeddedRunParams.provider).toBe("openai");
   expect(embeddedRunParams.model).toBe(EXPECTED_OPENAI_MODEL);
   expect(embeddedRunParams.fastMode).toBe(params.expectedFastMode);
   expect(embeddedRunParams.fastModeAutoOnSeconds).toBe(params.expectedFastModeAutoOnSeconds ?? 60);
-  expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
-    params.expectedCleanupBundleMcpOnRunEnd ?? true,
-  );
-  expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
+  if (!params.cli) {
+    expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
+      params.expectedCleanupBundleMcpOnRunEnd ?? true,
+    );
+    expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
+  }
   const isIsolated = (params.sessionTarget ?? "isolated") === "isolated";
   if (params.expectedRetiredSessionId) {
     expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
@@ -243,6 +250,20 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
       message: "test fast mode",
     });
   });
+
+  it.each([true, false, "auto"] as const)(
+    "forwards fast mode %s through CLI cron runs",
+    async (mode) => {
+      await runFastModeCase({
+        configFastMode: mode,
+        expectedFastMode: mode,
+        configFastAutoOnSeconds: 15,
+        expectedFastModeAutoOnSeconds: 15,
+        message: "CLI fast mode",
+        cli: true,
+      });
+    },
+  );
 
   it("passes config-driven fast auto cutoff into embedded cron runs", async () => {
     await runFastModeCase({

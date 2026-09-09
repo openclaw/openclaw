@@ -47,6 +47,7 @@ function jsonRoundTrip<T>(value: T): T {
 }
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(() => null),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(
     ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
       if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {

@@ -716,7 +716,7 @@ export function resolveExecDetail(
       : typeof record.cwd === "string"
         ? record.cwd
         : undefined;
-  const nodeFragment = nodeName ? ` · node: ${nodeName}` : "";
+  const nodeFragment = nodeName ? `, node: ${nodeName}` : "";
   if (hasShellCompoundCommand(unwrapped)) {
     const cwdSuffix = cwdRaw?.trim() ? formatCwdSuffix(cwdRaw.trim()) : undefined;
     return `${cwdSuffix ? `${compact} ${cwdSuffix}` : compact}${nodeFragment}`;
@@ -741,7 +741,7 @@ export function resolveExecDetail(
     compact !== displaySummary &&
     compact !== summary
   ) {
-    return `${displaySummary}${nodeFragment} · ${formatInlineCodeSpan(compact)}`;
+    return `${displaySummary}${nodeFragment}, ${formatInlineCodeSpan(compact)}`;
   }
 
   return `${displaySummary}${nodeFragment}`;

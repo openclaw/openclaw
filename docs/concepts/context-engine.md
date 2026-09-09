@@ -123,6 +123,10 @@ A plugin can register a context engine using the plugin API:
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 
+// `buildContext`, `countTokens`, and `commitAcceptedTurn` below are your own
+// plugin's helpers to implement. They are not part of the plugin SDK.
+// `buildMemorySystemPromptAddition` is real SDK surface, imported above.
+
 export default function register(api) {
   api.registerContextEngine("my-engine", (ctx) => ({
     info: {
@@ -443,6 +447,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - [Compaction](/concepts/compaction) - summarizing long conversations
 - [Context](/concepts/context) - how context is built for agent turns
+- [Honcho memory](/concepts/memory-honcho) - a memory plugin a context engine can draw on
 - [Plugin Architecture](/plugins/architecture) - registering context engine plugins
 - [Plugin manifest](/plugins/manifest) - plugin manifest fields
 - [Plugins](/tools/plugin) - plugin overview

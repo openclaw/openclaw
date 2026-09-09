@@ -1,10 +1,14 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, render, type LitElement } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import "./components/chat-detail-panel.ts";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../api/types.ts";
 import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
+import { resolveChatAgentId } from "./chat-agent-id.ts";
+import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import {
   availableSidebarSlots,
   sidebarPanelDefinitions,
@@ -19,16 +23,25 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
+import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
+import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
+import {
+  releaseChatMediaResourceSubscriber,
+  type AttachmentItem,
+} from "./components/chat-message-media.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
   renderSessionWorkspaceRail,
 } from "./components/chat-session-workspace.ts";
-import "./components/chat-sidebar-region.runtime.ts";
+import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
+import { renderChatThread } from "./components/chat-thread.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import "./components/chat-sidebar-region.runtime.ts";
+import { threadProps } from "./components/chat-transcript.test-support.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import {
   closeSlot,
@@ -173,6 +186,203 @@ function createReviewFixture() {
 }
 
 describe("chat pane embedded panels", () => {
+  it.each(["ready", "unavailable", "error"] as const)(
+    "keeps Files pending during renewed source resolution, then shows %s",
+    async (outcome) => {
+      const attachmentId = crypto.randomUUID();
+      const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+      const container = document.body.appendChild(document.createElement("div"));
+      const detail = document.body.appendChild(document.createElement("div"));
+      let sidebarContent: SidebarContent | null = null;
+      const pending = createDeferred<{ url: string } | null>();
+      const secondResolver = vi.fn(() => pending.promise);
+      const firstResolver = vi.fn(async () => ({ url: `${source}?mediaTicket=first` }));
+      const attachment: AttachmentItem = {
+        type: "attachment",
+        attachment: {
+          kind: "video",
+          label: "recording.mp4",
+          mimeType: "video/mp4",
+          sizeBytes: 574_000,
+          url: source,
+          artifactId: `artifact_${attachmentId}`,
+        },
+      };
+      const rerender = () =>
+        render(
+          renderAssistantAttachments(
+            [attachment],
+            {
+              connectionEpoch: 1,
+              onRequestUpdate: rerender,
+              resolveArtifactDownload: firstResolver,
+            },
+            (content) => {
+              sidebarContent = content;
+            },
+            undefined,
+            false,
+          ),
+          container,
+        );
+      onTestFinished(() => releaseChatMediaResourceSubscriber(rerender));
+      rerender();
+      const open = await vi.waitFor(() =>
+        expectDefined(
+          container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand"),
+          "Open attachment",
+        ),
+      );
+      open.click();
+      render(
+        html`<openclaw-chat-detail-panel
+          .content=${{
+            ...expectDefined<SidebarContent>(sidebarContent, "Opened attachment"),
+            sourceIdentity: undefined,
+          }}
+          .attachmentRuntime=${{ connectionEpoch: 2, resolveArtifactDownload: secondResolver }}
+        ></openclaw-chat-detail-panel>`,
+        detail,
+      );
+      const panel = expectDefined(
+        detail.querySelector<LitElement>("openclaw-chat-detail-panel"),
+        "Files panel",
+      );
+      await panel.updateComplete;
+
+      expect(panel.textContent).toContain("recording.mp4");
+      expect(panel.textContent).not.toContain("Preview unavailable");
+      expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+      const video = await vi.waitFor(() =>
+        expectDefined(panel.querySelector("video"), "Pending video"),
+      );
+      expect(video.hasAttribute("src")).toBe(false);
+      expect(video.preload).toBe("auto");
+      const presentation = panel.querySelector('[role="status"]');
+      const header = panel.querySelector(".chat-assistant-attachment-card__header");
+      expect(secondResolver).toHaveBeenCalledOnce();
+      if (outcome === "error") {
+        pending.reject(new Error("Connection lost"));
+      } else {
+        pending.resolve(outcome === "ready" ? { url: `${source}?mediaTicket=renewed` } : null);
+      }
+      if (outcome === "ready") {
+        const player = panel.querySelector<LitElement>("openclaw-chat-video-player");
+        await player?.updateComplete;
+        await vi.waitFor(() =>
+          expect(video.getAttribute("src")).toBe(`${source}?mediaTicket=renewed`),
+        );
+        expect(panel.querySelector("video")).toBe(video);
+        expect(panel.querySelector('[role="status"]')).toBe(presentation);
+        expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
+        expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+        Object.defineProperty(video, "readyState", { configurable: true, value: 2 });
+        video.dispatchEvent(new Event("loadeddata"));
+        await player?.updateComplete;
+        expect(panel.querySelector('[role="status"]')).toBeNull();
+        expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
+        expect(panel.textContent).not.toContain("Preview unavailable");
+      } else {
+        await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
+        expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
+        expect(panel.querySelector("video")).toBeNull();
+      }
+      detail.remove();
+      container.remove();
+    },
+  );
+
+  it.each(["history", "stream"] as const)(
+    "reuses attachment metadata when Open shows %s content in Files",
+    async (surface) => {
+      const { mount, state } = createReviewFixture();
+      const transcript = document.body.appendChild(document.createElement("div"));
+      const fetchMetadata = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ available: true, sizeBytes: 574_000 }),
+      });
+      vi.stubGlobal("fetch", fetchMetadata);
+      const filename = surface === "history" ? "recording.mp4" : "report.pdf";
+      const source = `/tmp/preview-cache-${surface}/${filename}`;
+      const controller = createTestTranscript();
+      const chat = {
+        ...threadProps(
+          `attachment-preview-${surface}`,
+          state.sessionKey,
+          surface === "history"
+            ? [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "attachment",
+                      attachment: {
+                        kind: "video",
+                        label: filename,
+                        mimeType: "video/mp4",
+                        url: source,
+                      },
+                    },
+                  ],
+                },
+              ]
+            : [],
+        ),
+        stream: surface === "stream" ? `MEDIA:${source}` : null,
+        streamStartedAt: surface === "stream" ? 1 : null,
+        onOpenSidebar: state.handleOpenSidebar,
+        sessionKey: state.sessionKey,
+        currentAgentId: resolveChatAgentId(state),
+        ...resolveChatMessageAccess(state).chatProps,
+        connectionEpoch: state.connectionEpoch,
+      } as ChatProps;
+      const renderAttachment = () => {
+        render(
+          renderChatThread({ ...chat, onRequestUpdate: renderAttachment }, controller),
+          transcript,
+        );
+        controller.hostUpdated();
+      };
+      try {
+        renderAttachment();
+        const open = await vi.waitFor(() => {
+          const button = transcript.querySelector<HTMLButtonElement>(
+            ".chat-assistant-attachment-card__expand",
+          );
+          expect(button).not.toBeNull();
+          return button!;
+        });
+        expect(fetchMetadata).toHaveBeenCalledOnce();
+        open.click();
+        const content = state.attachmentSidebarContent;
+        expect(content).not.toBeNull();
+        render(
+          renderChatDetailSlot({
+            backgroundTasks: createBackgroundTasksProps(state, { presented: false }),
+            chat,
+            content: content!,
+            host: state,
+            layout: state.sidebarLayout,
+            transcript: {} as ChatTranscriptController,
+          }),
+          mount,
+        );
+        await mount.querySelector<LitElement>("openclaw-chat-detail-panel")?.updateComplete;
+        expect(fetchMetadata).toHaveBeenCalledOnce();
+        expect(mount.textContent).toContain(filename);
+        if (surface === "history") {
+          expect(mount.querySelector("openclaw-chat-video-player")).not.toBeNull();
+        }
+      } finally {
+        controller.hostDisconnected();
+        mount.remove();
+        releaseChatMediaResourceSubscriber(renderAttachment);
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("keeps a newer task selection visible when a pending file preview completes", async () => {
     const { file, mount, preview, rails, renderPanels, state, task } = createReviewFixture();
     const taskContent = { kind: "task" as const, taskId: task.id };

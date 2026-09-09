@@ -186,7 +186,8 @@ filtering, migration, and trust-boundary details.
 
 ## Cross-agent memory search
 
-The QMD cross-agent search path was removed. Builtin memory does not search
+The QMD cross-agent search path was removed in v2026.8.1 along with the rest
+of the QMD backend. Builtin memory does not search
 another agent's transcript corpus; each agent searches only its own configured
 memory and eligible same-agent session sources. Put intentionally shared
 Markdown in an explicit shared `memory.search.extraPaths` directory when the
@@ -244,7 +245,9 @@ For a multi-agent roster defined directly in the main config file without a
 legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
 both keyed `agents.entries` and older `agents.list` rosters, including with
 `--fix --non-interactive`. Existing bindings and per-surface owners remain
-unchanged. If an account has no fallback route but its matchable narrower bindings
+unchanged. Last-known-good recovery applies the same ownership stamp before
+validating and restoring a directly authored markerless roster.
+If an account has no fallback route but its matchable narrower bindings
 all explicitly name one configured agent, Doctor adds an account-scoped binding for that
 agent. It does not borrow ownership from another account or channel, choose
 between conflicting owners, or assign other unowned surfaces.

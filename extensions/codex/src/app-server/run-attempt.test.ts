@@ -489,6 +489,9 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     onYieldDetected: () => undefined,
   });
   const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+    if (method === "config/read") {
+      return { config: {}, layers: [] };
+    }
     if (method === "thread/start") {
       return threadStartResult();
     }
@@ -1174,6 +1177,9 @@ describe("runCodexAppServerAttempt", () => {
       onYieldDetected: () => undefined,
     });
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -5092,7 +5098,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("reports hook-supplied bootstrap files that only expose path and content", async () => {
+  it("reports hook-supplied bootstrap files with unverified delivery on an external connection", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const soulPath = path.join(workspaceDir, "SOUL.md");
     const soulGuidance = "Hook supplied soul guidance.";
@@ -5122,10 +5128,13 @@ describe("runCodexAppServerAttempt", () => {
         name: "SOUL.md",
         path: soulPath,
         rawChars: soulGuidance.length,
-        injectedChars: soulGuidance.length,
-        truncated: false,
+        missing: false,
+        injectionStatus: "native_unverified",
+        injectedChars: null,
+        truncated: null,
       }),
     ]);
+    expect(result.systemPromptReport?.source).toBe("estimate");
   });
   it.each([
     { name: "non-empty legacy HEARTBEAT.md", contents: "Heartbeat checklist goes here." },

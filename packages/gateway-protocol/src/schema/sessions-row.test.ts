@@ -109,15 +109,18 @@ describe("SessionRowSchema", () => {
     expect(rejected.every((value) => !validateSessionsAssignOwnerParams(value))).toBe(true);
   });
 
-  it.each(["user", "auto", null] as const)("accepts model override source %s", (source) => {
-    expect(
-      Value.Check(SessionRowSchema, {
-        key: "agent:main:main",
-        kind: "global",
-        modelOverrideSource: source,
-      }),
-    ).toBe(true);
-  });
+  it.each(["user", "auto", "inherited", null] as const)(
+    "accepts model override source %s",
+    (source) => {
+      expect(
+        Value.Check(SessionRowSchema, {
+          key: "agent:main:main",
+          kind: "global",
+          modelOverrideSource: source,
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("rejects an invalid model override source", () => {
     expect(

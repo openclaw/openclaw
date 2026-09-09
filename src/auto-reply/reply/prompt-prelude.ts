@@ -119,7 +119,19 @@ function formatRoomEventLine(ctx: TemplateContext, body: string): string {
 }
 
 function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
+  const hasBaseBody = Boolean(normalizeOptionalString(params.baseBody));
+  const hasCompletedAudioBody =
+    hasBaseBody &&
+    [params.ctx, params.sessionCtx].some(
+      (ctx) =>
+        ctx.MediaUnderstanding?.some((output) => output.kind === "audio.transcription") &&
+        params.baseBody === ctx.agentText,
+    );
+  // Command text intentionally excludes machine transcripts. Prefer the
+  // enriched body only when this event owns an audio output and the body is
+  // still one of its canonical agent-text projections.
   return (
+    (hasCompletedAudioBody ? params.baseBody : undefined) ??
     normalizeOptionalString(params.ctx.commandText) ??
     normalizeOptionalString(params.sessionCtx.commandText) ??
     (params.hasUserBody ? params.baseBody.trim() : undefined) ??

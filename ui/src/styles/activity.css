@@ -75,7 +75,6 @@ openclaw-activity-page {
   gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-current-work__row + .activity-current-work__row {
@@ -377,7 +376,6 @@ a.activity-current-work__row:hover {
   min-height: 54px;
   padding: var(--space-3) var(--space-4);
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-feed__session-row {
@@ -432,7 +430,6 @@ a.activity-current-work__row:hover {
 .activity-feed__session-row:hover .activity-feed__session,
 .activity-feed__session-row:focus-within .activity-feed__session {
   background: var(--bg-hover);
-  text-decoration: none;
 }
 
 .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
@@ -452,7 +449,6 @@ a.activity-current-work__row:hover {
   background: var(--bg-elevated);
   font-size: var(--control-ui-text-xs);
   line-height: 1;
-  text-decoration: none;
   pointer-events: none;
   translate: 0 -50%;
   transition: opacity var(--duration-fast) ease;
@@ -468,7 +464,6 @@ a.activity-current-work__row:hover {
 .activity-feed__inspect-run:focus-visible {
   border-color: var(--border-strong);
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-feed__session .viewer-avatar {
@@ -641,7 +636,6 @@ a.activity-current-work__row:hover {
   height: 16px;
   flex: 0 0 auto;
   color: var(--muted);
-  text-decoration: none;
 }
 
 .activity-feed__device-attribution svg {
@@ -863,13 +857,11 @@ a.activity-current-work__row:hover {
   margin-bottom: var(--space-3);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  text-decoration: none;
 }
 
 .activity-run-inspector-back:hover,
 .activity-run-inspector-back:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .activity-run-inspector-back svg {

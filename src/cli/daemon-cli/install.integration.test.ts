@@ -14,6 +14,7 @@ import {
   buildSystemdUnitPropertyOutput,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import { buildSystemdUnit, parseSystemdExecStart } from "../../daemon/systemd-unit.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -65,6 +66,11 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 const { mergeInstallInvocationEnv, runDaemonInstall } = await import("./install.js");
+const { buildLaunchAgentPlist, readLaunchAgentProgramArgumentsFromFile } =
+  await import("../../daemon/launchd-plist.js");
+const { decodeLaunchAgentPlistFixture } =
+  await import("../../daemon/launchd-plist.test-support.js");
+const processExec = await import("../../process/exec.js");
 const { clearConfigCache, clearRuntimeConfigSnapshot, readConfigFileSnapshot } =
   await import("../../config/config.js");
 const { readSystemdDefinitionMutationCapability } =
@@ -143,12 +149,125 @@ describe("runDaemonInstall integration", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "";
     process.env.OPENCLAW_GATEWAY_PASSWORD = "";
     serviceMock.isLoaded.mockResolvedValue(false);
+    serviceMock.install.mockReset();
+    serviceMock.install.mockResolvedValue(undefined);
     serviceMock.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
     serviceMock.readCommand.mockReset();
     serviceMock.readCommand.mockResolvedValue(null);
     await fs.writeFile(configPath, JSON.stringify({}, null, 2));
     clearConfigCache();
   });
+
+  it.each(
+    (
+      [
+        { platform: "darwin", force: false },
+        { platform: "linux", force: false },
+        { platform: "darwin", force: true },
+        { platform: "linux", force: true },
+      ] as const
+    ).flatMap(({ platform, force }) =>
+      ["unsupported", "missing", "non-executable"].map((condition) => ({
+        platform,
+        force,
+        condition,
+      })),
+    ),
+  )(
+    "repairs $condition Node in the $platform definition (force=$force)",
+    async ({ platform, force, condition }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const entry = path.join(tempHome, "dist", "index.js");
+      await fs.mkdir(path.dirname(entry), { recursive: true });
+      await fs.writeFile(entry, "");
+      const originalArgv = process.argv;
+      const oldNode = path.join(
+        accountHome,
+        `.hermes-${condition}-${platform}-${force}`,
+        "node",
+        "bin",
+        "node",
+      );
+      if (condition === "non-executable") {
+        await fs.mkdir(path.dirname(oldNode), { recursive: true });
+        await fs.writeFile(oldNode, "not executable\n", { mode: 0o600 });
+      }
+      const definitionPath = path.join(
+        tempHome,
+        platform === "darwin" ? "gateway.plist" : "gateway.service",
+      );
+      const render = (programArguments: string[]) =>
+        platform === "darwin"
+          ? buildLaunchAgentPlist({
+              label: "ai.openclaw.gateway",
+              programArguments,
+              stdoutPath: path.join(tempHome, "stdout.log"),
+              stderrPath: path.join(tempHome, "stderr.log"),
+            })
+          : buildSystemdUnit({ programArguments });
+      const runExec = processExec.runExec;
+      vi.spyOn(processExec, "runExec").mockImplementation(async (file, args, options) => {
+        if (file === oldNode && condition === "unsupported") {
+          return {
+            stdout: JSON.stringify({ nodeVersion: "22.23.1", sqliteVersion: "3.53.4" }),
+            stderr: "",
+          };
+        }
+        if (file === "/usr/bin/plutil") {
+          if (typeof options === "number" || !options?.input) {
+            throw new Error("Missing plist fixture input");
+          }
+          return decodeLaunchAgentPlistFixture(options.input);
+        }
+        return runExec(file, args, options);
+      });
+      const readDefinition = async (): Promise<GatewayServiceCommandConfig | null> => {
+        if (platform === "darwin") {
+          return readLaunchAgentProgramArgumentsFromFile(definitionPath, {
+            requireEffective: true,
+          });
+        }
+        const unit = await fs.readFile(definitionPath, "utf8");
+        const execStart = unit.split("\n").find((line) => line.startsWith("ExecStart="));
+        if (!execStart) {
+          throw new Error("Missing systemd command");
+        }
+        return {
+          programArguments: parseSystemdExecStart(execStart.slice("ExecStart=".length)),
+          sourcePath: definitionPath,
+        };
+      };
+      await fs.writeFile(definitionPath, render([oldNode, entry, "gateway"]));
+      serviceMock.isLoaded.mockResolvedValue(true);
+      serviceMock.readCommand.mockImplementation(readDefinition);
+      serviceMock.install.mockImplementationOnce(async (plan) => {
+        if (!plan) {
+          throw new Error("Missing install plan");
+        }
+        await fs.writeFile(definitionPath, render(plan.programArguments));
+      });
+      try {
+        process.argv = [process.execPath, entry];
+        await runDaemonInstall({ json: true, force });
+        expect(serviceMock.install).toHaveBeenCalledOnce();
+        const repaired = await readDefinition();
+        const nodePath = repaired?.programArguments[0];
+        if (!nodePath) {
+          throw new Error("Missing repaired runtime");
+        }
+        expect(await fs.realpath(nodePath)).toBe(await fs.realpath(process.execPath));
+        expect(repaired?.programArguments).toContain(entry);
+        expect(await fs.readFile(definitionPath, "utf8")).not.toContain(oldNode);
+        expect(runtimeLogs.join("\n")).toContain(
+          condition === "unsupported"
+            ? "Replacing unsupported Gateway service Node 22.23.1"
+            : `Replacing missing Gateway service Node (${oldNode})`,
+        );
+      } finally {
+        process.argv = originalArgv;
+      }
+    },
+  );
 
   it.each([
     { mode: "Nix before external supervision", reason: "Nix mode detected" },

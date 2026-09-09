@@ -278,6 +278,150 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.queuedBody).not.toContain("[Chat history]");
   });
 
+  it("keeps completed audio transcripts in room-event bodies", () => {
+    const transcript = "turn left at the next light";
+    const agentText = `[Audio]\nTranscript:\n${transcript}`;
+    const transportEnvelope = "[Discord channel #ambient]\n[media attached: voice-message.ogg]";
+    const ctx = finalizeInboundContext({
+      Body: transportEnvelope,
+      BodyForAgent: agentText,
+      RawBody: transportEnvelope,
+      CommandBody: transportEnvelope,
+      Transcript: transcript,
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: transcript,
+          provider: "groq",
+        },
+      ],
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2003",
+      SenderName: "Alice",
+    });
+    const sessionCtx = finalizeInboundContext({ ...ctx });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx,
+      baseBody: sessionCtx.agentText,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe(`#2003 Alice: ${agentText}`);
+    expect(envelope.transcriptCommandBody).toBe(envelope.queuedBody);
+    expect(envelope.queuedBody).not.toContain(transportEnvelope);
+  });
+
+  it("does not infer room-event transcript ownership from matching text", () => {
+    const ctx = finalizeInboundContext({
+      Body: "typed message",
+      BodyForAgent: "look at the book",
+      CommandBody: "typed message",
+      Transcript: "ok",
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2004",
+      SenderName: "Alice",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx: finalizeInboundContext({ ...ctx }),
+      baseBody: ctx.agentText,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe("#2004 Alice: typed message");
+  });
+
+  it("does not borrow audio provenance from a different room-event projection", () => {
+    const ctx = finalizeInboundContext({
+      Body: "current typed message",
+      BodyForAgent: "current agent text",
+      CommandBody: "current typed message",
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "previous transcript",
+          provider: "groq",
+        },
+      ],
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2005",
+      SenderName: "Alice",
+    });
+    const sessionCtx = finalizeInboundContext({
+      ...ctx,
+      BodyForAgent: "unrelated session projection",
+      agentText: "unrelated session projection",
+      MediaUnderstanding: undefined,
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx,
+      baseBody: sessionCtx.agentText,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe("#2005 Alice: current typed message");
+  });
+
+  it("requires an exact canonical audio body match", () => {
+    const agentText = "[Audio]\nTranscript:\nok";
+    const ctx = finalizeInboundContext({
+      Body: "typed message",
+      BodyForAgent: agentText,
+      CommandBody: "typed message",
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "ok",
+          provider: "groq",
+        },
+      ],
+      Provider: "discord",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+      MessageSid: "2006",
+      SenderName: "Alice",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx,
+      sessionCtx: finalizeInboundContext({ ...ctx }),
+      baseBody: ` ${agentText}`,
+      hasUserBody: true,
+      inboundUserContext: "Conversation info:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.queuedBody).toBe("#2006 Alice: typed message");
+  });
+
   it("keeps media-only notes in ordinary user request transcripts", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",

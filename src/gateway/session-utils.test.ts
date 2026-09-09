@@ -375,6 +375,57 @@ describe("gateway session utils", () => {
     expect(row.modelOverrideSource).toBe(expected);
   });
 
+  test("projects explicit Default as the configured selection", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "main",
+      entry: {
+        sessionId: "explicit-default",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "stale-model",
+        modelOverrideSource: "default",
+      },
+    });
+
+    expect(row.modelProvider).toBe("openai");
+    expect(row.model).toBe("gpt-5.4");
+    expect(row.modelOverrideSource).toBeNull();
+  });
+
+  test("projects an inherited parent model as the child's effective selection", () => {
+    const parentKey = "agent:main:dashboard:parent";
+    const childKey = "agent:main:dashboard:child";
+    const parentEntry: SessionEntry = {
+      sessionId: "parent",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      modelOverrideSource: "user",
+    };
+    const childEntry: SessionEntry = {
+      sessionId: "child",
+      updatedAt: 2,
+      parentSessionKey: parentKey,
+    };
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({
+        primary: "openai/gpt-5.4",
+        models: { "anthropic/claude-sonnet-4-6": {} },
+      }),
+      storePath: "",
+      store: { [parentKey]: parentEntry, [childKey]: childEntry },
+      key: childKey,
+      entry: childEntry,
+    });
+
+    expect(row.modelProvider).toBe("anthropic");
+    expect(row.model).toBe("claude-sonnet-4-6");
+    expect(row.modelOverrideSource).toBe("inherited");
+  });
+
   test("projects the active fallback model separately from the selected model", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "ollama/qwen3.5:9b" }),

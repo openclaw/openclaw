@@ -154,7 +154,7 @@ The agent has three tools for working with memory:
 - **`intent`** — creates, lists, or explicitly cancels event-conditioned
   standing intents. Time-based reminders continue to use scheduled tasks.
 
-Both tools are provided by the active memory plugin (default: `memory-core`).
+All three tools are provided by the active memory plugin (default: `memory-core`).
 
 ## Memory search
 

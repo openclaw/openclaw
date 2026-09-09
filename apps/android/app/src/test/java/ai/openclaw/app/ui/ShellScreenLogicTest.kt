@@ -653,19 +653,28 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun overviewGatewayCardOnlyClaimsNominalWhenNoAttentionExists() {
+  fun overviewGatewayCardDoesNotClaimHealthWhenProviderAvailabilityIsUnknown() {
+    val attentionRows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary = emptyNodesDevices(),
+        readyProviderCount = 0,
+        unknownProviderCount = 1,
+      )
     val cards =
       overviewMetricCardSpecs(
         isConnected = true,
-        hasAttention = false,
+        hasAttention = attentionRows.isNotEmpty(),
         nodesDevicesSummary = emptyNodesDevices(),
         pendingApprovals = 0,
         sessionCount = 0,
       )
 
     val gateway = cards.single { it.title == "Gateway" }
-    assertEquals("Healthy", gateway.value)
-    assertEquals("All systems nominal", gateway.subtitle)
+    assertEquals("Online", gateway.value)
+    assertEquals("No highlighted items", gateway.subtitle)
     assertEquals(ClawStatus.Success, gateway.status)
   }
 

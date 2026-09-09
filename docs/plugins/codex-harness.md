@@ -41,7 +41,7 @@ authored provider request override. Valid model-scoped `params.fastMode` /
 `params.fast_mode` values and valid cutoff keys are typed agent-runtime
 controls, so they do not count as authored provider request params or select a
 runtime by themselves. See
-[OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+[OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime).
 If Codex owns auth before Platform versus ChatGPT routing is known, OpenClaw
 still requires every candidate route to declare Codex compatibility. Native
 auth ownership alone never bypasses that route check.
@@ -304,6 +304,7 @@ nine child pages below. The anchors from the single-page version still resolve h
 - [OpenAI provider](/providers/openai)
 - [OpenAI Codex help](https://help.openai.com/en/collections/14937394-codex)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
+- [Copilot SDK harness](/plugins/copilot)
 - [Plugin hooks](/plugins/hooks)
 - [Diagnostics export](/gateway/diagnostics)
 - [Status](/cli/status)

@@ -507,11 +507,11 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Session-scoped agent runtime/harness override selected with the model picker. */
     agentRuntimeOverride?: string;
     /**
-     * Tracks whether the persisted model override came from an explicit user
-     * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
-     * Resets only preserve user-driven overrides.
+     * Tracks whether the persisted model selection came from an explicit user
+     * action (`/model`, `sessions.patch`), a temporary runtime fallback, or an
+     * explicit configured-default selection that blocks parent inheritance.
      */
-    modelOverrideSource?: "auto" | "user";
+    modelOverrideSource?: "auto" | "user" | "default";
     /** Present only when providerOverride/modelOverride are a canonical route pair. */
     modelOverrideRouteResolution?: "resolved";
     /** Selected model that produced the current auto fallback override. */
@@ -637,6 +637,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     workspace?: string;
     name?: string;
     baseRef?: string;
+    /** Verified commit used for checkout while baseRef remains user-facing metadata. */
+    baseCommit?: string;
     titleSource: string;
   };
   /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */

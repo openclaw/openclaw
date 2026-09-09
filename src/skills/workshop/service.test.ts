@@ -16,9 +16,9 @@ import {
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { getSkillProposalRunProgress as getSkillProposalRunProgressImpl } from "./proposal-run-progress.test-support.js";
 import {
   applySkillProposal as applySkillProposalImpl,
-  getSkillProposalRunProgress as getSkillProposalRunProgressImpl,
   inspectSkillProposal as inspectSkillProposalImpl,
   listSkillProposals as listSkillProposalsImpl,
   proposeCreateSkill as proposeCreateSkillImpl,

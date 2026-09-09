@@ -1,6 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHints } from "../api/types.ts";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "../lib/config-form-utils.ts";
+import {
+  localizedHintForPath,
+  humanize,
+  schemaType,
+  type JsonSchema,
+} from "../lib/config-form-utils.ts";
 import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
 
 export type ConfigSearchCriteria = {
@@ -23,14 +28,13 @@ export function hasConfigSearchCriteria(criteria: ConfigSearchCriteria | undefin
 export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
   const tags: string[] = [];
   const seen = new Set<string>();
-  const raw = query.trim();
-  const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
+  const stripped = query.replace(/(?:^|\s)tag:([^\s]+)/gi, (_, token: string) => {
     const normalized = normalizeLowercaseStringOrEmpty(token);
     if (normalized && !seen.has(normalized)) {
       seen.add(normalized);
       tags.push(normalized);
     }
-    return leading;
+    return "";
   });
   return {
     text: normalizeLowercaseStringOrEmpty(stripped),
@@ -67,7 +71,7 @@ export function resolveConfigFieldMeta(
   schema: JsonSchema,
   hints: ConfigUiHints,
 ): ConfigFieldMeta {
-  const hint = hintForPath(path, hints);
+  const hint = localizedHintForPath(path, hints);
   const fallbackSegment = path.findLast((segment) => typeof segment === "string") ?? path.at(-1);
   const label = hint?.label ?? schema.title ?? humanize(String(fallbackSegment));
   const help = hint?.help ?? schema.description;

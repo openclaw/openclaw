@@ -419,6 +419,35 @@ exec "$REAL_GIT" "$@"`,
   }
 });
 
+releasePolicyIt("hydrates each release ancestry branch independently", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 220,
+    targetDistance: 8,
+    related: true,
+  });
+  const proxy = writeGitProxy(
+    fixture,
+    "independent-branch-hydration-git",
+    `if [[ " $* " == *" fetch "* && " $* " == *" --deepen="* && " $* " == *" +refs/heads/release-source:refs/remotes/origin/release-ancestry-source "* && " $* " == *" +refs/heads/main:refs/remotes/origin/release-ancestry-target-hydration "* ]]; then
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+  );
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(
+      runReleaseAncestry(checkout, "merge-base", {
+        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+        REAL_GIT: proxy.realGit,
+        RELEASE_ANCESTRY_SOURCE_REF: "refs/heads/release-source",
+      }),
+      "merge-base",
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
 releasePolicyIt("rejects fully hydrated disconnected release histories", () => {
   const fixture = createAncestryFixture({
     sourceDistance: 8,

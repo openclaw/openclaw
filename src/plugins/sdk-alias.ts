@@ -398,18 +398,11 @@ function resolveLoaderPluginSdkPackageRoot(
     return devSourceRoot;
   }
   const cwd = params.cwd ?? path.dirname(params.modulePath);
-  const fromCwd = resolveOpenClawPackageRootSync({ cwd });
-  const fromExplicitHints =
-    resolveTrustedOpenClawRootFromArgvHint({ cwd, argv1: params.argv1 }) ??
-    (params.moduleUrl
-      ? resolveOpenClawPackageRootSync({
-          cwd,
-          moduleUrl: params.moduleUrl,
-        })
-      : null);
+  // The running loader owns the SDK, even when plugin source lives in another checkout.
   return (
-    fromCwd ??
-    fromExplicitHints ??
+    (params.moduleUrl ? resolveOpenClawPackageRootSync({ moduleUrl: params.moduleUrl }) : null) ??
+    resolveOpenClawPackageRootSync({ cwd }) ??
+    resolveTrustedOpenClawRootFromArgvHint({ cwd, argv1: params.argv1 }) ??
     findNearestPluginSdkPackageRoot(path.dirname(params.modulePath)) ??
     (params.cwd ? findNearestPluginSdkPackageRoot(params.cwd) : null) ??
     findNearestPluginSdkPackageRoot(process.cwd())

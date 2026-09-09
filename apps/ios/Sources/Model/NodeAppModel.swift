@@ -396,6 +396,7 @@ final class NodeAppModel {
     // keeps the previous failure readable while an explicit reconnect starts a fresh attempt.
     private var nodeGatewayProblem: GatewayConnectionProblem?
     private var operatorGatewayProblem: GatewayConnectionProblem?
+    private var gatewayPreconnectProblem: (stableID: String, problem: GatewayConnectionProblem)?
     var gatewayDisplayStatusText: String {
         self.lastGatewayProblem?.localizedStatusText ?? self.gatewayStatusText
     }
@@ -3624,8 +3625,20 @@ extension NodeAppModel {
         let targetChanged = previousGatewayStableID.map {
             !$0.isEmpty && !GatewayStableIdentifier.matches($0, effectiveStableID)
         } ?? false
-        if targetChanged {
-            self.clearGatewayProblemForCommittedTargetSwitch(to: effectiveStableID)
+        let preconnectProblem = self.gatewayPreconnectProblem
+        let preservesPreconnectProblem = GatewayStableIdentifier.matches(
+            preconnectProblem?.stableID,
+            effectiveStableID)
+        self.gatewayPreconnectProblem = nil
+        if targetChanged || preconnectProblem != nil {
+            self.operatorGatewayProblem = nil
+            self.clearGatewayConnectionProblem()
+            self.setGatewayConnectionProgress(reconnecting: false)
+        }
+        if let preconnectProblem, preservesPreconnectProblem {
+            // A preflight failure owns its snapshot. Late callbacks from the old route must not
+            // substitute their problem or pairing controls when this target commits.
+            self.lastGatewayProblem = preconnectProblem.problem
         }
         let hasForeignCachedApproval = self.watchExecApprovalPromptsByID.values.contains {
             !GatewayStableIdentifier.matches($0.gatewayStableID, effectiveStableID)
@@ -3645,6 +3658,7 @@ extension NodeAppModel {
            activeConfig.hasSameConnectionInputs(as: nextConfig),
            nodeGatewayTask != nil,
            operatorGatewayTask != nil || !operatorLoopRequired,
+           preconnectProblem == nil,
            !forceReconnect
         {
             self.gatewayAutoReconnectEnabled = true
@@ -3656,7 +3670,7 @@ extension NodeAppModel {
         self.activeGatewayConnectConfig = nextConfig
         prepareForGatewayConnect(
             stableID: effectiveStableID,
-            preservingGatewayProblem: isSameGatewayTarget,
+            preservingGatewayProblem: isSameGatewayTarget || preservesPreconnectProblem,
             preservingFocusedChatSession: isSameGatewayTarget)
         if operatorLoopRequired {
             startOperatorGatewayLoop(
@@ -3722,6 +3736,7 @@ extension NodeAppModel {
 
     private func invalidateGatewayConnectAttempts() {
         self.gatewayConnectGeneration &+= 1
+        self.cancelGatewayPreconnectVerification()
     }
 
     var hasGatewaySessionResetInFlight: Bool {
@@ -3864,6 +3879,7 @@ extension NodeAppModel {
         self.lastGatewayProblem = nil
         self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
+        self.gatewayPreconnectProblem = nil
         self.cancelTalkPermissionUpgrade()
         // Publish teardown through the shared barrier before returning. A replacement connect
         // must await old loop cleanup instead of racing this synchronous UI action.
@@ -3967,6 +3983,13 @@ extension NodeAppModel {
     }
 
     func clearGatewayConnectionProblem() {
+        let activeStableID = self.activeGatewayConnectConfig?.effectiveStableID ?? self.connectedGatewayID
+        // Success belongs to the active route, not another target still awaiting trust.
+        if activeStableID == nil ||
+            GatewayStableIdentifier.matches(self.gatewayPreconnectProblem?.stableID, activeStableID)
+        {
+            self.gatewayPreconnectProblem = nil
+        }
         self.nodeGatewayProblem = nil
         if let operatorGatewayProblem {
             self.lastGatewayProblem = operatorGatewayProblem
@@ -3984,14 +4007,51 @@ extension NodeAppModel {
         self.gatewayPairingRequestId = nil
     }
 
-    func beginGatewayPreconnectVerification(statusText: String) {
-        // Preflight has not committed the replacement target yet. Keep the readable snapshot
-        // while retiring live pairing control; the committed route switch clears the snapshot.
+    func beginGatewayPreconnectVerification(stableID: String, statusText: String) {
+        if let preconnectProblem = self.gatewayPreconnectProblem,
+           GatewayStableIdentifier.matches(preconnectProblem.stableID, stableID)
+        {
+            self.lastGatewayProblem = preconnectProblem.problem
+        } else {
+            let activeStableID = self.activeGatewayConnectConfig?.effectiveStableID ?? self.connectedGatewayID
+            if self.gatewayPreconnectProblem != nil || !GatewayStableIdentifier.matches(activeStableID, stableID) {
+                self.lastGatewayProblem = nil
+            }
+            self.gatewayPreconnectProblem = nil
+        }
         self.nodeGatewayProblem = nil
         self.operatorGatewayProblem = nil
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.gatewayStatusText = statusText
+    }
+
+    func failGatewayPreconnectVerification(
+        _ problem: GatewayConnectionProblem,
+        stableID: String,
+        host: String?,
+        expectedGeneration: UInt64?)
+    {
+        guard expectedGeneration == self.gatewayConnectGeneration else { return }
+        let problem = GatewayConnectionIssue.addingEndpointGuidance(to: problem, host: host)
+        self.gatewayPreconnectProblem = (stableID: stableID, problem: problem)
+        self.applyGatewayConnectionProblem(problem)
+    }
+
+    func cancelGatewayPreconnectVerification() {
+        guard self.gatewayPreconnectProblem != nil else { return }
+        self.gatewayPreconnectProblem = nil
+        self.clearGatewayConnectionProblem()
+    }
+
+    func hasGatewayPreconnectProblem(for stableID: String) -> Bool {
+        guard let preconnectProblem = self.gatewayPreconnectProblem else { return false }
+        return GatewayStableIdentifier.matches(preconnectProblem.stableID, stableID) &&
+            self.lastGatewayProblem == preconnectProblem.problem
+    }
+
+    var unresolvedGatewayPreconnectStableID: String? {
+        self.gatewayPreconnectProblem?.stableID
     }
 
     private func applyGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
@@ -4024,6 +4084,9 @@ extension NodeAppModel {
 
     func applyOperatorGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
         guard !self.isLocalGatewayFixtureEnabled else { return }
+        let problem = GatewayConnectionIssue.addingEndpointGuidance(
+            to: problem,
+            host: self.activeGatewayConnectConfig?.url.host)
         self.operatorGatewayProblem = problem
         self.lastGatewayProblem = problem
         self.gatewayStatusText = problem.statusText
@@ -4998,7 +5061,11 @@ extension NodeAppModel {
     func mapNodeGatewayConnectionError(_ error: Error) -> GatewayConnectionProblem? {
         GatewayConnectionProblemMapper.map(
             error: error,
-            preserving: self.operatorGatewayProblem ?? self.nodeGatewayProblem)
+            preserving: self.operatorGatewayProblem ?? self.nodeGatewayProblem).map {
+            GatewayConnectionIssue.addingEndpointGuidance(
+                to: $0,
+                host: self.activeGatewayConnectConfig?.url.host)
+        }
     }
 
     private func resetNodeGatewayLoopStatusIfCurrent(_ context: NodeGatewayLoopContext) {
@@ -10592,19 +10659,5 @@ extension NodeAppModel {
     }
 }
 #endif
-
-extension NodeAppModel {
-    private func clearGatewayProblemForCommittedTargetSwitch(to stableID: String) {
-        guard let currentStableID = self.activeGatewayConnectConfig?.effectiveStableID
-            ?? self.connectedGatewayID,
-            !GatewayStableIdentifier.matches(currentStableID, stableID)
-        else { return }
-        // This runs only when the replacement config commits, without a suspension before the
-        // route generation advances. Preflight retains the prior snapshot until this boundary.
-        self.operatorGatewayProblem = nil
-        self.clearGatewayConnectionProblem()
-        self.setGatewayConnectionProgress(reconnecting: false)
-    }
-}
 
 // swiftlint:enable type_body_length file_length

@@ -109,6 +109,9 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/mobile/version.json",
   ...CONFIG_DOC_BASELINE_PATHS,
   "docs/install/updating.md",
+  "docs/install/updating/automatic-updates.md",
+  "docs/install/updating/rollback-and-recovery.md",
+  "docs/install/updating/update-methods.md",
   "package.json",
 ]);
 

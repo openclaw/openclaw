@@ -4,7 +4,7 @@ import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { listSessionsFromStoreAsync } from "./session-utils-list.js";
+import { listSessionFixture } from "./session-list.test-support.js";
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
@@ -25,12 +25,8 @@ async function populate() {
     parentSessionKey: parentKey,
   };
   retired.push(new WeakRef(parent), new WeakRef(child));
-  return listSessionsFromStoreAsync({
+  return listSessionFixture({
     cfg,
-    targetsBySessionKey: new Map([
-      [parentKey, { agentId: "main", storeTarget: { agentId: "main", storePath: "retired" } }],
-      [childKey, { agentId: "main", storeTarget: { agentId: "main", storePath: "retired" } }],
-    ]),
     storePath: "retired",
     store: { [parentKey]: parent, [childKey]: child },
     modelCatalog: [],

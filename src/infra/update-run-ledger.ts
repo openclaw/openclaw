@@ -14,6 +14,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "./kysely-sync.js";
 import {
   inspectUpdateRunAbandonment,
@@ -32,7 +33,12 @@ import {
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
-import type { UpdateRunRecord, UpdateRunPhase, UpdateRunStep } from "./update-run-record.js";
+import type {
+  UpdateFetchFailure,
+  UpdateRunRecord,
+  UpdateRunPhase,
+  UpdateRunStep,
+} from "./update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
@@ -604,4 +610,51 @@ export function findActiveUpdateRun(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
   return listUpdateRuns({ limit: 1, active: true }, options)[0];
+}
+
+/** Only a later recorded fetch completion clears an updater fetch failure. */
+export function getLatestUpdateFetchFailure(
+  options: OpenClawStateDatabaseOptions = {},
+): UpdateFetchFailure | undefined {
+  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+    if (!tableExists(db, "update_runs")) {
+      return undefined;
+    }
+    const query = getNodeSqliteKysely<LedgerDatabase>(db)
+      .selectFrom("update_runs")
+      .selectAll()
+      .orderBy("created_at_ms", "desc")
+      .orderBy("run_id", "desc");
+    for (const row of iterateSqliteQuerySync(db, query)) {
+      const run = decodeRun(row);
+      const fetchSteps = run.steps.filter(
+        ({ step }) =>
+          /^git (?:fetch(?:\s|$)|target inspection fetch$)/u.test(step) ||
+          step === "git import admitted target",
+      );
+      const failed = fetchSteps.findLast((step) => step.status === "failed");
+      // A run can complete its branch fetch and then fail fetching tags.
+      if (run.reason === "fetch-failed" || failed) {
+        const detail = failed?.detail ?? "";
+        return {
+          reason: "fetch-failed",
+          failedAtMs: failed?.endedAtMs ?? run.finishedAtMs ?? run.updatedAtMs,
+          detail: /would clobber existing tag/iu.test(detail)
+            ? "tag conflict"
+            : /authentication|permission denied|could not read Username|access denied/iu.test(
+                  detail,
+                )
+              ? "authentication failed"
+              : /resolve host|network|timed? out|timeout|unreachable/iu.test(detail)
+                ? "network error"
+                : "fetch-failed",
+          runId: run.runId,
+        };
+      }
+      if (fetchSteps.some((step) => step.status === "completed")) {
+        return undefined;
+      }
+    }
+    return undefined;
+  }, options);
 }

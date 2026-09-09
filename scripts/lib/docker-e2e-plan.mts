@@ -62,6 +62,9 @@ type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: stri
 const UPDATE_FIRST_HOP_COMPAT_CATALOGS = new Set([
   "3a07518cac2a3f92c0ecb73e177ced4ae3350872be59c8c9a1871c2f0e3c0773",
   "edf5302a5bb101f2a2efaf9735cd0ae90081bd1b693e0c77a1f8e56ada865096",
+  // Node-runner aliases for newer releases moved to the recorded package inventory.
+  "0a12e16a5b6a2d723472cff04a05b356751da92a54c7b9a19cbb539c94190bb6",
+  "2cb55271610aae5578175cf1587574231e9a72f9420a544d73370a8d3b8531ec",
 ]);
 const IOS_WATCH_RELAY_COMMANDS = ['"watch.status"', '"watch.notify"'];
 type DockerE2ePlanOptions = {
@@ -643,9 +646,15 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       if (step.argv[0] !== "config" || step.argv[1] !== "set") {
         continue;
       }
-      const channelId = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(step.argv[2] ?? "")?.[1];
-      if (channelId) {
-        configuredChannelIds.add(channelId);
+      const configPaths: string[] =
+        step.argv[2] === "--batch-json"
+          ? JSON.parse(step.argv[3] ?? "").map((entry: { path: string }) => entry.path)
+          : [step.argv[2] ?? ""];
+      for (const configPath of configPaths) {
+        const channelId = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(configPath)?.[1];
+        if (channelId) {
+          configuredChannelIds.add(channelId);
+        }
       }
     }
   }

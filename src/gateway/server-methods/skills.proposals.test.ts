@@ -652,23 +652,36 @@ describe("skills proposal gateway handlers", () => {
     );
   });
 
-  it("reports empty historical scan coverage and validates scan direction", async () => {
-    const status = await callHandler("skills.proposals.historyStatus", {});
-    expect(status).toMatchObject({
-      ok: true,
-      response: {
-        schema: "openclaw.skill-workshop.history-scan.v1",
-        hasScanned: false,
-        reviewedSessions: 0,
-        ideasFound: 0,
-      },
-    });
+  it.each([
+    ["skills.proposals.historyStatus", {}],
+    ["skills.proposals.historyScan", {}],
+    ["skills.proposals.historyScan", { agentId: "main", direction: "older" }],
+    ["skills.proposals.historyScan", { agentId: "main", direction: "newer" }],
+  ] as const)(
+    "%s directs historical scan clients to a normal Workshop session",
+    async (method, params) => {
+      await expect(callHandler(method, params)).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            "Historical batch scans are retired. Start a learning session from Workshop to review past conversations.",
+        },
+      });
+    },
+  );
 
+  it("preserves historical scan direction validation", async () => {
     const invalid = await callHandler("skills.proposals.historyScan", {
       direction: "all-time",
     });
-    expect(invalid.ok).toBe(false);
-    expect((invalid.error as { code?: string }).code).toBe("INVALID_REQUEST");
+    expect(invalid).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("invalid skills.proposals.historyScan params"),
+      },
+    });
   });
 
   it.each(["create", "update"])(

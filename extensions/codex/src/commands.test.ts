@@ -6586,6 +6586,9 @@ describe("codex command", () => {
       .spyOn(harness.client, "request")
       .mockImplementation(async (method, params) => {
         operations.push(method);
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] } as never;
+        }
         if (method === "thread/unsubscribe") {
           return {} as never;
         }
@@ -6707,6 +6710,7 @@ describe("codex command", () => {
       expect(operations).toEqual([
         "thread/unsubscribe",
         "thread/read",
+        "config/read",
         "thread/resume",
         "turn/start",
       ]);

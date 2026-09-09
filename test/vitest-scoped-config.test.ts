@@ -1017,7 +1017,7 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
     expect(testConfig.exclude).toContain("gateway.test.ts");
     expect(testConfig.exclude).toContain("server.startup-matrix-migration.integration.test.ts");
-    expect(testConfig.exclude).toContain("sessions-history-http.test.ts");
+    expect(testConfig.exclude).not.toContain("sessions-history-http.test.ts");
   });
 
   it("normalizes infra include patterns relative to the scoped dir", () => {

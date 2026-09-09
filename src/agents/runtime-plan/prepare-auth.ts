@@ -7,6 +7,7 @@ import { resolveMergedModelProviderConfig } from "../../config/model-provider-co
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import {
   prependAuthProfilePin,
   resolveAuthProfileEligibility,
@@ -18,6 +19,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
 import { resolveProviderConfigSecretInput } from "../model-auth-provider-config.js";
+import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import {
   hasUsableCustomProviderApiKey,
   resolveProviderEntryApiKeyProfileReference,
@@ -156,13 +158,15 @@ function resolveProfile(
         env: params.env ?? process.env,
       })
     : undefined;
+  const pendingOAuthRefresh =
+    credential?.type === "oauth" && isPendingOAuthRefreshFence(credential);
   return {
     kind: "profile",
     profileId,
     provider: credential?.provider ?? configured?.provider,
     mode: credential?.type ?? configured?.mode,
     // Runtime materialization owns secret readiness; only proven-invalid facts are terminal here.
-    readiness: availability === false ? "unavailable" : "unknown",
+    readiness: availability === false && !pendingOAuthRefresh ? "unavailable" : "unknown",
     cooldown:
       !options.ignoreCooldown &&
       params.authProfileStore &&
@@ -207,8 +211,9 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
 
 /** Selects concrete provider routes and ordered credentials as one immutable preparation. */
 export function prepareAgentRuntimeAuth(
-  params: PrepareAgentRuntimeAuthPlanParams,
+  input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
+  const params = { ...input, config: resolveModelProviderAuthConfig(input) };
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const userPinnedProfileId =
     params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
@@ -238,6 +243,7 @@ export function prepareAgentRuntimeAuth(
           store,
           provider: authProfileSelectionProvider,
           profileId: userPinnedProfileId,
+          includePendingOAuthRefresh: true,
         })
       : { eligible: false };
     if (!eligibility.eligible) {
@@ -318,6 +324,7 @@ export function prepareAgentRuntimeAuth(
           preferredProfile: requestedProfileId,
           forModel: params.modelId,
           readinessMode: "read-only",
+          includePendingOAuthRefresh: true,
         });
   const automaticOrderResolution = prependAuthProfilePin(
     resolvedAutomaticOrder,

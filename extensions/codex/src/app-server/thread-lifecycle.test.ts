@@ -19,6 +19,7 @@ import { CodexAppServerRpcError } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
+import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
@@ -452,7 +453,7 @@ describe("Codex ring-zero thread config", () => {
       developerInstructions,
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
-      config: { project_doc_max_bytes: 64_000 },
+      config: authoredProjectDocConfig(200_000),
     });
     const resume = buildThreadResumeParams(params, {
       appServer,
@@ -461,7 +462,7 @@ describe("Codex ring-zero thread config", () => {
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
       threadId: "thread-1",
-      config: { project_doc_max_bytes: 64_000 },
+      config: authoredProjectDocConfig(200_000),
     });
 
     expect(start.environments).toEqual([]);
@@ -514,11 +515,11 @@ describe("Codex ring-zero thread config", () => {
       hostSystemAgentActive: false,
       nativeCodeModeEnabled: false,
       threadId: "thread-1",
-      config: { project_doc_max_bytes: 64_000 },
+      config: authoredProjectDocConfig(200_000),
     });
 
     expect(start.config?.project_doc_max_bytes).toBe(131_072);
-    expect(resume.config?.project_doc_max_bytes).toBe(64_000);
+    expect(resume.config?.project_doc_max_bytes).toBe(200_000);
     for (const threadConfig of [start.config, resume.config]) {
       expect(threadConfig?.["features.multi_agent"]).toBe(false);
       expect(threadConfig?.["orchestrator.mcp.enabled"]).toBe(false);
@@ -533,7 +534,7 @@ describe("Codex ring-zero thread config", () => {
       dynamicTools: [],
       hostSystemAgentActive: false,
       nativeCodeModeEnabled: false,
-      config: { project_doc_max_bytes: 64_000 },
+      config: authoredProjectDocConfig(200_000),
     });
     expect(disabled.config?.project_doc_max_bytes).toBe(0);
   });
@@ -660,6 +661,7 @@ describe("Codex delegation capability", () => {
     };
     const appServer = createAppServerOptions() as never;
     const config = {
+      ...authoredProjectDocConfig(200_000),
       "features.apps": true,
       "features.context_management": { experimental_mode: true },
       "features.current_time_reminder": true,
@@ -703,6 +705,7 @@ describe("Codex delegation capability", () => {
     });
 
     for (const request of [start, resume]) {
+      expect(request.config?.project_doc_max_bytes).toBe(0);
       for (const disabledFeature of [
         "agents.enabled",
         "features.apps",
@@ -772,6 +775,19 @@ describe("Codex delegation capability", () => {
     }
   });
 });
+
+function authoredProjectDocConfig(projectDocMaxBytes: number) {
+  return buildCodexProjectDocThreadConfig(undefined, {
+    config: { project_doc_max_bytes: projectDocMaxBytes },
+    origins: {
+      project_doc_max_bytes: {
+        name: { type: "user", file: "/codex/config.toml", profile: null },
+        version: "sha256:authored-budget",
+      },
+    },
+    layers: [],
+  });
+}
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -2123,7 +2139,7 @@ describe("Codex app-server native code mode config", () => {
         appServer: createAppServerOptions() as never,
         developerInstructions: "test instructions",
         config: {
-          project_doc_max_bytes: 64_000,
+          ...authoredProjectDocConfig(200_000),
           "features.hooks": true,
         },
       },
@@ -2179,6 +2195,68 @@ describe("Codex app-server native code mode config", () => {
       "features.standalone_web_search": false,
       web_search: "cached",
     });
+  });
+
+  it.each([0, 200_000])(
+    "prefers request budgets over authored native budget %s",
+    (nativeBudget) => {
+      const effectiveNativeConfig = {
+        config: { project_doc_max_bytes: nativeBudget },
+        origins: {
+          project_doc_max_bytes: {
+            name: { type: "user" as const, file: "/codex/config.toml", profile: null },
+            version: "sha256:authored-budget",
+          },
+        },
+        layers: [],
+      };
+      expect(buildCodexProjectDocThreadConfig(undefined, effectiveNativeConfig)).toEqual({
+        project_doc_max_bytes: nativeBudget,
+      });
+      expect(
+        buildCodexProjectDocThreadConfig({ project_doc_max_bytes: 64_000 }, effectiveNativeConfig),
+      ).toEqual({ project_doc_max_bytes: 64_000 });
+      expect(
+        buildCodexProjectDocThreadConfig({ project_doc_max_bytes: 0 }, effectiveNativeConfig),
+      ).toEqual({ project_doc_max_bytes: 0 });
+    },
+  );
+
+  it.each([
+    { label: "missing", value: undefined },
+    { label: "null", value: null },
+    { label: "string", value: "200000" },
+    { label: "boolean", value: true },
+    { label: "negative", value: -1 },
+    { label: "fractional", value: 1.5 },
+    { label: "unsafe integer", value: Number.MAX_SAFE_INTEGER + 1 },
+    { label: "NaN", value: Number.NaN },
+    { label: "positive infinity", value: Number.POSITIVE_INFINITY },
+    { label: "negative infinity", value: Number.NEGATIVE_INFINITY },
+  ])("rejects an authored $label project-document budget", ({ value }) => {
+    expect(() =>
+      buildCodexProjectDocThreadConfig(undefined, {
+        config: value === undefined ? {} : { project_doc_max_bytes: value },
+        origins: {
+          project_doc_max_bytes: {
+            name: { type: "user", file: "/codex/config.toml", profile: null },
+            version: "sha256:authored-budget",
+          },
+        },
+        layers: [],
+      }),
+    ).toThrow("Codex config/read returned an invalid project_doc_max_bytes value");
+  });
+
+  it("preserves the OpenClaw default for Codex's materialized unauthored default", () => {
+    expect(buildCodexProjectDocThreadConfig()).toEqual({ project_doc_max_bytes: 131_072 });
+    expect(
+      buildCodexProjectDocThreadConfig(undefined, {
+        config: { project_doc_max_bytes: 32_768 },
+        origins: {},
+        layers: [],
+      }),
+    ).toEqual({ project_doc_max_bytes: 131_072 });
   });
 });
 

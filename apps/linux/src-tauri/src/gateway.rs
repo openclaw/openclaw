@@ -1,5 +1,5 @@
 use crate::cli::OpenClawCli;
-use crate::gateway_ws::GatewayWsConfig;
+use crate::gateway_ws::{GatewayOwnership, GatewayWsConfig};
 use serde::{Deserialize, Serialize};
 use std::thread;
 use std::time::Duration;
@@ -252,6 +252,7 @@ pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGa
                 token,
                 response.gateway_password,
                 response.tls_fingerprint,
+                GatewayOwnership::Local,
             ),
         });
     }

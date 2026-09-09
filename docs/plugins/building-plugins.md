@@ -420,3 +420,6 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 - [Plugin hooks](/plugins/hooks)
 - [Plugin architecture](/plugins/architecture)
+- [Plugin architecture internals](/plugins/architecture-internals)
+- [Plugin SDK subpaths](/plugins/sdk-subpaths)
+- [Manage plugins](/plugins/manage-plugins)
