@@ -50,7 +50,7 @@ openclaw browser --browser-profile openclaw tabs
 openclaw browser --browser-profile openclaw open https://example.com
 ```
 
-Detailed guidance: [Browser troubleshooting](/tools/browser#cdp-startup-failure-vs-navigation-ssrf-block)
+Detailed guidance: [Browser troubleshooting](/tools/browser/troubleshooting#cdp-startup-failure-vs-navigation-ssrf-block)
 
 ## Lifecycle
 
@@ -88,7 +88,7 @@ If `openclaw browser` is an unknown command, check `plugins.allow` in `~/.opencl
 
 An explicit root `browser` block (for example `browser.enabled=true` or `browser.profiles.<name>`) also activates the bundled browser plugin under a restrictive plugin allowlist.
 
-Related: [Browser tool](/tools/browser#missing-browser-command-or-tool)
+Related: [Browser tool](/tools/browser/setup#missing-browser-command-or-tool)
 
 ## Profiles
 

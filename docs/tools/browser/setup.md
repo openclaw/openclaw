@@ -19,7 +19,7 @@ openclaw browser --browser-profile openclaw snapshot
 ```
 
 "Browser disabled" means the plugin or `browser.enabled` is off; see
-[Configuration](#configuration) and [Plugin control](#plugin-control).
+[Configuration](/tools/browser/configuration#configuration) and [Plugin control](#plugin-control).
 
 If `openclaw browser` is missing entirely, or the agent says the browser tool
 is unavailable, jump to [Missing browser command or tool](#missing-browser-command-or-tool).

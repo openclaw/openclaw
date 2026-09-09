@@ -75,7 +75,7 @@ For the full key index and the other top-level config domains, see [Configuratio
   identity, and unresolved native targets remain fully process-local, so they
   are not automatically closed after a restart. Older untracked tabs require
   manual closure. Transient failures stay pending for a later retry. See
-  [Tab cleanup ownership](/tools/browser#tab-cleanup-ownership).
+  [Tab cleanup ownership](/tools/browser/configuration#tab-cleanup-ownership).
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` is disabled when unset, so browser navigation stays strict by default.
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when you intentionally trust private-network browser navigation.
 - In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
@@ -101,7 +101,7 @@ For the full key index and the other top-level config domains, see [Configuratio
   mode OpenClaw passes the endpoint to Chrome MCP instead of using auto-connect;
   `userDataDir` is ignored for Chrome MCP launch arguments.
   Valid endpoint arguments in `mcpArgs` take precedence over `cdpUrl`; see
-  [Custom Chrome MCP launch](/tools/browser#custom-chrome-mcp-launch).
+  [Custom Chrome MCP launch](/tools/browser/existing-session#custom-chrome-mcp-launch).
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, no `wait --load networkidle`, and no

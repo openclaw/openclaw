@@ -170,7 +170,7 @@ main model can read the screenshot directly.
   for a remote endpoint: the schema rejects an `openclaw` or `clawd` profile
   that sets neither with `Profile must set cdpPort or cdpUrl`.
   `existing-session` profiles use `cdpUrl` unless valid endpoint arguments in
-  `mcpArgs` override it; see [Custom Chrome MCP launch](/tools/browser#custom-chrome-mcp-launch).
+  `mcpArgs` override it; see [Custom Chrome MCP launch](/tools/browser/existing-session#custom-chrome-mcp-launch).
   They ignore `cdpPort`; `extension` profiles own their relay port and reject
   `cdpUrl`.
 - Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
