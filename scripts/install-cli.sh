@@ -592,10 +592,10 @@ linked_node_is_usable() {
 
   current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
   required_version="$(required_node_version)"
-  if ! node_release_version_is_supported "$current_version"; then
+  if ! parse_node_release_version "$current_version" || ((NODE_RELEASE_VERSION_MAJOR < 24)); then
     return 1
   fi
-  if ! semver_at_least "$NODE_RELEASE_VERSION_CORE" "$required_version"; then
+  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && ! semver_at_least "$NODE_RELEASE_VERSION_CORE" "$required_version"; then
     return 1
   fi
   candidate_bin="$(node_dir)/bin"
@@ -619,11 +619,30 @@ linked_node_is_usable() {
             (minor === 51 && patch >= 3) ||
             (minor === 50 && patch >= 7) ||
             (minor === 44 && patch >= 6)));
-      if (!safe) process.exitCode = 1;
+      const text = "a\u0000b\u0000";
+      const bytes = Buffer.from(text, "utf8");
+      const json = JSON.stringify({ value: text });
+      db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
+      db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
+      const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+      const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
+      const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
+      const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
+      if (!textSafe) {
+        console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
+      } else if (!blobSafe || !jsonSafe) {
+        console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
+      } else if (!safe) {
+        console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
+      }
+      if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
     } finally {
       db.close();
     }
-  ' >/dev/null 2>&1
+  ' --no-warnings >/dev/null || return 1
+  if ! node_version_is_supported "$NODE_RELEASE_VERSION_CORE"; then
+    log "Node ${NODE_RELEASE_VERSION_CORE}: unsupported version, capability probe passed"
+  fi
 }
 
 linked_node_sqlite_version() {
@@ -674,11 +693,12 @@ semver_at_least() {
   ((version_patch >= required_patch))
 }
 
-node_release_version_is_supported() {
+parse_node_release_version() {
   local version="$1"
   local major minor patch
 
   NODE_RELEASE_VERSION_CORE=""
+  NODE_RELEASE_VERSION_MAJOR=""
   while [[ "$version" == [[:space:]]* ]]; do version="${version#?}"; done
   while [[ "$version" == *[[:space:]] ]]; do version="${version%?}"; done
   if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
@@ -694,6 +714,11 @@ node_release_version_is_supported() {
   done
 
   NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
+  NODE_RELEASE_VERSION_MAJOR="$major"
+}
+
+node_release_version_is_supported() {
+  parse_node_release_version "$1" || return 1
   node_version_is_supported "$NODE_RELEASE_VERSION_CORE"
 }
 

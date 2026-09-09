@@ -249,7 +249,7 @@ Write-Host "[OK] Windows detected" -ForegroundColor Green
 
 # Check for Node.js
 function Test-NodeVersionSupported {
-    param([string]$Version)
+    param([string]$Version, [switch]$CapabilityGate)
 
     if ([string]::IsNullOrWhiteSpace($Version)) {
         return $false
@@ -276,6 +276,9 @@ function Test-NodeVersionSupported {
         $patch -gt $maxSafeInteger
     ) {
         return $false
+    }
+    if ($CapabilityGate) {
+        return ($major -ge 24)
     }
     if ($major -eq 24) {
         return ($minor -ge 16)
@@ -322,19 +325,57 @@ function Check-Node {
             $NodePath = $nodeCommand.Source
         }
         $nodeVersion = (& $nodePath -v 2>$null)
-        $sqliteProbe = 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); try { process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get().version)); } finally { db.close(); }'
-        $sqliteVersion = ($sqliteProbe | & $nodePath - 2>$null)
+        $sqliteProbe = @'
+const result = { available: false, version: null, text: false, blob: false, json: false };
+let db;
+try {
+    const { DatabaseSync } = require("node:sqlite");
+    db = new DatabaseSync(":memory:");
+    result.available = true;
+    result.version = db.prepare("SELECT sqlite_version() AS version").get()?.version ?? null;
+    const text = "a\u0000b\u0000";
+    const bytes = Buffer.from(text, "utf8");
+    const json = JSON.stringify({ value: text });
+    db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
+    db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
+    const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+    result.text = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
+    result.blob = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
+    result.json = row?.json_value === json && JSON.parse(row.json_value).value === text;
+} catch (error) {
+    result.error = error instanceof Error ? error.message : String(error);
+} finally {
+    db?.close();
+}
+process.stdout.write(JSON.stringify(result));
+'@
+        $sqliteOutput = ($sqliteProbe | & $nodePath - 2>$null)
+        $sqlite = $null
         if ($LASTEXITCODE -ne 0) {
-            $sqliteVersion = $null
+            $sqliteOutput = $null
         }
+        if ($sqliteOutput) {
+            $sqlite = $sqliteOutput | ConvertFrom-Json
+        }
+        $sqliteVersion = $sqlite.version
         if ($nodeVersion) {
             if (
-                (Test-NodeVersionSupported -Version $nodeVersion) -and
-                (Test-NodeSqliteSupported -Version $sqliteVersion)
+                (Test-NodeVersionSupported -Version $nodeVersion -CapabilityGate) -and
+                (Test-NodeSqliteSupported -Version $sqliteVersion) -and
+                $sqlite.text -and $sqlite.blob -and $sqlite.json -and -not $sqlite.error
             ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
+                if (-not (Test-NodeVersionSupported -Version $nodeVersion)) {
+                    Write-Host "[!] Node $nodeVersion`: unsupported version, capability probe passed" -ForegroundColor Yellow
+                }
                 return $true
-            } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
+            } elseif ($sqlite.available -and -not $sqlite.text -and -not $sqlite.error) {
+                Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
+                return $false
+            } elseif ($sqlite.error -or -not $sqlite.blob -or -not $sqlite.json) {
+                Write-Host "[!] Node $nodeVersion`: node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
+                return $false
+            } elseif (Test-NodeVersionSupported -Version $nodeVersion -CapabilityGate) {
                 $sqliteVersionLabel = if ([string]::IsNullOrWhiteSpace($sqliteVersion)) {
                     "unavailable"
                 } else {

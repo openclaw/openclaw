@@ -139,7 +139,9 @@ const databasePreflightMocks = vi.hoisted(() => ({
 const restartHealthTestControl = vi.hoisted(() => ({
   snapshot: undefined as unknown,
 }));
-const nodeVersionSatisfiesEngine = vi.fn();
+const nodeVersionSatisfiesPackageEngine = vi.fn();
+const resolveNodeRuntimeInfo =
+  vi.fn<(typeof import("../daemon/runtime-paths.js"))["resolveNodeRuntimeInfo"]>();
 const execFile = vi.fn((...args: unknown[]) => {
   const callback = args.at(-1);
   if (typeof callback === "function") {
@@ -339,8 +341,13 @@ vi.mock("../infra/update-check-package-target.js", () => ({
   fetchNpmPackageTargetStatus: vi.fn(),
 }));
 
+vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/runtime-paths.js")>()),
+  resolveNodeRuntimeInfo,
+}));
+
 vi.mock("../infra/runtime-guard.js", () => ({
-  nodeVersionSatisfiesEngine,
+  nodeVersionSatisfiesPackageEngine,
   parseSemver: (version: string | null) => {
     if (!version) {
       return null;
@@ -2011,7 +2018,14 @@ describe("update-cli", () => {
       packageSpec: "openclaw@2026.6.33",
     });
     primeNpmChannelTag("latest", "9999.0.0");
-    nodeVersionSatisfiesEngine.mockReturnValue(true);
+    nodeVersionSatisfiesPackageEngine.mockReturnValue(true);
+    resolveNodeRuntimeInfo.mockResolvedValue({
+      status: "supported",
+      version: process.versions.node,
+      sqliteVersion: "3.51.3",
+      nodeSharedSqlite: false,
+      sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
+    });
     vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
     vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({
       installKind: "git",
@@ -5646,7 +5660,7 @@ describe("update-cli", () => {
       });
     }
     if (failure === "package runtime") {
-      nodeVersionSatisfiesEngine.mockReturnValue(false);
+      nodeVersionSatisfiesPackageEngine.mockReturnValue(false);
     }
 
     await withEnvAsync(
@@ -5721,7 +5735,7 @@ describe("update-cli", () => {
         .mockResolvedValue(
           packageTargetStatus({ nodeEngine: compatible ? ">=999.0.0" : ">=22.19.0" }),
         );
-      nodeVersionSatisfiesEngine.mockImplementation(
+      nodeVersionSatisfiesPackageEngine.mockImplementation(
         (_version: string | null, engine: string | null) => engine !== ">=999.0.0",
       );
 
@@ -7176,7 +7190,7 @@ describe("update-cli", () => {
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({ target: "latest", version: "2026.3.23-2" }),
     );
-    nodeVersionSatisfiesEngine.mockReturnValue(false);
+    nodeVersionSatisfiesPackageEngine.mockReturnValue(false);
 
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
@@ -10646,6 +10660,15 @@ describe("update-cli", () => {
   });
 
   it("blocks a stale managed service Node before a no-restart package update", async () => {
+    resolveNodeRuntimeInfo.mockResolvedValue({
+      status: "unsupported",
+      version: "22.18.0",
+      sqliteVersion: "3.51.3",
+      nodeSharedSqlite: false,
+      sqliteProbe: { available: true, version: "3.51.3", text: false, blob: true, json: true },
+      capabilityError:
+        "Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)",
+    });
     const shellRoot = createCaseDir("openclaw-shell-root");
     const serviceRoot = tempDirs.make("openclaw-service-root-");
     const serviceNode = path.join(path.dirname(serviceRoot), "bin", "node");
@@ -10668,7 +10691,7 @@ describe("update-cli", () => {
       }
       return commandResult();
     });
-    nodeVersionSatisfiesEngine.mockReturnValue(false);
+    nodeVersionSatisfiesPackageEngine.mockReturnValue(false);
 
     await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
 
@@ -10792,9 +10815,26 @@ describe("update-cli", () => {
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
         packageTargetStatus({ version: "2026.9.3", nodeEngine: ">=24.16.0 <25 || >=26.1.0" }),
       );
-      nodeVersionSatisfiesEngine.mockImplementation(
+      nodeVersionSatisfiesPackageEngine.mockImplementation(
         (version) => fallback && version === process.versions.node,
       );
+      resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => {
+        const oldRuntime = nodePath === serviceNode;
+        return {
+          status: oldRuntime ? "unsupported" : "supported",
+          version: oldRuntime ? "22.23.1" : process.versions.node,
+          sqliteVersion: "3.51.3",
+          nodeSharedSqlite: false,
+          sqliteProbe: {
+            available: true,
+            version: "3.51.3",
+            text: !oldRuntime,
+            blob: true,
+            json: true,
+          },
+          ...(oldRuntime ? { capabilityError: "broken TEXT decoder" } : {}),
+        };
+      });
       mockFileBackedPathExists();
       vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
       mockServicePackageCommands({
@@ -10907,9 +10947,23 @@ describe("update-cli", () => {
         nodeEngine: ">=24.15.0 <25",
       }),
     );
-    nodeVersionSatisfiesEngine.mockImplementation(
+    nodeVersionSatisfiesPackageEngine.mockImplementation(
       (version: string | null) => version === "24.15.0",
     );
+    resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => {
+      const version =
+        nodePath === serviceNode ? "24.14.0" : nodePath === process.execPath ? "24.15.0" : null;
+      if (!version) {
+        throw new Error("Unexpected runtime probe target");
+      }
+      return {
+        status: "supported",
+        version,
+        sqliteVersion: "3.51.3",
+        nodeSharedSqlite: false,
+        sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
+      };
+    });
     mockFileBackedPathExists();
     mockServicePackageCommands({
       nodeModules,

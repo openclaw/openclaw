@@ -2,7 +2,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isSupportedOpenClawNodeVersion, SUPPORTED_NODE_VERSIONS } from "../../../node-version.mjs";
+import { SUPPORTED_NODE_VERSIONS } from "../../../node-version.mjs";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
@@ -279,6 +279,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const recordedNode = existingManagedCommand?.programArguments[0];
   if (runtimeRaw === "node" && !wrapperPath && recordedNode && isNodeRuntime(recordedNode)) {
     const recordedRuntime = await resolveNodeRuntimeInfo(recordedNode, installEnv);
+    if (recordedRuntime.status !== "probe-failed") {
+      const diagnostic = recordedRuntime.capabilityError ?? recordedRuntime.note;
+      if (diagnostic) {
+        warn(diagnostic);
+      }
+    }
     const missingRuntime =
       recordedRuntime.status === "probe-failed" &&
       (await fs.access(recordedNode, fsConstants.X_OK).then(
@@ -287,8 +293,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       ));
     const replacement = missingRuntime
       ? `missing Gateway service Node (${recordedNode})`
-      : recordedRuntime.status === "unsupported" &&
-          !isSupportedOpenClawNodeVersion(recordedRuntime.version)
+      : recordedRuntime.status === "unsupported"
         ? `unsupported Gateway service Node ${recordedRuntime.version} (${recordedNode})`
         : undefined;
     if (replacement) {

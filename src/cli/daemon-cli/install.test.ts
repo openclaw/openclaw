@@ -249,7 +249,14 @@ const { runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
 
 function nodeProbeOutput(nodeVersion: string, sqliteVersion = "3.53.4") {
-  return { stdout: JSON.stringify({ nodeVersion, sqliteVersion }), stderr: "" };
+  return {
+    stdout: JSON.stringify({
+      nodeVersion,
+      sqliteVersion,
+      sqliteProbe: { available: true, version: sqliteVersion, text: true, blob: true, json: true },
+    }),
+    stderr: "",
+  };
 }
 
 describe("runDaemonInstall", () => {
@@ -761,20 +768,6 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
     expectLastEmittedResult("already-installed");
   });
-
-  it.each(["3.53.4", "3.51.0"])(
-    "preserves a supported Node version with SQLite %s without force",
-    async (sqliteVersion) => {
-      service.isLoaded.mockResolvedValue(true);
-      service.readCommand.mockResolvedValue({
-        programArguments: ["/opt/supported/bin/node", "/opt/openclaw/dist/index.js", "gateway"],
-      });
-      runExecMock.mockResolvedValue(nodeProbeOutput("26.8.1", sqliteVersion));
-      await runDaemonInstall({ json: true });
-      expectLastEmittedResult("already-installed");
-      expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     { failure: "probe", message: "openclaw gateway install --force" },

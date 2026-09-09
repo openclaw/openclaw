@@ -12,7 +12,8 @@ const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));
 
-const { isSupportedOpenClawNodeVersion } = await import("./node-version.mjs");
+const { detectCurrentSqliteCapabilities, nodeRuntimeFailure, nodeRuntimeNote } =
+  await import("./node-sqlite.mjs");
 
 const RECOMMENDED_NODE_MAJOR = 26;
 const SUPPORTED_NODE_RANGE = ">=24.16.0 <25, or >=26.1.0";
@@ -29,21 +30,25 @@ const ensureSupportedRuntimeVersion = async () => {
       hasNodeSqlite = false;
     }
     if (hasNodeSqlite) {
-      return;
+      return false;
     }
     process.stderr.write(
       "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
         `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
     );
-    process.exit(1);
+    return process.exit(1);
   }
-  if (isSupportedOpenClawNodeVersion(process.versions.node)) {
-    return;
+  const probe = detectCurrentSqliteCapabilities();
+  const failure = nodeRuntimeFailure(process.versions.node, probe);
+  if (!failure) {
+    const note = nodeRuntimeNote(process.versions.node, probe);
+    if (note) {
+      process.stderr.write(`${note}\n`);
+    }
+    return false;
   }
 
-  process.stderr.write(
-    `openclaw: Node.js ${SUPPORTED_NODE_RANGE} is required (current: v${process.versions.node}).\n`,
-  );
+  process.stderr.write(`openclaw: ${failure}\n`);
   // These invocations have an exact-PID contract and cannot acquire a wrapper process.
   if (
     !isForegroundGmailRunInvocation(process.argv) &&
@@ -71,7 +76,7 @@ const ensureSupportedRuntimeVersion = async () => {
       `  nvm use ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm alias default ${RECOMMENDED_NODE_MAJOR}\n`,
   );
-  process.exit(1);
+  return process.exit(1);
 };
 
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;

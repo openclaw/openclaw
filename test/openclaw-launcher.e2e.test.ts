@@ -6,7 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
-import { isSupportedOpenClawNodeVersion } from "../node-version.mjs";
+import { parseNodeReleaseVersion } from "../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "./helpers/node-version-cases.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
@@ -23,6 +23,10 @@ async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
   await fs.copyFile(
     path.resolve(process.cwd(), "node-runtime-update.mjs"),
     path.join(fixtureRoot, "node-runtime-update.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-sqlite.mjs"),
+    path.join(fixtureRoot, "node-sqlite.mjs"),
   );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   return fixtureRoot;
@@ -369,7 +373,7 @@ describe("openclaw launcher", () => {
     });
   });
 
-  it("keeps the bootstrap Node range aligned with the package engine", async () => {
+  it("admits lossless Node builds outside the support table while retaining the major floor", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "entry.js"),
@@ -404,13 +408,13 @@ describe("openclaw launcher", () => {
         },
       );
 
-      if (isSupportedOpenClawNodeVersion(version)) {
+      if ((parseNodeReleaseVersion(version)?.major ?? 0) >= 24) {
         expect(result.status, version).toBe(0);
         expect(result.stdout, version).toContain("runtime-loaded");
       } else {
         expect(result.status, version).toBe(1);
         expect(result.stderr, version).toContain(
-          `openclaw: Node.js >=24.16.0 <25, or >=26.1.0 is required (current: v${version}).`,
+          `openclaw: Node ${version}: openclaw requires Node >=24.16.0 <25, or >=26.1.0.`,
         );
       }
     }
@@ -440,9 +444,7 @@ describe("openclaw launcher", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(
-      "openclaw: Node.js >=24.16.0 <25, or >=26.1.0 is required (current: v20.0.0).",
-    );
+    expect(result.stderr).toContain("openclaw: Node 20.0.0:");
     expect(result.stderr).toContain("nvm install 26");
     expect(result.stderr).not.toContain("TypeError");
   });
