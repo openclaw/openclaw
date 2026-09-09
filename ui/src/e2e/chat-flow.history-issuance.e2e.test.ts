@@ -46,8 +46,7 @@ suite.define(() => {
         ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
       );
       await loader.waitFor({ state: "attached" });
-      expect(await loader.evaluate((node) => getComputedStyle(node).visibility)).toBe("hidden");
-      const opacity = await loader.evaluate(async (node) => {
+      const frames = await loader.evaluate(async (node) => {
         const animation = node.getAnimations()[0];
         if (!animation) {
           throw new Error("The loading skeleton has no reveal animation");
@@ -56,13 +55,14 @@ suite.define(() => {
         animation.pause();
         return [499, 575, 650].map((time) => {
           animation.currentTime = time;
-          return Number(getComputedStyle(node).opacity);
+          const style = getComputedStyle(node);
+          return { opacity: Number(style.opacity), visibility: style.visibility };
         });
       });
-      expect(opacity[0]).toBe(0);
-      expect(opacity[1]).toBeGreaterThan(0);
-      expect(opacity[1]).toBeLessThan(1);
-      expect(opacity[2]).toBe(1);
+      expect(frames[0]).toEqual({ opacity: 0, visibility: "hidden" });
+      expect(frames[1]?.opacity).toBeGreaterThan(0);
+      expect(frames[1]?.opacity).toBeLessThan(1);
+      expect(frames[2]).toEqual({ opacity: 1, visibility: "visible" });
       await gateway.resolveDeferred("chat.startup");
       const previous = page.locator(".chat-thread").getByText("Previous conversation.");
       await previous.waitFor({ state: "visible" });
