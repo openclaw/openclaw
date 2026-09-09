@@ -614,6 +614,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         } catch (error) {
           const notSubmitted =
             creating && CrabboxCheckpointCreateError.wasNotSubmitted(error, context);
+          let recoveryRequired = creating;
           if (claimed && key) {
             try {
               if (creating && !notSubmitted) {
@@ -624,19 +625,20 @@ export function createCrabboxWarmImageManager(dependencies: {
                 );
               } else {
                 clearCrabboxWarmImageCapture(key, captureId);
+                recoveryRequired = false;
               }
             } catch {
               // Keep persisted ownership recoverable; physical lease cleanup still belongs to stop.
             }
           }
-          // Non-submission releases only image uncertainty. Source rollback may
-          // have failed, so provisioning must still fail and clean up its lease.
-          if (preparing || notSubmitted) {
+          // Required project captures must fail before enrollment. Optional teardown
+          // captures can warn and let source deletion complete.
+          if (preparing || (notSubmitted && owner?.projectKey)) {
             throw error;
           }
           warnOnce(
             "capture",
-            creating
+            recoveryRequired
               ? `${coerceErrorMessage(error)}. ${crabboxWarmImageRecoveryHint(captureId)}`
               : error,
           );

@@ -2,6 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { operationLeaseId, operationSlug } from "./crabbox-worker-profile.js";
 import {
@@ -408,7 +409,12 @@ describe("Crabbox profile warm images", () => {
     },
   );
 
-  it.each([
+  it.each<{
+    action: "run" | "create";
+    name: string;
+    result: Partial<SpawnResult>;
+    captureUncertain?: boolean;
+  }>([
     { action: "run", name: "scrub fails", result: { code: 7, stderr: "scrub failed" } },
     {
       action: "run",
@@ -427,7 +433,25 @@ describe("Crabbox profile warm images", () => {
       result: { code: 2, stderr: "flag provided but not defined: -json" },
     },
     { action: "create", name: "capture returns malformed JSON", result: { stdout: "{" } },
-  ])("warns once and still stops the enrolled lease when $name", async ({ action, result }) => {
+    {
+      action: "create",
+      name: "capture was not submitted",
+      captureUncertain: false,
+      result: {
+        code: 7,
+        stdout: JSON.stringify({
+          schema: "crabbox.checkpoint.create.failure.v1",
+          outcome: "not_submitted",
+          provider: PROFILE.provider,
+          leaseId: LEASE_ID,
+          checkpointId: CHECKPOINT_ID,
+          localReservation: "removed",
+        }),
+        stderr: "image submission rejected; source rollback failed",
+      },
+    },
+  ])("warns once and still stops the enrolled lease when $name", async (testCase) => {
+    const { action, result, captureUncertain = action === "create" } = testCase;
     let tearingDown = false;
     const { provider, calls, warn } = createWarmProvider(({ argv }) => {
       if (tearingDown && (argv[1] === action || argv[2] === action)) {
@@ -444,14 +468,19 @@ describe("Crabbox profile warm images", () => {
 
     expect(warn).toHaveBeenCalledOnce();
     expect(calls.at(-1)?.argv[1]).toBe("stop");
+    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
 
     tearingDown = false;
     calls.length = 0;
-    if (action === "create") {
+    if (captureUncertain) {
       // Failed creation can retain a paid artifact; retry requires explicit cleanup acknowledgment.
       const capture = listCrabboxWarmImages()[0]?.capture;
       expect(capture).toBeDefined();
+      expect(warn.mock.calls[0]?.[0]).toContain("--recover");
       recoverCrabboxWarmImageCapture(capture!.selector, true);
+    } else {
+      expect(listCrabboxWarmImages()).toEqual([]);
+      expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
     }
     await captureWarmImage(provider);
     expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
