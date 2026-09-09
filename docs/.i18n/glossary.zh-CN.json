@@ -2048,6 +2048,30 @@
     "target": "Docker VM 运行时"
   },
   {
+    "source": "Docker environment variables",
+    "target": "Docker 环境变量"
+  },
+  {
+    "source": "Docker networking, providers, and storage",
+    "target": "Docker 网络、提供商与存储"
+  },
+  {
+    "source": "Docker Compose operations and image maintenance",
+    "target": "Docker Compose 运维与镜像维护"
+  },
+  {
+    "source": "Docker agent sandbox and troubleshooting",
+    "target": "Docker 智能体沙箱与故障排查"
+  },
+  {
+    "source": "OpenShell",
+    "target": "OpenShell"
+  },
+  {
+    "source": "Multi-Agent Sandbox and Tools",
+    "target": "多智能体沙箱与工具"
+  },
+  {
     "source": "Updating",
     "target": "更新"
   },

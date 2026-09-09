@@ -66,7 +66,7 @@
     },
     {
       "source": "/install/clawdock",
-      "destination": "/install/docker#clawdock-migration"
+      "destination": "/install/docker/compose-operations#clawdock-migration"
     },
     {
       "source": "/plan/swarms",
@@ -1427,6 +1427,15 @@
                 "pages": [
                   "install/ansible",
                   "install/docker",
+                  {
+                    "group": "Docker",
+                    "pages": [
+                      "install/docker/environment-variables",
+                      "install/docker/networking-and-storage",
+                      "install/docker/compose-operations",
+                      "install/docker/sandbox-and-troubleshooting"
+                    ]
+                  },
                   "install/nix",
                   "install/podman"
                 ]
