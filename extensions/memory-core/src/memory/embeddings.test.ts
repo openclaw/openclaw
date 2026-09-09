@@ -4,6 +4,7 @@ import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-pro
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderFallbackModel,
@@ -16,7 +17,7 @@ const mockEmbeddingRegistry = vi.hoisted(() => ({
   genericAdapters: [] as EmbeddingProviderAdapter[],
   adapters: [] as MemoryEmbeddingProviderAdapter[],
   genericLookupConfigs: [] as Array<OpenClawConfig | undefined>,
-  acquireLocalService: vi.fn(async () => undefined),
+  acquireLocalService: vi.fn<MemoryCoreAcquireLocalService>(async () => undefined),
 }));
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
@@ -48,7 +49,7 @@ const missingBedrockCredentialsError = new Error(
 
 function createOptions(
   provider: string,
-  acquireLocalService = mockEmbeddingRegistry.acquireLocalService,
+  acquireLocalService: MemoryCoreAcquireLocalService = mockEmbeddingRegistry.acquireLocalService,
 ) {
   return {
     config: {
