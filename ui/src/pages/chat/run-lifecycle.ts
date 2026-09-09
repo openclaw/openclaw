@@ -113,15 +113,16 @@ type ReconcileOptions = {
   requestUpdate?: boolean;
 };
 
-type ChatAbortRunState = SessionScopeHost & {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  sessionKey: string;
-  chatRunId?: string | null;
-  chatRunSessionAbortable?: boolean;
-  lastError?: string | null;
-  chatError?: string | null;
-};
+type ChatAbortRunState = SessionScopeHost &
+  RunLifecycleHost & {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+    sessionKey: string;
+    chatRunId?: string | null;
+    chatRunSessionAbortable?: boolean;
+    lastError?: string | null;
+    chatError?: string | null;
+  };
 
 type ChatAbortIntentBase = {
   sourceClient: GatewayBrowserClient;
@@ -262,23 +263,41 @@ function queuedSessionAbortParams(
 
 type ChatAbortOptions = { preserveDraft?: boolean };
 
+export type ChatAbortOutcome = "aborted" | "no-active-run" | "failed";
+
+type ChatAbortRequestResult = { ok: true; noActiveRun: boolean } | { ok: false; error: unknown };
+
+/**
+ * Only an explicit Gateway "nothing to abort" answer counts: chat.abort
+ * reports `aborted: false`, sessions.abort reports `status: "no-active-run"`.
+ * Any other shape keeps the run owned so live events settle it as before.
+ */
+function readNoActiveRunResponse(response: unknown): boolean {
+  if (!response || typeof response !== "object") {
+    return false;
+  }
+  const payload = response as { aborted?: unknown; status?: unknown };
+  return payload.aborted === false || payload.status === "no-active-run";
+}
+
 async function requestChatAbort(
   client: GatewayBrowserClient,
   intent: ChatAbortIntent,
-): Promise<{ ok: true } | { ok: false; error: unknown }> {
+): Promise<ChatAbortRequestResult> {
   try {
+    let response: unknown;
     if (intent.runId !== null) {
       if (intent.sessionAbortable) {
         // Recovered embedded runs keep their exact run identity on the
         // session-owned abort path; sessions.abort resolves the embedded owner
         // by run id so a delayed Stop cannot abort replacement work.
-        await client.request("sessions.abort", {
+        response = await client.request("sessions.abort", {
           key: intent.sessionKey,
           ...(intent.agentId ? { agentId: intent.agentId } : {}),
           runId: intent.runId,
         });
       } else {
-        await client.request("chat.abort", {
+        response = await client.request("chat.abort", {
           sessionKey: intent.sessionKey,
           ...(intent.agentId ? { agentId: intent.agentId } : {}),
           runId: intent.runId,
@@ -287,16 +306,35 @@ async function requestChatAbort(
     } else {
       // A channel reply can be active without a browser-local chat run ID.
       // Session abort resolves the selected persisted session's exact run.
-      await client.request("sessions.abort", {
+      response = await client.request("sessions.abort", {
         key: intent.sessionKey,
         ...(intent.agentId ? { agentId: intent.agentId } : {}),
         ...(intent.clearQueued ? { clearQueued: true } : {}),
       });
     }
-    return { ok: true };
+    return { ok: true, noActiveRun: readNoActiveRunResponse(response) };
   } catch (err) {
     return { ok: false, error: err };
   }
+}
+
+/**
+ * The Gateway no longer owns this exact run, so its terminal event never
+ * reached this browser. Drop local ownership so the composer leaves its Stop
+ * state; the caller refreshes the transcript and session row from canonical
+ * Gateway state instead of guessing the run's outcome here.
+ */
+function retireStaleLocalRun(state: ChatAbortRunState, runId: string): boolean {
+  if (state.chatRunId !== runId) {
+    return false;
+  }
+  reconcileChatRunLifecycle(state, {
+    runId,
+    clearLocalRun: true,
+    clearToolStreamForRun: true,
+    clearRunStatus: true,
+  });
+  return true;
 }
 
 function currentChatAbortIntent(
@@ -319,16 +357,22 @@ function currentChatAbortIntent(
       };
 }
 
-async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
+async function abortChatRun(state: ChatAbortRunState): Promise<ChatAbortOutcome> {
   const client = state.client;
   if (!client || !state.connected) {
-    return false;
+    return "failed";
   }
-  const result = await requestChatAbort(client, currentChatAbortIntent(state, client));
+  const intent = currentChatAbortIntent(state, client);
+  const result = await requestChatAbort(client, intent);
   if (!result.ok) {
     setChatError(state, formatConnectError(result.error));
+    return "failed";
   }
-  return result.ok;
+  if (intent.runId !== null && result.noActiveRun) {
+    retireStaleLocalRun(state, intent.runId);
+    return "no-active-run";
+  }
+  return "aborted";
 }
 
 export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boolean> {
@@ -355,13 +399,19 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   }
   const result = await requestChatAbort(client, intent);
   if (result.ok) {
+    if (result.noActiveRun) {
+      retireStaleLocalRun(host, intent.runId);
+    }
     return true;
   }
   setChatError(host, formatConnectError(result.error));
   return false;
 }
 
-export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions) {
+export async function handleAbortChat(
+  host: ChatAbortHost,
+  opts?: ChatAbortOptions,
+): Promise<ChatAbortOutcome | undefined> {
   const disconnectedClient = host.connected ? null : host.client;
   const disconnectedIntent = disconnectedClient
     ? currentChatAbortIntent(host, disconnectedClient)
@@ -382,7 +432,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     host.pendingAbort = pendingAbort;
     return;
   }
-  await abortChatRun(host);
+  return await abortChatRun(host);
 }
 
 function clearTimer(timer: TimerHandle | number | null | undefined) {

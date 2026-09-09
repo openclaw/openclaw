@@ -2924,7 +2924,10 @@ function installControlUiMockGateway(
           method === "chat.abort" &&
           isRecord(frame.params) &&
           typeof frame.params.runId === "string" &&
-          typeof frame.params.sessionKey === "string"
+          typeof frame.params.sessionKey === "string" &&
+          // A fixture answering `aborted: false` models a run the Gateway
+          // already finished; it emits no terminal event for that run.
+          !(isRecord(payload) && payload.aborted === false)
         ) {
           this.deliver({
             event: "chat",

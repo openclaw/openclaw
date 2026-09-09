@@ -31,6 +31,7 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   handleChatDraftChange,
@@ -323,7 +324,12 @@ export function createPageState(
     return handleSendChat(state, messageOverride, options as never, submissionAction);
   };
   state.handleAbortChat = async (options) => {
-    await handleAbortChat(state, options as never);
+    const outcome = await handleAbortChat(state, options as never);
+    if (outcome === "no-active-run") {
+      // The Gateway had already finished this run; its terminal event was
+      // missed. Settle the transcript and session row from canonical state.
+      await refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
+    }
     renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {
