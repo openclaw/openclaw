@@ -363,7 +363,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: one exec policy object replaces two deprecated comparator exports.
       // +1: approved bounded TAR inspection through the archive admission owner.
       // +1: canonical runtime-context classifier for native history projection.
-      4447,
+      // +1: onModelDiagnosticEvent (plugin-sdk/diagnostic-runtime).
+      4448,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -461,7 +462,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
-      // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
+      // +1: downstream strength mappers need canonical ordering instead of duplicate rank targets.
       // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
       // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
       // +1: prepared model-provider builder preserves the stable builder's return contract.
@@ -495,7 +496,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: exec comparators are members of the shared policy object.
       // +1: approved bounded TAR inspection through the archive admission owner.
       // +1: canonical runtime-context classifier for native history projection.
-      2629,
+      // +1: onModelDiagnosticEvent (plugin-sdk/diagnostic-runtime).
+      2630,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
