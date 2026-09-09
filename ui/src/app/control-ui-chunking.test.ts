@@ -40,6 +40,12 @@ describe("Control UI build chunking", () => {
     ).toBe("gateway-runtime");
     expect(controlUiStableChunkName("/repo/ui/src/lib/gateway-methods.ts")).toBe("gateway-runtime");
     expect(controlUiStableChunkName("/repo/ui/src/app/app-host.ts")).toBeUndefined();
+    // Fragments must not adopt their locale's basename: performance accounting
+    // bounds `assets/<locale>-*.js` to one locale-catalog asset per locale.
+    expect(controlUiStableChunkName("\0virtual:openclaw-control-ui-locale-config-hints/ru")).toBe(
+      "locale-config-hints-ru",
+    );
+    expect(controlUiStableChunkName("\0virtual:openclaw-control-ui-locale/ru")).toBeUndefined();
   });
 
   it("bounds only the initial module graph without recursively absorbing dependencies", () => {
