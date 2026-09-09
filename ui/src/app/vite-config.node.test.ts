@@ -30,6 +30,7 @@ import { en } from "../i18n/locales/en.ts";
 
 const childProcessMocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
 const fsMocks = vi.hoisted(() => ({ existsSync: vi.fn(), readFileSync: vi.fn() }));
+const tsxMocks = vi.hoisted(() => ({ register: vi.fn() }));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -42,6 +43,12 @@ vi.mock("node:fs", async (importOriginal) => {
   fsMocks.existsSync.mockImplementation(actual.existsSync);
   fsMocks.readFileSync.mockImplementation(actual.readFileSync);
   return { ...actual, existsSync: fsMocks.existsSync, readFileSync: fsMocks.readFileSync };
+});
+
+vi.mock("tsx/esm/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tsx/esm/api")>();
+  tsxMocks.register.mockImplementation(actual.register);
+  return { ...actual, register: tsxMocks.register };
 });
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -65,10 +72,16 @@ function controlUiLocaleModuleHooks() {
   const resolveId = typeof resolveHook === "function" ? resolveHook : resolveHook?.handler;
   const loadHook = plugin.load;
   const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
-  if (!resolveId || !load) {
-    throw new Error("Expected locale module resolver and loader");
+  const watchChangeHook = plugin.watchChange;
+  const watchChange =
+    typeof watchChangeHook === "function" ? watchChangeHook : watchChangeHook?.handler;
+  const buildStartHook = plugin.buildStart;
+  const buildStart =
+    typeof buildStartHook === "function" ? buildStartHook : buildStartHook?.handler;
+  if (!resolveId || !load || !watchChange || !buildStart) {
+    throw new Error("Expected locale module resolver, loader, and invalidation hooks");
   }
-  return { resolveId, load };
+  return { buildStart, resolveId, load, watchChange };
 }
 
 async function loadControlUiLocaleCatalog(
@@ -747,6 +760,103 @@ describe("Control UI Vite config", () => {
       expect(watcher).toHaveBeenCalledWith(memoryPath);
       expect(watcher).toHaveBeenCalledWith(path.join(repoRoot, "src/config/schema.hints.ts"));
     }
+  });
+
+  it("discards an in-flight locale catalog load invalidated by a watched change", async () => {
+    const staleCatalog = {
+      common: { health: "stale" },
+      configHints: { stale: "stale" },
+    };
+    const currentCatalog = {
+      common: { health: "current" },
+      configHints: { current: "current" },
+    };
+    let resolveStaleImport:
+      | ((module: { loadControlUiSourceCatalog(): typeof staleCatalog }) => void)
+      | undefined;
+    const staleImport = new Promise<{ loadControlUiSourceCatalog(): typeof staleCatalog }>(
+      (resolve) => {
+        resolveStaleImport = resolve;
+      },
+    );
+    let importCount = 0;
+
+    await tsxMocks.register.withImplementation(
+      () =>
+        ({
+          import: async () => {
+            importCount += 1;
+            return importCount === 1
+              ? staleImport
+              : { loadControlUiSourceCatalog: () => currentCatalog };
+          },
+          unregister: async () => {},
+        }) as never,
+      async () => {
+        await fsMocks.existsSync.withImplementation(
+          () => false,
+          async () => {
+            const { load, watchChange } = controlUiLocaleModuleHooks();
+            const id = "\0virtual:openclaw-control-ui-locale/fr";
+            const firstLoad = loadControlUiLocaleCatalog(load, id);
+
+            await vi.waitFor(() => expect(importCount).toBe(1));
+            await watchChange.call({} as never, "ui/src/i18n/locales/en.ts", {
+              event: "update",
+            });
+            resolveStaleImport?.({ loadControlUiSourceCatalog: () => staleCatalog });
+
+            await expect(firstLoad).resolves.toEqual({ common: { health: "current" } });
+            await expect(loadControlUiLocaleCatalog(load, id)).resolves.toEqual({
+              common: { health: "current" },
+            });
+            expect(importCount).toBe(2);
+          },
+        );
+      },
+    );
+  });
+
+  it("discards a resolved locale partition invalidated at the next build start", async () => {
+    const staleCatalog = { common: { health: "stale" } };
+    const currentCatalog = { common: { health: "current" } };
+    let importCount = 0;
+    let invalidatePartition = true;
+
+    await tsxMocks.register.withImplementation(
+      () =>
+        ({
+          import: async () => {
+            importCount += 1;
+            return {
+              loadControlUiSourceCatalog: () => (importCount === 1 ? staleCatalog : currentCatalog),
+            };
+          },
+          unregister: async () => {},
+        }) as never,
+      async () => {
+        const { buildStart, load } = controlUiLocaleModuleHooks();
+        await fsMocks.existsSync.withImplementation(
+          () => {
+            if (invalidatePartition) {
+              invalidatePartition = false;
+              queueMicrotask(() => {
+                void buildStart.call({} as never, {} as never);
+              });
+            }
+            return false;
+          },
+          async () => {
+            const id = "\0virtual:openclaw-control-ui-locale/fr";
+
+            await expect(loadControlUiLocaleCatalog(load, id)).resolves.toEqual({
+              common: { health: "current" },
+            });
+            expect(importCount).toBe(2);
+          },
+        );
+      },
+    );
   });
 
   it("bootstraps only an absent locale memory from the partitioned English catalog", async () => {

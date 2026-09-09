@@ -99,12 +99,14 @@ function parseResolvedLocaleModuleId(id: string): { locale: string; configHints:
 export function controlUiLocaleModulesPlugin(): Plugin {
   // A base module and its fragment must be emitted from the same materialized
   // catalog so the split halves cannot drift apart within one build. The
-  // caches are cleared before any watched source or memory file is re-read.
-  let sourceCatalogLoad: ReturnType<typeof loadCurrentSourceCatalog> | null = null;
-  const partitionLoads = new Map<string, Promise<ControlUiLocaleCatalogPartition>>();
+  // cache generation changes before any watched source or memory file is re-read.
+  const createCatalogCache = () => ({
+    sourceCatalogLoad: null as ReturnType<typeof loadCurrentSourceCatalog> | null,
+    partitionLoads: new Map<string, Promise<ControlUiLocaleCatalogPartition>>(),
+  });
+  let catalogCache = createCatalogCache();
   const invalidateCatalogs = () => {
-    sourceCatalogLoad = null;
-    partitionLoads.clear();
+    catalogCache = createCatalogCache();
   };
   return {
     name: "control-ui-locale-modules",
@@ -129,23 +131,48 @@ export function controlUiLocaleModulesPlugin(): Plugin {
         return null;
       }
       const memoryPath = path.join(i18nAssetsDir, `${request.locale}.tm.jsonl`);
-      sourceCatalogLoad ??= loadCurrentSourceCatalog();
-      const { catalog: sourceCatalog, watchFiles } = await sourceCatalogLoad;
-      for (const watchFile of watchFiles) {
-        this.addWatchFile(watchFile);
+      while (true) {
+        const activeCache = catalogCache;
+        activeCache.sourceCatalogLoad ??= loadCurrentSourceCatalog();
+        let sourceCatalogResult: Awaited<ReturnType<typeof loadCurrentSourceCatalog>>;
+        try {
+          sourceCatalogResult = await activeCache.sourceCatalogLoad;
+        } catch (error) {
+          if (activeCache !== catalogCache) {
+            continue;
+          }
+          throw error;
+        }
+        if (activeCache !== catalogCache) {
+          continue;
+        }
+        for (const watchFile of sourceCatalogResult.watchFiles) {
+          this.addWatchFile(watchFile);
+        }
+        this.addWatchFile(memoryPath);
+        let partitionLoad = activeCache.partitionLoads.get(request.locale);
+        if (!partitionLoad) {
+          partitionLoad = loadControlUiLocaleCatalogPartition(
+            request.locale,
+            sourceCatalogResult.catalog,
+            memoryPath,
+          );
+          activeCache.partitionLoads.set(request.locale, partitionLoad);
+        }
+        let partition: ControlUiLocaleCatalogPartition;
+        try {
+          partition = await partitionLoad;
+        } catch (error) {
+          if (activeCache !== catalogCache) {
+            continue;
+          }
+          throw error;
+        }
+        if (activeCache !== catalogCache) {
+          continue;
+        }
+        return `export default ${JSON.stringify(request.configHints ? partition.configHints : partition.base)};`;
       }
-      this.addWatchFile(memoryPath);
-      let partitionLoad = partitionLoads.get(request.locale);
-      if (!partitionLoad) {
-        partitionLoad = loadControlUiLocaleCatalogPartition(
-          request.locale,
-          sourceCatalog,
-          memoryPath,
-        );
-        partitionLoads.set(request.locale, partitionLoad);
-      }
-      const partition = await partitionLoad;
-      return `export default ${JSON.stringify(request.configHints ? partition.configHints : partition.base)};`;
     },
   };
 }
