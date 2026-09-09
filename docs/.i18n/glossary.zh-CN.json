@@ -3460,6 +3460,34 @@
     "target": "SQLite 维护与会话迁移"
   },
   {
+    "source": "Database layout",
+    "target": "数据库布局"
+  },
+  {
+    "source": "Versioning contract",
+    "target": "版本契约"
+  },
+  {
+    "source": "Per-person and companion storage",
+    "target": "个人与配套设备存储"
+  },
+  {
+    "source": "Storage changes and release preflight",
+    "target": "存储变更与发布预检"
+  },
+  {
+    "source": "Agent schema history",
+    "target": "Agent 数据库 schema 历史"
+  },
+  {
+    "source": "State schema history",
+    "target": "状态数据库 schema 历史"
+  },
+  {
+    "source": "Integrity, troubleshooting, and recovery",
+    "target": "完整性、故障排查与恢复"
+  },
+  {
     "source": "Other checks and repairs",
     "target": "其他检查与修复"
   },
