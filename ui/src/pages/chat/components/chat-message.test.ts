@@ -2721,10 +2721,41 @@ describe("grouped chat rendering", () => {
 
     render(renderTestMessageGroup(group), container);
     await titler.decorate(sourceLink(), true);
-    expect(sourceLink().textContent).toBe("Main session");
+    expect(sourceLink().textContent?.trim()).toBe("Main session");
     expect(() => render(renderTestMessageGroup(group), container)).not.toThrow();
-    expect(sourceLink().textContent).toBe("Main session");
-    expect(sourceLink().title).toBe("agent:main:main");
+    expect(sourceLink().textContent?.trim()).toBe("Main session");
+    expect(sourceLink().hasAttribute("title")).toBe(false);
+    expect(sourceLink().getAttribute("aria-label")).toBe("Main session");
+  });
+
+  it("keeps a forwarded main-session chip decorated when the agent name hydrates", async () => {
+    const container = document.createElement("div");
+    const group = createMessageGroup(createAssistantMessage("forwarded report"), "assistant", {
+      senderSession: { sessionKey: "agent:research:main" },
+    });
+    const titler = new SessionLinkTitler(container);
+    const sourceLink = () => expectElement(container, "a.markdown-session-link", HTMLAnchorElement);
+    titler.connect();
+    try {
+      render(renderTestMessageGroup(group, { mainKey: "main" }), container);
+      await vi.waitFor(() => expect(sourceLink().getAttribute("aria-label")).toBe("research"));
+      const anchor = sourceLink();
+      render(
+        renderTestMessageGroup(group, {
+          mainKey: "main",
+          agents: [{ id: "research", identity: { name: "Research Agent" } }],
+        }),
+        container,
+      );
+      await vi.waitFor(() => {
+        expect(sourceLink()).toBe(anchor);
+        expect(anchor.getAttribute("aria-label")).toBe("Research Agent");
+        expect(anchor.querySelector("svg")).not.toBeNull();
+        expect(anchor.textContent?.trim()).toBe("Research Agent");
+      });
+    } finally {
+      titler.disconnect();
+    }
   });
 
   it("uses the assistant name when an assistant group has no sender label", () => {
