@@ -1091,6 +1091,7 @@ openclaw-session-owner-chip {
 }
 
 .btn {
+  color: inherit;
   display: inline-flex;
   align-items: center;
   justify-content: center;

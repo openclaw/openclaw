@@ -258,6 +258,13 @@ describeCursorPolicy("Control UI cursor policy", () => {
       await page.evaluate((mode) => {
         document.documentElement.dataset.themeMode = mode;
       }, theme);
+      expect(
+        await page.locator("#new-tab-link").evaluate((element) => getComputedStyle(element).color),
+      ).toBe(
+        await page
+          .locator("#new-tab-button")
+          .evaluate((element) => getComputedStyle(element).color),
+      );
       const people = await page.locator(".sidebar-online__person").all();
       expect(people).toHaveLength(2);
       for (const person of people) {
