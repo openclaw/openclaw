@@ -41,6 +41,18 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 // match — those are not assistant-stream contracts.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
   /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)[.!]?$/i;
+// These exact transport diagnostics identify rejection, not whether replay is safe.
+const PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES = new Set([
+  "Provider completed tool call with malformed JSON arguments",
+  "Provider completed stream with an incomplete tool call",
+  "Provider returned an incomplete or malformed tool call",
+  "Mistral completed tool call has invalid JSON arguments",
+  "Responses stream completed tool call with invalid JSON arguments",
+]);
+
+export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): boolean {
+  return errorMessage !== undefined && PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage);
+}
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 

@@ -32,7 +32,11 @@ import "../../../styles/chat/reply-preview.css";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import { renderAssistantAttachments, renderOmittedMedia } from "./chat-message-attachments.ts";
+import {
+  renderAssistantAttachments,
+  renderMessageAttachment,
+  renderOmittedMedia,
+} from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import type {
   ChatMessageRenderPreparation,
@@ -214,6 +218,7 @@ export function renderGroupedMessage(
     isStreaming: boolean;
     sessionKey?: string;
     presented?: boolean;
+    transcriptVisible?: boolean;
     boardProvider?: BoardProvider;
     agentId?: string;
     duplicateCount?: number;
@@ -275,6 +280,16 @@ export function renderGroupedMessage(
   } = projectMessageMedia(message, normalizedMessage.content);
   schedulePairingQrExpiryRefresh(messageKey, nextPairingQrExpiresAt, opts.onRequestUpdate);
   const hasImages = images.length > 0;
+  const videoPreviews =
+    normalizedRole === "user"
+      ? visibleAttachments.filter(
+          (item) => item.type === "attachment" && item.attachment.kind === "video",
+        )
+      : [];
+  const cardAttachments = visibleAttachments.filter((item) => !videoPreviews.includes(item));
+  const hasUserFiles =
+    normalizedRole === "user" &&
+    cardAttachments.some((item) => item.attachment.kind === "document");
   const imageRenderOptions = {
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
@@ -319,7 +334,8 @@ export function renderGroupedMessage(
 
   const bubbleClasses = [
     "chat-bubble",
-    hasImages ? "chat-bubble--with-images" : "",
+    hasImages || videoPreviews.length > 0 || hasUserFiles ? "chat-bubble--with-images" : "",
+    hasUserFiles ? "chat-bubble--with-files" : "",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
     opts.entryAnimated ? "chat-bubble--user-turn-enter" : "",
@@ -438,11 +454,23 @@ export function renderGroupedMessage(
 
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
   // Collapsed tool results must not load attachments or render hidden markdown.
+  // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`
     ${renderPairingQrExpiryNotices(expiredPairingQrCount)}
-    ${renderMessageImages(images, imageRenderOptions)} ${renderOmittedMedia(omittedMedia)}
+    ${renderMessageImages(
+      images,
+      imageRenderOptions,
+      videoPreviews.map(
+        (item) => html`
+          <div class="chat-image-frame chat-video-preview">
+            ${opts.transcriptVisible === false ? nothing : renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview")}
+          </div>
+        `,
+      ),
+    )}
+    ${renderOmittedMedia(omittedMedia)}
     ${renderAssistantAttachments(
-      visibleAttachments,
+      cardAttachments,
       imageRenderOptions,
       onOpenSidebar,
       opts.onAssistantAttachmentLoaded,

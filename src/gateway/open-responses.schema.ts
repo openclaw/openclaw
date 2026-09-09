@@ -236,7 +236,7 @@ export type CreateResponseBody = z.infer<typeof CreateResponseBodySchema>;
 // ─────────────────────────────────────────────────────────────────────────────
 
 type OutputTextContentPart = Extract<ContentPart, { type: "output_text" }>;
-type OutputStatus = "in_progress" | "completed";
+type OutputStatus = "in_progress" | "completed" | "incomplete";
 
 export type OutputItem =
   | (Omit<Extract<ItemParam, { type: "message" }>, "id" | "role" | "content" | "status"> & {
@@ -269,6 +269,8 @@ export type ResponseResource = {
   output: OutputItem[];
   usage: Usage;
   error?: { code: string; message: string } | undefined;
+  // Provider content filters are failures, not incomplete output.
+  incomplete_details?: { reason: "max_output_tokens" } | undefined;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -285,6 +287,7 @@ export type StreamingEvent =
   | { type: "response.created"; response: ResponseResource }
   | { type: "response.in_progress"; response: ResponseResource }
   | { type: "response.completed"; response: ResponseResource }
+  | { type: "response.incomplete"; response: ResponseResource }
   | { type: "response.failed"; response: ResponseResource }
   | { type: "response.output_item.added"; output_index: number; item: OutputItem }
   | { type: "response.output_item.done"; output_index: number; item: OutputItem }

@@ -1,4 +1,3 @@
-// Registers provider plugins into the provider registry.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -16,6 +15,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import {
   loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata,
   normalizePluginsConfigWithRegistry,
   type PluginRegistryRecord,
   type PluginRegistrySnapshot,
@@ -564,25 +564,23 @@ function resolveProviderOwnershipContext(
           ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
           allowWorkspaceScopedSnapshot: true,
         }));
-  const config = params.config ?? {};
-  const env = params.env ?? process.env;
-  const manifestRegistry =
-    params.manifestRegistry ??
-    metadataSnapshot?.manifestRegistry ??
-    resolveManifestRegistry({
-      config,
-      workspaceDir: params.workspaceDir,
-      env,
-      registry: loadProviderRegistrySnapshot({
-        config,
-        workspaceDir: params.workspaceDir,
-        env,
-      }),
-      includeDisabled: true,
-    });
+  const manifestRegistry = params.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
+  if (manifestRegistry) {
+    return { manifestRegistry, ...(metadataSnapshot ? { metadataSnapshot } : {}) };
+  }
+  const registryParams = {
+    config: params.config ?? {},
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  };
+  const loaded = loadPluginRegistrySnapshotWithMetadata(registryParams);
   return {
-    manifestRegistry,
-    ...(metadataSnapshot ? { metadataSnapshot } : {}),
+    manifestRegistry: loadPluginManifestRegistryForInstalledIndex({
+      ...registryParams,
+      index: loaded.snapshot,
+      manifestRegistry: loaded.manifestRegistry,
+      includeDisabled: true,
+    }),
   };
 }
 

@@ -12,15 +12,17 @@ sidebarTitle: "Exec approvals"
 Exec approvals are the **companion app / node host guardrail** for letting a
 sandboxed agent run commands on a real host (`gateway` or `node`). Commands
 run only when policy + allowlist + (optional) user approval all agree.
-Approvals stack **on top of** tool policy and elevated gating (elevated
-`full` skips them).
+Approvals stack **on top of** tool policy and elevated gating. Gateway
+full-session and qualifying elevated-full paths can skip host approval
+evaluation; see the [strict inline-eval exceptions](/tools/exec#inline-eval-strictinlineeval).
 
 For a mode-first overview of `deny`, `allowlist`, `ask`, `auto`, `full`,
 Codex Guardian mapping, and ACPX harness permissions, see
 [Permission modes](/tools/permission-modes).
 
 <Note>
-Effective policy is the **stricter** of `tools.exec.*` and approvals
+Outside the full-permission Gateway session exception described below,
+effective policy is the **stricter** of `tools.exec.*` and approvals
 defaults: approvals can only tighten config-derived security/ask, never
 loosen them. If an approvals field is omitted, the `tools.exec` value is
 used. Host exec also uses local approvals state on that machine - a
@@ -192,7 +194,7 @@ Example schema:
 | `allowlist` | Run only allowlisted commands without asking.                                                                                                               |
 | `ask`       | Use allowlist policy and ask on misses.                                                                                                                     |
 | `auto`      | Run deterministic allowlist matches directly; review eligible misses with `allow` (once), `deny` (reason returned to the agent), or `ask` (human approval). |
-| `full`      | Run host exec without approval prompts.                                                                                                                     |
+| `full`      | Run host exec without ordinary policy prompts; see strict inline-eval behavior below.                                                                       |
 
 Doctor migrates supported legacy `tools.exec.security` / `tools.exec.ask` pairs
 to `tools.exec.mode`. If a deploy script, template, or config generator still
@@ -214,7 +216,7 @@ running it again does not update a stale deployment source.
 <ParamField path="security" type='"deny" | "allowlist" | "full"'>
   - `deny` - block all host exec requests.
   - `allowlist` - allow only allowlisted commands.
-  - `full` - allow everything (equivalent to elevated).
+  - `full` - do not require an allowlist match. This does not grant elevated access.
 
 Default is `full` for gateway/node hosts; a `sandbox` host defaults to
 `deny` instead.
@@ -229,7 +231,7 @@ Default is `full` for gateway/node hosts; a `sandbox` host defaults to
   [Exec tool](/tools/exec#parameters)) can only harden that baseline, and
   channel-origin model calls ignore it when the effective host ask is `off`.
 
-- `off` - never prompt.
+- `off` - no ordinary policy prompts. Separately enabled strict inline-eval checks can still require approval.
 - `on-miss` - prompt only when the allowlist does not match.
 - `always` - prompt on every command. `allow-always` durable trust does **not** suppress prompts when effective ask mode is `always`.
 
@@ -243,23 +245,24 @@ Default is `full` for gateway/node hosts; a `sandbox` host defaults to
 
 - `deny` - block.
 - `allowlist` - allow only if allowlist matches.
-- `full` - allow.
+- `full` - add no stricter fallback limit to the active security policy. Allowlist restrictions and explicit-approval requirements, such as recognized strict inline-eval forms, still apply.
 
 </ParamField>
 
 ### `tools.exec.strictInlineEval`
 
-<ParamField path="strictInlineEval" type="boolean">
-  When `true`, treats inline code-eval forms as approval-only even if the
-  interpreter binary itself is allowlisted. Defense-in-depth for
-  interpreter loaders that do not map cleanly to one stable file operand.
+<ParamField path="strictInlineEval" type="boolean" default="false">
+  When ordinary host approval evaluation runs, `true` treats recognized
+  inline code-eval forms as approval-only, including under ordinary
+  `full`/`off` policy or an allowlisted interpreter binary. Defense-in-depth
+  for interpreter loaders that do not map cleanly to one stable file operand.
 </ParamField>
 
 Examples that strict mode catches: `python -c`, `node -e`/`--eval`/`-p`,
 `ruby -e`, `perl -e`/`-E`, `php -r`, `lua -e`, `osascript -e` (also `awk`,
 `sed`, `make`, `find -exec`, and `xargs` inline forms).
 
-In strict mode these commands need reviewer or explicit approval. With
+On that approval path, these commands need reviewer or explicit approval. With
 `tools.exec.mode: "auto"`, eligible commands receive an `allow`, `deny`, or `ask`
 verdict. The reviewer may grant one low- or medium-risk execution, return a denial
 reason to the agent, or ask a human. Gateway commands must pass mutable-file
@@ -273,6 +276,14 @@ See [Exec modes](/tools/exec#modes) for binding limits and escalation.
 human because their approval requests do not expose an enforceable resolved
 executable.
 `allow-always` does not persist new allowlist entries for inline-eval commands.
+
+Configured `tools.exec.mode: "full"` alone does not bypass this setting. On
+the Gateway, a full-permission session with effective security `full` and
+ask `off` skips host approval evaluation. Permitted elevated-full execution
+also skips it when both exec and host approval policies allow `full`/`off`.
+Those paths skip strict inline-eval detection. Ask-only tightening of a full
+session restores the approval path while retaining its host-file-floor
+exception. See [Inline eval](/tools/exec#inline-eval-strictinlineeval).
 
 ### `tools.exec.commandHighlighting`
 
@@ -292,6 +303,12 @@ To run host exec without approval prompts, open **both** policy layers:
 requested exec policy in OpenClaw config (`tools.exec.*`) **and**
 host-local approvals policy in the execution host approvals document.
 
+For ordinary configured full-mode execution of recognized inline-eval forms
+without prompts, leave `tools.exec.strictInlineEval` unset or set it to
+`false` (the default). If detection runs with strict mode enabled,
+`askFallback: "full"` does not replace reviewer or explicit approval. The
+Gateway session and elevated exceptions described above skip that detection.
+
 Omitted `askFallback` defaults to `deny`. Set host `askFallback` to `full`
 explicitly when a no-UI approval prompt should fall back to allow.
 
@@ -305,7 +322,7 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
-- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy. Node preparation still reads the target policy and resolves the working directory once. If both sides allow full/off, ordinary path aliases and inline scripts do not require approval binding; restrictive policy and later policy changes remain enforced.
+- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy. Node preparation still reads the target policy and resolves the working directory once. If both sides allow full/off and strict inline eval is disabled, ordinary path aliases and inline scripts do not require approval binding; restrictive policy and later policy changes remain enforced.
 - `auto` does not make node or gateway routing a free override from a sandboxed session. Per-call `host=node` and `host=gateway` requests are allowed from `auto` only when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 </Warning>
@@ -326,6 +343,7 @@ If you want a more conservative setup, tighten OpenClaw exec policy back to
     ```bash
     openclaw config set tools.exec.host gateway
     openclaw config set tools.exec.mode full
+    openclaw config set tools.exec.strictInlineEval false
     openclaw gateway restart
     ```
   </Step>
@@ -398,8 +416,8 @@ EOF
   `security: "full"` and `ask: "off"`. A stricter host file, such as `ask:
 "always"`, still prompts.
 
-If the host approvals document stays stricter than config, the stricter host
-policy still wins.
+Outside the full-permission Gateway session exception, if the host approvals
+document stays stricter than config, the stricter host policy still wins.
 
 ## Allowlist (per agent)
 

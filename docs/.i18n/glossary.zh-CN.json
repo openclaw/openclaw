@@ -3126,5 +3126,41 @@
   {
     "source": "Evidence to keep",
     "target": "需保留的证据"
+  },
+  {
+    "source": "Codex session catalog and supervision",
+    "target": "Codex 会话目录与监督"
+  },
+  {
+    "source": "Codex app-server transport",
+    "target": "Codex app-server 传输"
+  },
+  {
+    "source": "Codex approval and sandbox modes",
+    "target": "Codex 审批与沙箱模式"
+  },
+  {
+    "source": "Codex auth and environment isolation",
+    "target": "Codex 认证与环境隔离"
+  },
+  {
+    "source": "Codex dynamic tools",
+    "target": "Codex 动态工具"
+  },
+  {
+    "source": "Codex timeouts and turn settlement",
+    "target": "Codex 超时与回合结算"
+  },
+  {
+    "source": "Codex model discovery",
+    "target": "Codex 模型发现"
+  },
+  {
+    "source": "Codex restricted turns",
+    "target": "Codex 受限回合"
+  },
+  {
+    "source": "Codex workspace bootstrap files",
+    "target": "Codex 工作区引导文件"
   }
 ]

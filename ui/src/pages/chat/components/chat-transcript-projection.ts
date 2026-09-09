@@ -320,6 +320,7 @@ export function projectChatTranscript(
         : null;
     return {
       ...sharedMessageRenderOptions,
+      transcriptVisible: props.transcriptVisible,
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
@@ -644,6 +645,7 @@ export function projectChatTranscript(
     JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
     props.presented,
+    props.transcriptVisible,
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
     avatarPlacement,
     props.boardProvider,

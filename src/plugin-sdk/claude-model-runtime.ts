@@ -1,6 +1,7 @@
 // Provider policy artifacts load eagerly; keep Claude identity and thinking
 // helpers on their leaf owners so policy resolution does not load transports.
 export {
+  requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,

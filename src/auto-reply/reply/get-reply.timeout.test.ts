@@ -22,15 +22,24 @@ afterEach(async () => {
 });
 
 it.each([
-  { options: { timeoutOverrideMs: 1800000 }, expected: 1800000 },
-  { options: { timeoutOverrideMs: 1500 }, expected: 1500 },
-  { options: { timeoutOverrideMs: 0 }, expected: MAX_TIMER_TIMEOUT_MS },
-  { options: {}, expected: 180000 },
-  { options: { timeoutOverrideSeconds: 1800 }, expected: 1800000 },
-  { options: { timeoutOverrideSeconds: 0 }, expected: MAX_TIMER_TIMEOUT_MS },
+  { options: { timeoutOverrideMs: 1800000 }, expected: 1800000, expectedOverride: 1800000 },
+  { options: { timeoutOverrideMs: 180000 }, expected: 180000, expectedOverride: 180000 },
+  { options: { timeoutOverrideMs: 1500 }, expected: 1500, expectedOverride: 1500 },
+  {
+    options: { timeoutOverrideMs: 0 },
+    expected: MAX_TIMER_TIMEOUT_MS,
+    expectedOverride: MAX_TIMER_TIMEOUT_MS,
+  },
+  { options: {}, expected: 180000, expectedOverride: undefined },
+  { options: { timeoutOverrideSeconds: 1800 }, expected: 1800000, expectedOverride: 1800000 },
+  {
+    options: { timeoutOverrideSeconds: 0 },
+    expected: MAX_TIMER_TIMEOUT_MS,
+    expectedOverride: MAX_TIMER_TIMEOUT_MS,
+  },
 ])(
   "passes timeout options $options to the actual runtime entrypoint",
-  async ({ options, expected }) => {
+  async ({ options, expected, expectedOverride }) => {
     state = await createOpenClawTestState({
       label: "reply-timeout",
       env: { OPENCLAW_TEST_FAST: "0" },
@@ -61,8 +70,8 @@ it.each([
     );
     expect([reply].flat()).toEqual([expect.objectContaining({ text: "Done" })]);
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(vi.mocked(runEmbeddedAgent).mock.calls[0]![0]).toMatchObject({
-      timeoutMs: expected,
-    });
+    const run = vi.mocked(runEmbeddedAgent).mock.calls[0]![0];
+    expect(run.timeoutMs).toBe(expected);
+    expect(run.runTimeoutOverrideMs).toBe(expectedOverride);
   },
 );
