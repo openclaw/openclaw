@@ -486,16 +486,14 @@ function resolveSessionKeyForRequestInternal(opts: {
 
   // Command preparation needs one owned entry. Exact reads preserve the SQLite target and
   // Doctor guards without enumerating the agent store or exposing hidden run-owned rows.
-  // Exact row locators are not canonicalized, but persisted rows always hold the canonical
-  // store-folded key, so the read must use that form: a request key carrying an opaque
-  // uppercase tail (a client ULID, for example) would otherwise miss the row its previous
-  // turn created and remint the session id, tripping the admission fence.
+  // Exclusion and lookup share the persisted locator; routing keeps the request key.
+  const storeSessionKey = sessionKey ? normalizeStoreSessionKey(sessionKey) : undefined;
   const sessionEntry =
-    sessionKey && !isInternalSessionEffectsKey(sessionKey)
+    storeSessionKey && !isInternalSessionEffectsKey(storeSessionKey)
       ? loadExactSessionEntryReadOnly({
           agentId: storeAgentId,
           storePath,
-          sessionKey: normalizeStoreSessionKey(sessionKey),
+          sessionKey: storeSessionKey,
         })?.entry
       : undefined;
 
