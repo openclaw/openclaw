@@ -434,7 +434,6 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
 
   const inlineUserAvatar =
     normalizedRole === "user" &&
-    !isPeerGroup &&
     avatarPlacement === "gutter" &&
     Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown);
   const avatar =

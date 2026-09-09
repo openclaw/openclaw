@@ -1058,7 +1058,12 @@ img.chat-avatar.chat-avatar--logo {
   inset-inline-start: calc(100% + var(--chat-avatar-gap));
 }
 
-.chat-group.user:not(.chat-group--peer) .chat-bubble--with-images > .chat-message-avatar-anchor {
+.chat-group--peer .chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot) {
+  inset-inline-start: auto;
+  inset-inline-end: calc(100% + var(--chat-avatar-gap));
+}
+
+.chat-group.user .chat-bubble--with-images > .chat-message-avatar-anchor {
   position: relative;
   display: block;
   width: fit-content;
