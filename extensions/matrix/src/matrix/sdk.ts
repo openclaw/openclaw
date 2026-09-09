@@ -346,6 +346,7 @@ export class MatrixClient {
     | import("./sdk/crypto-bootstrap.js").MatrixCryptoBootstrapper<MatrixRawEvent>
     | undefined;
   private readonly autoBootstrapCrypto: boolean;
+  private syncQuiescePromise: Promise<void> | null = null;
   private stopPersistPromise: Promise<void> | null = null;
   private sdkStopped = false;
   private verificationSummaryListenerBound = false;
@@ -719,7 +720,9 @@ export class MatrixClient {
   }
 
   async quiesceSync(): Promise<void> {
-    await quiesceMatrixClientSync({
+    // Quiescence is terminal for a client generation. Memoize both success and
+    // failure so persistence cannot start a second protected-sync shutdown.
+    this.syncQuiescePromise ??= quiesceMatrixClientSync({
       client: this.client,
       emitter: this.emitter,
       markStopped: () => {
@@ -728,6 +731,7 @@ export class MatrixClient {
       started: this.started,
       syncStore: this.syncStore,
     });
+    await this.syncQuiescePromise;
   }
 
   async drainPendingDecryptions(reason = "matrix client shutdown"): Promise<void> {

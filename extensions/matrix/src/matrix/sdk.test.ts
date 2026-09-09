@@ -5,6 +5,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
+import { SyncApi, SyncState } from "matrix-js-sdk/lib/sync.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
@@ -251,7 +253,23 @@ type MatrixJsClientStub = {
   getCrypto: ReturnType<typeof vi.fn<() => unknown>>;
   decryptEventIfNeeded: ReturnType<typeof vi.fn>;
   relations: ReturnType<typeof vi.fn>;
+  syncApi?: SyncApi;
 };
+
+type MatrixSyncApiTestInternals = {
+  connectionReturnedResolvers?: ReturnType<typeof createDeferred<boolean>>;
+};
+
+function createSyncApiHarness(state: SyncState): {
+  syncApi: SyncApi;
+  stop: ReturnType<typeof vi.fn>;
+} {
+  const syncApi = Object.create(SyncApi.prototype) as SyncApi;
+  const stop = vi.fn();
+  vi.spyOn(syncApi, "getSyncState").mockReturnValue(state);
+  vi.spyOn(syncApi, "stop").mockImplementation(stop);
+  return { stop, syncApi };
+}
 
 function createMatrixJsClientStub(): MatrixJsClientStub {
   const client = new EventEmitter() as unknown as MatrixJsClientStub;
@@ -774,6 +792,50 @@ describe("MatrixClient request hardening", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it.each([SyncState.Error, SyncState.Reconnecting])(
+    "memoizes %s quiescence through the production persistence path",
+    async (syncState) => {
+      vi.useFakeTimers();
+      const { stop, syncApi } = createSyncApiHarness(syncState);
+      const keepalive = createDeferred<boolean>();
+      const keepaliveOutcome = keepalive.promise.catch((error: unknown) => error);
+      (syncApi as unknown as MatrixSyncApiTestInternals).connectionReturnedResolvers = keepalive;
+      matrixJsClient.syncApi = syncApi;
+      const client = new MatrixClient("https://matrix.example.org", "token");
+      await client.start();
+
+      await client.quiesceSync();
+      await client.stopAndPersist();
+
+      expect(stop).toHaveBeenCalledTimes(1);
+      await expect(keepaliveOutcome).resolves.toBe("SyncApi.stop() was called");
+      expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("memoizes failed quiescence instead of retrying protected sync stop", async () => {
+    vi.useFakeTimers();
+    const { stop, syncApi } = createSyncApiHarness(SyncState.Syncing);
+    matrixJsClient.syncApi = syncApi;
+    const client = new MatrixClient("https://matrix.example.org", "token");
+    await client.start();
+
+    const first = client.quiesceSync();
+    const firstRejection = expect(first).rejects.toThrow(
+      "Matrix classic sync did not reach STOPPED within 5000ms",
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await firstRejection;
+    await expect(client.quiesceSync()).rejects.toThrow(
+      "Matrix classic sync did not reach STOPPED within 5000ms",
+    );
+
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(matrixJsClient.stopClient).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
