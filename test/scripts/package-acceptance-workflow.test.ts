@@ -12399,7 +12399,15 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         .toSorted()
         .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),
     ].join("\n");
-    const fullReleaseDocs = readFileSync("docs/reference/full-release-validation.md", "utf8");
+    // Full release validation is an index over docs/reference/full-release-validation/*.
+    // Read the whole set so this assertion follows the content instead of a single file path.
+    const fullReleaseDocs = [
+      readFileSync("docs/reference/full-release-validation.md", "utf8"),
+      ...readdirSync("docs/reference/full-release-validation")
+        .filter((name) => name.endsWith(".md"))
+        .toSorted()
+        .map((name) => readFileSync(`docs/reference/full-release-validation/${name}`, "utf8")),
+    ].join("\n");
     const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
 
     expect(nightly).toContain('-f expected_sha="$SHA"');

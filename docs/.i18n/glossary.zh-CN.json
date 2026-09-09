@@ -3034,5 +3034,41 @@
   {
     "source": "Channel mention policy",
     "target": "频道提及策略"
+  },
+  {
+    "source": "Releasing",
+    "target": "发布流程"
+  },
+  {
+    "source": "Release performance sweep",
+    "target": "发布性能扫描"
+  },
+  {
+    "source": "Dispatch a validation run",
+    "target": "启动验证运行"
+  },
+  {
+    "source": "Continue a failed validation",
+    "target": "继续失败的验证"
+  },
+  {
+    "source": "Extended-stable and changelog-only validation",
+    "target": "扩展稳定版与仅变更日志验证"
+  },
+  {
+    "source": "Top-level stages",
+    "target": "顶层阶段"
+  },
+  {
+    "source": "Release checks stages",
+    "target": "发布检查阶段"
+  },
+  {
+    "source": "Release profiles and focused reruns",
+    "target": "发布档位与定向重跑"
+  },
+  {
+    "source": "Evidence to keep",
+    "target": "需保留的证据"
   }
 ]

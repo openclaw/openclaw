@@ -2739,6 +2739,18 @@
                 "pages": [
                   "reference/RELEASING",
                   "reference/full-release-validation",
+                  {
+                    "group": "Full release validation",
+                    "pages": [
+                      "reference/full-release-validation/dispatch",
+                      "reference/full-release-validation/continuation",
+                      "reference/full-release-validation/extended-stable",
+                      "reference/full-release-validation/stages",
+                      "reference/full-release-validation/release-checks",
+                      "reference/full-release-validation/profiles",
+                      "reference/full-release-validation/evidence"
+                    ]
+                  },
                   "reference/release-performance-sweep"
                 ]
               },
