@@ -23,16 +23,22 @@ import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
-import { imageGenerationTaskLifecycle } from "./media-generate-background.js";
+import {
+  imageGenerationTaskLifecycle,
+  musicGenerationTaskLifecycle,
+} from "./media-generate-background.js";
+import { createMusicGenerateTool } from "./music-generate-tool.js";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==",
   "base64",
 );
 
-function createNativeFixture(edit = false) {
+type GenerationKind = "image" | "music";
+
+function createNativeFixture(kind: GenerationKind, edit = false, trackCount = 1) {
   const dir = makePluginLoaderTempDir();
-  const key = `__openclaw_prepared_image_${path.basename(dir)}`;
+  const key = `__openclaw_prepared_${kind}_${path.basename(dir)}`;
   const connections: Array<{
     database: DatabaseSync;
     disposals: number;
@@ -43,9 +49,15 @@ function createNativeFixture(edit = false) {
   const resumeGeneration = createDeferredCore();
   Object.defineProperty(globalThis, key, {
     configurable: true,
-    value: { connections, generated, resumeGeneration, png },
+    value: {
+      connections,
+      generated,
+      resumeGeneration,
+      png,
+      audio: Buffer.from("synthetic native music 42"),
+    },
   });
-  const id = "prepared-image-resource";
+  const id = `prepared-${kind}-resource`;
   const plugin = writePlugin({
     dir,
     id,
@@ -59,13 +71,16 @@ module.exports = {
     state.connections.push(connection);
     const read = () => database.prepare("SELECT 42 AS value").get().value;
     api.lifecycle.registerRuntimeLifecycle({
-      id: "prepared-image-database",
+      id: "prepared-media-database",
       dispose() {
         read();
         connection.disposals++;
         database.close();
       },
     });
+${
+  kind === "image"
+    ? `
     api.registerImageGenerationProvider({
       id: ${JSON.stringify(id)},
       defaultModel: "fixture-image",
@@ -90,6 +105,33 @@ module.exports = {
         };
       },
     });
+`
+    : `
+    api.registerMusicGenerationProvider({
+      id: ${JSON.stringify(id)},
+      defaultModel: "fixture-music",
+      isConfigured() { return read() === 42; },
+      capabilities: { generate: { maxTracks: 2 }, edit: { enabled: ${edit}, maxInputImages: ${edit ? 1 : 0} } },
+      async generateMusic() {
+        read();
+        connection.generated++;
+        state.generated.resolve();
+        await state.resumeGeneration.promise;
+        read();
+        return {
+          tracks: Array.from({ length: ${trackCount} }, (_, index) => ({
+            buffer: state.audio,
+            mimeType: "audio/mpeg",
+            get fileName() {
+              connection.projected++;
+              return "native-" + index + "-" + read() + ".mp3";
+            },
+          })),
+        };
+      },
+    });
+`
+}
   },
 };`,
   });
@@ -97,17 +139,18 @@ module.exports = {
     path.join(dir, "openclaw.plugin.json"),
     JSON.stringify({
       id,
-      contracts: { imageGenerationProviders: [id] },
+      contracts: { [`${kind}GenerationProviders`]: [id] },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
   );
   const config: OpenClawConfig = {
-    agents: { defaults: { mediaModels: { image: { primary: `${id}/fixture-image` } } } },
+    agents: { defaults: { mediaModels: { [kind]: { primary: `${id}/fixture-${kind}` } } } },
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
   };
   return {
     dir,
     config,
+    output: kind === "image" ? png : Buffer.from("synthetic native music 42"),
     connections,
     generated,
     resumeGeneration,
@@ -163,7 +206,7 @@ async function prepareSnapshot(
     readFullModelCatalog: () => catalog.modelCatalog,
     loadFullModelCatalog: async () => catalog.modelCatalog,
     loadAuth: async () => {
-      throw new Error("The synthetic image provider does not request model credentials");
+      throw new Error("The synthetic media provider does not request model credentials");
     },
   });
 }
@@ -176,9 +219,11 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-describe("prepared image job registration resources", () => {
+describe.each(["image", "music"] as const)("prepared %s job registration resources", (kind) => {
+  const createTool = kind === "image" ? createImageGenerateTool : createMusicGenerateTool;
+  const lifecycle = kind === "image" ? imageGenerationTaskLifecycle : musicGenerationTaskLifecycle;
   it("refuses new paid admission when the prepared owner releases during reference loading", async () => {
-    const fixture = createNativeFixture(true);
+    const fixture = createNativeFixture(kind, true);
     const referenceStarted = createDeferredCore();
     const resumeReference = createDeferredCore();
     try {
@@ -188,11 +233,11 @@ describe("prepared image job registration resources", () => {
         const referencePath = path.join(fixture.dir, "reference.png");
         fs.writeFileSync(referencePath, png);
         const snapshot = await prepareSnapshot(fixture, first.registry);
-        const createTask = vi.spyOn(imageGenerationTaskLifecycle, "createTaskRun").mockReturnValue({
+        const createTask = vi.spyOn(lifecycle, "createTaskRun").mockReturnValue({
           taskId: "preflight-image-task",
           runId: "preflight-image-run",
-          requesterSessionKey: "agent:main:discord:direct:synthetic-image",
-          taskLabel: "Synthetic image edit",
+          requesterSessionKey: "agent:main:discord:direct:synthetic-media",
+          taskLabel: "Synthetic media edit",
         });
         const schedule = vi.fn();
         const loadReference = webMedia.loadWebMedia;
@@ -201,16 +246,16 @@ describe("prepared image job registration resources", () => {
           await resumeReference.promise;
           return loadReference(...args);
         });
-        const tool = createImageGenerateTool({
+        const tool = createTool({
           config: fixture.config,
           agentDir: snapshot.agentDir,
           workspaceDir: fixture.dir,
           preparedModelRuntime: snapshot,
-          agentSessionKey: "agent:main:discord:direct:synthetic-image",
+          agentSessionKey: "agent:main:discord:direct:synthetic-media",
           scheduleBackgroundWork: schedule,
         });
         const outcome = tool!
-          .execute("preflight-image-call", { prompt: "Synthetic image edit", image: referencePath })
+          .execute("preflight-image-call", { prompt: "Synthetic media edit", image: referencePath })
           .then(
             (value) => ({ value, error: undefined }),
             (error: unknown) => ({ value: undefined, error }),
@@ -219,7 +264,7 @@ describe("prepared image job registration resources", () => {
           await Promise.race([
             referenceStarted.promise,
             outcome.then(() => {
-              throw new Error("Image preflight settled before reading its reference");
+              throw new Error("Media preflight settled before reading its reference");
             }),
           ]);
           await first.release();
@@ -246,7 +291,7 @@ describe("prepared image job registration resources", () => {
   it.each(["queued", "saving", "rollback"] as const)(
     "retains the admitted provider through %s after its parent releases",
     async (phase) => {
-      const fixture = createNativeFixture();
+      const fixture = createNativeFixture(kind, false, phase === "rollback" ? 2 : 1);
       const saveStarted = createDeferredCore();
       const resumeSave = createDeferredCore();
       const rollbackStarted = createDeferredCore();
@@ -260,26 +305,22 @@ describe("prepared image job registration resources", () => {
           let successor: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
           try {
             const snapshot = await prepareSnapshot(fixture, first.registry);
-            expect(snapshot.mediaCapabilityProviders?.imageGenerationProviders).toHaveLength(1);
+            expect(snapshot.mediaCapabilityProviders?.[`${kind}GenerationProviders`]).toHaveLength(
+              1,
+            );
             const connection = fixture.connections[0]!;
-            const sessionKey = "agent:main:discord:direct:synthetic-image";
-            vi.spyOn(imageGenerationTaskLifecycle, "createTaskRun").mockReturnValue({
+            const sessionKey = "agent:main:discord:direct:synthetic-media";
+            vi.spyOn(lifecycle, "createTaskRun").mockReturnValue({
               taskId: "image-resource-task",
               runId: "image-resource-run",
               requesterSessionKey: sessionKey,
               requesterAgentId: "main",
-              taskLabel: "Synthetic image resource proof",
+              taskLabel: "Synthetic media resource proof",
             });
-            vi.spyOn(imageGenerationTaskLifecycle, "recordTaskProgress").mockImplementation(
-              () => {},
-            );
-            const completed = vi
-              .spyOn(imageGenerationTaskLifecycle, "completeTaskRun")
-              .mockImplementation(() => {});
-            const failed = vi
-              .spyOn(imageGenerationTaskLifecycle, "failTaskRun")
-              .mockImplementation(() => {});
-            vi.spyOn(imageGenerationTaskLifecycle, "wakeTaskCompletion").mockResolvedValue({
+            vi.spyOn(lifecycle, "recordTaskProgress").mockImplementation(() => {});
+            const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(() => {});
+            const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(() => {});
+            vi.spyOn(lifecycle, "wakeTaskCompletion").mockResolvedValue({
               status: "delivered",
             });
             const save = mediaStore.saveMediaBuffer;
@@ -289,7 +330,7 @@ describe("prepared image job registration resources", () => {
             vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async (...args) => {
               saveCalls++;
               if (phase === "rollback" && saveCalls === 1) {
-                throw new Error("synthetic first image persistence failure");
+                throw new Error("synthetic first media persistence failure");
               }
               saveStarted.resolve();
               await resumeSave.promise;
@@ -302,7 +343,7 @@ describe("prepared image job registration resources", () => {
               await resumeRollback.promise;
               return remove(...args);
             });
-            const tool = createImageGenerateTool({
+            const tool = createTool({
               config: fixture.config,
               agentDir: snapshot.agentDir,
               workspaceDir: fixture.dir,
@@ -312,7 +353,7 @@ describe("prepared image job registration resources", () => {
             });
             expect(tool).not.toBeNull();
             const started = await tool!.execute("image-resource-call", {
-              prompt: "Synthetic image resource proof",
+              prompt: "Synthetic media resource proof",
               count: phase === "rollback" ? 2 : 1,
             });
             expect(started.details).toMatchObject({ status: "started" });
@@ -331,14 +372,14 @@ describe("prepared image job registration resources", () => {
             await Promise.race([
               fixture.generated.promise,
               completion.then(() => {
-                throw new Error("Image task settled without invoking its prepared provider");
+                throw new Error("Media task settled without invoking its prepared provider");
               }),
             ]);
             fixture.resumeGeneration.resolve();
             await Promise.race([
               saveStarted.promise,
               completion.then(() => {
-                throw new Error("Image task settled before persisting its output");
+                throw new Error("Media task settled before persisting its output");
               }),
             ]);
             await first.release();
@@ -360,7 +401,7 @@ describe("prepared image job registration resources", () => {
               expect(failed).toHaveBeenCalledWith(
                 expect.objectContaining({
                   error: expect.objectContaining({
-                    message: "synthetic first image persistence failure",
+                    message: "synthetic first media persistence failure",
                   }),
                 }),
               );
@@ -370,7 +411,7 @@ describe("prepared image job registration resources", () => {
               expect(failed).not.toHaveBeenCalled();
               expect(completed).toHaveBeenCalledOnce();
               expect(connection.projected).toBeGreaterThan(0);
-              expect(fs.readFileSync(savedPath!)).toEqual(png);
+              expect(fs.readFileSync(savedPath!)).toEqual(fixture.output);
             }
           } finally {
             fixture.resumeGeneration.resolve();

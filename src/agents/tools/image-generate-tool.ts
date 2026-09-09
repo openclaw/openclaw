@@ -35,7 +35,6 @@ import {
   createImageGenerateStatusActionResult,
 } from "./image-generate-tool.actions.js";
 import {
-  acquireImageGenerationToolProviders,
   executeImageGenerationJob,
   loadImageGenerationReferences,
   inferImageGenerationResolution,
@@ -52,6 +51,7 @@ import {
   runMediaGenerationTask,
   type ImageGenerationTaskHandle,
 } from "./media-generate-background.js";
+import { acquireImageGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   applyAgentDefaultModelConfig,
   buildMediaReferenceDetails,
