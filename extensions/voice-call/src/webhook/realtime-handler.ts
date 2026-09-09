@@ -70,6 +70,7 @@ const REALTIME_DISCONNECT_HANGUP_GRACE_MS = 2_000;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
+const FORCED_CONSULT_STREAM_MAX_CHARS = FORCED_CONSULT_RESULT_MAX_CHARS - 16;
 const FORCED_CONSULT_REASON = "provider_final_transcript_without_openclaw_agent_consult";
 const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
@@ -1990,7 +1991,7 @@ export class RealtimeCallHandler {
                   }),
                 );
               },
-              maxChars: FORCED_CONSULT_RESULT_MAX_CHARS,
+              maxChars: FORCED_CONSULT_STREAM_MAX_CHARS,
               onCancel: () => {
                 if (speechBridge.handleBargeIn) {
                   speechBridge.handleBargeIn({ audioPlaybackActive: true, force: true });

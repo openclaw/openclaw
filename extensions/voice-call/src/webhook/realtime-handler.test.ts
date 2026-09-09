@@ -1806,6 +1806,73 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("does not replay a streamed long answer when the bounded final adds truncation", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const spoken: string[] = [];
+    const submitToolResult = vi.fn();
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({
+        supportsOutOfBandSpeech: true,
+        supportsToolResultContinuation: true,
+        supportsToolResultSuppression: true,
+        speakOutOfBand: vi.fn(async (text: string) => {
+          spoken.push(text);
+        }),
+        submitToolResult,
+      });
+    });
+    const handler = makeHandler(undefined, {
+      manager: { getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-streamed-long")) },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const streamedPrefix = `${"x".repeat(1_783)}.`;
+    const finalText = `${streamedPrefix}${" Final detail.".repeat(10)}`;
+    handler.registerToolHandler(
+      "openclaw_agent_consult",
+      async (_args: unknown, _callId: string, context: ToolHandlerContext) => {
+        await context.onVisiblePartial?.({ runId: "run-long", text: finalText });
+        return { text: finalText };
+      },
+    );
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-streamed-long", callSid: "CA-streamed-long" },
+          }),
+        );
+        await waitForRealtimeTest(() => expect(callbacks).toBeDefined());
+        callbacks?.onToolCall?.({
+          itemId: "item-streamed-long",
+          callId: "call-streamed-long",
+          name: "openclaw_agent_consult",
+          args: { question: "Return a long answer." },
+        });
+
+        await waitForRealtimeTest(() => {
+          expect(submitToolResult).toHaveBeenLastCalledWith(
+            "call-streamed-long",
+            { text: `${streamedPrefix} [truncated]` },
+            { suppressResponse: true },
+          );
+        });
+        expect(spoken.filter((text) => text.includes(streamedPrefix))).toHaveLength(1);
+        expect(spoken.join("\n")).not.toContain("Correction:");
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("falls back to only the unspoken suffix when later speech disconnects", async () => {
     let callbacks: RealtimeBridgeRequest | undefined;
     const clearPendingSpeech = vi.fn();
