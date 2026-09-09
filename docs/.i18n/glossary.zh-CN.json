@@ -2596,6 +2596,30 @@
     "target": "编写与添加测试"
   },
   {
+    "source": "Quick live smokes and the Android node sweep",
+    "target": "快速 Live 冒烟测试与 Android 节点扫描"
+  },
+  {
+    "source": "Live model smoke (profile keys)",
+    "target": "Live 模型冒烟测试（配置文件密钥）"
+  },
+  {
+    "source": "CLI backend and APNs lanes",
+    "target": "CLI 后端与 APNs 通道"
+  },
+  {
+    "source": "ACP bind and Codex app-server lanes",
+    "target": "ACP 绑定与 Codex app-server 通道"
+  },
+  {
+    "source": "OpenAI long context and the live model matrix",
+    "target": "OpenAI 长上下文与 Live 模型矩阵"
+  },
+  {
+    "source": "Media provider live lanes",
+    "target": "媒体提供商 Live 通道"
+  },
+  {
     "source": "Provider model catalogs",
     "target": "提供商模型目录"
   },

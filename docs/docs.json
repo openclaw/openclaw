@@ -3057,7 +3057,18 @@
                     ]
                   },
                   "help/testing-updates-plugins",
-                  "help/testing-live"
+                  "help/testing-live",
+                  {
+                    "group": "Live testing guide",
+                    "pages": [
+                      "help/testing-live/quick-smokes",
+                      "help/testing-live/model-smoke",
+                      "help/testing-live/cli-backends",
+                      "help/testing-live/acp-and-codex",
+                      "help/testing-live/long-context-and-matrix",
+                      "help/testing-live/media-providers"
+                    ]
+                  }
                 ]
               },
               {
