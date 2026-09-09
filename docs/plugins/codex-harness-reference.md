@@ -544,9 +544,11 @@ node; use a Gateway-owned authenticated request or a credential-free endpoint
 instead.
 Normal Codex turns are supported, but `/btw` side questions are unavailable
 until they can be bound to the active placement.
-The managed placement workspace is not an OS sandbox: approved processes and
-files have the node account's full access. Use a separate least-privilege node
-account when isolation is required.
+Native commands and filesystem operations follow the configured Codex permission
+mode or network permissions profile, within the node account's OS access. Launch
+approval does not replace those restrictions. See
+[Native execution permissions](/plugins/codex-harness/placement#native-execution-permissions)
+for filesystem and network limits and upgrade behavior.
 See [Run Codex on a paired device](/plugins/codex-harness/placement#run-codex-on-a-paired-device)
 and [Run Codex on a cloud worker](/plugins/codex-harness/placement#run-codex-on-a-cloud-worker).
 

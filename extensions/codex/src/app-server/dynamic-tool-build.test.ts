@@ -1621,22 +1621,35 @@ describe("Codex app-server dynamic tool build", () => {
     expect(persistentWebSearchAllowed).toBe(false);
   });
 
-  it("maps Podman sandbox network config into Codex external sandbox policy", () => {
+  it.each([
+    {
+      name: "isolated Podman",
+      sandbox: { backendId: "podman", docker: { network: "none" } },
+      expected: { type: "externalSandbox", networkAccess: "restricted" },
+    },
+    {
+      name: "networked Podman",
+      sandbox: { backendId: "Podman", docker: { network: "bridge" } },
+      expected: { type: "externalSandbox", networkAccess: "enabled" },
+    },
+    {
+      name: "remote bridge",
+      sandbox: { backendId: "ssh", placementExecutionMode: "remote-exec" },
+      expected: { type: "externalSandbox", networkAccess: "enabled" },
+    },
+    {
+      name: "native paired/cloud node",
+      sandbox: {
+        backendId: "node",
+        placementExecutionMode: "remote-exec",
+        placementNodeId: "native-worker",
+      },
+      expected: undefined,
+    },
+  ])("selects the external sandbox override for $name", ({ sandbox, expected }) => {
     expect(
-      resolveCodexExternalSandboxPolicyForOpenClawSandbox({
-        enabled: true,
-        backendId: "podman",
-        docker: { network: "none" },
-      } as never),
-    ).toEqual({ type: "externalSandbox", networkAccess: "restricted" });
-
-    expect(
-      resolveCodexExternalSandboxPolicyForOpenClawSandbox({
-        enabled: true,
-        backendId: "Podman",
-        docker: { network: "bridge" },
-      } as never),
-    ).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
+      resolveCodexExternalSandboxPolicyForOpenClawSandbox({ enabled: true, ...sandbox } as never),
+    ).toEqual(expected);
   });
 
   it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {

@@ -396,9 +396,10 @@ a stale launch is refused. Each attempt owns an isolated Gateway app-server clie
 remote environment registration retires with that attempt. Disconnect ends the
 active attempt and its remote processes; reconnect allows only a fresh
 attempt. Normal Codex turns work, but `/btw` side questions fail closed because
-they are not yet placement-bound. The placement workspace does not confine
-execution: process and filesystem access remain bounded only by the node's
-operating system account.
+they are not yet placement-bound. Native commands and filesystem operations
+follow the configured Codex permission mode or network permissions profile,
+within the node's OS access. Launch approval does not replace those restrictions.
+See [Native execution permissions](/plugins/codex-harness/placement#native-execution-permissions).
 
 ## V1 support contract
 

@@ -77,11 +77,11 @@ worker, so a paired host remains eligible when all worker slots are occupied.
 The command must still be effectively invocable: declaring it without the
 approved pairing surface and Gateway allowlist is insufficient.
 
-Approval grants access to any process or file available to the node's operating
-system account. The verified placement workspace sets the working directory
-and reconciliation scope; it does not sandbox or confine that access. Pair only
-trusted devices, and run the node under a separate least-privilege OS account
-when isolation is required.
+Launch approval authorizes the exec-server process. Native commands and filesystem
+operations also follow the session's Codex permissions and managed requirements,
+as described in [Native execution permissions](/plugins/codex-harness/placement#native-execution-permissions).
+Pair only trusted devices, and use a separate least-privilege node account to
+limit the OS access available to the session.
 
 Choose the paired device in the Control UI **Place** picker, or dispatch an
 existing managed-worktree session explicitly:
@@ -154,12 +154,50 @@ including the cloud node's local exec policy and approvals floors.
 Codex runs its managed exec-server over the enrolled node's authenticated
 outbound connection without starting an OpenClaw worker child or consuming a
 worker slot. Its app-server, model connection, provider authentication, and
-transcript remain Gateway-owned. Process and filesystem access still have the
-node operating-system account's permissions, and only credential-free HTTP is
-forwarded. Workspace changes reconcile to the Gateway-owned worktree or an
+transcript remain Gateway-owned. The same
+[native execution permissions](/plugins/codex-harness/placement#native-execution-permissions) apply on cloud
+nodes, within the node operating-system account's access. Only credential-free
+HTTP is forwarded. Workspace changes reconcile to the Gateway-owned worktree or an
 immutable repository checkpoint. A failed or disconnected attempt is terminal
 and requires a fresh attempt; it never resumes the remote process or falls back
 to Gateway-local or SSH execution.
 
 See [Cloud workers](/gateway/cloud-workers) for profile configuration,
 placement lifecycle, and cleanup.
+
+## Native execution permissions
+
+Paired-device and enrolled cloud-node `remote-exec` use Codex's native exec-server
+for enforcement. OpenClaw keeps the selected node environment and workspace and
+applies the configured Codex permission mode or network permissions profile.
+Launch approval does not grant unrestricted native execution.
+
+- `read-only` prevents filesystem writes.
+- `workspace-write` allows writes to the selected workspace and permitted
+  temporary directories, subject to Codex's protected paths and configured
+  temporary-directory exclusions. It does not grant writes throughout the node.
+- Without `appServer.networkProxy`, OpenClaw's `read-only` and `workspace-write`
+  turn policies disable native command network access. With `networkProxy`, the
+  selected Codex permissions profile supplies the filesystem and network rules.
+- The node's OS permissions and managed Codex requirements still apply. Native
+  execution fails if the node cannot enforce the requested sandbox.
+
+OpenClaw's experimental sandbox exec-server bridge continues to use
+`externalSandbox` because the OpenClaw backend owns enforcement there. That
+policy is not used to select a native node environment. See
+[Sandboxed native execution](/plugins/codex-harness-reference#sandboxed-native-execution).
+
+### Upgrade existing node sessions
+
+Older harness versions sent an `externalSandbox` turn override for native node
+placements. After upgrading, work that relied on that broader access can fail
+under `read-only`, `workspace-write`, or network restrictions. These restrictions
+can affect repository setup, writes outside the workspace, and dependency
+downloads even after the node launch is approved.
+
+OpenClaw supplies the configured native permission mode or network permissions
+profile when starting or resuming a Codex thread and no longer adds the
+`externalSandbox` turn override for native node placements. Earlier operations
+in an existing session may have relied on broader access. Review the configured
+permissions if a resumed workflow now fails; node launch approval does not
+replace the native permission policy or managed requirements.

@@ -30,6 +30,7 @@ import {
   type StageTimingSummary,
 } from "openclaw/plugin-sdk/time-runtime";
 import {
+  isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
   type CodexPluginConfig,
@@ -753,10 +754,15 @@ export function resolveCodexAppServerExecutionCwd(params: {
     remoteWorkspaceRoot: params.remoteWorkspaceRoot,
   });
 }
-/** Converts OpenClaw sandbox networking into Codex's external-sandbox policy shape. */
+/** Supplies external sandbox policy only when the OpenClaw backend owns enforcement. */
 export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(
   sandbox: OpenClawSandboxContext | undefined,
-): CodexSandboxPolicy {
+): CodexSandboxPolicy | undefined {
+  // The node exec-server enforces Codex's native permission context itself.
+  // An external override would discard it and violate managed sandbox requirements.
+  if (isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)) {
+    return undefined;
+  }
   return {
     type: "externalSandbox",
     networkAccess: codexNetworkAccessForOpenClawSandbox(sandbox) ? "enabled" : "restricted",

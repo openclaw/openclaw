@@ -46,6 +46,7 @@ import {
 } from "./shared-client.js";
 import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
+import { buildTurnStartParams } from "./turn-params.js";
 
 const desktopGeneration = vi.hoisted(() => ({
   current: undefined as { epoch: number; fingerprint: string } | undefined,
@@ -88,6 +89,7 @@ async function startIsolatedPairedAttempt(params: {
   sessionId: string;
   runtime: NonNullable<Parameters<typeof startCodexAttemptThread>[0]["runtime"]>;
   paths?: AttemptPaths;
+  appServer?: Parameters<typeof startCodexAttemptThread>[0]["appServer"];
 }) {
   const paths = params.paths ?? createAttemptPaths(tempRoots);
   const sandbox = {
@@ -108,6 +110,7 @@ async function startIsolatedPairedAttempt(params: {
     skipStartSpy: true,
     runtime: params.runtime,
     sandbox,
+    appServer: params.appServer,
     attemptClientFactory: () => createIsolatedCodexAppServerClient,
     buildAttemptParams: () => ({
       ...createAttemptParams(paths),
@@ -118,7 +121,7 @@ async function startIsolatedPairedAttempt(params: {
   await answerInitialize(params.harness);
   const environmentAdd = await waitForRequest(params.harness, "environment/add");
   params.harness.send({ id: environmentAdd.id, result: {} });
-  const threadStart = await waitForThreadStart(params.harness);
+  const threadStart = await waitForRequest(params.harness, "thread/start");
   params.harness.send({ id: threadStart.id, result: threadStartResult(params.sessionId) });
   const result = await run;
   const environmentId = (environmentAdd.params as { environmentId?: string }).environmentId;
@@ -126,7 +129,7 @@ async function startIsolatedPairedAttempt(params: {
   expect(
     readHarnessMessages(params.harness.writes).filter(({ method }) => method === "environment/add"),
   ).toHaveLength(1);
-  return { result, sandbox, environmentId };
+  return { result, sandbox, environmentId, paths, threadStart };
 }
 
 const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
@@ -749,7 +752,7 @@ describe("startCodexAttemptThread", () => {
     expect(harness.stdinDestroyed).toBe(true);
   });
 
-  it("retires each fresh paired-node app-server and its registered environment", async () => {
+  it("preserves native permissions while retiring each paired-node client and environment", async () => {
     const runtime = createPairedAttemptRuntime();
     const clients = [
       createAttemptClientHarness(),
@@ -761,14 +764,55 @@ describe("startCodexAttemptThread", () => {
       start.mockResolvedValueOnce(harness.client);
     }
     const environmentIds = new Set<string>();
+    const nativePolicies = [
+      { sandbox: "read-only" as const, expected: { type: "readOnly", networkAccess: false } },
+      {
+        sandbox: "workspace-write" as const,
+        expected: { type: "workspaceWrite", networkAccess: false },
+      },
+      {
+        sandbox: "workspace-write" as const,
+        expected: undefined,
+        networkProxy: {
+          profileName: "test-managed-network",
+          configFingerprint: "test-managed-network-v1",
+          configPatch: { default_permissions: "test-managed-network" },
+        },
+      },
+    ];
 
     for (const [index, harness] of clients.entries()) {
+      const policy = nativePolicies[index]!;
+      const appServer = {
+        ...resolveCodexAppServerRuntimeOptions({ pluginConfig }),
+        sandbox: policy.sandbox,
+        networkProxy: policy.networkProxy,
+      };
       const attempt = await startIsolatedPairedAttempt({
         harness,
         sessionId: `sequential-${index}`,
         runtime: runtime.runtime,
+        appServer,
       });
       environmentIds.add(attempt.environmentId!);
+      const turn = buildTurnStartParams(createAttemptParams(attempt.paths), {
+        threadId: `sequential-${index}`,
+        cwd: attempt.result.executionCwd,
+        appServer,
+        sandboxPolicy: attempt.result.sandboxPolicy,
+        environmentSelection: attempt.result.environmentSelection,
+      });
+      if (policy.expected) {
+        expect(turn.sandboxPolicy).toMatchObject(policy.expected);
+        expect(attempt.threadStart.params).toMatchObject({ sandbox: policy.sandbox });
+      } else {
+        expect(turn).not.toHaveProperty("sandboxPolicy");
+        expect(attempt.threadStart.params).not.toHaveProperty("sandbox");
+        expect(attempt.threadStart.params).toMatchObject({
+          config: { default_permissions: "test-managed-network" },
+        });
+      }
+      expect(turn.environments).toEqual([attempt.result.sandboxEnvironment]);
       await releaseCodexSandboxExecServerEnvironment(
         attempt.sandbox,
         attempt.result.sandboxEnvironment,
