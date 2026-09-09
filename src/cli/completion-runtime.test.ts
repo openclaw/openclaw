@@ -10,6 +10,7 @@ import {
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
+  isPortableCompletionSourceLine,
   resolveCompletionCachePath,
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
@@ -339,7 +340,10 @@ describe("completion-runtime", () => {
         await fs.mkdir(path.dirname(cachePath), { recursive: true });
         await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
 
-        const portablePath = `\${HOME}${cachePath.slice(homeDir.length)}`;
+        const portablePath = `\${HOME}/${path
+          .relative(homeDir, cachePath)
+          .split(path.sep)
+          .join("/")}`;
         const portableLine = `[[ -f "${portablePath}" ]] && source "${portablePath}"`;
         const before = `# dotfiles-managed\n${portableLine}\n`;
         const profilePath = path.join(homeDir, ".bashrc");
@@ -381,6 +385,101 @@ describe("completion-runtime", () => {
         await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(false);
       },
     );
+  });
+
+  it("cleans owned slow hooks but keeps the portable line without appending a copy", async () => {
+    const homeDir = tempDirs.make("openclaw-portable-completion-mixed-");
+    const stateDir = path.join(homeDir, ".openclaw");
+
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        XDG_CONFIG_HOME: undefined,
+        ZDOTDIR: undefined,
+      },
+      async () => {
+        const cachePath = resolveCompletionCachePath("bash", "openclaw");
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+
+        const portablePath = `\${HOME}/${path
+          .relative(homeDir, cachePath)
+          .split(path.sep)
+          .join("/")}`;
+        const portableLine = `[[ -f "${portablePath}" ]] && source "${portablePath}"`;
+        const slowLine = "source <(openclaw completion --shell bash)";
+        const profilePath = path.join(homeDir, ".bashrc");
+        await fs.writeFile(profilePath, `${portableLine}\n${slowLine}\n`, "utf-8");
+
+        await installCompletion("bash", true, "openclaw");
+
+        const after = await fs.readFile(profilePath, "utf-8");
+        expect(after).toContain(portableLine);
+        expect(after).not.toContain(slowLine);
+        expect(after).not.toContain("# OpenClaw Completion");
+      },
+    );
+  });
+
+  it("rejects shell-invalid portable operands", () => {
+    const home = "/tmp/fake-home";
+    const cache = `${home}/.openclaw/completions/openclaw.bash`;
+    // Single quotes suppress expansion, so the shell would load a literal path.
+    expect(
+      isPortableCompletionSourceLine(
+        "[[ -f '${HOME}/.openclaw/completions/openclaw.bash' ]] && source '${HOME}/.openclaw/completions/openclaw.bash'",
+        cache,
+        home,
+      ),
+    ).toBe(false);
+    // Tilde does not expand inside double quotes.
+    expect(
+      isPortableCompletionSourceLine(
+        '[[ -f "~/.openclaw/completions/openclaw.bash" ]] && source "~/.openclaw/completions/openclaw.bash"',
+        cache,
+        home,
+      ),
+    ).toBe(false);
+    // Parent components may resolve elsewhere through symlinks.
+    expect(
+      isPortableCompletionSourceLine(
+        '[[ -f "${HOME}/linked/../.openclaw/completions/openclaw.bash" ]] && source "${HOME}/linked/../.openclaw/completions/openclaw.bash"',
+        cache,
+        home,
+      ),
+    ).toBe(false);
+    // Guard and source must point at the same file.
+    expect(
+      isPortableCompletionSourceLine(
+        '[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/other.bash"',
+        cache,
+        home,
+      ),
+    ).toBe(false);
+    // Valid forms still recognized: unquoted tilde, double-quoted and bare $HOME.
+    expect(
+      isPortableCompletionSourceLine(
+        "[[ -f ~/.openclaw/completions/openclaw.bash ]] && source ~/.openclaw/completions/openclaw.bash",
+        cache,
+        home,
+      ),
+    ).toBe(true);
+    expect(
+      isPortableCompletionSourceLine(
+        '[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
+        cache,
+        home,
+      ),
+    ).toBe(true);
+    expect(
+      isPortableCompletionSourceLine(
+        "[[ -f $HOME/.openclaw/completions/openclaw.bash ]] && source $HOME/.openclaw/completions/openclaw.bash",
+        cache,
+        home,
+      ),
+    ).toBe(true);
   });
 
   it("prints the same canonical reload hint used by Doctor and onboarding", async () => {

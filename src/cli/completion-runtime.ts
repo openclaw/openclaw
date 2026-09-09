@@ -160,20 +160,37 @@ function isCompletionProfileHeader(line: string): boolean {
 }
 
 /**
- * Expands a leading portable home reference (`~/`, `$HOME/`, `${HOME}/`)
- * against the given home directory. Anything else is returned unchanged.
+ * Resolves a shell operand to an absolute path only when its quoting context
+ * actually performs the expansion: `~` expands solely unquoted, while
+ * `$HOME`/`${HOME}` expand unquoted or double-quoted — never single-quoted.
+ * Rejects parent (`..`) segments and unquoted shell metacharacters so two
+ * paths compare equal only when the shell would load the same file.
+ * Returns null for anything the shell would not resolve to `home`.
  */
-function expandPortableHomePrefix(value: string, home: string): string {
-  if (value.startsWith("~/")) {
-    return `${home}/${value.slice(2)}`;
+function resolvePortableOperand(raw: string, quote: string, home: string): string | null {
+  if (quote === "'") {
+    return null;
   }
-  if (value.startsWith("$HOME/")) {
-    return `${home}/${value.slice(6)}`;
+  let rest: string;
+  if (raw.startsWith("~/")) {
+    if (quote !== "") {
+      return null;
+    }
+    rest = raw.slice(2);
+  } else if (raw.startsWith("$HOME/")) {
+    rest = raw.slice(6);
+  } else if (raw.startsWith("${HOME}/")) {
+    rest = raw.slice(8);
+  } else {
+    return null;
   }
-  if (value.startsWith("${HOME}/")) {
-    return `${home}/${value.slice(8)}`;
+  if (!rest || rest.split("/").includes("..")) {
+    return null;
   }
-  return value;
+  if (quote === "" && /[*?[\]'"`$&;|<>(){}!]/.test(rest)) {
+    return null;
+  }
+  return path.join(home, rest);
 }
 
 const PORTABLE_COMPLETION_SOURCE_PATTERN =
@@ -196,15 +213,21 @@ export function isPortableCompletionSourceLine(
   if (!match) {
     return false;
   }
-  const guardPath = match[1] ?? match[2] ?? match[3] ?? "";
-  const sourcePath = match[4] ?? match[5] ?? match[6] ?? "";
-  if (!guardPath || !sourcePath) {
+  const guardRaw = match[1] ?? match[2] ?? match[3] ?? "";
+  const sourceRaw = match[4] ?? match[5] ?? match[6] ?? "";
+  if (!guardRaw || !sourceRaw) {
     return false;
   }
-  const expandedGuard = path.normalize(expandPortableHomePrefix(guardPath, home));
-  const expandedSource = path.normalize(expandPortableHomePrefix(sourcePath, home));
-  const normalizedCache = path.normalize(cachePath);
-  return expandedGuard === normalizedCache && expandedSource === normalizedCache;
+  const guardQuote = match[1] !== undefined ? '"' : match[2] !== undefined ? "'" : "";
+  const sourceQuote = match[4] !== undefined ? '"' : match[5] !== undefined ? "'" : "";
+  const expandedGuard = resolvePortableOperand(guardRaw, guardQuote, home);
+  const expandedSource = resolvePortableOperand(sourceRaw, sourceQuote, home);
+  return (
+    expandedGuard !== null &&
+    expandedSource !== null &&
+    expandedGuard === expandedSource &&
+    expandedGuard === cachePath
+  );
 }
 
 function isCompletionProfileLine(line: string, binName: string, cachePath: string): boolean {
@@ -336,15 +359,11 @@ function updateCompletionProfile(
   let hadExisting = false;
 
   // A portable home-relative source line is user-owned (dotfile managers):
-  // recognizing it as configured must preserve it, not replace it with an
-  // absolute-path copy.
-  if (
-    lines.some((line) =>
-      isPortableCompletionSourceLine(line, cachePath, process.env.HOME ?? os.homedir()),
-    )
-  ) {
-    return { next: content, changed: false, hadExisting: true };
-  }
+  // keep it while still cleaning owned stale hooks below; the canonical
+  // absolute-path block is appended only when no portable line exists.
+  const hasPortable = lines.some((line) =>
+    isPortableCompletionSourceLine(line, cachePath, process.env.HOME ?? os.homedir()),
+  );
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
@@ -368,6 +387,10 @@ function updateCompletionProfile(
   }
 
   const trimmed = filtered.join("\n").trimEnd();
+  if (hasPortable) {
+    const next = `${trimmed}\n`;
+    return { next, changed: next !== content, hadExisting: true };
+  }
   const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };
