@@ -620,16 +620,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         if (!authority.hasActive() || !hasInitialTurn) {
           return;
         }
-        await expectDefined(
-          chatHandlers["chat.send"],
-          "chat.send handler",
-        )({
+        const sendChat = expectDefined(chatHandlers["chat.send"], "chat.send handler");
+        await sendChat({
           req,
           params: {
             sessionKey: key,
             agentId,
             message: initialMessage ?? "",
             idempotencyKey: initialRunId,
+            ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
             ...(p.mentions ? { mentions: p.mentions } : {}),
             ...(initialAttachments ? { attachments: initialAttachments } : {}),
           },
