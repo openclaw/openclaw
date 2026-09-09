@@ -229,6 +229,16 @@ jobs:
           ./scripts/install-swift-tools.sh "$swift_tools_dir"
           echo "$swift_tools_dir" >> "$GITHUB_PATH"
 
+      - name: Install Watch Rust toolchain
+        if: hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+
       - name: Refresh trusted authority before store access
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

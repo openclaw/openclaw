@@ -2241,4 +2241,45 @@ describe("mobile release authority", () => {
       },
     ]);
   });
+
+  it("installs the pinned Watch Rust toolchain before iOS store access", () => {
+    const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
+    const workflow = parse(source) as {
+      jobs: {
+        release: {
+          steps: Array<{
+            if?: string;
+            name: string;
+            run?: string;
+          }>;
+        };
+      };
+    };
+    const releaseSteps = workflow.jobs.release.steps;
+    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 26");
+    const rustIndex = releaseSteps.findIndex(
+      (step) => step.name === "Install Watch Rust toolchain",
+    );
+    const storeAccessIndex = releaseSteps.findIndex(
+      (step) => step.name === "Refresh trusted authority before store access",
+    );
+    const uploadIndex = releaseSteps.findIndex(
+      (step) => step.name === "Upload and distribute iOS beta",
+    );
+    const rustStep = releaseSteps[rustIndex];
+
+    expect(xcodeIndex).toBeGreaterThanOrEqual(0);
+    expect(rustIndex).toBeGreaterThan(xcodeIndex);
+    expect(storeAccessIndex).toBeGreaterThan(rustIndex);
+    expect(uploadIndex).toBeGreaterThan(storeAccessIndex);
+    expect(rustStep?.if).toBe("hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''");
+    expect(rustStep?.run).toContain(
+      `watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"`,
+    );
+    expect(rustStep?.run).toContain('test -n "$watch_toolchain"');
+    expect(rustStep?.run).toContain(
+      'rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src',
+    );
+    expect(rustStep?.run).toContain('echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"');
+  });
 });
