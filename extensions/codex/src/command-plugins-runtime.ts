@@ -10,16 +10,16 @@ import {
 } from "./app-server/auth-bridge.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.js";
+import { withCodexAppServerJsonClient } from "./app-server/request.js";
 import { resolveCodexRunSessionBindingAuthority } from "./app-server/session-binding.js";
-import {
-  getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
-} from "./app-server/shared-client.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveCommandAppServerContext, resolveControlTarget } from "./command-handler-scope.js";
 import type { CodexPluginsConfigBlock } from "./command-plugin-config.js";
 import { prepareCodexControlSessionAuth } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
+
+const SCOPE_CHANGED_MESSAGE =
+  "Codex account, conversation, or plugin policy changed. Run the command again.";
 
 /** One account and physical connection for an operator's plugin inspection or recheck. */
 export type CodexPluginCommandContext = {
@@ -89,101 +89,118 @@ export async function withCodexPluginCommandContext<T>(
             config: ctx.config,
           });
   if ((await readAuthBinding()) !== authBinding) {
-    throw new Error(
-      "Codex account, conversation, or plugin policy changed. Run the command again.",
-    );
+    throw new Error(SCOPE_CHANGED_MESSAGE);
   }
-  const client = await getLeasedSharedCodexAppServerClient({
-    startOptions: appServer.start,
-    pluginConfig,
-    agentDir: scope.agentDir,
-    config: ctx.config,
-    ...auth.clientOptions,
-  });
-  let accountChanged = false;
-  let unsubscribe: (() => void) | undefined;
-  const validateCurrent = async () => {
-    const currentTarget = await resolveControlTarget(ctx);
-    const currentBinding = currentTarget
-      ? await deps.bindingStore.read(currentTarget.identity)
-      : undefined;
-    const currentConversation = readCodexConversationBindingData(
-      await ctx.getCurrentConversationBinding(),
-    );
-    const currentPolicy = JSON.stringify(await deps.codexPluginsManagementIo?.readConfig());
-    const currentAuthBinding = await readAuthBinding();
-    if (
-      accountChanged ||
-      client.getCloseError() ||
-      (currentTarget?.identity.kind === "session" &&
-        resolveCodexRunSessionBindingAuthority({
-          identity: currentTarget.identity,
-          config: ctx.config,
-        }) === "superseded") ||
-      !isDeepStrictEqual(currentTarget, target) ||
-      !isDeepStrictEqual(currentConversation, conversation) ||
-      currentBinding?.threadId !== binding?.threadId ||
-      currentBinding?.clientId !== binding?.clientId ||
-      currentBinding?.cwd !== binding?.cwd ||
-      currentBinding?.authProfileId !== binding?.authProfileId ||
-      currentBinding?.conversationStartId !== binding?.conversationStartId ||
-      currentBinding?.pluginAppsFingerprint !== binding?.pluginAppsFingerprint ||
-      currentPolicy !== initialPolicy ||
-      currentAuthBinding !== authBinding
-    ) {
-      throw new Error(
-        "Codex account, conversation, or plugin policy changed. Run the command again.",
-      );
-    }
-  };
-  try {
-    // Codex serializes account/read after the full login handler, including its
-    // delayed account/updated notification. Drain startup before fencing reads.
-    try {
-      await client.request("account/read", { refreshToken: false });
-    } catch {
-      throw new Error(
-        "Codex account startup could not be confirmed. Check /codex account and retry.",
-      );
-    }
-    unsubscribe = client.addNotificationHandler((notification) => {
-      if (notification.method === "account/updated") {
-        accountChanged = true;
+  return await withCodexAppServerJsonClient(
+    {
+      startOptions: appServer.start,
+      pluginConfig,
+      agentDir: scope.agentDir,
+      config: ctx.config,
+      sessionId: ctx.sessionId,
+      sessionKey: ctx.sessionKey,
+      timeoutMs: appServer.requestTimeoutMs,
+      timeoutMessage: "Codex plugin request timed out. Check the Codex connection and retry.",
+      ...auth.clientOptions,
+    },
+    async (request, client, requestScope) => {
+      const assertCurrent = () => {
+        requestScope.assertCurrent();
+        if (
+          client.getCloseError() ||
+          (target?.identity.kind === "session" &&
+            resolveCodexRunSessionBindingAuthority({
+              identity: target.identity,
+              config: ctx.config,
+            }) === "superseded")
+        ) {
+          throw new Error(SCOPE_CHANGED_MESSAGE);
+        }
+      };
+      const validateCurrent = async () => {
+        assertCurrent();
+        const currentTarget = await resolveControlTarget(ctx);
+        const currentBinding = currentTarget
+          ? await deps.bindingStore.read(currentTarget.identity)
+          : undefined;
+        const currentConversation = readCodexConversationBindingData(
+          await ctx.getCurrentConversationBinding(),
+        );
+        const currentPolicy = JSON.stringify(await deps.codexPluginsManagementIo?.readConfig());
+        const currentAuthBinding = await readAuthBinding();
+        // Reads can outlive cancellation; never publish after the request scope ends.
+        assertCurrent();
+        if (
+          !isDeepStrictEqual(currentTarget, target) ||
+          !isDeepStrictEqual(currentConversation, conversation) ||
+          currentBinding?.threadId !== binding?.threadId ||
+          currentBinding?.clientId !== binding?.clientId ||
+          currentBinding?.cwd !== binding?.cwd ||
+          currentBinding?.authProfileId !== binding?.authProfileId ||
+          currentBinding?.conversationStartId !== binding?.conversationStartId ||
+          currentBinding?.pluginAppsFingerprint !== binding?.pluginAppsFingerprint ||
+          currentPolicy !== initialPolicy ||
+          currentAuthBinding !== authBinding
+        ) {
+          throw new Error(SCOPE_CHANGED_MESSAGE);
+        }
+      };
+      // Codex serializes account/read after login's delayed account/updated.
+      // Drain startup before subscribing so the prepared login is not revoked.
+      try {
+        await request({
+          method: "account/read",
+          requestParams: { refreshToken: false },
+          assertCurrent,
+        });
+      } catch {
+        requestScope.assertCurrent();
+        throw new Error(
+          "Codex account startup could not be confirmed. Check /codex account and retry.",
+        );
       }
-    });
-    await validateCurrent();
-    const result = await run({
-      request: async <TResponse>(method: string, requestParams?: unknown): Promise<TResponse> => {
+      const unsubscribe = client.addNotificationHandler((notification) => {
+        if (notification.method === "account/updated") {
+          requestScope.abort(new Error(SCOPE_CHANGED_MESSAGE));
+        }
+      });
+      try {
         await validateCurrent();
-        const response = await client.request<TResponse>(method, requestParams);
-        // A delayed response must not publish into a cache after scope changes.
+        const result = await run({
+          request: async <TResponse>(
+            method: string,
+            requestParams?: unknown,
+          ): Promise<TResponse> => {
+            await validateCurrent();
+            const response = await request<TResponse>({ method, requestParams, assertCurrent });
+            await validateCurrent();
+            return response;
+          },
+          workspaceDir,
+          agentId: scope.agentId,
+          current,
+          ...(profileId ? { profileId } : {}),
+          // Persisted thread ids alone cannot attest a different physical client.
+          ...(binding?.clientId === client.getInstanceId() ? { threadId: binding.threadId } : {}),
+          appCacheKey: buildCodexPluginAppCacheKey({
+            appServer,
+            agentDir: scope.agentDir,
+            authProfileId: profileId,
+            accountId,
+            envApiKeyFingerprint:
+              usesNativeAuth || preparedAuth || profileId
+                ? undefined
+                : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start }),
+            appServerVersion: client.getServerVersion(),
+            runtimeIdentity: client.getRuntimeIdentity(),
+          }),
+          validateCurrent,
+        });
         await validateCurrent();
-        return response;
-      },
-      workspaceDir,
-      agentId: scope.agentId,
-      current,
-      ...(profileId ? { profileId } : {}),
-      // Persisted thread ids alone cannot attest a different physical client.
-      ...(binding?.clientId === client.getInstanceId() ? { threadId: binding.threadId } : {}),
-      appCacheKey: buildCodexPluginAppCacheKey({
-        appServer,
-        agentDir: scope.agentDir,
-        authProfileId: profileId,
-        accountId,
-        envApiKeyFingerprint:
-          usesNativeAuth || preparedAuth || profileId
-            ? undefined
-            : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start }),
-        appServerVersion: client.getServerVersion(),
-        runtimeIdentity: client.getRuntimeIdentity(),
-      }),
-      validateCurrent,
-    });
-    await validateCurrent();
-    return result;
-  } finally {
-    unsubscribe?.();
-    releaseLeasedSharedCodexAppServerClient(client);
-  }
+        return result;
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 }

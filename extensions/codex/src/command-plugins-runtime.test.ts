@@ -54,6 +54,7 @@ afterEach(async () => {
   for (const harness of clients.splice(0)) {
     harness.client.close();
   }
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -216,6 +217,138 @@ describe("Codex plugin command context", () => {
     ).rejects.toThrow("Codex account startup could not be confirmed");
     expect(test.release).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { unansweredMethod: "account/read", pluginConfig: {}, timeoutMs: 60_000 },
+    {
+      unansweredMethod: "app/installed",
+      pluginConfig: { appServer: { requestTimeoutMs: 30_000 } },
+      timeoutMs: 30_000,
+    },
+  ])(
+    "bounds an unanswered $unansweredMethod RPC by the $timeoutMs ms operation deadline and releases its lease",
+    async ({ unansweredMethod, pluginConfig, timeoutMs }) => {
+      const test = fixture();
+      test.request.mockRestore();
+      // Install the clock before acquisition can create a deadline; leave filesystem work real.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      let failure: unknown;
+      const pending = withCodexPluginCommandContext({ ...test, pluginConfig }, async (context) =>
+        context.request("app/installed", { forceRefresh: false }),
+      ).catch((error: unknown) => {
+        failure = error;
+      });
+      try {
+        const startup = JSON.parse(await test.harness.waitForWrite(0));
+        expect(startup.method).toBe("account/read");
+        const startupDelayMs = unansweredMethod === "app/installed" ? 20_000 : 0;
+        if (startupDelayMs) {
+          await vi.advanceTimersByTimeAsync(startupDelayMs);
+          test.harness.send({ id: startup.id, result: {} });
+          expect(JSON.parse(await test.harness.waitForWrite(1)).method).toBe("app/installed");
+        }
+        await vi.advanceTimersByTimeAsync(timeoutMs - startupDelayMs + 1);
+        expect(failure).toBeInstanceOf(Error);
+        expect(String(failure)).toMatch(/timed out|startup could not be confirmed/);
+        expect(test.release).toHaveBeenCalledOnce();
+      } finally {
+        test.harness.client.close();
+        await pending;
+      }
+    },
+  );
+
+  it("releases a lease acquired after the deadline without sending a startup RPC", async () => {
+    const test = fixture();
+    test.request.mockRestore();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    let finishAcquisition!: (client: typeof test.harness.client) => void;
+    const acquired = new Promise<typeof test.harness.client>((resolve) => {
+      finishAcquisition = resolve;
+    });
+    let signalAcquiring!: () => void;
+    const acquiring = new Promise<void>((resolve) => {
+      signalAcquiring = resolve;
+    });
+    test.acquire.mockImplementation(() => {
+      signalAcquiring();
+      return acquired;
+    });
+    let failure: unknown;
+    const run = vi.fn(async () => "unused");
+    const pending = withCodexPluginCommandContext({ ...test, pluginConfig: {} }, run).catch(
+      (error: unknown) => {
+        failure = error;
+      },
+    );
+    try {
+      await acquiring;
+      await vi.advanceTimersByTimeAsync(60_001);
+      finishAcquisition(test.harness.client);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toContain("timed out");
+      expect(test.harness.writes).toHaveLength(0);
+      expect(run).not.toHaveBeenCalled();
+      expect(test.release).toHaveBeenCalledOnce();
+    } finally {
+      finishAcquisition(test.harness.client);
+      test.harness.client.close();
+      await pending;
+    }
+  });
+
+  it.each([
+    { change: "account", response: "overload" },
+    { change: "session", response: "overload" },
+    { change: "account", response: "unanswered" },
+  ])(
+    "cancels a refresh with $response response after the $change changes without further writes",
+    async ({ change, response }) => {
+      const test = fixture();
+      test.request.mockRestore();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      let failure: unknown;
+      const pending = withCodexPluginCommandContext(
+        { ...test, pluginConfig: {} },
+        async (context) => context.request("app/installed", { forceRefresh: true }),
+      ).catch((error: unknown) => {
+        failure = error;
+      });
+      try {
+        const startup = JSON.parse(await test.harness.waitForWrite(0));
+        test.harness.send({ id: startup.id, result: {} });
+        const refresh = JSON.parse(await test.harness.waitForWrite(1));
+        expect(refresh).toMatchObject({ method: "app/installed", params: { forceRefresh: true } });
+        if (response === "overload") {
+          test.harness.send({
+            id: refresh.id,
+            error: { code: -32001, message: "Server overloaded" },
+          });
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        if (change === "account") {
+          test.harness.send({
+            method: "account/updated",
+            params: { authMode: "chatgptAuthTokens", planType: "team" },
+          });
+        } else {
+          await upsertSessionEntry({
+            storePath: resolveStorePath(test.ctx.config.session?.store, { agentId: "second" }),
+            sessionKey: test.ctx.sessionKey!,
+            entry: { sessionId: "session-after-reset", updatedAt: 1 },
+          });
+        }
+        await vi.advanceTimersByTimeAsync(response === "overload" ? 1_000 : 0);
+        expect(test.harness.writes).toHaveLength(2);
+        expect(String(failure)).toContain("Codex account, conversation, or plugin policy changed");
+        expect(test.release).toHaveBeenCalledOnce();
+      } finally {
+        test.harness.client.close();
+        await pending;
+      }
+    },
+  );
 
   it.each([true, false])(
     "uses the selected profile partition with stable account %s",
