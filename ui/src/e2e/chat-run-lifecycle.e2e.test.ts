@@ -373,6 +373,53 @@ suite.define(() => {
     expect(await composer.inputValue()).toBe("keep this draft");
   });
 
+  it("restores the composer when Stop targets a run the Gateway already finished", async () => {
+    const context = await suite.newBrowserContext({});
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const sessionKey = "agent:main:main";
+    // The Gateway finished this run, but the browser never saw its terminal event.
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey,
+      methodResponses: { "chat.abort": { ok: true, aborted: false, runIds: [] } },
+    });
+
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    await currentPage
+      .locator(".agent-chat__input textarea")
+      .fill("finish without a terminal event");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    const send = await gateway.waitForRequest("chat.send");
+    const runId = (send.params as { idempotencyKey?: unknown }).idempotencyKey;
+    expect(typeof runId).toBe("string");
+    const stop = currentPage.getByRole("button", { name: "Stop generating" });
+    await stop.waitFor({ state: "visible" });
+    const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+    if (captureProof) {
+      await currentPage.screenshot({
+        path: path.join(suite.artifactDir, "finished-run-stop-visible.png"),
+        fullPage: true,
+      });
+    }
+
+    await stop.click();
+    const abort = await gateway.waitForRequest("chat.abort");
+    expect(abort.params).toEqual({ runId, sessionKey });
+    if (captureProof) {
+      // Let a stuck composer show itself before the capture.
+      await currentPage.waitForTimeout(1_000);
+      await currentPage.screenshot({
+        path: path.join(suite.artifactDir, "finished-run-after-stop.png"),
+        fullPage: true,
+      });
+    }
+    await stop.waitFor({ state: "detached" });
+    // The Send control only takes its ready name once a draft exists.
+    await currentPage.locator(".agent-chat__input textarea").fill("next message");
+    await currentPage.getByRole("button", { name: "Send message" }).waitFor({ state: "visible" });
+    expect(await gateway.getRequests("chat.abort")).toHaveLength(1);
+  });
+
   it("shows compaction savings and live working time", async () => {
     const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
