@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
+import { markGatewayBoundRealtimeToolResult } from "../realtime-bound-tool-result.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
@@ -126,6 +127,7 @@ function makeHandler(
     toolPolicy: overrides?.toolPolicy ?? "safe-read-only",
     consultPolicy: overrides?.consultPolicy ?? "auto",
     tools: overrides?.tools ?? [],
+    toolBindings: overrides?.toolBindings ?? {},
     fastContext: overrides?.fastContext ?? {
       enabled: false,
       timeoutMs: 800,
@@ -1493,18 +1495,11 @@ describe("RealtimeCallHandler path routing", () => {
   });
 
   it("submits continuing responses only for realtime agent consult calls", async () => {
-    let callbacks:
-      | {
-          onToolCall?: (event: {
-            itemId: string;
-            callId: string;
-            name: string;
-            args: unknown;
-          }) => void;
-          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
-        }
-      | undefined;
+    let callbacks: RealtimeBridgeRequest | undefined;
     let resolveConsult: ((value: unknown) => void) | undefined;
+    const resolveSlowLookups: Array<(value: unknown) => void> = [];
+    const slowLookupSignals: AbortSignal[] = [];
+    let resolveExactSpeechSubmission: (() => void) | undefined;
     let resolveWorkingSubmission: (() => void) | undefined;
     let rejectWorkingSubmission = false;
     const resolveFinalSubmissions: Array<() => void> = [];
@@ -1541,12 +1536,19 @@ describe("RealtimeCallHandler path routing", () => {
             resolveFinalSubmissions.push(resolve);
           });
         }
+        if (_callId === "custom-stale-exact-call") {
+          return new Promise<void>((resolve) => {
+            resolveExactSpeechSubmission = resolve;
+          });
+        }
         return undefined;
       },
     );
+    const sendUserMessage = vi.fn();
     const bridge = makeBridge({
       supportsToolResultContinuation: true,
       submitToolResult,
+      sendUserMessage,
     });
     const createBridge = vi.fn(
       (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
@@ -1571,7 +1573,17 @@ describe("RealtimeCallHandler path routing", () => {
       },
     );
     handler.registerToolHandler("openclaw_agent_consult", consultHandler);
-    handler.registerToolHandler("custom_lookup", async () => ({ ok: true }));
+    handler.registerToolHandler("custom_lookup", async () =>
+      markGatewayBoundRealtimeToolResult({ ok: true, spokenResponse: "Two tasks are active." }),
+    );
+    handler.registerToolHandler(
+      "custom_slow_lookup",
+      async (_args, _callId, context) =>
+        await new Promise((resolve) => {
+          slowLookupSignals.push(context.abortSignal);
+          resolveSlowLookups.push(resolve);
+        }),
+    );
     const server = await startRealtimeServer(handler);
 
     try {
@@ -1660,13 +1672,90 @@ describe("RealtimeCallHandler path routing", () => {
         });
 
         await waitForRealtimeTest(() => {
-          expect(submitToolResult).toHaveBeenCalledWith("custom-call", { ok: true }, undefined);
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "custom-call",
+            { ok: true, spokenResponse: "Two tasks are active." },
+            { suppressResponse: true },
+          );
         });
         const customCallResults = submitToolResult.mock.calls.filter(
           ([callId]) => callId === "custom-call",
         );
         expect(customCallResults).toHaveLength(1);
-        expect(customCallResults[0]?.[2]).toBeUndefined();
+        expect(customCallResults[0]?.[2]).toEqual({ suppressResponse: true });
+        expect(sendUserMessage).toHaveBeenCalledWith(
+          'Internal OpenClaw voice playback result.\nDo not call openclaw_agent_consult or any other tool for this message.\nSpeak this exact OpenClaw answer to the caller, without adding, removing, or rephrasing words.\nAnswer: "Two tasks are active."',
+        );
+
+        submitToolResult.mockClear();
+        sendUserMessage.mockClear();
+        callbacks?.onToolCall?.({
+          itemId: "item-parallel-1",
+          callId: "custom-parallel-call-1",
+          name: "custom_slow_lookup",
+          args: {},
+        });
+        callbacks?.onToolCall?.({
+          itemId: "item-parallel-2",
+          callId: "custom-parallel-call-2",
+          name: "custom_slow_lookup",
+          args: {},
+        });
+        await waitForRealtimeTest(() => {
+          expect(slowLookupSignals).toHaveLength(2);
+        });
+        expect(slowLookupSignals[0]?.aborted).toBe(false);
+        expect(slowLookupSignals[1]?.aborted).toBe(false);
+        resolveSlowLookups[0]?.({ ok: "first" });
+        resolveSlowLookups[1]?.({ ok: "second" });
+        await waitForRealtimeTest(() => {
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "custom-parallel-call-1",
+            { ok: "first" },
+            undefined,
+          );
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "custom-parallel-call-2",
+            { ok: "second" },
+            undefined,
+          );
+        });
+
+        submitToolResult.mockClear();
+        callbacks?.onToolCall?.({
+          itemId: "item-slow",
+          callId: "custom-slow-call",
+          name: "custom_slow_lookup",
+          args: {},
+        });
+        await waitForRealtimeTest(() => {
+          expect(slowLookupSignals).toHaveLength(3);
+        });
+        expect(slowLookupSignals[2]?.aborted).toBe(false);
+        callbacks?.onClearAudio("barge-in");
+        expect(slowLookupSignals[2]?.aborted).toBe(true);
+        resolveSlowLookups[2]?.(
+          markGatewayBoundRealtimeToolResult({ ok: true, spokenResponse: "Stale result." }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(submitToolResult).not.toHaveBeenCalled();
+        expect(sendUserMessage).not.toHaveBeenCalled();
+
+        callbacks?.onToolCall?.({
+          itemId: "item-stale-exact",
+          callId: "custom-stale-exact-call",
+          name: "custom_lookup",
+          args: {},
+        });
+        await waitForRealtimeTest(() => {
+          expect(resolveExactSpeechSubmission).toBeTypeOf("function");
+        });
+        callbacks?.onClearAudio("barge-in");
+        resolveExactSpeechSubmission?.();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(sendUserMessage).not.toHaveBeenCalled();
 
         submitToolResult.mockClear();
         rejectWorkingSubmission = true;
@@ -1791,9 +1880,7 @@ describe("RealtimeCallHandler path routing", () => {
         }
         await vi.advanceTimersByTimeAsync(0);
         expect(hostTool).toHaveBeenCalledOnce();
-        expect(hostTool.mock.calls[0]?.[2].abortSignal?.aborted).toBe(
-          path === "general" ? undefined : false,
-        );
+        expect(hostTool.mock.calls[0]?.[2].abortSignal?.aborted).toBe(false);
 
         if ("error" in outcome && !synchronous) {
           pending.reject(outcome.error);
@@ -1826,9 +1913,7 @@ describe("RealtimeCallHandler path routing", () => {
         expect(sendUserMessage).not.toHaveBeenCalled();
         expect(closeBridge).not.toHaveBeenCalled();
         expect(ws.readyState).toBe(WebSocket.OPEN);
-        expect(hostTool.mock.calls[0]?.[2].abortSignal?.aborted).toBe(
-          path === "general" ? undefined : false,
-        );
+        expect(hostTool.mock.calls[0]?.[2].abortSignal?.aborted).toBe(false);
       } finally {
         warn.mockRestore();
         log.mockRestore();
@@ -2931,6 +3016,7 @@ describe("RealtimeCallHandler path routing", () => {
         expect(context).toEqual({
           partialUserTranscript: "Send a Discord message.",
           abortSignal: expect.any(AbortSignal),
+          toolCallId: "consult-call",
         });
         await waitForRealtimeTest(() => {
           expect(submitToolResult).toHaveBeenLastCalledWith(

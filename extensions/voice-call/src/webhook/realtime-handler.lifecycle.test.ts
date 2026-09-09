@@ -20,6 +20,7 @@ function createRealtimeConfig(): VoiceCallRealtimeConfig {
     toolPolicy: "safe-read-only",
     consultPolicy: "auto",
     tools: [],
+    toolBindings: {},
     fastContext: {
       enabled: false,
       timeoutMs: 800,

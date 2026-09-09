@@ -268,6 +268,7 @@ export default definePluginEntry({
           coreConfig: api.config as OpenClawConfig,
           fullConfig: api.config,
           agentRuntime: api.runtime.agent,
+          gatewayRuntime: api.runtime.gateway,
           stateRuntime: api.runtime.state,
           ttsRuntime: api.runtime.tts,
           logger: api.logger,

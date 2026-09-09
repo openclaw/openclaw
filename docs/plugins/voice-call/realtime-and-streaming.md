@@ -91,6 +91,33 @@ When a host tool run reports cancellation, the realtime model receives a
 cancelled result and the phone call stays open. Timeouts and other tool failures
 remain errors; ending the phone session suppresses pending consult results.
 
+Configured `realtime.tools` are provider descriptors only unless the same tool
+name has a `realtime.toolBindings` entry. A binding fixes that tool to one
+Gateway method; model arguments cannot select another method. The bundled
+voice-call plugin invokes bindings in process with `operator.read` scope and
+adds trusted call, session, transcript, and tool-call context under
+`_openclawVoiceContext`. When the method returns a non-empty `spokenResponse`,
+the bridge submits the tool result without free-form continuation and asks the
+provider to speak that text through the exact-speech protocol.
+
+```json5
+{
+  realtime: {
+    tools: [
+      {
+        type: "function",
+        name: "queue_status",
+        description: "Read the queue status.",
+        parameters: { type: "object", properties: {} },
+      },
+    ],
+    toolBindings: {
+      queue_status: { gatewayMethod: "queue.status", timeoutMs: 5000 },
+    },
+  },
+}
+```
+
 ### Agent voice context
 
 Enable `realtime.agentContext` when the voice bridge should sound like the

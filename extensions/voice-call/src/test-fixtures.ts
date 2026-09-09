@@ -54,6 +54,7 @@ export function createVoiceCallBaseConfig(params?: {
       toolPolicy: "safe-read-only",
       consultPolicy: "auto",
       tools: [],
+      toolBindings: {},
       fastContext: {
         enabled: false,
         timeoutMs: 800,

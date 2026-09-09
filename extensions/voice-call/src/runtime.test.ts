@@ -619,6 +619,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
         parameters: { type: "object", properties: {} },
       },
     ];
+    config.realtime.toolBindings = {
+      custom_tool: { gatewayMethod: "aq.currentWork", timeoutMs: 2_000 },
+    };
     const sessionStore: Record<string, unknown> = {};
     const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "Use the shipment status." }],
@@ -635,6 +638,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       session: createMockSessionRuntime(sessionStore),
       runEmbeddedAgent,
     };
+    const gatewayRequest = vi.fn(async () => ({ spokenResponse: "Two tasks are active." }));
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
       agentId: "support",
@@ -649,6 +653,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       config,
       coreConfig: {} as OpenClawConfig,
       agentRuntime: agentRuntime as never,
+      gatewayRuntime: { isAvailable: vi.fn(async () => true), request: gatewayRequest } as never,
     });
 
     const realtimeHandlerOptions = requireRecord(
@@ -664,6 +669,32 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "openclaw_agent_consult",
       "custom_tool",
     ]);
+    const customRegistration = mocks.realtimeHandlerRegisterToolHandler.mock.calls.find(
+      ([name]) => name === "custom_tool",
+    );
+    if (!customRegistration || typeof customRegistration[1] !== "function") {
+      throw new Error("expected custom realtime tool handler callback");
+    }
+    await expect(
+      customRegistration[1]({ detail: "brief" }, "call-1", {
+        partialUserTranscript: "What is running?",
+        toolCallId: "tool-call-1",
+      }),
+    ).resolves.toEqual({ spokenResponse: "Two tasks are active." });
+    expect(gatewayRequest).toHaveBeenCalledWith(
+      "aq.currentWork",
+      {
+        detail: "brief",
+        _openclawVoiceContext: {
+          callId: "call-1",
+          sessionKey: "agent:support:voice:15550009999",
+          source: "voice",
+          toolCallId: "tool-call-1",
+          utterance: "What is running?",
+        },
+      },
+      { timeoutMs: 2_000, scopes: ["operator.read"] },
+    );
     const handler = requireRealtimeConsultToolHandler();
     await expect(
       handler({ question: "What should I say?" }, "call-1", {

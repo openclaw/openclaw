@@ -18,6 +18,11 @@ import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
+import {
+  RealtimeToolBindingSchema,
+  type RealtimeToolConfig,
+  RealtimeToolSchema,
+} from "./realtime-tool-binding.js";
 import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailscale-config.js";
 
 // -----------------------------------------------------------------------------
@@ -204,20 +209,6 @@ const OutboundConfigSchema = z
 // Realtime Voice Configuration
 // -----------------------------------------------------------------------------
 
-const RealtimeToolSchema = z
-  .object({
-    type: z.literal("function"),
-    name: z.string().min(1),
-    description: z.string(),
-    parameters: z.object({
-      type: z.literal("object"),
-      properties: z.record(z.string(), z.unknown()),
-      required: z.array(z.string()).optional(),
-    }),
-  })
-  .strict();
-type RealtimeToolConfig = z.infer<typeof RealtimeToolSchema>;
-
 const VoiceCallRealtimeProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
@@ -309,6 +300,8 @@ const VoiceCallRealtimeConfigSchema = z
     consultFastMode: z.boolean().optional(),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
+    /** Trusted handlers for configured tools, keyed by tool name. */
+    toolBindings: z.record(z.string(), RealtimeToolBindingSchema).default({}),
     /** Low-latency memory/session context for the consult tool. */
     fastContext: VoiceCallRealtimeFastContextConfigSchema,
     /** Bounded agent persona/context injection for the fast realtime voice path. */
@@ -323,6 +316,7 @@ const VoiceCallRealtimeConfigSchema = z
     toolPolicy: "safe-read-only",
     consultPolicy: "auto",
     tools: [],
+    toolBindings: {},
     fastContext: {
       enabled: false,
       timeoutMs: 800,
@@ -737,6 +731,9 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
         defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
       tools:
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
+      toolBindings:
+        (config.realtime?.toolBindings as VoiceCallRealtimeConfig["toolBindings"] | undefined) ??
+        defaults.realtime.toolBindings,
       consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional().parse(
         config.realtime?.consultThinkingLevel ?? defaults.realtime.consultThinkingLevel,
       ),

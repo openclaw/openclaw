@@ -27,7 +27,11 @@ import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
-import { resolveVoiceCallRealtimeTools } from "./realtime-call-control.js";
+import { markGatewayBoundRealtimeToolResult } from "./realtime-bound-tool-result.js";
+import {
+  REALTIME_VOICE_END_CALL_TOOL_NAME,
+  resolveVoiceCallRealtimeTools,
+} from "./realtime-call-control.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveCallAgentId, resolveVoiceCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
@@ -286,6 +290,7 @@ export async function createVoiceCallRuntime(params: {
   coreConfig: OpenClawConfig;
   fullConfig?: OpenClawConfig;
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
+  gatewayRuntime?: OpenClawPluginApi["runtime"]["gateway"];
   stateRuntime?: VoiceCallStateRuntime["state"];
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: Logger;
@@ -295,6 +300,7 @@ export async function createVoiceCallRuntime(params: {
     coreConfig,
     fullConfig,
     agentRuntime,
+    gatewayRuntime,
     stateRuntime,
     ttsRuntime,
     logger,
@@ -459,6 +465,62 @@ export async function createVoiceCallRuntime(params: {
           });
         },
       );
+    }
+    for (const [toolName, binding] of Object.entries(config.realtime.toolBindings)) {
+      if (!realtimeConfig.tools.some((tool) => tool.name === toolName)) {
+        throw new Error(
+          `Invalid voice-call config: realtime.toolBindings.${toolName} has no matching realtime.tools entry`,
+        );
+      }
+      if (
+        toolName === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME ||
+        toolName === REALTIME_VOICE_END_CALL_TOOL_NAME
+      ) {
+        throw new Error(
+          `Invalid voice-call config: realtime.toolBindings.${toolName} cannot replace a built-in tool`,
+        );
+      }
+      if (!gatewayRuntime) {
+        throw new Error(
+          `Invalid voice-call config: realtime.toolBindings.${toolName} requires the Gateway runtime`,
+        );
+      }
+      realtimeHandler.registerToolHandler(toolName, async (args, callId, handlerContext) => {
+        handlerContext.abortSignal?.throwIfAborted();
+        const call = manager.getCall(callId);
+        if (!call) {
+          return { error: `Call "${callId}" not found` };
+        }
+        const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
+        const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
+        const agentId = resolveCallAgentId(call, effectiveConfig);
+        const sessionKey = resolveVoiceCallConsultSessionKey({
+          ...call,
+          config: { ...effectiveConfig, agentId },
+          coreSession: cfg.session,
+        });
+        let modelArgs: Record<string, unknown> = {};
+        if (args && typeof args === "object" && !Array.isArray(args)) {
+          // SAFETY: the guards establish a non-array object before spreading model arguments.
+          modelArgs = args as Record<string, unknown>;
+        }
+        return markGatewayBoundRealtimeToolResult(
+          await gatewayRuntime.request(
+            binding.gatewayMethod,
+            {
+              ...modelArgs,
+              _openclawVoiceContext: {
+                callId,
+                sessionKey,
+                source: "voice",
+                toolCallId: handlerContext.toolCallId,
+                utterance: handlerContext.partialUserTranscript,
+              },
+            },
+            { timeoutMs: binding.timeoutMs, scopes: ["operator.read"] },
+          ),
+        );
+      });
     }
     webhookServer.setRealtimeHandler(realtimeHandler);
   }

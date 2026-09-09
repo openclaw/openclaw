@@ -11,6 +11,7 @@ import {
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
   buildRealtimeVoiceAgentErrorProviderResult,
+  buildRealtimeVoiceSpeakExactMessage,
   calculateMulawRms,
   createRealtimeVoiceSessionHarness,
   createSpeechThresholdGate,
@@ -31,6 +32,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-util
 import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
+import { readGatewayBoundExactSpeech } from "../realtime-bound-tool-result.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
 import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
@@ -46,6 +48,7 @@ import {
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
   abortSignal?: AbortSignal;
+  toolCallId?: string;
 };
 type ToolHandlerFn = (
   args: unknown,
@@ -388,6 +391,10 @@ export class RealtimeCallHandler {
   private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
   private readonly consultSessionsByCallId = new Map<string, RealtimeConsultSession>();
   private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
+  private readonly boundToolExecutionsByCallId = new Map<
+    string,
+    Map<string, { owner: ActiveRealtimeVoiceBridge; abortController: AbortController }>
+  >();
   private readonly terminationAttempts = new Set<Promise<void>>();
   private closePromise: Promise<void> | null = null;
   private closing = false;
@@ -774,6 +781,7 @@ export class RealtimeCallHandler {
       interruptProvider?: (audioPlaybackActive: boolean) => void,
       clearedAudioBytes = 0,
     ): void => {
+      this.cancelBoundToolExecution(callId, nativeConsultOwner.current);
       const outputAudioActive = harness.talk.outputAudioActive;
       const pendingTelephonyAudio = audioPacer.hasPendingAudio();
       if (
@@ -1026,6 +1034,7 @@ export class RealtimeCallHandler {
           if (owner && this.isActiveBridgeOwner(callId, owner)) {
             this.resetUserTranscriptState(callId, userTranscriptOwner);
             this.resetConsultSessionForContinuity(callId, owner);
+            this.cancelBoundToolExecution(callId, owner);
           }
           harness.flushOutput(() => {
             audioPacer.clearAudio();
@@ -1099,6 +1108,7 @@ export class RealtimeCallHandler {
         const ownsCallState = this.isActiveBridgeOwner(callId, owner);
         this.clearActiveBridgeMappings(callId, callSid, owner);
         this.cancelConsultSession(callId, owner);
+        this.cancelBoundToolExecution(callId, owner);
         if (ownsCallState) {
           this.clearUserTranscriptState(callId, userTranscriptOwner);
         }
@@ -1183,6 +1193,7 @@ export class RealtimeCallHandler {
       } finally {
         this.clearActiveBridgeMappings(callId, callSid, session);
         this.cancelConsultSession(callId, session);
+        this.cancelBoundToolExecution(callId, session);
         this.clearUserTranscriptState(callId, userTranscriptOwner);
         harness.close();
         audioPacer.close();
@@ -1476,6 +1487,23 @@ export class RealtimeCallHandler {
       return;
     }
     this.consultSessionsByCallId.delete(callId);
+  }
+
+  private cancelBoundToolExecution(callId: string, owner?: ActiveRealtimeVoiceBridge): void {
+    const executions = this.boundToolExecutionsByCallId.get(callId);
+    if (!executions) {
+      return;
+    }
+    for (const [toolCallId, execution] of executions) {
+      if (owner && execution.owner !== owner) {
+        continue;
+      }
+      executions.delete(toolCallId);
+      execution.abortController.abort(new Error("Realtime bound tool execution was cancelled."));
+    }
+    if (executions.size === 0) {
+      this.boundToolExecutionsByCallId.delete(callId);
+    }
   }
 
   private isActiveBridgeOwner(callId: string, owner: ActiveRealtimeVoiceBridge): boolean {
@@ -1856,9 +1884,28 @@ export class RealtimeCallHandler {
         final: true,
       });
     };
-    const submitFinalToolResult = async (result: unknown): Promise<void> => {
-      await bridge.submitToolResult(bridgeCallId, result);
+    const submitFinalToolResult = async (
+      result: unknown,
+      isCurrent: () => boolean = () => true,
+    ): Promise<void> => {
+      if (this.activeBridgesByCallId.get(callId) !== bridge || !isCurrent()) {
+        return;
+      }
+      const exactSpeech = readGatewayBoundExactSpeech(result);
+      await bridge.submitToolResult(
+        bridgeCallId,
+        result,
+        exactSpeech ? { suppressResponse: true } : undefined,
+      );
+      if (this.activeBridgesByCallId.get(callId) !== bridge || !isCurrent()) {
+        return;
+      }
       emitFinalToolEvent(result);
+      if (exactSpeech) {
+        bridge.sendUserMessage(
+          buildRealtimeVoiceSpeakExactMessage({ text: exactSpeech, surfaceLabel: "the caller" }),
+        );
+      }
     };
     const submitWorkingResponse = async (): Promise<void> => {
       if (
@@ -1982,6 +2029,7 @@ export class RealtimeCallHandler {
           const context = {
             partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
             abortSignal: abortController.signal,
+            toolCallId: bridgeCallId,
           };
           state.partialUserTranscript = context.partialUserTranscript;
           const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
@@ -2024,8 +2072,25 @@ export class RealtimeCallHandler {
     console.log(
       `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
     );
+    if (this.activeBridgesByCallId.get(callId) !== bridge) {
+      return;
+    }
+    const abortController = new AbortController();
+    const execution = { owner: bridge, abortController };
+    const existingExecutions = this.boundToolExecutionsByCallId.get(callId);
+    if (existingExecutions?.has(bridgeCallId)) {
+      return;
+    }
+    const executions = existingExecutions ?? new Map();
+    executions.set(bridgeCallId, execution);
+    this.boundToolExecutionsByCallId.set(callId, executions);
+    const isCurrentExecution = (): boolean =>
+      !abortController.signal.aborted &&
+      this.boundToolExecutionsByCallId.get(callId)?.get(bridgeCallId) === execution;
     const context = {
       partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
+      abortSignal: abortController.signal,
+      toolCallId: bridgeCallId,
     };
     let result: unknown;
     try {
@@ -2033,7 +2098,17 @@ export class RealtimeCallHandler {
         ? { error: `Tool "${name}" not available` }
         : await handler(args, callId, context);
     } catch (error) {
+      if (abortController.signal.aborted) {
+        return;
+      }
       result = buildRealtimeVoiceAgentErrorProviderResult(error);
+    }
+    if (
+      abortController.signal.aborted ||
+      !isCurrentExecution() ||
+      this.activeBridgesByCallId.get(callId) !== bridge
+    ) {
+      return;
     }
     const error = hasResultError(result)
       ? formatErrorMessage(result.error ?? "unknown")
@@ -2041,7 +2116,16 @@ export class RealtimeCallHandler {
     console.log(
       `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${error === undefined ? "ok" : "error"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
     );
-    await submitFinalToolResult(result);
+    try {
+      await submitFinalToolResult(result, isCurrentExecution);
+    } finally {
+      if (executions.get(bridgeCallId) === execution) {
+        executions.delete(bridgeCallId);
+      }
+      if (executions.size === 0 && this.boundToolExecutionsByCallId.get(callId) === executions) {
+        this.boundToolExecutionsByCallId.delete(callId);
+      }
+    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
