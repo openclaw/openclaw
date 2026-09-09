@@ -692,6 +692,84 @@ describe("secrets apply", () => {
     });
   });
 
+  it("routes auth-profiles targets to the shared store owning the profile", async () => {
+    // Issue #143173: with state-db shared ownership after the upgrade
+    // migration, the live profile sits in the shared store while the
+    // per-agent store is empty. Applying a SecretRef must replace the
+    // plaintext where it lives instead of writing the ref to the agent
+    // store and leaving the live key behind.
+    await writeJsonFile(fixture.authStorePath, { version: 1, profiles: {} });
+    const stateDatabase = openOpenClawStateDatabase({ env: fixture.env }).db;
+    stateDatabase
+      .prepare(
+        `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+         VALUES ('auth.sharedStore', ?, 1)`,
+      )
+      .run(JSON.stringify({ location: "state-db" }));
+    stateDatabase
+      .prepare(
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
+      )
+      .run(
+        "authProfiles.store",
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-ope...text", // pragma: allowlist secret
+            },
+          },
+        }),
+      );
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          ref: OPENAI_API_KEY_ENV_REF,
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    };
+
+    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(result.changed).toBe(true);
+
+    expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: OPENAI_API_KEY_ENV_REF,
+        },
+      },
+    });
+    expect(
+      (
+        readPersistedSharedAuthProfileStoreRaw(fixture.env) as unknown as {
+          profiles: { "openai:default": { key?: string } };
+        }
+      ).profiles["openai:default"].key,
+    ).toBeUndefined();
+    expect(readPersistedAuthProfileStoreRaw(fixture.agentDir)).toEqual({
+      version: 1,
+      profiles: {},
+    });
+  });
+
   it("preserves relocated shared inheritance when applying an agent SecretRef", async () => {
     const sharedDir = path.join(fixture.rootDir, "relocated-shared");
     const agentDir = path.join(fixture.rootDir, "ops-agent");

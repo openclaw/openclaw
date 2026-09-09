@@ -5,7 +5,10 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
+import {
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
 import {
   coercePersistedAuthProfileStore,
   loadPersistedAuthProfileStore,
@@ -552,6 +555,7 @@ function ensureMutableAuthStore(
 
 function resolveAuthStoreForTarget(params: {
   target: SecretsPlanTarget;
+  resolved: ResolvedPlanTargetEntry["resolved"];
   nextConfig: OpenClawConfig;
   stateDir: string;
   env: NodeJS.ProcessEnv;
@@ -568,6 +572,43 @@ function resolveAuthStoreForTarget(params: {
     env: params.env,
     agentId,
   });
+  const profileId = params.resolved.pathSegments[1];
+  if (typeof profileId === "string" && profileId.length > 0) {
+    const sharedTarget = resolveSharedAuthStoreTarget({
+      stateDir: params.stateDir,
+      env: params.env,
+    });
+    // Only redirect under state-db shared ownership: with legacy-main
+    // ownership the shared path is just the main agent file, where a profile
+    // presence is normal and must not reroute other agents' targets.
+    if (
+      sharedTarget.path !== authStoreTarget.path &&
+      resolveSharedAuthStoreOwnership(sharedTarget.env).location === "state-db"
+    ) {
+      const agentProfiles = readProfileIds(
+        params.authStoreByPath.get(authStoreTarget.path) ??
+          loadPersistedAuthProfileStore(authStoreTarget.agentDir),
+      );
+      if (!agentProfiles.has(profileId)) {
+        const sharedProfiles = readProfileIds(
+          params.authStoreByPath.get(sharedTarget.path) ??
+            loadPersistedSharedAuthProfileStore(sharedTarget.env),
+        );
+        if (sharedProfiles.has(profileId)) {
+          // The profile lives in the shared store (e.g. state-db ownership
+          // after the upgrade migration) while the per-agent store does not
+          // have it: writing the SecretRef to the agent store would leave the
+          // live plaintext in place, so route to the owning shared store.
+          const existing = params.authStoreByPath.get(sharedTarget.path);
+          const loaded = existing ?? loadPersistedSharedAuthProfileStore(sharedTarget.env);
+          const store = ensureMutableAuthStore(isRecord(loaded) ? loaded : undefined);
+          params.authStoreByPath.set(sharedTarget.path, store);
+          params.authStoreTargetByPath.set(sharedTarget.path, sharedTarget);
+          return { path: sharedTarget.path, store };
+        }
+      }
+    }
+  }
   const authStorePath = authStoreTarget.path;
   const existing = params.authStoreByPath.get(authStorePath);
   const loaded = existing ?? loadPersistedAuthProfileStore(authStoreTarget.agentDir);
@@ -575,6 +616,34 @@ function resolveAuthStoreForTarget(params: {
   params.authStoreByPath.set(authStorePath, store);
   params.authStoreTargetByPath.set(authStorePath, authStoreTarget);
   return { path: authStorePath, store };
+}
+
+function resolveSharedAuthStoreTarget(params: {
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+}): Extract<AuthProfileStoreTarget, { kind: "shared" }> {
+  const scopedEnv = {
+    ...params.env,
+    OPENCLAW_STATE_DIR: params.stateDir,
+    OPENCLAW_AGENT_DIR: undefined,
+  };
+  return {
+    kind: "shared",
+    path: resolveSharedAuthStorePath(scopedEnv),
+    env: scopedEnv,
+    stateDir: params.stateDir,
+  };
+}
+
+function readProfileIds(store: unknown): Set<string> {
+  if (!isRecord(store)) {
+    return new Set();
+  }
+  const profiles = (store as { profiles?: unknown }).profiles;
+  if (!isRecord(profiles)) {
+    return new Set();
+  }
+  return new Set(Object.keys(profiles));
 }
 
 function resolveAuthStoreTargetForAgent(params: {
@@ -666,6 +735,7 @@ function applyAuthProfileTargetMutation(params: {
   }
   const { store } = resolveAuthStoreForTarget({
     target: params.target,
+    resolved: params.resolved,
     nextConfig: params.nextConfig,
     stateDir: params.stateDir,
     env: params.env,
