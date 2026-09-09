@@ -2496,11 +2496,25 @@ describe("chat scroll-to-bottom affordance", () => {
     expect(queue.compareDocumentPosition(composer)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
-  it("hides the scroll-to-bottom button when the transcript is already latest", () => {
-    const container = renderChatView({ showNewMessages: false });
+  it.each([false, true])(
+    "keeps the latest action inactive while hidden and reuses it on reentry (initially visible: %s)",
+    (showNewMessages) => {
+      const container = renderChatView({ showNewMessages });
+      const button = requireElement(container, ".chat-scroll-to-bottom", "scroll affordance");
 
-    expect(container.querySelector(".chat-scroll-to-bottom")).toBeNull();
-  });
+      renderChatInto(container, { showNewMessages: false });
+
+      expect(container.querySelector(".chat-scroll-to-bottom")).toBe(button);
+      expect(button.getAttribute("aria-hidden")).toBe("true");
+      expect(button.hasAttribute("inert")).toBe(true);
+
+      renderChatInto(container, { showNewMessages: true });
+
+      expect(container.querySelector(".chat-scroll-to-bottom")).toBe(button);
+      expect(button.getAttribute("aria-hidden")).toBe("false");
+      expect(button.hasAttribute("inert")).toBe(false);
+    },
+  );
 });
 
 describe("chat composer workbench", () => {

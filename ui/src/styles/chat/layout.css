@@ -795,8 +795,48 @@ openclaw-chat-page {
   border-radius: var(--radius-full);
   box-shadow: var(--shadow-sm);
   cursor: var(--cursor-action);
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transform: translate(-50%, 8px) scale(0.9);
+  transition:
+    transform var(--duration-slow) var(--ease-in-out),
+    opacity var(--duration-slow) var(--ease-in-out),
+    visibility 0s linear var(--duration-slow);
+}
+
+.chat-scroll-to-bottom[data-visible="true"] {
   pointer-events: auto;
-  transform: translateX(-50%);
+  visibility: visible;
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+  transition:
+    transform var(--duration-normal) var(--ease-out),
+    opacity var(--duration-normal) var(--ease-out),
+    visibility 0s;
+}
+
+@starting-style {
+  .chat-scroll-to-bottom[data-visible="true"] {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-scroll-to-bottom,
+  .chat-scroll-to-bottom[data-visible="true"] {
+    transform: translateX(-50%);
+    transition-property: opacity, visibility;
+    transition-timing-function: linear;
+    transition-delay: 0s, var(--duration-fast);
+    /* Keep the short fade despite the global reduced-motion duration reset. */
+    transition-duration: var(--duration-fast), 0s !important;
+  }
+
+  .chat-scroll-to-bottom[data-visible="true"] {
+    transition-delay: 0s;
+  }
 }
 
 .chat-scroll-to-bottom:focus-visible {
