@@ -80,8 +80,8 @@ Flags:
 
 - `--command <command>` (required): e.g. `device.info`.
 - `--params <json>`: JSON object string (default `{}`).
-- `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
-- `--timeout <ms>`: Gateway transport timeout (default `30000`). The effective timeout is `max(timeout, invokeTimeout + 10000)`, allowing transport grace beyond the node's invoke deadline.
+- `--invoke-timeout <ms>`: node invoke timeout as a positive integer (default `15000`).
+- `--timeout <ms>`: Gateway transport timeout (default `30000`). For a positive invoke timeout, the effective transport timeout is `max(timeout, invokeTimeout + 10000)`, allowing transport grace beyond the node's invoke deadline.
 - `--idempotency-key <key>`: optional idempotency key.
 
 `system.run` and `system.run.prepare` are blocked here; use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.
