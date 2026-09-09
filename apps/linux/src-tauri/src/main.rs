@@ -23,7 +23,7 @@ use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot, ReadyGateway};
 use gateway_operation_queue::{GatewayOperation, GatewayOperationQueue};
 use installer::InstallChannel;
-use remote_gateway::RemoteGatewayRequest;
+use remote_gateway::{RemoteConnectionSource, RemoteGatewayRequest};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -428,7 +428,7 @@ impl DesktopState {
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
         if !explicit_local {
             if let Some(remote) = remote_gateway::load_saved_remote()? {
-                return self.connect_remote_locked(app, remote);
+                return self.connect_remote_locked(app, remote, RemoteConnectionSource::Saved);
             }
         }
         let cli = self.resolve_cli();
@@ -588,13 +588,14 @@ impl DesktopState {
             .operation
             .lock()
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
-        self.connect_remote_locked(app, request)
+        self.connect_remote_locked(app, request, RemoteConnectionSource::Submitted)
     }
 
     fn connect_remote_locked(
         &self,
         app: &AppHandle,
         mut request: RemoteGatewayRequest,
+        source: RemoteConnectionSource,
     ) -> Result<GatewaySnapshot, String> {
         remote_gateway::validate_request(&request)?;
         let mut active_tunnel = self
@@ -621,7 +622,12 @@ impl DesktopState {
         remote_gateway::resolve_remote_tls_fingerprint(&mut request, &gateway_url)?;
         let target = remote_gateway::dashboard_url(&gateway_url)?;
         let script = native_auth_initialization_script(&target, &gateway_url, &request)?;
-        remote_gateway::save_config_at(&remote_gateway::config_path()?, &request, &gateway_url)?;
+        remote_gateway::save_config_at(
+            &remote_gateway::config_path()?,
+            &request,
+            &gateway_url,
+            source,
+        )?;
         *active_tunnel = tunnel;
         drop(active_tunnel);
 
