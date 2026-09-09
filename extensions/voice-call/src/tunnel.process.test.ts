@@ -221,7 +221,6 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child process",
         .toBe("SIGTERM");
       expect(await waitForProcessExit(childPid, 1_000)).toBe(true);
     } finally {
-      clearTimeout(startupTimer);
       process.env.PATH = previousPath;
       if (previousPidPath === undefined) {
         delete process.env.OPENCLAW_NGROK_PID_FILE;
