@@ -70,12 +70,26 @@ openclaw devices reject <requestId>
 
 ### `openclaw devices join-code`
 
-Mint a single-use node onboarding URL.
+Mint a single-use node onboarding URL with administrator access to the
+Gateway. Paste the printed `npx openclaw connect <url>` command on the machine
+to enroll.
 
 ```bash
 openclaw devices join-code
 openclaw devices join-code --json
 ```
+
+Join-code creation and redemption are core Gateway operations; no pairing
+plugin needs to be enabled. The URL must be reachable from the joining machine.
+Remote join URLs require a TLS Gateway endpoint. Explicitly configured loopback
+endpoints can use HTTP, provided the joining machine can reach that loopback
+endpoint, for example through a local tunnel.
+
+With only the default loopback bind and no advertised endpoint, URL discovery
+refuses to mint a link. Configure a reachable secure endpoint first; see
+[Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
+Plaintext LAN pairing can use a setup code directly instead of an HTTP join URL.
+See [Connect a machine](/cli/connect).
 
 ### `openclaw devices remove <deviceId>`
 

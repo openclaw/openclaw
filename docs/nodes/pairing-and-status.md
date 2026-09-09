@@ -10,17 +10,43 @@ sidebarTitle: "Pairing and status"
 
 ## Pairing + status
 
-Nodes use **device pairing**. A node presents a signed device identity during connect; the Gateway creates a device pairing request for `role: node`. Approve via the devices CLI (or UI). The direct Apple Watch setup uses an admin-minted, short-lived node-only setup code to approve its fixed low-risk command surface; later capability expansion still requires normal approval.
+Nodes use **device pairing**. A node presents a signed device identity during connect; the Gateway creates a device pairing request for `role: node`. Device approval admits the connection; the declared command surface needs a separate approval. The direct Apple Watch setup uses an admin-minted, short-lived node-only setup code to approve its fixed low-risk command surface; later capability expansion still requires normal approval.
+
+For manual approval, run these commands on the Gateway:
 
 ```bash
 openclaw devices list
-openclaw devices approve <requestId>
-openclaw devices reject <requestId>
+openclaw devices approve <deviceRequestId>
+```
+
+Restart the installed node with `openclaw node restart`, or stop and rerun its
+foreground `openclaw node run` command. For an app node paused for manual pairing,
+restart node mode or the app. This reconnect creates a separate command-surface
+request. Back on the Gateway:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <nodeRequestId>
 openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-Pending pairing requests expire 5 minutes after the device's last retry — a device that keeps reconnecting keeps its one pending request (and `requestId`) alive instead of minting a new prompt every few minutes; see [Node pairing](/gateway/pairing) for the full request/approve lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — clients get a `device.pair.resolved` event for the superseded request, and you should re-run `openclaw devices list` before approving.
+The two request IDs are distinct. Use `openclaw devices reject <deviceRequestId>`
+to reject device admission instead of approving it. An initial unapproved surface
+has no effective commands. During an expansion, previously approved commands
+remain effective only while the node still declares them and Gateway policy
+allows them.
+
+SSH-verified and administrator-minted bootstrap enrollment can approve the first
+surface automatically. Trusted-network device approval alone does not; inspect
+`nodes pending` and approve the surface separately. Later command, capability,
+or permission expansion still needs approval. Surface approval does not bypass
+[Gateway command policy](/nodes/command-policy) or [local exec approvals](/tools/exec-approvals).
+
+Pending device-pairing requests expire 5 minutes after the device's last retry — a device that keeps reconnecting keeps its one pending request (and `requestId`) alive instead of minting a new prompt every few minutes; see [Node pairing](/gateway/pairing) for the full request/approve lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — clients get a `device.pair.resolved` event for the superseded request, and you should re-run `openclaw devices list` before approving.
+
+Pending command-surface requests do not expire merely with time; they follow the
+[capability approval lifecycle](/gateway/pairing#how-capability-approval-works).
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
 - A connected native Mac can opt in to coalesced physical-input activity from
