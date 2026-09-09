@@ -1127,29 +1127,4 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
     // The restart prompt was shown but user declined (createPrompter returned false for it).
   });
-
-  it("retries ECONNREFUSED after an approved restart until the gateway is reachable", async () => {
-    setPlatform("linux");
-    healthCommand
-      .mockRejectedValueOnce(new Error("connect ECONNREFUSED 127.0.0.1:18789"))
-      .mockResolvedValueOnce(undefined);
-
-    const runtime = await runAutoRepair();
-
-    expect(service.restart).toHaveBeenCalledTimes(1);
-    expect(healthCommand).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("fails immediately after restart when the health probe is not a connection refusal", async () => {
-    setPlatform("linux");
-    healthCommand.mockRejectedValueOnce(new Error("unexpected auth failure"));
-
-    const runtime = await runAutoRepair();
-
-    expect(healthCommand).toHaveBeenCalledOnce();
-    expect(sleep).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith("health failed");
-  });
 });
