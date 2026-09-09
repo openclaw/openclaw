@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   readPersistedAuthProfileStateRaw,
+  readPersistedAuthProfileStoreRaw,
   readPersistedSharedAuthProfileStoreRaw,
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStateRaw,
@@ -18,6 +19,122 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { maybeRepairCodexSessionRoutes } from "./shared/codex-route-session-repair.js";
 
 describe("Doctor auth alias preservation", () => {
+  it.each([false, true])(
+    "recovers a failed config write without adopting a changed account (%s)",
+    async (replaceAccount) => {
+      await withOpenClawTestState(
+        { label: "alias-config-recovery", layout: "home" },
+        async (fixture) => {
+          const agentDir = fixture.agentDir("worker");
+          const cfg: OpenClawConfig = {
+            plugins: { enabled: false },
+            agents: { entries: { main: {}, worker: { agentDir } } },
+            auth: {
+              profiles: { "openai-codex:work": { provider: "openai-codex", mode: "api_key" } },
+              order: { "openai-codex": ["openai-codex:work"] },
+            },
+          };
+          runAuthProfileWriteTransaction(
+            undefined,
+            (database) => {
+              writePersistedAuthProfileStoreRaw(
+                {
+                  version: 1,
+                  profiles: {
+                    "openai-codex:work": {
+                      type: "api_key",
+                      provider: "openai-codex",
+                      key: "synthetic-original-account",
+                    },
+                  },
+                },
+                undefined,
+                database,
+              );
+            },
+            { env: fixture.env },
+          );
+          const workerStore = {
+            version: 1,
+            profiles: {
+              "openai-codex:work": {
+                type: "api_key",
+                provider: "openai-codex",
+                key: "synthetic-worker-account",
+              },
+            },
+          };
+          runAuthProfileWriteTransaction(
+            agentDir,
+            (database) => {
+              writePersistedAuthProfileStoreRaw(workerStore, agentDir, database);
+            },
+            { env: fixture.env },
+          );
+          const run = () =>
+            runDoctorRepairSequence({
+              state: { cfg, candidate: structuredClone(cfg), pendingChanges: false, fixHints: [] },
+              doctorFixCommand: "openclaw doctor --fix",
+              env: fixture.env,
+            });
+          // The durable store commit survives even when the caller cannot save this candidate.
+          await run();
+          expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+            profiles: { "openai:work": { provider: "openai", key: "synthetic-original-account" } },
+          });
+          if (replaceAccount) {
+            runAuthProfileWriteTransaction(
+              undefined,
+              (database) => {
+                writePersistedAuthProfileStoreRaw(
+                  {
+                    version: 1,
+                    profiles: {
+                      "openai:work": {
+                        type: "api_key",
+                        provider: "openai",
+                        key: "synthetic-replacement-account",
+                      },
+                    },
+                  },
+                  undefined,
+                  database,
+                );
+              },
+              { env: fixture.env },
+            );
+          } else {
+            // A stopped multi-store pass can leave one owner at its recorded pre-migration state.
+            runAuthProfileWriteTransaction(
+              agentDir,
+              (database) => {
+                writePersistedAuthProfileStoreRaw(workerStore, agentDir, database);
+              },
+              { env: fixture.env },
+            );
+          }
+          const resumed = await run();
+          if (replaceAccount) {
+            expect(resumed.state.candidate.auth).toEqual(cfg.auth);
+            expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+              profiles: { "openai:work": { key: "synthetic-replacement-account" } },
+            });
+          } else {
+            expect(resumed.state.candidate.auth).toEqual({
+              profiles: { "openai:work": { provider: "openai", mode: "api_key" } },
+              order: { openai: ["openai:work"] },
+            });
+            expect(resumed.openAICodexAuthProfileIdMap?.get("openai-codex:work")).toBe(
+              "openai:work",
+            );
+            expect(readPersistedAuthProfileStoreRaw(agentDir)).toMatchObject({
+              profiles: { "openai:work": { provider: "openai", key: "synthetic-worker-account" } },
+            });
+          }
+        },
+      );
+    },
+  );
   it.each([
     ["claude-cli:work", "claude-cli", "anthropic:work", "shared"],
     ["google-gemini-cli:work", "google-gemini-cli", "google:work", "agent"],

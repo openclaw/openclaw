@@ -439,7 +439,11 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
 
   return new Map(
     [...params.authProfileIdMap].filter(([legacyProfileId, canonicalProfileId]) => {
-      const legacyProvider = legacyProfileId.split(":", 1)[0];
+      const separator = legacyProfileId.indexOf(":");
+      if (separator < 0) {
+        return false;
+      }
+      const legacyProvider = legacyProfileId.slice(0, separator);
       const provider =
         isLegacyCodexProviderId(legacyProvider) || legacyProfileId === "openai:codex-cli"
           ? "openai"

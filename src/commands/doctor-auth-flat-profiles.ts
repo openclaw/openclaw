@@ -80,6 +80,12 @@ import {
   type AuthProfileMigrationSourceReceipt,
 } from "./doctor-auth-migration-receipts.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  runWithAuthAliasMigrationReceipt,
+  recordAuthAliasMigration,
+  recoverAuthAliasMigration,
+  type AuthAliasStoreSnapshot,
+} from "./doctor/auth-alias-receipt.js";
 import { resolveLegacyRuntimeModelProviderAlias } from "./doctor/shared/legacy-runtime-model-providers.js";
 import { inspectAuthDatabaseFiles } from "./doctor/shared/stale-auth-order-store.js";
 
@@ -1910,7 +1916,16 @@ export function maybeRepairLegacyAuthProfileStores(params: {
       });
     }
   }
-  const unresolvedProfileIds = new Set<string>();
+  const unresolvedProfileIds = new Set(
+    Object.entries(params.cfg.auth?.profiles ?? {})
+      .filter(
+        ([id, profile]) =>
+          !params.profileIdMap.has(id) &&
+          (isLegacyAuthProfileId(id) ||
+            canonicalLegacyAuthProvider(profile.provider) !== profile.provider),
+      )
+      .map(([id]) => id),
+  );
   for (const target of planned) {
     for (const id of [
       ...collectRawAuthRotationProfileIds(target.store),
@@ -1967,10 +1982,34 @@ export function maybeRepairLegacyAuthProfileStores(params: {
     }
   }
 
-  const locked: Array<{ database: AuthProfileDatabase; target: (typeof planned)[number] }> = [];
+  const recovery = recoverAuthAliasMigration({ stores: planned, env });
+  for (const from of params.profileIdMap.keys()) {
+    if (recovery.blocked.has(from)) {
+      return {
+        changes: [],
+        warnings: [
+          ...warnings,
+          `Kept auth profile ${from} unchanged because its recorded account changed; reconcile the migration before retrying.`,
+        ],
+        profileIdMap: new Map(),
+      };
+    }
+  }
+  const migrated = planned.map((target) => {
+    const migratedStore = structuredClone(target.store);
+    const migratedState = structuredClone(target.state);
+    canonicalizeLegacyAuthStore(migratedStore, migratedState, params.profileIdMap);
+    return Object.assign(target, { migratedStore, migratedState });
+  });
+  const receiptSha256 = recordAuthAliasMigration({
+    profileIdMap: params.profileIdMap,
+    stores: migrated,
+    env,
+  });
+  const locked: Array<{ database: AuthProfileDatabase; target: (typeof migrated)[number] }> = [];
   const changes: string[] = [];
   const migrate = (index: number): void => {
-    const nextTarget = planned[index];
+    const nextTarget = migrated[index];
     if (nextTarget) {
       runAuthProfileWriteTransaction(
         nextTarget.agentDir,
@@ -1992,9 +2031,8 @@ export function maybeRepairLegacyAuthProfileStores(params: {
     }
     // Every participating owner is locked and revalidated before the first write.
     for (const { database, target } of locked) {
-      const store = structuredClone(target.store);
-      const state = structuredClone(target.state);
-      canonicalizeLegacyAuthStore(store, state, params.profileIdMap);
+      const store = target.migratedStore;
+      const state = target.migratedState;
       const storeChanged = !isDeepStrictEqual(store, target.store);
       const stateChanged = !isDeepStrictEqual(state, target.state);
       if (storeChanged) {
@@ -2010,7 +2048,7 @@ export function maybeRepairLegacyAuthProfileStores(params: {
       }
     }
   };
-  migrate(0);
+  runWithAuthAliasMigrationReceipt(receiptSha256, env, () => migrate(0));
   if (changes.length > 0) {
     clearRuntimeAuthProfileStoreSnapshots();
   }
@@ -2129,6 +2167,7 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
   const eligible = new Set<string>();
   const blocked = new Set<string>();
   const profileIdMap = new Map<string, string>();
+  const sqliteStores: AuthAliasStoreSnapshot[] = [];
   let incompleteCensus = false;
   const candidates = listAuthProfileRepairCandidates(params.cfg, env, () => {
     incompleteCensus = true;
@@ -2200,6 +2239,12 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
       return profileIdMap;
     }
     if (inspection.status === "readable") {
+      sqliteStores.push({
+        databasePath: candidate.agentDir
+          ? resolveAuthProfileDatabasePath(candidate.agentDir)
+          : resolveSharedAuthStorePath(env),
+        store: inspection.raw,
+      });
       if (!collectProfiles(inspection.raw)) {
         return profileIdMap;
       }
@@ -2250,8 +2295,17 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
       collectReferences(raw);
     }
   }
+  const recovery = recoverAuthAliasMigration({ stores: sqliteStores, env });
+  for (const profileId of recovery.blocked) {
+    blocked.add(profileId);
+  }
+  for (const [from, to] of recovery.recovered) {
+    if (!blocked.has(from)) {
+      profileIdMap.set(from, to);
+    }
+  }
   for (const profileId of [...eligible].toSorted((left, right) => left.localeCompare(right))) {
-    if (!blocked.has(profileId)) {
+    if (!blocked.has(profileId) && !profileIdMap.has(profileId)) {
       profileIdMap.set(
         profileId,
         isLegacyAuthProfileId(profileId)
