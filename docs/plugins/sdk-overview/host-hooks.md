@@ -69,7 +69,7 @@ override lookups. Returned audio buffers outlive registration disposal. The
 separate synchronous speech lookup and request-preparation APIs keep their
 existing caller lifetime; streaming speech is not part of this finite operation.
 
-For `image_generate` and `music_generate` tools prepared from an owned inspection,
+For `image_generate`, `music_generate`, and `video_generate` tools prepared from an owned inspection,
 resources remain held through preflight and, once accepted, through generation, media saving, and
 any rollback. A `started` result acknowledges acceptance; it does not mean the
 work or cleanup has finished. If the original inspection retires during
