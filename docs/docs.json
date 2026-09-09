@@ -2611,6 +2611,14 @@
                   "security/network-proxy",
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
+                  "security/THREAT-MODEL-ATLAS/reconnaissance",
+                  "security/THREAT-MODEL-ATLAS/initial-access",
+                  "security/THREAT-MODEL-ATLAS/execution",
+                  "security/THREAT-MODEL-ATLAS/persistence",
+                  "security/THREAT-MODEL-ATLAS/defense-evasion",
+                  "security/THREAT-MODEL-ATLAS/discovery",
+                  "security/THREAT-MODEL-ATLAS/collection-and-exfiltration",
+                  "security/THREAT-MODEL-ATLAS/impact",
                   "security/CONTRIBUTING-THREAT-MODEL"
                 ]
               },

@@ -2148,6 +2148,38 @@
     "target": "威胁模型"
   },
   {
+    "source": "Reconnaissance (AML.TA0002)",
+    "target": "侦察（AML.TA0002）"
+  },
+  {
+    "source": "Initial access (AML.TA0004)",
+    "target": "初始访问（AML.TA0004）"
+  },
+  {
+    "source": "Execution (AML.TA0005)",
+    "target": "执行（AML.TA0005）"
+  },
+  {
+    "source": "Persistence (AML.TA0006)",
+    "target": "持久化（AML.TA0006）"
+  },
+  {
+    "source": "Defense evasion (AML.TA0007)",
+    "target": "防御规避（AML.TA0007）"
+  },
+  {
+    "source": "Discovery (AML.TA0008)",
+    "target": "发现（AML.TA0008）"
+  },
+  {
+    "source": "Collection and exfiltration (AML.TA0009, AML.TA0010)",
+    "target": "收集与外传（AML.TA0009、AML.TA0010）"
+  },
+  {
+    "source": "Impact (AML.TA0011)",
+    "target": "影响（AML.TA0011）"
+  },
+  {
     "source": "Timezones",
     "target": "时区"
   },
