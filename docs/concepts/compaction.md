@@ -145,7 +145,7 @@ In safeguard mode, provider timeouts and rate limits from built-in summarization
 
 ### Identifier preservation
 
-Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). Override with `identifierPolicy: "off"` to disable. Custom guidance belongs in a compaction provider's `summarize()` implementation.
+Compaction summarization preserves opaque identifiers by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Set `agents.defaults.compaction.identifierPolicy: "off"` to disable. Custom guidance belongs in a compaction provider's `summarize()` implementation.
 
 ### Active transcript byte guard
 

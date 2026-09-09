@@ -110,8 +110,7 @@ These live under `~/.openclaw/` and should NOT be committed to the workspace rep
 
 - `~/.openclaw/openclaw.json` (config)
 - `~/.openclaw/state/openclaw.sqlite` (shared workspace setup state and attestations)
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (model auth profiles, routing state, standing intents, and other agent-scoped durability)
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (session rows, transcripts, and per-agent runtime state)
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (model auth profiles, routing state, standing intents, session rows, transcripts, memory index state, and other per-agent runtime durability)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
 - `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
 - `~/.openclaw/agents/<agentId>/sessions/` (legacy migration sources and archive/support artifacts)

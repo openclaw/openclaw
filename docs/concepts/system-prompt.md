@@ -22,7 +22,7 @@ Provider plugins can contribute cache-aware guidance without replacing the OpenC
 - inject a **stable prefix** above the prompt cache boundary
 - inject a **dynamic suffix** below the prompt cache boundary
 
-Use provider-owned contributions for model-family-specific tuning. Reserve the legacy `before_prompt_build` hook for compatibility or truly global prompt changes.
+Use provider-owned contributions for model-family-specific tuning; they have been the recommended path since v2026.4.5. Reserve the `before_prompt_build` hook, which is still supported, for compatibility or truly global prompt changes.
 
 The built-in GPT-5-family prompt contribution (`resolveGpt5SystemPromptContribution`) uses this mechanism: a `stablePrefix` behavior contract (execution policy, tool discipline, output contract, completion contract) plus an optional `interaction_style` override for a friendlier tone. For OpenAI-family routes, `plugins.entries.openai.config.personality` controls that style layer: `"friendly"` is the default, `"on"` aliases `"friendly"`, and `"off"` removes only the friendly override; the stable behavior contract remains.
 

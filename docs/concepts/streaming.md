@@ -8,7 +8,7 @@ title: "Streaming and chunking"
 ---
 
 OpenClaw has two independent streaming layers, and there is **no true
-token-delta streaming** to channel messages today:
+token-delta streaming** to channel messages:
 
 - **Block streaming (channels):** emit completed **blocks** as the assistant
   writes. These are normal channel messages, not token deltas.
