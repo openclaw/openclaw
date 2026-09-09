@@ -72,6 +72,8 @@ const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
 const FORCED_CONSULT_STREAM_MAX_CHARS = FORCED_CONSULT_RESULT_MAX_CHARS - 16;
 const FORCED_CONSULT_REASON = "provider_final_transcript_without_openclaw_agent_consult";
+const REALTIME_CONSULT_RECONNECT_FALLBACK_TEXT =
+  "I lost that supervisor update when the connection reset. Please ask me to try again.";
 const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
@@ -874,6 +876,7 @@ export class RealtimeCallHandler {
     const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
     let provisionalCloseReason: RealtimeVoiceCloseReason | undefined;
     let sessionClosed = false;
+    let consultReconnectFallbackPending = false;
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -1037,8 +1040,14 @@ export class RealtimeCallHandler {
           const turnId = harness.talk.activeTurnId;
           const owner = nativeConsultOwner.current;
           if (owner && this.isActiveBridgeOwner(callId, owner)) {
+            const nativeConsult = this.nativeConsultsInFlightByCallId.get(callId);
+            const forcedConsult = this.forcedConsultsByCallId.get(callId);
+            const hadActiveConsult =
+              nativeConsult?.owner === owner || forcedConsult?.owner === owner;
             this.resetUserTranscriptState(callId, userTranscriptOwner);
-            this.resetConsultSessionForContinuity(callId, owner);
+            if (this.resetConsultSessionForContinuity(callId, owner) && hadActiveConsult) {
+              consultReconnectFallbackPending = true;
+            }
           }
           harness.flushOutput(() => {
             audioPacer.clearAudio();
@@ -1049,6 +1058,19 @@ export class RealtimeCallHandler {
               turnId,
               payload: { callId, providerCallId: callSid, reason: event.type },
             });
+          }
+          return;
+        }
+        if (event.direction === "client" && event.type === "session.reconnect.ready") {
+          const owner = nativeConsultOwner.current;
+          if (consultReconnectFallbackPending && owner && this.isActiveBridgeOwner(callId, owner)) {
+            consultReconnectFallbackPending = false;
+            owner.sendUserMessage(
+              buildRealtimeVoiceSpeakExactMessage({
+                text: REALTIME_CONSULT_RECONNECT_FALLBACK_TEXT,
+                surfaceLabel: "the caller",
+              }),
+            );
           }
           return;
         }
@@ -1097,6 +1119,7 @@ export class RealtimeCallHandler {
         });
       },
       onClose: (reason) => {
+        consultReconnectFallbackPending = false;
         harness.finishOutputAudio(reason);
         harness.emit({
           type: "session.closed",

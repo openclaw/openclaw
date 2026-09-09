@@ -2102,6 +2102,97 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("delivers one fallback after continuity reset reconnects an active consult", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    let context: ToolHandlerContext | undefined;
+    const result = createDeferred<{ text: string }>();
+    const handleBargeIn = vi.fn();
+    const sendUserMessage = vi.fn();
+    const speakOutOfBand = vi.fn(async () => {});
+    const submitToolResult = vi.fn();
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({
+        supportsOutOfBandSpeech: true,
+        supportsToolResultContinuation: true,
+        supportsToolResultSuppression: true,
+        handleBargeIn,
+        sendUserMessage,
+        speakOutOfBand,
+        submitToolResult,
+      });
+    });
+    const handler = makeHandler(undefined, {
+      manager: { getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-reconnect-fallback")) },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.registerToolHandler(
+      "openclaw_agent_consult",
+      (_args: unknown, _callId: string, toolContext: ToolHandlerContext) => {
+        context = toolContext;
+        return result.promise;
+      },
+    );
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-reconnect-fallback", callSid: "CA-reconnect-fallback" },
+          }),
+        );
+        await waitForRealtimeTest(() => expect(callbacks).toBeDefined());
+        callbacks?.onToolCall?.({
+          itemId: "item-reconnect-fallback",
+          callId: "call-reconnect-fallback",
+          name: "openclaw_agent_consult",
+          args: { question: "Check the queue." },
+        });
+        await waitForRealtimeTest(() => expect(context).toBeDefined());
+        await context?.onVisiblePartial?.({ runId: "run-reconnect", text: "First result." });
+        expect(speakOutOfBand).toHaveBeenCalledOnce();
+
+        callbacks?.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+        expect(handleBargeIn).toHaveBeenCalledOnce();
+        await context?.onVisiblePartial?.({
+          runId: "run-reconnect",
+          text: "First result. Stale result.",
+        });
+        expect(speakOutOfBand).toHaveBeenCalledOnce();
+        expect(sendUserMessage).not.toHaveBeenCalled();
+
+        callbacks?.onEvent?.({ direction: "client", type: "session.reconnect.ready" });
+        expect(sendUserMessage).toHaveBeenCalledOnce();
+        expect(sendUserMessage.mock.calls[0]?.[0]).toContain(
+          "I lost that supervisor update when the connection reset. Please ask me to try again.",
+        );
+        callbacks?.onEvent?.({ direction: "client", type: "session.reconnect.ready" });
+        result.resolve({ text: "First result. Late final." });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+
+        expect(sendUserMessage).toHaveBeenCalledOnce();
+        expect(
+          submitToolResult.mock.calls.filter(
+            ([, toolResult]) =>
+              toolResult && typeof toolResult === "object" && "text" in toolResult,
+          ),
+        ).toHaveLength(0);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      result.resolve({ text: "First result. Late final." });
+      await server.close();
+    }
+  });
+
   it("keeps the non-streaming final append bounded and minimal", async () => {
     let callbacks: RealtimeBridgeRequest | undefined;
     const submitToolResult = vi.fn();
