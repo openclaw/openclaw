@@ -2152,6 +2152,18 @@
     "target": "配置示例"
   },
   {
+    "source": "Common tasks",
+    "target": "常见任务"
+  },
+  {
+    "source": "Config hot reload",
+    "target": "配置热重载"
+  },
+  {
+    "source": "Config RPC (programmatic updates)",
+    "target": "配置 RPC（程序化更新）"
+  },
+  {
     "source": "Configuration: hot reload",
     "target": "配置：热重载"
   },

@@ -2384,6 +2384,15 @@
                     "group": "Configuration",
                     "pages": [
                       "gateway/configuration",
+                      {
+                        "group": "Configuration",
+                        "pages": [
+                          "gateway/configuration/common-tasks",
+                          "gateway/configuration/hot-reload",
+                          "gateway/configuration/config-rpc",
+                          "gateway/configuration/environment-variables"
+                        ]
+                      },
                       "gateway/configuration-reference",
                       "gateway/config-agents",
                       {
