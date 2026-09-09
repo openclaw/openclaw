@@ -22,6 +22,7 @@ import {
 } from "./agent-deletion-journal.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
+import { openDanglingWorkshopIndexReadAdmission } from "./openclaw-state-db-dangling-workshop-index.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { ensureAgentDatabaseLeaseSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -281,7 +282,9 @@ export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
     ? openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(pathname)
     : undefined;
   const db = cached?.db ?? openNodeSqliteDatabase(pathname, { readOnly: true });
+  let closeSchemaReadAdmission: (() => void) | undefined;
   try {
+    closeSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(db);
     runWithSqliteBusyTimeout(db, 250, () => {
       if (!tableExists(db, "agent_database_leases")) {
         return;
@@ -294,9 +297,13 @@ export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
       }
     });
   } finally {
-    if (!cached) {
-      clearNodeSqliteKyselyCacheForDatabase(db);
-      db.close();
+    try {
+      closeSchemaReadAdmission?.();
+    } finally {
+      if (!cached) {
+        clearNodeSqliteKyselyCacheForDatabase(db);
+        db.close();
+      }
     }
   }
 }

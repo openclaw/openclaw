@@ -73,6 +73,44 @@ describe.each(["admission", "explicit", "async"] as const)("%s read-only state r
       expect(fs.readFileSync(options.path)).toEqual(before);
     });
   });
+  it("reads through the exact dangling Workshop index without changing its source", async () => {
+    await withTempDir("openclaw-state-readonly-dangling-workshop-", async (stateDir) => {
+      const options = createOptions(stateDir);
+      const opened = openOpenClawStateDatabase(options);
+      closeOpenClawStateDatabaseForTest();
+      const database = new DatabaseSync(opened.path);
+      try {
+        database.exec(
+          "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+        );
+        database.enableDefensive?.(false);
+        database.exec("PRAGMA writable_schema = ON;");
+        database
+          .prepare(
+            `UPDATE sqlite_schema
+              SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
+                           ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
+            WHERE type = 'index'
+              AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
+          )
+          .run();
+        const schema = database.prepare("PRAGMA schema_version").get() as {
+          schema_version: number;
+        };
+        database.exec(
+          `PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schema.schema_version + 1};`,
+        );
+      } finally {
+        database.close();
+      }
+      const before = fs.readFileSync(options.path);
+
+      expect(
+        await readState(({ db }) => db.prepare("SELECT role FROM schema_meta").get(), options),
+      ).toEqual({ role: "global" });
+      expect(fs.readFileSync(options.path)).toEqual(before);
+    });
+  });
   it.each(["cached", "uncached"])(
     "reads committed rows without joining a %s transaction",
     async (cacheState) => {

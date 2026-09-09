@@ -57,6 +57,7 @@ import {
   runStateSchemaMigrationTransaction,
   writeCurrentStateSchemaMetadata,
   executeCanonicalStateSchema,
+  prepareStateDatabaseSchemaRepair,
 } from "./openclaw-state-db-maintenance.js";
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
@@ -143,14 +144,13 @@ function repairStateSchema(
   let ownershipRefused = false;
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedStateSchemaVersion(db, pathname);
+    const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(db, pathname, env);
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runStateSchemaMigrationTransaction(
       db,
       pathname,
       () => {
-        assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
-        const applied: string[] = [];
+        const applied = repairAdmittedSchema();
         const previousVersion = readStateSchemaMigrationVersion(db);
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           for (const name of verifyAndRepairCanonicalSqliteIndexes(

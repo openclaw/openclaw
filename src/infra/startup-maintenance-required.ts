@@ -7,6 +7,7 @@ const maintenanceReasons = {
   "agent-media": "offline media migration",
   "agent-databases-composite-primary-key": "state database schema migration",
   "audit-events-v2": "state database schema migration",
+  "legacy-workshop-review-index": "state database schema migration",
   "legacy-workspace": "workspace setup state migration",
   "legacy-session-store": "session store migration",
 } as const;

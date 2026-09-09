@@ -15,6 +15,7 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import { openDanglingWorkshopIndexReadAdmission } from "./openclaw-state-db-dangling-workshop-index.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -75,12 +76,17 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
     return { reused: false };
   }
   try {
-    // Process-local terminal failures evict this handle. Persisted quarantine
-    // is checked on the next physical open so hot reads do not poll metadata.
-    // A newer build can migrate this file while the handle stays open, so the
-    // forward-compatibility gate still runs before any reused read.
-    assertSupportedStateSchemaVersion(opened.db, pathname);
-    return { reused: true, value: operation(opened) };
+    const closeSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(opened.db);
+    try {
+      // Process-local terminal failures evict this handle. Persisted quarantine
+      // is checked on the next physical open so hot reads do not poll metadata.
+      // A newer build can migrate this file while the handle stays open, so the
+      // forward-compatibility gate still runs before any reused read.
+      assertSupportedStateSchemaVersion(opened.db, pathname);
+      return { reused: true, value: operation(opened) };
+    } finally {
+      closeSchemaReadAdmission?.();
+    }
   } catch (error) {
     openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(opened, error);
     throw error;
@@ -113,13 +119,19 @@ function withOpenClawStateReadOnlyLocation<T>(
 ): T {
   const read = () => {
     const db = openNodeSqliteDatabase(location, { readOnly: true });
+    let closeSchemaReadAdmission: (() => void) | undefined;
     try {
+      closeSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(db);
       db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       assertSupportedStateSchemaVersion(db, pathname);
       return operation({ db, path: pathname });
     } finally {
-      clearNodeSqliteKyselyCacheForDatabase(db);
-      db.close();
+      try {
+        closeSchemaReadAdmission?.();
+      } finally {
+        clearNodeSqliteKyselyCacheForDatabase(db);
+        db.close();
+      }
     }
   };
   // Only live-source descriptors join handle custody; snapshots remain private.
