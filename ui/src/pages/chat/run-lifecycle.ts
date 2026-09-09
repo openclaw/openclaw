@@ -424,7 +424,7 @@ export async function handleAbortChat(
     // Session-only stops cannot be replayed safely against a later run.
     // Explain the blocked action instead of leaving the visible Stop inert.
     setChatError(host, t("chat.questions.disconnected"));
-    return;
+    return undefined;
   }
   if (!opts?.preserveDraft) {
     host.chatMessage = "";
@@ -433,7 +433,7 @@ export async function handleAbortChat(
   }
   if (pendingAbort) {
     host.pendingAbort = pendingAbort;
-    return;
+    return undefined;
   }
   return await abortChatRun(host);
 }
