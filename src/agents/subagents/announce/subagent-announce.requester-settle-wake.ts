@@ -34,6 +34,7 @@ import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import {
   consumeRequesterFinalAttachment,
   revokeRequesterFinalAttachment,
+  transferRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
@@ -507,6 +508,19 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       params.transitionBatch(settledBatch, state);
     }
 
+    const directIdempotencyKey = buildAnnounceIdempotencyKey(
+      attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
+    );
+    if (requesterAgentId && state.requesterYieldBatch && state.rearmGeneration !== undefined) {
+      transferRequesterFinalAttachment({
+        requesterAgentId,
+        requesterSessionKey,
+        requesterSessionId: requesterEntry.sessionId,
+        batchRunIds,
+        rearmGeneration: state.rearmGeneration,
+        requesterTurnRunId: directIdempotencyKey,
+      });
+    }
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
     try {
       delivery = await deliverSubagentAnnouncement({
@@ -525,9 +539,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         expectsCompletionMessage: false,
         requireDirectDelivery: true,
         ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
-        directIdempotencyKey: buildAnnounceIdempotencyKey(
-          attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
-        ),
+        directIdempotencyKey,
         signal: params.signal,
         resolveGatewayContext,
       });
