@@ -150,7 +150,7 @@ export async function acquirePluginCapabilityProviders<
   }
 }
 
-async function finishCapabilityOperation<T>(
+export async function finishCapabilityOperation<T>(
   outcome: Result<T, unknown>,
   release: () => Promise<void>,
 ): Promise<T> {
