@@ -355,7 +355,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry non-business transport error payloads", () => {
+  it("treats a provider 500 error payload as fallback-eligible", () => {
+    // `server_error` is an allowlisted ProviderErrorPayloadFailoverReason
+    // alongside auth/billing/rate_limit/overloaded, so a provider-side 500
+    // belongs to the fallback chain. This previously returned null only because
+    // an untyped 500 classified as `timeout`, which the allowlist excludes.
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "llama-3.1",
@@ -364,6 +368,26 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
           {
             isError: true,
             text: "HTTP 500: internal server error",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ reason: "server_error" });
+  });
+
+  it("does not retry non-business transport error payloads", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "llama-3.1",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "connection closed before a response arrived",
           },
         ],
         meta: {

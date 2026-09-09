@@ -1,4 +1,5 @@
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { isTimingHttpStatus } from "./classification-rules.js";
 import type { FailoverReason } from "./signal.js";
 
 type AssistantRequestFailureCopyFacts = {
@@ -57,8 +58,17 @@ export function renderAssistantRequestFailureCopy(
   const provider = facts.provider?.trim();
   const model = facts.model?.trim();
   const target = provider && model ? `${provider}/${model}` : provider || model;
+  // Some producers carry the status only inside a wrapper the classifier's
+  // status inference does not read (for example `Azure OpenAI API error (502):`),
+  // so the reason can still be timeout while the reply resolves a 5xx. Correct
+  // that here for non-timing statuses only, so a real 504 keeps its timeout
+  // wording. Remove once inferSignalStatus reads wrapped statuses.
   const normalizedReason =
-    facts.reason === "timeout" && typeof facts.status === "number" && facts.status >= 500
+    facts.reason === "timeout" &&
+    typeof facts.status === "number" &&
+    facts.status >= 500 &&
+    facts.status < 600 &&
+    !isTimingHttpStatus(facts.status)
       ? "server_error"
       : facts.reason;
   const reason = normalizedReason ? ASSISTANT_REQUEST_FAILURE_REASON[normalizedReason] : undefined;

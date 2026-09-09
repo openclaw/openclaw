@@ -49,6 +49,18 @@ export function isUnclassifiedNoBodyHttpSignal(signal: FailoverSignal): boolean 
   const message = signal.message?.trim();
   return !message || isExplicitNoBodyHttpMessage(message, status);
 }
+// The HTTP statuses that describe a timing failure: 408 request timeout, the
+// 504/522/524 gateway timeouts, and 499, which nginx returns when the client
+// aborts - here, when our own deadline fired. Every other 5xx is a
+// provider-side error, and `timeout` is not a
+// synonym for one, because resolveRunFailoverDecision excludes `timeout` from
+// retry-limit model fallback and from profile rotation, so naming an outage a
+// timeout silently skips a configured fallback chain. Both the status mapping
+// and the HTML-body path in classify.ts read this one predicate.
+const TIMING_HTTP_STATUSES = new Set([408, 499, 504, 522, 524]);
+export function isTimingHttpStatus(status: number | undefined): boolean {
+  return typeof status === "number" && TIMING_HTTP_STATUSES.has(status);
+}
 type PaymentRequiredFailoverReason = Extract<FailoverReason, "billing" | "rate_limit">;
 // Provider SDKs often keep semantic error fields outside Error.message.
 // These bounded candidates feed classification only; user-facing copy still
@@ -263,11 +275,16 @@ export function classifyFailoverClassificationFromHttpStatus(
   }
   if (status === 499 || (status >= 500 && status < 600)) {
     // Gateways can wrap a deterministic request rejection in a 5xx response.
-    return messageReason === "overloaded" ||
+    if (
+      messageReason === "overloaded" ||
       messageReason === "server_error" ||
       (status >= 500 && messageReason === "format")
-      ? messageClassification
-      : toReasonClassification("timeout");
+    ) {
+      return messageClassification;
+    }
+    return isTimingHttpStatus(status)
+      ? toReasonClassification("timeout")
+      : toReasonClassification("server_error");
   }
   if (status === 400 || status === 422) {
     // 400/422 are ambiguous: inspect the payload first so provider-specific

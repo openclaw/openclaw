@@ -106,4 +106,27 @@ describe("renderAssistantRequestFailureCopy", () => {
       "⚠️ openai/test-model request failed (authentication failed). Re-authenticate the provider and try again.",
     );
   });
+
+  it("reports the classified reason for 5xx failures instead of re-deriving it", () => {
+    // The classifier owns the reason. A gateway timeout really did time out,
+    // and an untyped 5xx is already classified server_error upstream, so this
+    // layer must not second-guess either from the status.
+    expect(renderAssistantRequestFailureCopy({ ...target, reason: "timeout", status: 504 })).toBe(
+      "⚠️ openai/test-model request failed (request timed out, HTTP 504). This is usually temporary — try again shortly.",
+    );
+    expect(
+      renderAssistantRequestFailureCopy({ ...target, reason: "server_error", status: 502 }),
+    ).toBe(
+      "⚠️ openai/test-model request failed (provider internal error, HTTP 502). This is usually temporary — try again shortly.",
+    );
+  });
+
+  it("corrects a timeout reason carrying a non-timing 5xx from a wrapped producer", () => {
+    // `Azure OpenAI API error (502): ...` hides its status from the classifier's
+    // status inference, so the reason arrives as timeout while the reply
+    // resolves 502. The copy must not claim a timeout.
+    expect(renderAssistantRequestFailureCopy({ ...target, reason: "timeout", status: 502 })).toBe(
+      "⚠️ openai/test-model request failed (provider internal error, HTTP 502). This is usually temporary — try again shortly.",
+    );
+  });
 });
