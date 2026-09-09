@@ -165,7 +165,7 @@ export function isPluginInPackageBundledRoots(params: {
     );
 }
 
-function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefined {
+export function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefined {
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
   // In pnpm source checkouts, prefer the built bundled plugin runtime when it
   // exists so dist gateway runs avoid loading TS plugin entrypoints through jiti.

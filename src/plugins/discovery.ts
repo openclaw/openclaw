@@ -667,7 +667,9 @@ function isSourceCheckoutExtensionsDir(extensionsDir: string): boolean {
   );
 }
 
-function resolveBundledSourceCheckoutExtensionsDir(bundledRoot?: string): string | undefined {
+export function resolveBundledSourceCheckoutExtensionsDir(
+  bundledRoot?: string,
+): string | undefined {
   if (!bundledRoot) {
     return undefined;
   }
