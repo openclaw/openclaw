@@ -3256,6 +3256,54 @@
     "target": "配置 — 聊天命令"
   },
   {
+    "source": "ACP agents quickstart",
+    "target": "ACP 智能体快速上手"
+  },
+  {
+    "source": "ACP agents operator runbook",
+    "target": "ACP 智能体运维手册"
+  },
+  {
+    "source": "ACP agents bindings",
+    "target": "ACP 智能体绑定"
+  },
+  {
+    "source": "ACP agents sessions",
+    "target": "ACP 智能体会话"
+  },
+  {
+    "source": "ACP agents delivery model",
+    "target": "ACP 智能体投递模型"
+  },
+  {
+    "source": "ACP agents controls",
+    "target": "ACP 智能体控制"
+  },
+  {
+    "source": "ACP agents troubleshooting",
+    "target": "ACP 智能体故障排查"
+  },
+  {
+    "source": "Set up OpenTelemetry export",
+    "target": "设置 OpenTelemetry 导出"
+  },
+  {
+    "source": "OpenTelemetry configuration",
+    "target": "OpenTelemetry 配置"
+  },
+  {
+    "source": "Privacy and trace context",
+    "target": "隐私和追踪上下文"
+  },
+  {
+    "source": "Model calls and exported metrics",
+    "target": "模型调用和导出指标"
+  },
+  {
+    "source": "Exported spans and diagnostic events",
+    "target": "导出的 Span 和诊断事件"
+  },
+  {
     "source": "Configuration — tool policy",
     "target": "配置 — 工具策略"
   },
@@ -3278,25 +3326,5 @@
   {
     "source": "Configuration — provider examples",
     "target": "配置 — 提供商示例"
-  },
-  {
-    "source": "Set up OpenTelemetry export",
-    "target": "设置 OpenTelemetry 导出"
-  },
-  {
-    "source": "OpenTelemetry configuration",
-    "target": "OpenTelemetry 配置"
-  },
-  {
-    "source": "Privacy and trace context",
-    "target": "隐私和追踪上下文"
-  },
-  {
-    "source": "Model calls and exported metrics",
-    "target": "模型调用和导出指标"
-  },
-  {
-    "source": "Exported spans and diagnostic events",
-    "target": "导出的 Span 和诊断事件"
   }
 ]

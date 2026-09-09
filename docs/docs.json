@@ -1951,6 +1951,18 @@
                   "tools/subagents",
                   "tools/swarm",
                   "tools/acp-agents",
+                  {
+                    "group": "ACP agents",
+                    "pages": [
+                      "tools/acp-agents/quickstart",
+                      "tools/acp-agents/runbook",
+                      "tools/acp-agents/bindings",
+                      "tools/acp-agents/sessions",
+                      "tools/acp-agents/delivery",
+                      "tools/acp-agents/controls",
+                      "tools/acp-agents/troubleshooting"
+                    ]
+                  },
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
                 ]
