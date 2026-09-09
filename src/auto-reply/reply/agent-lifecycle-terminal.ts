@@ -124,12 +124,16 @@ export function createAgentLifecycleTerminalBackstop(params: {
       // providers (claude-cli) carry a reason but no summary, so fall through to
       // the shared recovery text rather than the raw provider error string; this
       // is what the persisted lastRunError the Control UI renders inherits.
+      // Others (an OpenAI non-JSON 401 refresh response) carry a bounded
+      // summary and status but no recognized reason. Both shapes are auth
+      // refresh failures, so both keep the observation the Control UI uses to
+      // classify the error and render provider/status details.
       data.error =
         renderFailoverCodeUserCopy(getFailoverErrorCode(resultOrError)) ??
         (oauthFailure?.summary ? `⚠️ ${oauthFailure.summary}` : undefined) ??
         (oauthFailure?.reason ? buildOAuthRefreshFailureRecoveryText(oauthFailure) : undefined) ??
         formatErrorMessage(resultOrError);
-      if (oauthFailure?.reason) {
+      if (oauthFailure?.summary || oauthFailure?.reason) {
         data.errorObservation = {
           ...(oauthFailure.provider ? { provider: oauthFailure.provider } : {}),
           ...(oauthFailure.reason ? { failoverReason: oauthFailure.reason } : {}),

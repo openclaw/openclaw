@@ -44,6 +44,38 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     expect(JSON.stringify(event)).not.toContain(rawDiagnostic);
   });
 
+  it("keeps the auth-refresh observation for a summary-only OAuth failure", () => {
+    emitAgentEvent.mockClear();
+    // An OpenAI non-JSON HTTP 401 refresh response yields a bounded summary and
+    // status with no recognized reason; OAuthRefreshFailureError preserves that
+    // shape. The Control UI still needs the observation to classify the error
+    // and render provider/status details.
+    const summary = "OpenAI Codex token refresh failed (HTTP 401).";
+    const oauthError = new OAuthRefreshFailureError({
+      provider: "openai",
+      message: `OAuth token refresh failed for openai: ${summary}`,
+      reason: null,
+      status: 401,
+      summary,
+    });
+    const error = new Error("wrapped OAuth refresh failure", { cause: oauthError });
+    const terminal = createAgentLifecycleTerminalBackstop({
+      runId: "oauth-refresh-failure-summary-only",
+      getLifecycleGeneration: () => "test-generation",
+      resolveTerminationFields: () => ({}),
+    });
+
+    terminal.emit("error", error);
+
+    const event = emitAgentEvent.mock.calls[0]?.[0];
+    expect(event.data.error).toBe(`⚠️ ${summary}`);
+    expect(event.data.errorObservation).toEqual({
+      provider: "openai",
+      providerRuntimeFailureKind: "auth_refresh",
+      httpStatus: 401,
+    });
+  });
+
   it.each([
     { reason: "auth", status: 401 },
     { reason: "session_expired", status: 410 },
