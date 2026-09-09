@@ -197,7 +197,9 @@ async function executeDoctorLint(
         for (const finding of runtimeFindings.filter((entry) =>
           healthFindingMeetsSeverity(entry, sevMin),
         )) {
-          runtime.error(`${finding.message}\n${finding.fixHint}`);
+          runtime.error(
+            finding.fixHint ? `${finding.message}\n${finding.fixHint}` : finding.message,
+          );
         }
       },
     };
@@ -429,7 +431,9 @@ async function createStateSnapshotFailureExecution(
       }
       for (const entry of visible) {
         runtime.error(`doctor --lint: ${entry.message}`);
-        runtime.error(`fix: ${entry.fixHint}`);
+        if (entry.fixHint) {
+          runtime.error(`fix: ${entry.fixHint}`);
+        }
       }
     },
   };

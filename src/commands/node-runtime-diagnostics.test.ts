@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import * as runtimeGuard from "../infra/runtime-guard.js";
@@ -66,6 +69,55 @@ afterEach(() => {
 });
 
 describe("Node runtime diagnostics command surfaces", () => {
+  it.each(["invalid config", "snapshot failure"])(
+    "renders informational Node findings without a missing fix hint after %s",
+    async (failure) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-node-note-"));
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+      const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+      mockCliRuntime("24.15.0");
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: false,
+        config: {},
+        issues: [{ path: "gateway.mode", message: "Required" }],
+      });
+      if (failure === "snapshot failure") {
+        vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
+          throw new Error("No space left for private snapshot");
+        });
+      }
+      try {
+        expect(
+          await runDoctorLintCli(runtime, {
+            severityMin: "info",
+            ...(failure === "snapshot failure" ? { updateReadiness: "post-plugin" } : {}),
+          }),
+        ).toBe(1);
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining(
+            failure === "snapshot failure"
+              ? "No space left for private snapshot"
+              : "config file exists but does not parse cleanly",
+          ),
+        );
+        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Node 24.15.0:"));
+        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("nvm install 26"));
+        expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
+      } finally {
+        if (originalIsTTY) {
+          Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
+        } else {
+          Reflect.deleteProperty(process.stdout, "isTTY");
+        }
+        vi.unstubAllEnvs();
+        fs.rmSync(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("keeps Node repair guidance visible when config validation fails", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
