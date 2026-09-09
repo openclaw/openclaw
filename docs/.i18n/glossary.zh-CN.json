@@ -3454,5 +3454,37 @@
   {
     "source": "Telegram troubleshooting",
     "target": "Telegram 故障排查"
+  },
+  {
+    "source": "Sub-agent slash command",
+    "target": "子智能体斜杠命令"
+  },
+  {
+    "source": "Sub-agent tool reference",
+    "target": "子智能体工具参考"
+  },
+  {
+    "source": "Thread-bound sub-agent sessions",
+    "target": "线程绑定的子智能体会话"
+  },
+  {
+    "source": "Nested sub-agents and authentication",
+    "target": "嵌套子智能体与鉴权"
+  },
+  {
+    "source": "Sub-agent announce",
+    "target": "子智能体通报"
+  },
+  {
+    "source": "Sub-agent tool policy",
+    "target": "子智能体工具策略"
+  },
+  {
+    "source": "Sub-agent concurrency, recovery, and stopping",
+    "target": "子智能体并发、恢复与停止"
+  },
+  {
+    "source": "Swarm collectors",
+    "target": "Swarm 收集器"
   }
 ]
