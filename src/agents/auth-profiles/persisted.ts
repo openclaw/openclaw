@@ -14,7 +14,6 @@ import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
 import { oauthCredentialMetadataSchema } from "./credential-schema.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
-import { AuthProfileStoreUnreadableError } from "./legacy-source-diagnostic.js";
 import {
   hasOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
@@ -35,6 +34,7 @@ import {
   type AuthProfileDatabase,
 } from "./sqlite.js";
 import { coerceAuthProfileState, mergeAuthProfileState } from "./state.js";
+import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import type {
   AuthProfileCredential,
   AuthProfileSecretsStore,

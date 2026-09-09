@@ -67,6 +67,22 @@ describe("assertAuthProfileMigrationReady", () => {
       blockedProvider: "openai",
     },
     { name: "malformed JSON", raw: "{broken", scoped: false },
+    { name: "metadata-only flat object", raw: '{"metadata":{}}', scoped: false },
+    {
+      name: "unknown flat fields",
+      raw: '{"anthropic":{"unknown":"value"},"openai":{"other":true}}',
+      scoped: false,
+    },
+    {
+      name: "mixed flat metadata",
+      raw: '{"anthropic":{"apiKey":"synthetic-key"},"metadata":{}}',
+      scoped: false,
+    },
+    {
+      name: "unrecognized canonical entry",
+      raw: '{"profiles":{"anthropic:default":{"provider":"anthropic","unknown":true}}}',
+      scoped: false,
+    },
     {
       name: "missing provider",
       raw: JSON.stringify({
@@ -89,6 +105,9 @@ describe("assertAuthProfileMigrationReady", () => {
           expect(sibling).not.toThrow();
         } else {
           expect(sibling).toThrow("affected providers: all (legacy provider scope unavailable)");
+          expect(() => assertAuthProfileMigrationReady(agentDir, undefined, "openai")).toThrow(
+            "affected providers: all (legacy provider scope unavailable)",
+          );
         }
         expect(() => assertAuthProfileMigrationReady(agentDir, undefined, blockedProvider)).toThrow(
           "run openclaw doctor --fix",

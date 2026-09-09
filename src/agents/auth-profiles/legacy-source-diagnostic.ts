@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { coerceLegacyFlatCredential } from "./legacy-flat-credential.js";
 import {
   listLegacyAuthProfileSources,
   resolveLegacyAuthProfileSourceCandidates,
@@ -11,13 +12,17 @@ import {
   type LegacyAuthProfileSourceKind,
 } from "./legacy-source-files.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { parseLegacyCredentialEntry } from "./persisted.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
   inspectPersistedSharedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "./sqlite.js";
+import { AUTH_PROFILE_MIGRATION_COMMAND } from "./store-unreadable-error.js";
+import type { AuthProfileStore } from "./types.js";
 
+export { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 export {
   listLegacyAuthProfileArchives,
   listLegacyAuthProfileSources,
@@ -25,7 +30,6 @@ export {
 } from "./legacy-source-files.js";
 
 const AUTH_PROFILE_MIGRATION_REQUIRED_CODE = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
-const AUTH_PROFILE_MIGRATION_COMMAND = "openclaw doctor --fix" as const;
 const log = createSubsystemLogger("auth-profiles/persistence");
 
 function isCredentialSource(source: LegacyAuthProfileSource): boolean {
@@ -52,10 +56,13 @@ export function readLegacyAuthProfileProviders(
         return null;
       }
       for (const [key, profile] of Object.entries(profiles)) {
-        if (!isRecord(profile)) {
+        const credential = nested
+          ? parseLegacyCredentialEntry(profile)
+          : coerceLegacyFlatCredential(key, profile);
+        if (!credential) {
           return null;
         }
-        const provider = nested ? profile.provider : (profile.provider ?? key);
+        const provider = credential.provider;
         // Keep untrusted metadata bounded and safe to include in diagnostics.
         if (typeof provider !== "string" || !/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(provider)) {
           return null;
@@ -212,18 +219,6 @@ export class AuthProfileMigrationRequiredError extends Error {
   }
 }
 
-export class AuthProfileStoreUnreadableError extends Error {
-  readonly code = "AUTH_PROFILE_STORE_UNREADABLE" as const;
-  readonly action = AUTH_PROFILE_MIGRATION_COMMAND;
-
-  constructor(databasePath: string) {
-    super(
-      `Auth profile store ${shortenHomePath(databasePath)} is unreadable; run ${AUTH_PROFILE_MIGRATION_COMMAND}.`,
-    );
-    this.name = "AuthProfileStoreUnreadableError";
-  }
-}
-
 const migrationRequiredByDatabase = new Map<string, AuthProfileMigrationRequiredError>();
 const warnedLegacySourceDatabases = new Set<string>();
 
@@ -282,9 +277,14 @@ export function assertAuthProfileMigrationStateAtDatabasePath(
   databasePath: string,
   provider?: string,
   config?: OpenClawConfig,
+  deferScopedRefusals = false,
 ): void {
   const error = migrationRequiredByDatabase.get(databasePath);
-  if (error?.blocksProvider(provider, config)) {
+  if (
+    error &&
+    !(deferScopedRefusals && error.affectedProviders !== null) &&
+    error.blocksProvider(provider, config)
+  ) {
     // The activated secrets snapshot for this owner is empty. Only an explicit
     // lifecycle clear/reload may remove the error and publish migrated SQLite rows.
     throw error;
@@ -297,11 +297,13 @@ export function assertAuthProfileMigrationCandidates(params: {
   hasCredentials: () => boolean;
   provider?: string;
   config?: OpenClawConfig;
+  deferScopedRefusals?: boolean;
 }): void {
   assertAuthProfileMigrationStateAtDatabasePath(
     params.databasePath,
     params.provider,
     params.config,
+    params.deferScopedRefusals,
   );
   // Older shipped processes and restores can recreate these three fixed files
   // after startup, so this credential boundary deliberately rechecks their names.
@@ -321,7 +323,10 @@ export function assertAuthProfileMigrationCandidates(params: {
     params.databasePath,
     new AuthProfileMigrationRequiredError({ databasePath: params.databasePath, sources }),
   );
-  if (migrationError.blocksProvider(params.provider, params.config)) {
+  if (
+    !(params.deferScopedRefusals && migrationError.affectedProviders !== null) &&
+    migrationError.blocksProvider(params.provider, params.config)
+  ) {
     throw migrationError;
   }
 }
@@ -331,6 +336,7 @@ export function assertAuthProfileMigrationReady(
   env?: NodeJS.ProcessEnv,
   provider?: string,
   config?: OpenClawConfig,
+  deferScopedRefusals = false,
 ): void {
   assertAuthProfileMigrationCandidates({
     databasePath: resolveAuthProfileOwnerPath(agentDir, env),
@@ -338,7 +344,29 @@ export function assertAuthProfileMigrationReady(
     hasCredentials: () => hasMigratedAuthProfileCredentials(agentDir, env),
     provider,
     config,
+    deferScopedRefusals,
   });
+}
+
+/** Read-only preparation excludes unavailable providers without releasing their owner fence. */
+export function excludeAuthProfileMigrationProviders(
+  store: AuthProfileStore,
+  databasePath: string,
+  config?: OpenClawConfig,
+): AuthProfileStore {
+  assertAuthProfileMigrationStateAtDatabasePath(databasePath, undefined, config, true);
+  const error = migrationRequiredByDatabase.get(databasePath);
+  if (!error) {
+    return store;
+  }
+  return {
+    ...store,
+    profiles: Object.fromEntries(
+      Object.entries(store.profiles).filter(
+        ([, credential]) => !error.blocksProvider(credential.provider, config),
+      ),
+    ),
+  };
 }
 
 export function clearAuthProfileMigrationDiagnostics(): void {

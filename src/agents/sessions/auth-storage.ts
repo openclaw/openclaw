@@ -10,6 +10,7 @@ import fs from "node:fs";
 import { dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import type {
   OAuthCredentials,
@@ -19,10 +20,8 @@ import type {
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
-  assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
-  markAuthProfileMigrationRequired,
 } from "../auth-profiles/legacy-source-diagnostic.js";
 import { normalizeOAuthRefreshCredential } from "../auth-profiles/oauth-refresh-fence.js";
 import {
@@ -30,7 +29,6 @@ import {
   isPendingOAuthRefreshFence,
 } from "../auth-profiles/oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
-import { getRuntimeAuthProfileStoreSnapshotCore } from "../auth-profiles/runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
@@ -40,11 +38,12 @@ import {
 } from "../auth-profiles/sqlite.js";
 import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
-  loadAuthProfileStoreForSecretsRuntime,
+  createAuthProfileStoreReadScope,
   saveAuthProfileStoreWithPreparedOwner,
 } from "../auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
+import { materializeAuthStorageStore } from "./auth-storage-materialize.js";
 import {
   isAuthStorageOAuthRefreshFence,
   refreshAuthStorageOAuthCredential,
@@ -167,37 +166,7 @@ function projectAuthoritativeAuthStorageData(
   store: AuthProfileStore,
   snapshots: readonly AuthProfileStore[],
 ): AuthStorageData {
-  if (snapshots.length === 0) {
-    assertAuthStorageSecretRefsMaterialized(store);
-    return projectAuthStorageData(store);
-  }
-  const profiles = Object.fromEntries(
-    Object.entries(store.profiles).map(([profileId, credential]) => {
-      const runtimeCredential = snapshots
-        .map((snapshot) => snapshot.profiles[profileId])
-        .find((candidate) =>
-          credential.type === "api_key" && credential.keyRef
-            ? candidate?.type === "api_key" &&
-              Boolean(candidate.key) &&
-              candidate.provider === credential.provider &&
-              isDeepStrictEqual(candidate.keyRef, credential.keyRef)
-            : credential.type === "token" && credential.tokenRef
-              ? candidate?.type === "token" &&
-                Boolean(candidate.token) &&
-                candidate.provider === credential.provider &&
-                isDeepStrictEqual(candidate.tokenRef, credential.tokenRef)
-              : false,
-        );
-      const needsMaterializedRef =
-        (credential.type === "api_key" && Boolean(credential.keyRef)) ||
-        (credential.type === "token" && Boolean(credential.tokenRef));
-      return [
-        profileId,
-        needsMaterializedRef && runtimeCredential ? runtimeCredential : credential,
-      ];
-    }),
-  );
-  const materialized = { ...store, profiles };
+  const materialized = materializeAuthStorageStore(store, snapshots);
   assertAuthStorageSecretRefsMaterialized(materialized);
   return projectAuthStorageData(materialized);
 }
@@ -290,26 +259,43 @@ function loadSqliteAuthStorageStore(
 
 class SqliteAuthStorageBackend implements AuthStorageBackend {
   constructor(
-    private readonly agentDir: string,
-    private preparedStore?: AuthProfileStore,
+    private readonly scope: ReturnType<typeof createAuthProfileStoreReadScope>,
+    private readonly preparedStore: AuthProfileStore,
   ) {}
 
+  private get agentDir(): string {
+    return this.scope.agentDir;
+  }
+
+  assertProviderReady(provider?: string): void {
+    this.scope.assertProviderReady(provider);
+  }
+
+  read(): string {
+    return JSON.stringify(
+      projectAuthoritativeAuthStorageData(
+        this.scope.read(),
+        this.resolveMaterializedRuntimeStores(),
+      ),
+    );
+  }
+
   private resolveMaterializedRuntimeStores(): AuthProfileStore[] {
-    const current = getRuntimeAuthProfileStoreSnapshotCore(this.agentDir);
+    const current = this.scope.getRuntimeSnapshots();
     // A current lifecycle snapshot is authoritative, including an unresolved
     // ref after failed/revoked secrets reload. Prepared data is bootstrap-only.
-    return current ? [current] : this.preparedStore ? [this.preparedStore] : [];
+    return current.length > 0 ? current : [this.preparedStore];
   }
 
   private readRaw(): AuthProfileStore {
-    assertAuthProfileMigrationReady(this.agentDir);
+    this.assertProviderReady();
     return loadSqliteAuthStorageStore(this.agentDir);
   }
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
-    assertAuthProfileMigrationReady(this.agentDir);
+    this.assertProviderReady();
     const snapshots = this.resolveMaterializedRuntimeStores();
-    assertAuthProfileMigrationReady(this.agentDir);
+    this.assertProviderReady();
     return runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
       const store = loadSqliteAuthStorageStore(this.agentDir, database);
       const materializedData = projectAuthoritativeAuthStorageData(store, snapshots);
@@ -332,7 +318,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
   }
 
   async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    assertAuthProfileMigrationReady(this.agentDir);
+    this.assertProviderReady();
     return await withFileLock(
       resolveAuthProfileDatabasePath(this.agentDir),
       OAUTH_REFRESH_LOCK_OPTIONS,
@@ -346,7 +332,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
         if (next === undefined) {
           return result;
         }
-        assertAuthProfileMigrationReady(this.agentDir);
+        this.assertProviderReady();
         runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
           const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
           if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
@@ -373,14 +359,24 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
   }
 }
 
+function createSqliteAuthStorageBackend(
+  agentDir: string,
+  config?: OpenClawConfig,
+): SqliteAuthStorageBackend {
+  const scope = createAuthProfileStoreReadScope(agentDir, config);
+  const preparedStore = materializeAuthStorageStore(scope.store, scope.getRuntimeSnapshots());
+  assertAuthStorageSecretRefsMaterialized(preparedStore);
+  return new SqliteAuthStorageBackend(scope, preparedStore);
+}
+
 /**
  * @deprecated Use AuthStorage.forAgent(agentDir). This compatibility adapter
  * derives the owning agent directory from the old path and persists only to SQLite.
  * It is eligible for removal after 2026-10-01 and a clean published-plugin sweep.
  */
 export class FileAuthStorageBackend implements AuthStorageBackend {
-  private readonly delegate: SqliteAuthStorageBackend;
-  readonly migrationOwnerAgentDir: string;
+  private delegate?: SqliteAuthStorageBackend;
+  private readonly agentDir: string;
 
   constructor(authPath?: string) {
     if (!fileAuthStorageBackendWarningEmitted) {
@@ -392,16 +388,27 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       });
     }
     assertDeprecatedAuthStoragePathAbsent(authPath);
-    this.migrationOwnerAgentDir = authPath ? dirname(authPath) : getAgentDir();
-    this.delegate = new SqliteAuthStorageBackend(this.migrationOwnerAgentDir);
+    this.agentDir = authPath ? dirname(authPath) : getAgentDir();
+  }
+
+  private getDelegate(): SqliteAuthStorageBackend {
+    return (this.delegate ??= createSqliteAuthStorageBackend(this.agentDir));
+  }
+
+  read(): string {
+    return this.getDelegate().read();
+  }
+
+  assertProviderReady(provider?: string): void {
+    this.getDelegate().assertProviderReady(provider);
   }
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
-    return this.delegate.withLock(fn);
+    return this.getDelegate().withLock(fn);
   }
 
   async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    return await this.delegate.withLockAsync(fn);
+    return await this.getDelegate().withLockAsync(fn);
   }
 }
 
@@ -435,30 +442,13 @@ export class AuthStorage {
   private loadError: Error | null = null;
   private errors: Error[] = [];
   private storage: AuthStorageBackend;
-  private migrationOwnerAgentDir?: string;
-
-  private constructor(storage: AuthStorageBackend, migrationOwnerAgentDir?: string) {
+  private constructor(storage: AuthStorageBackend) {
     this.storage = storage;
-    this.migrationOwnerAgentDir = migrationOwnerAgentDir ?? storage.migrationOwnerAgentDir;
     this.reload();
   }
 
-  static forAgent(agentDir: string = getAgentDir()): AuthStorage {
-    try {
-      assertAuthProfileMigrationReady(agentDir);
-      const preparedStore =
-        getRuntimeAuthProfileStoreSnapshotCore(agentDir) ??
-        loadAuthProfileStoreForSecretsRuntime(agentDir);
-      assertAuthStorageSecretRefsMaterialized(preparedStore);
-      return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore), agentDir);
-    } catch (error) {
-      if (!(error instanceof AuthProfileMigrationRequiredError) || !error.affectedProviders) {
-        throw error;
-      }
-      // Keep persistence fenced; getApiKey checks the selected provider before fallback.
-      markAuthProfileMigrationRequired(agentDir, error);
-      return new AuthStorage(new SqliteAuthStorageBackend(agentDir), agentDir);
-    }
+  static forAgent(agentDir: string = getAgentDir(), config?: OpenClawConfig): AuthStorage {
+    return new AuthStorage(createSqliteAuthStorageBackend(agentDir, config));
   }
 
   /**
@@ -517,17 +507,11 @@ export class AuthStorage {
     this.errors.push(normalizedError);
   }
 
-  private getCanonicalLoadError(provider?: string): Error | null {
+  private getCanonicalLoadError(): Error | null {
     if (!this.loadError) {
       return null;
     }
-    if (
-      this.loadError instanceof AuthProfileMigrationRequiredError &&
-      !this.loadError.blocksProvider(provider)
-    ) {
-      return null;
-    }
-    return this.migrationOwnerAgentDir ||
+    return this.storage.assertProviderReady ||
       this.loadError instanceof AuthProfileMigrationRequiredError ||
       this.loadError instanceof AuthProfileStoreUnreadableError
       ? this.loadError
@@ -547,10 +531,14 @@ export class AuthStorage {
   reload(): void {
     let content: string | undefined;
     try {
-      this.storage.withLock((current) => {
-        content = current;
-        return { result: undefined };
-      });
+      if (this.storage.read) {
+        content = this.storage.read();
+      } else {
+        this.storage.withLock((current) => {
+          content = current;
+          return { result: undefined };
+        });
+      }
       this.data = this.parseStorageData(content);
       this.loadError = null;
     } catch (error) {
@@ -756,17 +744,24 @@ export class AuthStorage {
       return runtimeKey;
     }
 
-    if (this.migrationOwnerAgentDir) {
-      assertAuthProfileMigrationReady(this.migrationOwnerAgentDir, undefined, providerId);
-    }
+    this.storage.assertProviderReady?.(providerId);
 
-    const canonicalLoadError = this.getCanonicalLoadError(providerId);
+    const canonicalLoadError = this.getCanonicalLoadError();
     if (canonicalLoadError) {
       // Canonical-store ownership blocks implicit env/config fallback. An
       // explicit runtime override above remains the only caller-owned escape.
       throw canonicalLoadError;
     }
 
+    const apiKey = await this.resolveStoredOrFallbackApiKey(providerId, options);
+    this.storage.assertProviderReady?.(providerId);
+    return apiKey;
+  }
+
+  private async resolveStoredOrFallbackApiKey(
+    providerId: string,
+    options?: { includeFallback?: boolean },
+  ): Promise<string | undefined> {
     let cred = this.data[providerId];
     if (isAuthStorageOAuthRefreshFence(providerId, cred)) {
       this.reload();

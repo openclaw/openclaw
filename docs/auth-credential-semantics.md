@@ -172,6 +172,13 @@ warning-only behavior. Recorded refusals remain until the lifecycle explicitly
 clears them; changing or removing a legacy file does not release them. Doctor lists the affected providers, and
 `openclaw doctor --fix` performs the supported verified import and archive.
 
+Session readers retain their local and shared auth-store owners and check each
+owner's current refusal before returning credentials. A shared-provider refusal
+does not replace an unrelated local credential with environment or config auth,
+and unresolved local SecretRefs still fail closed. Only recognized credential
+entries can narrow a legacy refusal; metadata-only objects and unknown layouts
+remain owner-wide.
+
 For script compatibility, probe errors keep this first line unchanged:
 
 `Auth profile credentials are missing or expired.`
