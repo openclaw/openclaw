@@ -496,7 +496,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
   });
 
   it.each([false, true])(
-    "keeps accepted steering bytes stable across transcript persistence (image: %s)",
+    "keeps steering bytes stable while persisting canonical text and images (image: %s)",
     async (withImage) => {
       const { session, sessionManager } = await createTestSession();
       const admittedAt = 1717570800000;
@@ -560,7 +560,9 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       expect(guard.getEntry(entryId)).toMatchObject({
         message: {
           timestamp: admittedAt,
-          content: withImage ? message.content : "Visible transcript prompt",
+          content: withImage
+            ? [{ type: "text", text: "Visible transcript prompt" }, image]
+            : "Visible transcript prompt",
         },
       });
       if (withImage) {

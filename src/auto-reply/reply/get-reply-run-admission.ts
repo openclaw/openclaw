@@ -556,7 +556,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       : "steering";
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const shouldSteer =
-    !isRoomEvent &&
     queueAdmissionState !== "ready" &&
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&
