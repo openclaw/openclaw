@@ -12,17 +12,16 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const RESPONSE_MARKER = "ACTIVE_MEMORY_TRIGGER_STALL_PROOF_OK";
 const RECALL_PROMPT_SIGNATURE = "You are a memory search agent.";
-const RECALL_SUMMARY = "User decided the deploy window is Tuesday 02:00 UTC.";
+const RECALL_SUMMARY =
+  "Retrieved from memory: Deploy window decision: Tuesday 02:00 UTC, agreed last week.";
 const MEMORY_FACT = "Deploy window decision: Tuesday 02:00 UTC, agreed last week.";
 const PREFLIGHT_TIMEOUT_LINE = "before_prompt_build preflight timed out after 1500ms";
 const LANE_ONE_FAILED_LINE = "lane-1 trigger recall failed";
 const LOCK_RELEASE_FALLBACK_MS = 6_000;
 const TEST_TIMEOUT_MS = 600_000;
-const ANSI_SEQUENCE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
 type GatewayChatRun = { runId?: unknown; status?: unknown };
 type ModelRequest = {
-  at: number;
   kind: "recall-tool" | "recall-final" | "chat";
   injected: boolean;
 };
@@ -119,16 +118,20 @@ async function startMockProvider() {
       }
       if (request.method === "POST" && request.url === "/v1/embeddings") {
         const inputs = JSON.parse(body) as { input?: string | string[] };
-        const count = Array.isArray(inputs.input) ? inputs.input.length : 1;
+        const texts = Array.isArray(inputs.input) ? inputs.input : [inputs.input ?? ""];
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
             object: "list",
             model: "text-embedding-3-small",
-            data: Array.from({ length: count }, (_, index) => ({
+            data: texts.map((text, index) => ({
               object: "embedding",
               index,
-              embedding: Array.from({ length: 64 }, () => 0.01),
+              // Separate the seeded decision from default workspace templates.
+              // Identical vectors let unrelated templates fill the result window.
+              embedding: Array.from({ length: 64 }, (_, dimension) =>
+                dimension === (text.toLowerCase().includes("deploy") ? 0 : 1) ? 1 : 0,
+              ),
             })),
             usage: { prompt_tokens: 1, total_tokens: 1 },
           }),
@@ -139,19 +142,34 @@ async function startMockProvider() {
         response.writeHead(404).end();
         return;
       }
+      const payload = JSON.parse(body) as { input?: Array<{ type?: string; output?: unknown }> };
       if (!body.includes(RECALL_PROMPT_SIGNATURE)) {
-        requests.push({ at: Date.now(), kind: "chat", injected: body.includes(RECALL_SUMMARY) });
-        writeTextResponse(response, RESPONSE_MARKER);
+        requests.push({ kind: "chat", injected: body.includes(RECALL_SUMMARY) });
+        writeTextResponse(
+          response,
+          body.includes(RECALL_SUMMARY)
+            ? `${RESPONSE_MARKER}: ${RECALL_SUMMARY}`
+            : "No Active Memory recall context.",
+        );
         return;
       }
       // The recall agent must ground its summary in a real memory_search result,
       // so the first recall round asks for the tool and the second summarizes.
       if (body.includes("function_call_output")) {
-        requests.push({ at: Date.now(), kind: "recall-final", injected: false });
-        writeTextResponse(response, RECALL_SUMMARY);
+        requests.push({ kind: "recall-final", injected: false });
+        const grounded =
+          payload.input?.some(
+            (item) =>
+              item.type === "function_call_output" &&
+              JSON.stringify(item.output).includes(MEMORY_FACT),
+          ) === true;
+        writeTextResponse(
+          response,
+          grounded ? RECALL_SUMMARY : "No indexed fact was returned by the recall tool.",
+        );
         return;
       }
-      requests.push({ at: Date.now(), kind: "recall-tool", injected: false });
+      requests.push({ kind: "recall-tool", injected: false });
       writeToolCallResponse(response, "memory_search", { query: "deploy window decision" });
     })().catch((error: unknown) => {
       if (!response.headersSent) {
@@ -207,26 +225,6 @@ async function readLogsSince(
   return [...(await readLogFiles(gateway))]
     .map(([file, text]) => text.slice(offsets.get(file) ?? 0))
     .join("\n");
-}
-
-function activeMemoryLines(logText: string): string[] {
-  return logText
-    .split("\n")
-    .filter((line) => line.includes("active-memory:"))
-    .map((line) => line.replace(ANSI_SEQUENCE, "").trim())
-    .map((line) => {
-      // tslog JSON entries keep the message in key "1" and the time in _meta.date.
-      if (!line.startsWith("{")) {
-        return line;
-      }
-      try {
-        const entry = JSON.parse(line) as { 1?: unknown; _meta?: { date?: string } };
-        const message = typeof entry[1] === "string" ? entry[1] : JSON.stringify(entry[1] ?? "");
-        return `${entry._meta?.date ?? ""} ${message}`.trim();
-      } catch {
-        return line;
-      }
-    });
 }
 
 function holdGenerationLock(lockPath: string) {
@@ -324,7 +322,6 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
             { timeoutMs: 30_000 },
           )) as GatewayChatRun;
           expect(started).toMatchObject({ status: "started" });
-          let lockReleasedAfterMs: number | undefined;
           if (releaseLockOnLaneOneFailure) {
             // Keep the lock only until lane one gives up, so the recall agent's
             // own memory_search can then complete: a transient publisher lock.
@@ -334,7 +331,6 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
               }
               await sleep(50);
             }
-            lockReleasedAfterMs = Date.now() - startedAt;
             releaseLockOnLaneOneFailure();
           }
           const terminal = (await gateway.call(
@@ -342,24 +338,20 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
             { runId: started.runId, timeoutMs: 120_000 },
             { timeoutMs: 125_000 },
           )) as GatewayChatRun;
-          const elapsedMs = Date.now() - startedAt;
+          const history = await gateway.call("chat.history", { sessionKey, limit: 20 });
+          const replyGrounded = JSON.stringify(history).includes(
+            `${RESPONSE_MARKER}: ${RECALL_SUMMARY}`,
+          );
           const logText = await readLogsSince(gateway, offsets);
-          const modelRequests = provider.requests.slice(requestsBefore).map((entry) => ({
-            kind: entry.kind,
-            injected: entry.injected,
-            atMs: entry.at - startedAt,
-          }));
+          const modelRequests = provider.requests.slice(requestsBefore);
           const record = {
             phase: label,
+            replyGrounded,
             terminalStatus: terminal.status,
-            elapsedMs,
-            lockReleasedAfterMs,
             preflightTimedOut: logText.includes(PREFLIGHT_TIMEOUT_LINE),
             laneOneFailed: logText.includes(LANE_ONE_FAILED_LINE),
             recallRounds: modelRequests.filter((entry) => entry.kind !== "chat").length,
             contextInjected: modelRequests.some((entry) => entry.kind === "chat" && entry.injected),
-            modelRequests,
-            activeMemoryLines: activeMemoryLines(logText),
           };
           console.log(JSON.stringify(record));
           return record;
@@ -371,6 +363,7 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
         expect(control.preflightTimedOut).toBe(false);
         expect(control.recallRounds).toBeGreaterThanOrEqual(2);
         expect(control.contextInjected).toBe(true);
+        expect(control.replyGrounded).toBe(true);
         await fs.access(lockPath);
 
         // Stalled turn: another process holds the index generation lock, so
@@ -392,16 +385,11 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
         console.log(
           JSON.stringify({
             phase: "active-memory-trigger-stall-proof-complete",
-            head: process.env.OPENCLAW_PROOF_HEAD_SHA ?? "local-checkout",
-            lockPath: path.basename(lockPath),
             control: {
-              elapsedMs: control.elapsedMs,
               recallRounds: control.recallRounds,
               contextInjected: control.contextInjected,
             },
             stalled: {
-              elapsedMs: stalled.elapsedMs,
-              lockReleasedAfterMs: stalled.lockReleasedAfterMs,
               preflightTimedOut: stalled.preflightTimedOut,
               laneOneFailed: stalled.laneOneFailed,
               recallRounds: stalled.recallRounds,
@@ -415,6 +403,7 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
         expect(stalled.laneOneFailed).toBe(true);
         expect(stalled.recallRounds).toBeGreaterThanOrEqual(2);
         expect(stalled.contextInjected).toBe(true);
+        expect(stalled.replyGrounded).toBe(true);
       },
     );
   },

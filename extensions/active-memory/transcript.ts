@@ -205,7 +205,7 @@ function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   };
   const arm = (timeoutMs: number, onTimeout: () => void) => {
     stop();
-    deadlineAt = Date.now() + timeoutMs;
+    deadlineAt = performance.now() + timeoutMs;
     timeoutId = setTimeout(() => {
       onTimeout();
       resolveTimeout(timeoutSentinel);
@@ -214,7 +214,8 @@ function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   };
   // Remaining budget of the armed phase, so optional sub-steps can bound
   // themselves inside the same deadline instead of racing a fresh timer.
-  const remainingMs = () => (timeoutId ? Math.max(0, deadlineAt - Date.now()) : 0);
+  const remainingMs = () =>
+    timeoutId ? Math.max(0, Math.floor(deadlineAt - performance.now())) : 0;
   return { arm, promise, remainingMs, stop };
 }
 
