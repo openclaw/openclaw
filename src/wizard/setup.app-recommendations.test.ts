@@ -3,7 +3,6 @@ import { refreshOnboardRecommendationsCommand } from "../commands/onboard-recomm
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
-  OnboardingRecommendationMatch,
   OnboardingRecommendationsRecord,
   OnboardingRecommendationsStore,
 } from "../state/onboarding-recommendations.js";
@@ -547,60 +546,7 @@ describe("setupAppRecommendations", () => {
   });
 
   it("reoffers a failed install and consumes it after a successful retry", async () => {
-    const storeState: { current: OnboardingRecommendationsRecord | null } = { current: null };
-    let now = 0;
-    const writeOffer = vi.fn(
-      (params: Parameters<OnboardingRecommendationsStore["writeOffer"]>[0]) => {
-        now += 1;
-        storeState.current = {
-          inventoryHash: "hash",
-          matches: [...params.matches],
-          offeredAt: now,
-          acceptedAt: params.answered ? now : null,
-          updatedAt: now,
-        };
-        return storeState.current;
-      },
-    );
-    const acknowledgeStored = vi.fn(
-      (params: Parameters<OnboardingRecommendationsStore["acknowledge"]>[0] = {}) => {
-        if (
-          !storeState.current ||
-          (params.expected &&
-            (params.expected.inventoryHash !== storeState.current.inventoryHash ||
-              params.expected.updatedAt !== storeState.current.updatedAt))
-        ) {
-          return null;
-        }
-        now += 1;
-        storeState.current = { ...storeState.current, acceptedAt: now, updatedAt: now };
-        return storeState.current;
-      },
-    );
-    const updatePendingStored = vi.fn(
-      ({
-        matches,
-        expected,
-      }: {
-        matches: readonly OnboardingRecommendationMatch[];
-        expected: OnboardingRecommendationsRecord;
-      }) => {
-        if (
-          !storeState.current ||
-          expected.inventoryHash !== storeState.current.inventoryHash ||
-          expected.updatedAt !== storeState.current.updatedAt
-        ) {
-          return null;
-        }
-        now += 1;
-        storeState.current = {
-          ...storeState.current,
-          matches: [...matches],
-          updatedAt: now,
-        };
-        return storeState.current;
-      },
-    );
+    const store = storeDeps();
     const recommend = vi.fn(async () => recommendationResult());
     const installSkill = vi
       .fn()
@@ -618,11 +564,7 @@ describe("setupAppRecommendations", () => {
     const deps = {
       recommend,
       installSkill,
-      readStored: () => storeState.current,
-      writeOffer,
-      acknowledgeStored,
-      updatePendingStored,
-      deferOfferToBootstrap: () => false,
+      ...store,
     };
 
     await setupAppRecommendations({
@@ -635,7 +577,7 @@ describe("setupAppRecommendations", () => {
       deps,
     });
 
-    expect(storeState.current).toMatchObject({
+    expect(store.readStored()).toMatchObject({
       acceptedAt: null,
       matches: [expect.objectContaining({ candidateId: "@demo-owner/chat-skill" })],
     });
@@ -652,8 +594,8 @@ describe("setupAppRecommendations", () => {
 
     expect(recommend).toHaveBeenCalledOnce();
     expect(installSkill).toHaveBeenCalledTimes(2);
-    expect(acknowledgeStored).toHaveBeenCalledOnce();
-    expect(storeState.current?.acceptedAt).toBeTypeOf("number");
+    expect(store.acknowledgeStored).toHaveBeenCalledOnce();
+    expect(store.readStored()?.acceptedAt).toBeTypeOf("number");
   });
 
   it("consumes an exact installed skill left pending by an interrupted run", async () => {
