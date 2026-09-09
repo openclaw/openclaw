@@ -411,7 +411,7 @@ describe("doctor lint state isolation", () => {
               id: "core/doctor/runtime-tool-schemas",
               kind: "core",
               description: "verifies snapshot isolation",
-              async detect(ctx) {
+              async detect(ctx: HealthCheckContext) {
                 isolated = process.env.OPENCLAW_STATE_DIR !== state.stateDir;
                 if (!check.repair) {
                   throw new Error("state-integrity repair is missing");
