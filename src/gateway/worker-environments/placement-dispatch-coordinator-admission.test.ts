@@ -14,6 +14,61 @@ import {
 import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
 describe("worker placement maintenance admission", () => {
+  it.each(["active", "incomplete", "stale-generation"] as const)(
+    "holds input for its exact recovery owner (%s)",
+    async (outcome) => {
+      const entered = createDeferredCore();
+      const finish = createDeferredCore();
+      const active = {
+        ...ACTIVE_PLACEMENT,
+        sessionId: PROVISIONING_PLACEMENT.sessionId,
+        generation: PROVISIONING_PLACEMENT.generation + 1,
+      };
+      const coordinated = coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({
+          resumeProvisioning: async (_placement, _core, report, admit) => {
+            if (!admit) {
+              throw new Error("Recovery fixture requires admission");
+            }
+            return await admit(async () => {
+              entered.resolve();
+              await finish.promise;
+              if (outcome === "incomplete") {
+                return undefined;
+              }
+              report?.(active);
+              return active;
+            });
+          },
+        }),
+        (_request, run) => run(),
+      );
+      const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
+      await entered.promise;
+      const waiting = coordinated.waitForInitialPlacement({
+        ...PROVISIONING_PLACEMENT,
+        generation: PROVISIONING_PLACEMENT.generation + (outcome === "stale-generation" ? 1 : 0),
+      });
+      void waiting.catch(() => undefined);
+      try {
+        if (outcome === "stale-generation") {
+          await expect(waiting).rejects.toThrow("no matching live dispatch owner");
+        }
+        finish.resolve();
+        await recovery;
+        if (outcome === "active") {
+          await expect(waiting).resolves.toEqual(active);
+        }
+        if (outcome === "incomplete") {
+          await expect(waiting).rejects.toThrow("did not publish a ready placement");
+        }
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([waiting, recovery]);
+      }
+    },
+  );
+
   it("reclaims an idle session before a disjoint dispatch finishes while preserving its fence", async () => {
     const cloudStarted = createDeferredCore();
     const releaseCloud = createDeferredCore();

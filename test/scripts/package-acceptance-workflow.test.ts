@@ -12390,11 +12390,14 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   it("documents checked extended-stable dispatch instead of a raw-SHA workflow ref", () => {
     const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
-    // The CI page is an index over docs/ci/*. Read the whole set so this
-    // assertion follows the content instead of a single file path.
+    // The CI page is an index over docs/ci/**. Read the whole tree so this
+    // assertion follows the content instead of a single file path. The walk is
+    // recursive because docs/ci pages are themselves split into subdirectories
+    // (docs/ci/scope-and-routing/*); a flat readdir silently drops those and
+    // turns a content move into a failure.
     const ciDocs = [
       readFileSync("docs/ci.md", "utf8"),
-      ...readdirSync("docs/ci")
+      ...readdirSync("docs/ci", { encoding: "utf8", recursive: true })
         .filter((name) => name.endsWith(".md"))
         .toSorted()
         .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),

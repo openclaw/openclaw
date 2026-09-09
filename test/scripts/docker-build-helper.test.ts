@@ -6558,19 +6558,215 @@ process.exit(73);
     expect(pluginBinding).not.toContain('readFileSync(logPath, "utf8")');
   });
 
-  it("materializes legacy bundle-MCP client links before its read-only Docker mount", () => {
-    const runner = readFileSync(AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH, "utf8");
-
-    expectTextToIncludeAll(runner, [
-      "scripts/e2e/lib/temp-state-dir.ts \\",
-      "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts |",
-      'CLIENT_PATH="$LEGACY_CLIENT_ROOT/scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"',
-      'ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"',
-      'ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"',
-      '-v "$LEGACY_CLIENT_SOURCE_ROOT:$LEGACY_CLIENT_ROOT:ro"',
-    ]);
-    expect(runner).not.toContain("CLIENT_PRELUDE");
-  });
+  it.each(
+    [
+      {
+        layout: "June",
+        clientPath: "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+        distPrefix: "../../dist",
+        helperImport: "./lib/temp-state-dir.ts",
+      },
+      {
+        layout: "July",
+        clientPath: "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
+        distPrefix: "../../../../dist",
+        helperImport: "../../../../scripts/e2e/lib/temp-state-dir.ts",
+      },
+    ].flatMap((layout) =>
+      [
+        "success",
+        "missing helper",
+        "archive failure",
+        "empty extraction",
+        "altered extraction",
+      ].map((scenario) => ({
+        layout: layout.layout,
+        clientPath: layout.clientPath,
+        distPrefix: layout.distPrefix,
+        helperImport: layout.helperImport,
+        scenario,
+      })),
+    ),
+  )(
+    "stages the committed $layout bundle-MCP client through the real runner: $scenario",
+    (layout) => {
+      const root = tempDirs.make("openclaw-bundle-client-");
+      const source = join(root, "source");
+      const bin = join(root, "bin");
+      mkdirSync(source);
+      mkdirSync(bin);
+      const helperPath = "scripts/e2e/lib/temp-state-dir.ts";
+      const client = [
+        `import { disposeAllSessionMcpRuntimes, getOrCreateSessionMcpRuntime } from "${layout.distPrefix}/agents/agent-bundle-mcp-runtime.js";`,
+        `import { createE2eStateDir } from "${layout.helperImport}";`,
+        'throw new Error("target client must not execute in the staging fixture");',
+        "",
+      ].join("\n");
+      const helper =
+        'export async function createE2eStateDir() { throw new Error("not executed"); }\n';
+      const manifest = `${JSON.stringify({ name: "openclaw", type: "module", version: "2026.7.33" })}\n`;
+      for (const [relative, content] of Object.entries({
+        "package.json": manifest,
+        [layout.clientPath]: client,
+        [helperPath]: helper,
+        "src/agents/agent-bundle-mcp-runtime.ts":
+          "export async function getOrCreateSessionMcpRuntime() {}\nexport async function disposeAllSessionMcpRuntimes() {}\n",
+        "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts":
+          "type Params = { modelPrompt?: string; };\nextractInternalRuntimeContext();\n",
+      })) {
+        if (layout.scenario === "missing helper" && relative === helperPath) {
+          continue;
+        }
+        mkdirSync(dirname(join(source, relative)), { recursive: true });
+        writeFileSync(join(source, relative), content);
+      }
+      const git = (...args: string[]) =>
+        execFileSync(
+          "git",
+          ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args],
+          { cwd: source, encoding: "utf8" },
+        ).trim();
+      git("init", "-q");
+      git("config", "user.email", "test@example.invalid");
+      git("config", "user.name", "Test");
+      git("add", ".");
+      git("commit", "-qm", "fixture");
+      const selectedSha = git("rev-parse", "HEAD");
+      writeFileSync(join(source, layout.clientPath), "dirty client decoy\n");
+      mkdirSync(dirname(join(source, helperPath)), { recursive: true });
+      writeFileSync(join(source, helperPath), "dirty helper decoy\n");
+      writeFileSync(join(source, "package.json"), '{"type":"commonjs"}\n');
+      const capture = join(root, "docker.jsonl");
+      if (layout.scenario === "archive failure") {
+        const realGit = execFileSync("bash", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+        writeExecutables(bin, {
+          git: `#!${process.execPath}
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+if (args.includes("archive")) process.exit(2);
+const result = spawnSync(${JSON.stringify(realGit)}, args, { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`,
+        });
+      }
+      if (layout.scenario === "empty extraction" || layout.scenario === "altered extraction") {
+        const realTar = execFileSync("bash", ["-c", "command -v tar"], { encoding: "utf8" }).trim();
+        writeExecutables(bin, {
+          tar: `#!${process.execPath}
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (${JSON.stringify(layout.scenario)} === "empty extraction") {
+  process.stdin.resume();
+} else {
+  const result = spawnSync(${JSON.stringify(realTar)}, args, { stdio: "inherit" });
+  if (result.status !== 0) process.exit(result.status ?? 1);
+  fs.appendFileSync(path.join(args[args.indexOf("-C") + 1], ${JSON.stringify(layout.clientPath)}), "altered bytes\\n");
+}
+`,
+        });
+      }
+      writeExecutables(bin, {
+        docker: `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+let staged = null;
+const mount = args.find(arg => arg.endsWith(":/tmp/openclaw-frozen-agent-bundle-mcp-tools:ro"));
+if (args[0] === "run" && mount) {
+  const root = mount.slice(0, mount.indexOf(":"));
+  const client = path.join(root, process.env.FIXTURE_CLIENT_PATH);
+  staged = {
+    root,
+    client: fs.readFileSync(client, "utf8"),
+    helper: fs.readFileSync(path.resolve(path.dirname(client), process.env.FIXTURE_HELPER_IMPORT), "utf8"),
+    manifest: fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    dist: fs.readlinkSync(path.join(root, "dist")),
+    modules: fs.readlinkSync(path.join(root, "node_modules")),
+    mode: fs.statSync(root).mode & 0o777,
+    entries: fs.readdirSync(root, { recursive: true }).sort()
+  };
+}
+fs.appendFileSync(process.env.FIXTURE_DOCKER_CAPTURE, JSON.stringify({ args, staged }) + "\\n");
+`,
+      });
+      const result = spawnSync("bash", [AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH], {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          PATH: `${bin}:${process.env.PATH}`,
+          HOME: root,
+          TMPDIR: root,
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: source,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_SELECTED_SHA: selectedSha,
+          OPENCLAW_TOOLING_SHA: "b".repeat(40),
+          OPENCLAW_SKIP_DOCKER_BUILD: "1",
+          OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
+          FIXTURE_DOCKER_CAPTURE: capture,
+          FIXTURE_CLIENT_PATH: layout.clientPath,
+          FIXTURE_HELPER_IMPORT: layout.helperImport,
+        },
+      });
+      const calls: Array<{
+        args: string[];
+        staged: {
+          root: string;
+          client: string;
+          helper: string;
+          manifest: string;
+          dist: string;
+          modules: string;
+          mode: number;
+          entries: string[];
+        } | null;
+      }> = existsSync(capture)
+        ? readFileSync(capture, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line))
+        : [];
+      if (layout.scenario !== "success") {
+        expect(result.status, result.stderr + result.stdout).not.toBe(0);
+        expect(calls.every((call) => call.args[0] === "rm")).toBe(true);
+        expect(
+          readdirSync(root).filter((entry) =>
+            entry.startsWith("openclaw-frozen-agent-bundle-mcp-tools."),
+          ),
+        ).toEqual([]);
+        if (layout.scenario === "missing helper") {
+          expect(result.stderr).toContain("missing required");
+        }
+        if (layout.scenario === "empty extraction") {
+          expect(result.stderr).toContain("missing regular staged");
+        }
+        if (layout.scenario === "altered extraction") {
+          expect(result.stderr).toContain("differs from selected source");
+        }
+        return;
+      }
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+      const run = calls.find((call) => call.args[0] === "run");
+      if (!run?.staged) {
+        throw new Error("runner did not mount the selected client");
+      }
+      expect(run.staged).toMatchObject({
+        client,
+        helper,
+        manifest,
+        dist: "/app/dist",
+        modules: "/app/node_modules",
+        mode: 0o755,
+      });
+      expect(run.args.at(-1)).toContain(
+        `tsx /tmp/openclaw-frozen-agent-bundle-mcp-tools/${layout.clientPath}`,
+      );
+      expect(run.staged.entries).not.toContain("src");
+      expect(existsSync(run.staged.root)).toBe(false);
+      expect(calls.filter((call) => call.args[0] === "run")).toHaveLength(1);
+    },
+  );
 
   it("keeps Open WebUI Docker E2E resource-guarded", () => {
     const runner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
@@ -7039,7 +7235,7 @@ process.exit(73);
 
   it("uses the selected release's legacy gateway client only after frozen authorization", () => {
     const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
-    expect(runner).toContain('[[ "$FROZEN_CONTEXT" == "1" ]]');
+    expect(runner).toContain('openclaw_resolve_frozen_gateway_network_layout "$SOURCE_ROOT"');
     expect(runner).toContain("scripts/e2e/lib/gateway-network/client.mjs");
     expect(runner).toContain('-v "$LEGACY_GATEWAY_LIB:/app/scripts/e2e/lib:ro"');
     expect(runner).toContain("node /app/scripts/e2e/lib/gateway-network/client.mjs");

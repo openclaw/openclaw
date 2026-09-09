@@ -123,6 +123,24 @@ describe("resolveApplicationStartupSettings", () => {
 describe("loadSettings default gateway URL derivation", () => {
   installSettingsStorageLifecycle();
 
+  it("keeps development credentials scoped to the upstream when the Vite target changes", () => {
+    setTestLocation({ protocol: "http:", host: "localhost:5173", pathname: "/" });
+    const first = "ws://localhost:18789";
+    const second = "ws://localhost:18790";
+    saveSettings(makeUiSettings(first));
+    persistSessionToken(first, "first-credential");
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl: second, proxyPath: "/dev-second" });
+    expect(loadSettings()).toMatchObject({ gatewayUrl: second, token: "" });
+    persistSessionToken(second, "second-credential");
+    expect(loadSettings()).toMatchObject({ gatewayUrl: second, token: "second-credential" });
+    expect(resolvePageGatewaySettings(makeUiSettings(first))).toMatchObject({
+      gatewayUrl: second,
+      token: "second-credential",
+    });
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl: first, proxyPath: "/dev-first" });
+    expect(loadSettings()).toMatchObject({ gatewayUrl: first, token: "first-credential" });
+  });
+
   it("keeps IPv6 dev-page default gateway hosts dialable", () => {
     setTestLocation({ protocol: "http:", host: "[::1]:5173", pathname: "/" });
     // A vite client script marks the page as dev, which reroutes the default

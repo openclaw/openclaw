@@ -96,6 +96,45 @@ function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-
   return active;
 }
 
+it("rejects an unbounded claim wait when its signal is already aborted", async () => {
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    owner: placementTurnOwner(active),
+    claimId: "claim-aborted-wait",
+    runId: "run-aborted-wait",
+  });
+  const controller = new AbortController();
+  controller.abort();
+
+  await expect(
+    store.waitForTurnClaimRelease(SESSION.sessionId, { signal: controller.signal }),
+  ).rejects.toThrow(`Turn claim wait aborted for session ${SESSION.sessionId}`);
+  expect(store.validateTurnClaim(claim)).toBe(true);
+});
+
+it.each([
+  { executionMode: "worker-turn", visibleBeforeStaging: true },
+  { executionMode: "remote-exec", visibleBeforeStaging: false },
+] as const)(
+  "projects $executionMode workspace reconciliation at its owned boundary",
+  (scenario) => {
+    const active = advanceToActive(scenario.executionMode);
+    const claim = store.claimTurn({
+      ...SESSION,
+      owner: placementTurnOwner(active),
+      claimId: `workspace-result-${scenario.executionMode}`,
+      runId: `run-${scenario.executionMode}`,
+    });
+    store.markWorkspaceResultPending(claim);
+
+    const readReconciling = () => store.getWorkspaceResultReconcilingSessionIds([active.sessionId]);
+    expect(readReconciling().has(active.sessionId)).toBe(scenario.visibleBeforeStaging);
+    store.recordStagedWorkspaceResult(claim, `refs/openclaw/worker-results/${claim.claimId}`);
+    expect(readReconciling()).toEqual(new Set([active.sessionId]));
+  },
+);
+
 it("emits exact worker claim closure after release and owner fencing", () => {
   const closed = vi.fn();
   const unregister = store.registerTurnClaimClosedHandler(closed);

@@ -46,6 +46,55 @@ as explicit model overrides. Use `openai/gpt-image-1.5` for
 transparent-background PNG/WebP output; the current `gpt-image-2` API rejects
 `background: "transparent"`.
 
+### GPT Image 2.5
+
+Select `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst` explicitly.
+Both support generation and edits through the direct Images API.
+The default remains `openai/gpt-image-2`.
+
+Export `OPENAI_API_KEY` and select API-key authentication:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        auth: "api-key",
+        models: [],
+      },
+    },
+  },
+}
+```
+
+This explicit selection matters when an OpenAI OAuth profile also exists.
+Exporting the environment variable alone does not override that profile.
+GPT Image 2.5 subscription access is not established by this API-key setup.
+
+Both variants accept `low`, `medium`, `high`, `xhigh`, `max`, or `auto` quality.
+Use PNG or WebP for transparent backgrounds. Edits accept up to 5 reference
+images through OpenClaw.
+
+```bash
+openclaw infer image generate \
+  --model openai/gpt-image-2.5-flare \
+  --prompt "A simple red circle sticker on a transparent background" \
+  --quality low --output-format webp --background transparent --json
+
+openclaw infer image edit \
+  --model openai/gpt-image-2.5-sunburst \
+  --file /path/to/reference.png \
+  --prompt "Keep the shape and change the color to blue" \
+  --quality low --size auto --json
+```
+
+`size` accepts `auto` or `WIDTHxHEIGHT`. Dimensions must be divisible by 16,
+with no edge above 3840 pixels and total pixels between 655,360 and 8,294,400.
+The aspect ratio must be between 1:3 and 3:1.
+
+### Other Image Models
+
 For a transparent-background request, call `image_generate` with
 `model: "openai/gpt-image-1.5"`, `outputFormat: "png"` or `"webp"`, and
 `background: "transparent"`; the older `openai.background` provider option is

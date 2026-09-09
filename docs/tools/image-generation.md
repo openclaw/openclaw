@@ -75,17 +75,18 @@ internal image endpoints remain blocked by default.
 
 ## Common routes
 
-| Goal                                                 | Model ref                                          | Auth                                   |
-| ---------------------------------------------------- | -------------------------------------------------- | -------------------------------------- |
-| OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                       |
-| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI ChatGPT/Codex OAuth             |
-| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                             | `OPENAI_API_KEY` or OpenAI Codex OAuth |
-| DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell`       | `DEEPINFRA_API_KEY`                    |
-| fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                 | `FAL_KEY`                              |
-| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
-| LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
-| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
-| Google Gemini image generation                       | `google/gemini-3.1-flash-image`                    | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Goal                                                 | Model ref                                                       | Auth                                   |
+| ---------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------- |
+| OpenAI image generation with API billing             | `openai/gpt-image-2`                                            | `OPENAI_API_KEY`                       |
+| OpenAI GPT Image 2.5                                 | `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst` | Explicit OpenAI API-key route          |
+| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                                            | OpenAI ChatGPT/Codex OAuth             |
+| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                                          | `OPENAI_API_KEY` or OpenAI Codex OAuth |
+| DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell`                    | `DEEPINFRA_API_KEY`                    |
+| fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                              | `FAL_KEY`                              |
+| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview`              | `OPENROUTER_API_KEY`                   |
+| LiteLLM image generation                             | `litellm/gpt-image-2`                                           | `LITELLM_API_KEY`                      |
+| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`                           | `AZURE_OPENAI_API_KEY` or Entra ID     |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image`                                 | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same tool handles text-to-image and reference-image editing. Use `image`
 for one reference or `images` for multiple. For Krea 2 models on fal, those
@@ -169,8 +170,9 @@ current session:
   `1:4`, `8:1`, `1:8`. Providers validate their model-specific subset.
 </ParamField>
 <ParamField path="resolution" type='"1K" | "2K" | "4K"'>Resolution hint.</ParamField>
-<ParamField path="quality" type='"low" | "medium" | "high" | "auto"'>
-  Quality hint when the provider supports it.
+<ParamField path="quality" type='"low" | "medium" | "high" | "xhigh" | "max" | "auto"'>
+  Quality hint when the model supports it. GPT Image 2.5 supports `xhigh`
+  and `max` through OpenAI.
 </ParamField>
 <ParamField path="outputFormat" type='"png" | "jpeg" | "webp"'>
   Output format hint when the provider supports it.
@@ -289,6 +291,24 @@ and ComfyUI support 1.
 ## Provider deep dives
 
 <AccordionGroup>
+  <Accordion title="GPT Image 2.5 through OpenAI">
+    Select `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst`
+    explicitly. The default remains `openai/gpt-image-2`.
+
+    Both variants support generation, edits, `xhigh` and `max` quality,
+    PNG/JPEG/WebP output, and transparent backgrounds with PNG or WebP.
+    OpenAI accepts up to 5 reference images through OpenClaw.
+
+    Use the [explicit OpenAI API-key route](/providers/openai/image-and-video#gpt-image-2.5)
+    for direct GPT Image 2.5 requests. Exporting `OPENAI_API_KEY` alone does not
+    override an existing OAuth profile. These examples do not establish
+    GPT Image 2.5 subscription access.
+
+    Use `size: "auto"` or valid `WIDTHxHEIGHT` dimensions. Both dimensions
+    must be divisible by 16, with no edge above 3840 pixels.
+    Total pixels must be 655,360-8,294,400, with an aspect ratio from 1:3 to 3:1.
+
+  </Accordion>
   <Accordion title="OpenAI gpt-image-2 (and gpt-image-1.5)">
     OpenAI image generation defaults to `openai/gpt-image-2`. If an
     `openai` OAuth profile is configured, OpenClaw reuses the same

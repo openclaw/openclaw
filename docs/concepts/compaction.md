@@ -145,7 +145,7 @@ In safeguard mode, provider timeouts and rate limits from built-in summarization
 
 ### Identifier preservation
 
-Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). Override with `identifierPolicy: "off"` to disable. Custom guidance belongs in a compaction provider's `summarize()` implementation.
+Compaction summarization preserves opaque identifiers by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Set `agents.defaults.compaction.identifierPolicy: "off"` to disable. Custom guidance belongs in a compaction provider's `summarize()` implementation.
 
 ### Active transcript byte guard
 
@@ -265,5 +265,6 @@ For advanced configuration (reserve tokens, identifier preservation, custom cont
 - [Session](/concepts/session): session management and lifecycle.
 - [Session pruning](/concepts/session-pruning): trimming tool results.
 - [Context](/concepts/context): how context is built for agent turns.
-- [Hooks](/automation/hooks#event-types): internal compaction events (`session:compact:before`, `session:compact:after`).
+- [Context engines](/concepts/context-engine): pluggable context assembly.
+- [Hooks](/automation/hooks/event-types): internal compaction events (`session:compact:before`, `session:compact:after`).
 - [Plugin hooks](/plugins/hooks/reference#hook-catalog): typed compaction hooks (`before_compaction`, `after_compaction`).

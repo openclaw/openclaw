@@ -37,6 +37,11 @@ pub(crate) struct RemoteGatewayRequest {
     pub tls_fingerprint: Option<String>,
 }
 
+pub(crate) enum RemoteConnectionSource {
+    Saved,
+    Submitted,
+}
+
 pub(crate) fn normalize_gateway_url(raw: &str) -> Result<Url, String> {
     let mut url = Url::parse(raw.trim()).map_err(|_| {
         "Enter a valid Gateway URL, such as https://gateway.example.com.".to_string()
@@ -508,7 +513,12 @@ pub(crate) fn save_config_at(
     path: &Path,
     request: &RemoteGatewayRequest,
     gateway_url: &Url,
+    source: RemoteConnectionSource,
 ) -> Result<(), String> {
+    // Saved credentials are resolved for runtime use, not configuration replacement.
+    if matches!(source, RemoteConnectionSource::Saved) {
+        return Ok(());
+    }
     let parent = path
         .parent()
         .ok_or_else(|| "OpenClaw configuration path has no parent directory.".to_string())?;
@@ -773,6 +783,36 @@ mod tests {
             .join("openclaw.json")
     }
 
+    fn reconnect_saved_at(path: &Path) -> RemoteGatewayRequest {
+        let before = fs::read(path).expect("saved config");
+        let original = read_config(path).unwrap().unwrap();
+        let restored = load_saved_remote_at(path)
+            .expect("load saved remote")
+            .expect("remote mode");
+        validate_request(&restored).expect("valid saved request");
+        let url = normalize_gateway_url(restored.url.as_deref().unwrap()).expect("Gateway URL");
+
+        save_config_at(path, &restored, &url, RemoteConnectionSource::Saved)
+            .expect("saved reconnect persistence");
+
+        let saved = read_config(path).unwrap().unwrap();
+        for field in ["token", "password"] {
+            assert_eq!(
+                saved["gateway"]["remote"].get(field),
+                original["gateway"]["remote"].get(field),
+                "saved reconnect must preserve the configured {field}, not its resolved value"
+            );
+        }
+        assert_eq!(
+            fs::read(path).expect("reconnected config"),
+            before,
+            "saved reconnect must not rewrite configuration or materialize credentials"
+        );
+        load_saved_remote_at(path)
+            .expect("reload after reconnect")
+            .expect("remote mode")
+    }
+
     #[test]
     fn normalizes_dashboard_and_websocket_urls_without_exposing_auth() {
         assert_eq!(
@@ -859,7 +899,8 @@ mod tests {
         let input = request();
         let url = normalize_gateway_url(input.url.as_deref().unwrap()).expect("gateway URL");
 
-        save_config_at(&path, &input, &url).expect("persist config");
+        save_config_at(&path, &input, &url, RemoteConnectionSource::Submitted)
+            .expect("persist config");
 
         let saved: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).expect("config")).expect("JSON config");
@@ -898,7 +939,7 @@ mod tests {
         let input = request();
         let url = normalize_gateway_url(input.url.as_deref().unwrap()).expect("gateway URL");
 
-        assert!(save_config_at(&path, &input, &url).is_err());
+        assert!(save_config_at(&path, &input, &url, RemoteConnectionSource::Submitted).is_err());
         assert_eq!(
             fs::read_to_string(&target).expect("target"),
             "do not modify"
@@ -918,20 +959,23 @@ mod tests {
 
     #[test]
     fn saved_remote_connection_reloads_without_requiring_a_local_cli() {
-        let path = isolated_path();
-        let input = request();
-        let url = normalize_gateway_url(input.url.as_deref().unwrap()).expect("gateway URL");
-        save_config_at(&path, &input, &url).expect("persist remote config");
+        for field in ["token", "password"] {
+            let path = isolated_path();
+            let mut input = request();
+            input.token = (field == "token").then(|| "fixture-literal-token".to_string());
+            input.password = (field == "password").then(|| "fixture-literal-password".to_string());
+            let url = normalize_gateway_url(input.url.as_deref().unwrap()).expect("gateway URL");
+            save_config_at(&path, &input, &url, RemoteConnectionSource::Submitted)
+                .expect("persist remote config");
 
-        let restored = load_saved_remote_at(&path)
-            .expect("load saved remote")
-            .expect("remote mode");
+            let restored = reconnect_saved_at(&path);
 
-        assert_eq!(restored.transport, "direct");
-        assert_eq!(restored.url.as_deref(), Some(url.as_str()));
-        assert_eq!(restored.token.as_deref(), Some("test-token"));
-        assert!(restored.password.is_none());
-        fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+            assert_eq!(restored.transport, "direct");
+            assert_eq!(restored.url.as_deref(), Some(url.as_str()));
+            assert_eq!(restored.token, input.token);
+            assert_eq!(restored.password, input.password);
+            fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+        }
     }
 
     #[test]
@@ -964,7 +1008,8 @@ mod tests {
         let mut input = request();
         input.url = Some("https://gateway.example.com/".to_string());
         let url = normalize_gateway_url(input.url.as_deref().unwrap()).expect("pinned URL");
-        save_config_at(&path, &input, &url).expect("same-endpoint reconnect");
+        save_config_at(&path, &input, &url, RemoteConnectionSource::Submitted)
+            .expect("same-endpoint submission");
         let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["gateway"]["remote"]["tlsFingerprint"], fingerprint);
         fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
@@ -972,32 +1017,32 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn saved_remote_file_secret_refs_follow_provider_contract() {
+    fn saved_remote_file_credentials_survive_reconnect_and_rotation() {
         use std::os::unix::fs::PermissionsExt;
 
-        for (mode, id, payload, expected) in [
-            (
-                "singleValue",
-                "value",
-                "fixture-file-token\n",
-                "fixture-file-token",
-            ),
-            (
-                "json",
-                "/gateway~1auth/token~0value",
-                r#"{"gateway/auth":{"token~value":"fixture-json-token"}}"#,
-                "fixture-json-token",
-            ),
-        ] {
-            let path = isolated_path();
-            fs::create_dir_all(path.parent().unwrap()).expect("test directory");
-            let secret_path = path.parent().unwrap().join("gateway-secret");
-            fs::write(&secret_path, payload).expect("secret fixture");
-            fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600))
-                .expect("private secret fixture");
-            fs::write(
-                &path,
-                json!({
+        for field in ["token", "password"] {
+            for (mode, id, payload, rotated_payload) in [
+                (
+                    "singleValue",
+                    "value",
+                    "fixture-file-secret\n",
+                    "fixture-rotated-secret\n",
+                ),
+                (
+                    "json",
+                    "/gateway~1auth/secret~0value",
+                    r#"{"gateway/auth":{"secret~value":"fixture-file-secret"}}"#,
+                    r#"{"gateway/auth":{"secret~value":"fixture-rotated-secret"}}"#,
+                ),
+            ] {
+                let path = isolated_path();
+                fs::create_dir_all(path.parent().unwrap()).expect("test directory");
+                let secret_path = path.parent().unwrap().join("gateway-secret");
+                fs::write(&secret_path, payload).expect("secret fixture");
+                fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600))
+                    .expect("private secret fixture");
+                let reference = json!({ "source": "file", "provider": "gatewayfile", "id": id });
+                let mut config = json!({
                     "secrets": {
                         "providers": {
                             "gatewayfile": {
@@ -1010,62 +1055,155 @@ mod tests {
                     "gateway": {
                         "mode": "remote",
                         "remote": {
-                            "url": "ws://127.0.0.1:18789",
-                            "token": { "source": "file", "provider": "gatewayfile", "id": id },
+                            "url": "ws://127.0.0.1:18789/openclaw",
                         },
                     },
-                })
-                .to_string(),
-            )
-            .expect("file-backed remote config");
+                });
+                config["gateway"]["remote"][field] = reference.clone();
+                fs::write(&path, config.to_string()).expect("file-backed remote config");
 
-            let restored = load_saved_remote_at(&path)
-                .expect("resolve private file reference")
-                .expect("remote mode");
-            assert_eq!(restored.token.as_deref(), Some(expected));
+                for (payload, expected) in [
+                    (payload, "fixture-file-secret"),
+                    (rotated_payload, "fixture-rotated-secret"),
+                ] {
+                    fs::write(&secret_path, payload).expect("rotate secret fixture");
+                    let restored = reconnect_saved_at(&path);
+                    assert_eq!(serde_json::to_value(restored).unwrap()[field], expected);
+                    let raw = fs::read_to_string(&path).expect("saved config");
+                    let saved: Value = serde_json::from_str(&raw).expect("JSON config");
+                    assert_eq!(saved["gateway"]["remote"][field], reference);
+                    assert!(
+                        !raw.contains(expected),
+                        "resolved secret must stay out of config"
+                    );
+                }
 
-            fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o644))
-                .expect("insecure secret fixture");
-            assert!(load_saved_remote_at(&path).is_err());
-            fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+                fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o644))
+                    .expect("insecure secret fixture");
+                assert!(load_saved_remote_at(&path).is_err());
+                assert_eq!(read_config(&path).unwrap().unwrap(), config);
+
+                // Explicit submission replaces the ref even when the value matches its last resolution.
+                let mut input = request();
+                input.url = Some("ws://127.0.0.1:18789/openclaw".to_string());
+                input.token = (field == "token").then(|| "fixture-rotated-secret".to_string());
+                input.password =
+                    (field == "password").then(|| "fixture-rotated-secret".to_string());
+                let url = normalize_gateway_url(input.url.as_deref().unwrap()).unwrap();
+                save_config_at(&path, &input, &url, RemoteConnectionSource::Submitted)
+                    .expect("explicit credential replacement");
+                let saved = read_config(&path).unwrap().unwrap();
+                assert_eq!(saved["gateway"]["remote"][field], "fixture-rotated-secret");
+                let reloaded = load_saved_remote_at(&path).unwrap().unwrap();
+                assert_eq!(
+                    serde_json::to_value(reloaded).unwrap()[field],
+                    "fixture-rotated-secret"
+                );
+                fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+            }
         }
     }
 
     #[test]
-    fn saved_remote_env_secret_shorthand_and_provider_allowlists_are_enforced() {
-        let path = isolated_path();
-        fs::create_dir_all(path.parent().unwrap()).expect("test directory");
-        fs::write(
-            &path,
-            json!({
-                "secrets": {
-                    "defaults": { "env": "gatewayenv" },
-                    "providers": {
-                        "gatewayenv": { "source": "env", "allowlist": ["HOME"] },
-                    },
-                },
-                "gateway": {
-                    "mode": "remote",
-                    "remote": {
-                        "url": "ws://127.0.0.1:18789",
-                        "token": "${HOME}",
-                    },
-                },
-            })
-            .to_string(),
-        )
-        .expect("environment-backed remote config");
+    fn saved_remote_env_credentials_survive_reconnect_and_rotation() {
+        const CONFIG_PATH: &str = "OPENCLAW_TEST_REMOTE_CONFIG_PATH";
+        const CREDENTIAL: &str = "OPENCLAW_TEST_REMOTE_CREDENTIAL";
+        const UNAVAILABLE: &str = "OPENCLAW_TEST_REMOTE_UNAVAILABLE";
+        if let Some(path) = env::var_os(CONFIG_PATH) {
+            let path = PathBuf::from(path);
+            let config = read_config(&path).unwrap().unwrap();
+            let before = fs::read(&path).unwrap();
+            if env::var_os(UNAVAILABLE).is_some() {
+                assert!(load_saved_remote_at(&path).is_err());
+            } else {
+                let expected = env::var(CREDENTIAL).expect("child credential");
+                let restored = reconnect_saved_at(&path);
+                for (field, value) in [("token", restored.token), ("password", restored.password)] {
+                    let configured = config["gateway"]["remote"].get(field).is_some();
+                    assert_eq!(value.as_deref(), configured.then_some(expected.as_str()));
+                }
+                assert!(!fs::read_to_string(&path).unwrap().contains(&expected));
+            }
+            assert_eq!(fs::read(&path).unwrap(), before);
+            return;
+        }
 
-        let restored = load_saved_remote_at(&path)
-            .expect("resolve environment shorthand")
-            .expect("remote mode");
-        assert_eq!(restored.token.as_deref(), env::var("HOME").ok().as_deref());
+        let test_name = thread::current()
+            .name()
+            .expect("named test thread")
+            .to_string();
+        for field in ["token", "password"] {
+            for reference in [
+                json!({ "source": "env", "provider": "gatewayenv", "id": CREDENTIAL }),
+                json!(format!("${{{CREDENTIAL}}}")),
+                json!(format!("${CREDENTIAL}")),
+            ] {
+                let path = isolated_path();
+                fs::create_dir_all(path.parent().unwrap()).expect("test directory");
+                let mut config = json!({
+                    "secrets": {
+                        "defaults": { "env": "gatewayenv" },
+                        "providers": {
+                            "gatewayenv": { "source": "env", "allowlist": [CREDENTIAL] },
+                        },
+                    },
+                    "gateway": {
+                        "mode": "remote",
+                        "remote": { "url": "ws://127.0.0.1:18789" },
+                    },
+                });
+                config["gateway"]["remote"][field] = reference.clone();
+                fs::write(&path, config.to_string()).expect("environment-backed remote config");
 
-        let mut denied: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        denied["secrets"]["providers"]["gatewayenv"]["allowlist"] = json!(["NOT_HOME"]);
-        fs::write(&path, denied.to_string()).expect("restricted environment provider");
-        assert!(load_saved_remote_at(&path).is_err());
-        fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+                // Child processes give each relaunch its own environment without mutating other tests.
+                let mut command = Command::new(env::current_exe().expect("test binary"));
+                command
+                    .args(["--exact", &test_name, "--nocapture"])
+                    .env(CONFIG_PATH, &path)
+                    .env_remove(UNAVAILABLE);
+                for value in ["fixture-env-secret", "fixture-rotated-env-secret"] {
+                    let output = command
+                        .env(CREDENTIAL, value)
+                        .output()
+                        .expect("reconnect child");
+                    assert!(
+                        output.status.success(),
+                        "environment-backed reconnect failed: {}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    assert_eq!(
+                        read_config(&path).unwrap().unwrap()["gateway"]["remote"][field],
+                        reference
+                    );
+                }
+                let output = command
+                    .env(UNAVAILABLE, "1")
+                    .env_remove(CREDENTIAL)
+                    .output()
+                    .expect("unresolved ref child");
+                assert!(
+                    output.status.success(),
+                    "missing environment ref must fail closed: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+
+                config["secrets"]["providers"]["gatewayenv"]["allowlist"] = json!([]);
+                fs::write(&path, config.to_string()).expect("restricted environment provider");
+                let output = command
+                    .env(CREDENTIAL, "fixture-env-secret")
+                    .output()
+                    .expect("disallowed ref child");
+                assert!(
+                    output.status.success(),
+                    "disallowed environment ref must fail closed: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                fs::remove_dir_all(path.parent().unwrap()).expect("cleanup");
+            }
+        }
     }
 
     fn existing_json5_config(path: &Path) {
@@ -1092,9 +1230,7 @@ mod tests {
         let path = isolated_path();
         existing_json5_config(&path);
 
-        let restored = load_saved_remote_at(&path)
-            .expect("documented JSON5 should load")
-            .expect("remote mode");
+        let restored = reconnect_saved_at(&path);
 
         assert_eq!(restored.url.as_deref(), Some("ws://127.0.0.1:18789"));
         assert_eq!(restored.token.as_deref(), Some("existing-fixture-token"));
@@ -1108,7 +1244,8 @@ mod tests {
         let input = request();
         let url = normalize_gateway_url(input.url.as_deref().unwrap()).expect("Gateway URL");
 
-        save_config_at(&path, &input, &url).expect("update documented JSON5 configuration");
+        save_config_at(&path, &input, &url, RemoteConnectionSource::Submitted)
+            .expect("update documented JSON5 configuration");
 
         let saved: Value = serde_json::from_slice(&fs::read(&path).expect("config"))
             .expect("changed config is canonically rewritten as JSON");
@@ -1145,11 +1282,15 @@ mod tests {
         input.ssh_target = Some("operator@studio.example:2222".to_string());
         input.remote_port = Some(19789);
         let stable_url = Url::parse("ws://127.0.0.1:50420").expect("tunnel URL");
-        save_config_at(&path, &input, &stable_url).expect("persist SSH config");
+        save_config_at(
+            &path,
+            &input,
+            &stable_url,
+            RemoteConnectionSource::Submitted,
+        )
+        .expect("persist SSH config");
 
-        let restored = load_saved_remote_at(&path)
-            .expect("load saved remote")
-            .expect("SSH mode");
+        let restored = reconnect_saved_at(&path);
 
         assert_eq!(restored.url.as_deref(), Some("ws://127.0.0.1:50420/"));
         assert_eq!(

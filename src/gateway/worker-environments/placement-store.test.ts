@@ -9,8 +9,8 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type {
-  WorkerSessionPlacementIdentity,
   WorkerPlacementExecutionMode,
+  WorkerSessionPlacementIdentity,
 } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
@@ -302,7 +302,7 @@ describe("worker session placement store", () => {
       }),
     ).toThrow("during an active turn");
 
-    const released = store.waitForTurnClaimRelease(SESSION.sessionId, { timeoutMs: 1_000 });
+    const released = store.waitForTurnClaimRelease(SESSION.sessionId, {});
     store.releaseTurn(localClaim);
     await released;
     expect(

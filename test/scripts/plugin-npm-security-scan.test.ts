@@ -423,26 +423,31 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
       const spawnProbe =
         'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+      const artifacts = new Map<boolean, ReturnType<typeof writePluginArtifact>>();
       for (const context of ["", "release/2026.9.1", "release/2026.9.2", "release/2026.9.3"]) {
         const requiresLegacyDoctor =
           context === "release/2026.9.1" || context === "release/2026.9.2";
-        const artifact = writePluginArtifact({
-          extensionId: "codex",
-          packageName,
-          files: {
-            "src/app-server/transport-stdio.ts": spawnProbe,
-            "src/app-server/sandbox-exec-server/sandbox-child.ts": spawnProbe,
-            "src/app-server/transport-process-snapshot.ts": spawnProbe,
-            ...(requiresLegacyDoctor ? { "src/doctor.ts": spawnProbe } : {}),
-            ...(count === null
-              ? {}
-              : {
-                  [fixturePath]:
-                    'import { spawn } from "node:child_process";\n' +
-                    "spawn(process.execPath, []);\n".repeat(count),
-                }),
-          },
-        });
+        let artifact = artifacts.get(requiresLegacyDoctor);
+        if (!artifact) {
+          artifact = writePluginArtifact({
+            extensionId: "codex",
+            packageName,
+            files: {
+              "src/app-server/transport-stdio.ts": spawnProbe,
+              "src/app-server/sandbox-exec-server/sandbox-child.ts": spawnProbe,
+              "src/app-server/transport-process-snapshot.ts": spawnProbe,
+              ...(requiresLegacyDoctor ? { "src/doctor.ts": spawnProbe } : {}),
+              ...(count === null
+                ? {}
+                : {
+                    [fixturePath]:
+                      'import { spawn } from "node:child_process";\n' +
+                      "spawn(process.execPath, []);\n".repeat(count),
+                  }),
+            },
+          });
+          artifacts.set(requiresLegacyDoctor, artifact);
+        }
         const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
         expect(scanned.scanErrors).toEqual([]);
         const result = scanned.packageResults[0]!;

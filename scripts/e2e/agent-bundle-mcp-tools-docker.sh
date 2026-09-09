@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
-openclaw_resolve_frozen_core_harness_capabilities "$SOURCE_ROOT"
+openclaw_resolve_frozen_agent_bundle_mcp_contract "$SOURCE_ROOT" || exit $?
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-agent-bundle-mcp-tools-e2e" OPENCLAW_IMAGE)"
 CONTAINER_NAME="openclaw-agent-bundle-mcp-tools-e2e-$$"
 RUN_LOG="$(mktemp -t openclaw-agent-bundle-mcp-tools-log.XXXXXX)"
@@ -24,23 +24,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker_e2e_build_or_reuse "$IMAGE_NAME" agent-bundle-mcp-tools
-OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 agent-bundle-mcp-tools empty)"
-CLIENT_PATH="test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts"
+CLIENT_PATH="$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_CLIENT_PATH"
 CLIENT_MOUNT_ARGS=()
 if [ "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" = "legacy" ]; then
-  # The selected release's client imports a trusted E2E helper and ../../dist.
-  # Materialize its committed source tree outside the trusted read-only harness.
+  # Keep the selected client's import depth and helper without executing either.
   LEGACY_CLIENT_SOURCE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-frozen-agent-bundle-mcp-tools.XXXXXX")"
   # Preserve its root package.json so tsx retains the selected release's ESM scope,
   # then link the package-owned dependencies.
-  git -C "$SOURCE_ROOT" archive "$OPENCLAW_SELECTED_SHA" -- \
+  GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 git -C "$SOURCE_ROOT" archive "$OPENCLAW_SELECTED_SHA" -- \
     package.json \
     scripts/e2e/lib/temp-state-dir.ts \
-    scripts/e2e/agent-bundle-mcp-tools-docker-client.ts |
+    "$CLIENT_PATH" |
     tar -x -C "$LEGACY_CLIENT_SOURCE_ROOT"
+  for required_path in package.json scripts/e2e/lib/temp-state-dir.ts "$CLIENT_PATH"; do
+    if [ ! -f "$LEGACY_CLIENT_SOURCE_ROOT/$required_path" ] || [ -L "$LEGACY_CLIENT_SOURCE_ROOT/$required_path" ]; then
+      echo "missing regular staged bundle input: $required_path" >&2
+      exit 2
+    fi
+    # Archive attributes must not silently rewrite the selected source bytes.
+    if ! GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 git -C "$SOURCE_ROOT" \
+      cat-file blob "$OPENCLAW_SELECTED_SHA:$required_path" |
+      cmp -s - "$LEGACY_CLIENT_SOURCE_ROOT/$required_path"; then
+      echo "staged bundle input differs from selected source: $required_path" >&2
+      exit 2
+    fi
+  done
   LEGACY_CLIENT_ROOT="/tmp/openclaw-frozen-agent-bundle-mcp-tools"
-  CLIENT_PATH="$LEGACY_CLIENT_ROOT/scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"
+  CLIENT_PATH="$LEGACY_CLIENT_ROOT/$CLIENT_PATH"
   ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"
   ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"
   # The functional image runs as UID 1001 and must traverse this host-owned staging root.
@@ -49,6 +59,9 @@ if [ "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" = "legacy" ]; then
     -v "$LEGACY_CLIENT_SOURCE_ROOT:$LEGACY_CLIENT_ROOT:ro"
   )
 fi
+
+docker_e2e_build_or_reuse "$IMAGE_NAME" agent-bundle-mcp-tools
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 agent-bundle-mcp-tools empty)"
 
 echo "Running in-container OpenClaw bundle MCP tool availability smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.

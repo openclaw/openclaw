@@ -631,5 +631,6 @@ path even if the Codex turn has no assistant text.
 - [Native Codex plugins](/plugins/codex-native-plugins)
 - [Plugin hooks](/plugins/hooks)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
+- [Agent runtimes](/concepts/agent-runtimes)
 - [Diagnostics export](/gateway/diagnostics)
 - [Trajectory export](/tools/trajectory)

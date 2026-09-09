@@ -107,12 +107,15 @@ export async function transferSkillResources(params: {
   snapshot?: SkillSnapshot;
   tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand">;
   remoteWorkspaceDir: string;
+  // Placement ownership authorizes cleanup even after the run closes.
   assertCurrent: () => void;
+  assertRunCurrent?: () => void;
   signal?: AbortSignal;
   explicitSelections?: readonly import("../../skills/types.js").ExplicitSkillSelection[];
 }) {
   const check = () => {
     params.signal?.throwIfAborted();
+    params.assertRunCurrent?.();
     params.assertCurrent();
   };
   const delivery = await prepareSkillResourceDelivery(

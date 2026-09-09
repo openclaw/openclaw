@@ -43,6 +43,26 @@ async function collectChannelBoundMessageToolPolicyWarningsThroughDoctor(
   return warnings.filter((warning) => warning.includes("is routed from channel"));
 }
 
+function createMessagePolicyAgents(routedAgentId: string): NonNullable<OpenClawConfig["agents"]> {
+  return {
+    list: [
+      {
+        id: "main",
+        default: true,
+        tools: {
+          allow: ["read"],
+        },
+      },
+      {
+        id: routedAgentId,
+        tools: {
+          profile: "messaging",
+        },
+      },
+    ],
+  };
+}
+
 type TestManifestRecord = {
   id: string;
   channels: string[];
@@ -1469,23 +1489,7 @@ describe("doctor preview warnings", () => {
         discord: {},
         telegram: {},
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "commander",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("commander"),
       bindings: [
         {
           agentId: "commander",
@@ -1508,23 +1512,7 @@ describe("doctor preview warnings", () => {
       channels: {
         discord: {},
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "commander",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("commander"),
       bindings: [
         {
           agentId: "commander",
@@ -1547,23 +1535,7 @@ describe("doctor preview warnings", () => {
       channels: {
         discord: {},
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "commander",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("commander"),
       bindings: [
         {
           agentId: "commander",
@@ -1637,23 +1609,7 @@ describe("doctor preview warnings", () => {
       channels: {
         imessage: {},
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "ios-agent",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("ios-agent"),
       bindings: [
         {
           agentId: "ios-agent",
@@ -1681,23 +1637,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
-            tools: {
-              allow: ["read"],
-            },
-          },
-          {
-            id: "personal-agent",
-            tools: {
-              profile: "messaging",
-            },
-          },
-        ],
-      },
+      agents: createMessagePolicyAgents("personal-agent"),
       bindings: [
         {
           agentId: "personal-agent",

@@ -11,6 +11,7 @@ import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
@@ -548,11 +549,9 @@ export function resolveGatewayScopedTools(
       ...excludedToolNames,
     ].map(normalizeToolPolicyName),
   );
-  const tools = applyToolAvailabilityDescriptions(
-    applyDelegationCapability(
-      policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
-      params.delegationCapability,
-    ),
+  const tools = applyDelegationCapability(
+    policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+    params.delegationCapability,
   );
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
@@ -576,7 +575,7 @@ export function resolveGatewayScopedTools(
 
   return {
     agentId: sessionAgentId,
-    tools,
+    tools: applyToolAvailabilityDescriptions(filterRequesterYieldTools(tools, params.sessionKey)),
     workspaceDir,
   };
 }

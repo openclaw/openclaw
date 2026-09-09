@@ -77,7 +77,8 @@ Run a persistent OpenClaw Gateway on Oracle Cloud's **Always Free** ARM tier (up
     source ~/.bashrc
     ```
 
-    When prompted "How do you want to hatch your bot?", select **Do this later**.
+    When the installer offers to hatch an agent, defer it — the gateway steps
+    below configure the host first.
 
   </Step>
 

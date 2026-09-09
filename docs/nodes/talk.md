@@ -503,3 +503,4 @@ Watch background behavior. See [Watch setup and limits](/platforms/ios#standalon
 - [Voice wake](/nodes/voicewake)
 - [Audio and voice notes](/nodes/audio)
 - [Media understanding](/nodes/media-understanding)
+- [Google Meet plugin](/plugins/google-meet)
