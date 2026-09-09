@@ -55,6 +55,12 @@ existing owner. Provider listing still returns caller-owned callbacks and does
 not acquire a generation lifetime. Return asynchronous provider work and have
 `dispose()` stop and join any additional background work it owns.
 
+Video generation uses the same ownership for
+`api.runtime.videoGeneration.generate(...)`, from model-capability lookup through
+completed video assets and result metadata. Video assets may contain buffers or
+provider-hosted URLs. Downloads after the call returns belong to the caller;
+registration disposal must not invalidate those completed artifacts.
+
 Executable CLI command registration also uses an owned, uncached registry. Its
 resources remain available through asynchronous registration, command actions,
 and their tracked cleanup, then `dispose()` runs. Closing command preparation
