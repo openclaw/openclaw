@@ -3254,5 +3254,25 @@
   {
     "source": "Configuration — chat commands",
     "target": "配置 — 聊天命令"
+  },
+  {
+    "source": "Set up OpenTelemetry export",
+    "target": "设置 OpenTelemetry 导出"
+  },
+  {
+    "source": "OpenTelemetry configuration",
+    "target": "OpenTelemetry 配置"
+  },
+  {
+    "source": "Privacy and trace context",
+    "target": "隐私和追踪上下文"
+  },
+  {
+    "source": "Model calls and exported metrics",
+    "target": "模型调用和导出指标"
+  },
+  {
+    "source": "Exported spans and diagnostic events",
+    "target": "导出的 Span 和诊断事件"
   }
 ]

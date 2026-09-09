@@ -2258,6 +2258,16 @@
                       "gateway/telemetry",
                       "logging",
                       "gateway/opentelemetry",
+                      {
+                        "group": "OpenTelemetry",
+                        "pages": [
+                          "gateway/opentelemetry/setup",
+                          "gateway/opentelemetry/configuration",
+                          "gateway/opentelemetry/privacy-and-trace-context",
+                          "gateway/opentelemetry/model-calls-and-metrics",
+                          "gateway/opentelemetry/spans-and-events"
+                        ]
+                      },
                       "gateway/prometheus",
                       "gateway/logging",
                       "gateway/diagnostics",
