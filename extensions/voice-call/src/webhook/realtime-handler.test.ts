@@ -1806,6 +1806,95 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("shares streamed speech suppression with a coalesced consult caller", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const releaseFinal = createDeferred<void>();
+    const spoken: string[] = [];
+    const submitToolResult = vi.fn();
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({
+        supportsOutOfBandSpeech: true,
+        supportsToolResultContinuation: true,
+        supportsToolResultSuppression: true,
+        speakOutOfBand: vi.fn(async (text: string) => {
+          spoken.push(text);
+        }),
+        submitToolResult,
+      });
+    });
+    const handler = makeHandler(undefined, {
+      manager: { getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-shared-stream")) },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.registerToolHandler(
+      "openclaw_agent_consult",
+      async (_args: unknown, _callId: string, context: ToolHandlerContext) => {
+        await context.onVisiblePartial?.({ runId: "run-shared", text: "Shared result." });
+        await releaseFinal.promise;
+        return { text: "Shared result." };
+      },
+    );
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-shared-stream", callSid: "CA-shared-stream" },
+          }),
+        );
+        await waitForRealtimeTest(() => expect(callbacks).toBeDefined());
+        callbacks?.onToolCall?.({
+          itemId: "item-shared-1",
+          callId: "call-shared-1",
+          name: "openclaw_agent_consult",
+          args: { question: "Check once." },
+        });
+        await waitForRealtimeTest(() => expect(spoken).toHaveLength(1));
+        callbacks?.onToolCall?.({
+          itemId: "item-shared-2",
+          callId: "call-shared-2",
+          name: "openclaw_agent_consult",
+          args: { question: "Check once." },
+        });
+        releaseFinal.resolve();
+
+        await waitForRealtimeTest(() => {
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "call-shared-1",
+            { text: "Shared result." },
+            { suppressResponse: true },
+          );
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "call-shared-2",
+            {
+              status: "already_delivered",
+              message:
+                "OpenClaw already delivered this consult result internally. Do not repeat it.",
+            },
+            { suppressResponse: true },
+          );
+        });
+        expect(spoken).toHaveLength(1);
+        expect(
+          submitToolResult.mock.calls.filter(
+            ([, result]) => result && typeof result === "object" && "text" in result,
+          ),
+        ).toHaveLength(1);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      releaseFinal.resolve();
+      await server.close();
+    }
+  });
+
   it("does not replay a streamed long answer when the bounded final adds truncation", async () => {
     let callbacks: RealtimeBridgeRequest | undefined;
     const spoken: string[] = [];

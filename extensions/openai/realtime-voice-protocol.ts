@@ -266,14 +266,15 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
-    this.clearPendingSpeech();
     // Wire observers can synchronously reenter while the sink still owns its snapshot.
     if (this.interruptingPlayback) {
       return;
     }
     this.interruptingPlayback = true;
     try {
-      this.interruptPlayback(options);
+      if (this.interruptPlayback(options)) {
+        this.clearPendingSpeech();
+      }
     } finally {
       this.interruptingPlayback = false;
     }
@@ -312,7 +313,7 @@ export abstract class OpenAIRealtimeProtocol {
     }
   }
 
-  private interruptPlayback(options?: RealtimeVoiceBargeInOptions): void {
+  private interruptPlayback(options?: RealtimeVoiceBargeInOptions): boolean {
     const assistantAudioItem = this.assistantAudioItem;
     const force = options?.force === true;
     const shouldInterruptProvider =
@@ -349,7 +350,7 @@ export abstract class OpenAIRealtimeProtocol {
         type: "conversation.item.truncate.skipped",
         detail: `reason=barge-in audioEndMs=${audioEndMs} minAudioEndMs=${minBargeInAudioEndMs}`,
       });
-      return;
+      return false;
     }
     // VAD suppression can notify observers before create is sent. Retire that
     // local reservation without awaiting a native terminal that cannot arrive.
@@ -385,6 +386,7 @@ export abstract class OpenAIRealtimeProtocol {
     }
     // The sink can request replacement generation when cleared; trim its history first.
     this.config.onClearAudio("barge-in");
+    return true;
   }
 
   protected requestResponseCreate(options?: OpenAIRealtimeUserMessageOptions): void {

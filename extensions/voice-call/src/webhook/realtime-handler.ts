@@ -1958,7 +1958,18 @@ export class RealtimeCallHandler {
         if (outcome.kind === "cancelled") {
           return;
         }
-        await submitFinalToolResult(outcome.result);
+        if (existingNativeConsult.speechStream) {
+          await submitFinalToolResult(
+            {
+              status: "already_delivered",
+              message:
+                "OpenClaw already delivered this consult result internally. Do not repeat it.",
+            },
+            { suppressResponse: true },
+          );
+        } else {
+          await submitFinalToolResult(outcome.result);
+        }
         return;
       }
 
