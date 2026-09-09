@@ -2938,5 +2938,33 @@
   {
     "source": "Plugin SDK events and hook semantics",
     "target": "插件 SDK 事件与钩子语义"
+  },
+  {
+    "source": "Channel message adapter",
+    "target": "频道消息适配器"
+  },
+  {
+    "source": "Durable channel ingress",
+    "target": "持久化频道入口"
+  },
+  {
+    "source": "Channel status and media",
+    "target": "频道状态与媒体"
+  },
+  {
+    "source": "Channel sessions and bindings",
+    "target": "频道会话与绑定"
+  },
+  {
+    "source": "Channel approvals",
+    "target": "频道审批"
+  },
+  {
+    "source": "Channel setup and config",
+    "target": "频道设置与配置"
+  },
+  {
+    "source": "Channel mention policy",
+    "target": "频道提及策略"
   }
 ]

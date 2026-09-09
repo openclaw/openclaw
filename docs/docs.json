@@ -1751,6 +1751,18 @@
                   "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
+                  {
+                    "group": "Channel plugins",
+                    "pages": [
+                      "plugins/sdk-channel-plugins/message-adapter",
+                      "plugins/sdk-channel-plugins/durable-ingress",
+                      "plugins/sdk-channel-plugins/status-and-media",
+                      "plugins/sdk-channel-plugins/sessions-and-bindings",
+                      "plugins/sdk-channel-plugins/approvals",
+                      "plugins/sdk-channel-plugins/setup-and-config",
+                      "plugins/sdk-channel-plugins/mention-policy"
+                    ]
+                  },
                   "plugins/sdk-provider-plugins",
                   {
                     "group": "Provider plugins",
