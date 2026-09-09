@@ -151,8 +151,8 @@ describe("typeface presentation", () => {
       "utf8",
     );
     const range = (css.match(/U\+[0-9A-F]+(?:-U?\+?[0-9A-F]+)?/gu) ?? []).map((token) => {
-      const [start, end = start] = token.replaceAll("U+", "").split("-");
-      return [parseInt(start, 16), parseInt(end, 16)] as const;
+      const [start = "", end = start] = token.replaceAll("U+", "").split("-");
+      return [Number.parseInt(start, 16), Number.parseInt(end, 16)] as const;
     });
     const covered = (codepoint: number) =>
       range.some(([start, end]) => start <= codepoint && codepoint <= end);
