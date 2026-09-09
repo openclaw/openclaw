@@ -5,7 +5,7 @@ import type {
   ControlUiPageTarget,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { RouteId } from "../app-route-paths.ts";
-import { isRouteId, pathForRoute } from "../app-route-paths.ts";
+import { isRouteId, pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../app/operator-access.ts";
@@ -16,7 +16,6 @@ import {
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
 import { normalizeSessionKeyForUiComparison } from "../lib/sessions/session-key.ts";
-import { pluginTabLocation } from "../pages/plugin/tab-slugs.ts";
 import { createControlUiComponents } from "./control-ui-components.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 

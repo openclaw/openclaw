@@ -1,8 +1,11 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import {
+  INTERNAL_PLUGIN_PATH_PARAM,
+  pluginTabSlugFromPath,
+  routePageSpec,
+} from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { INTERNAL_PLUGIN_PATH_PARAM, pluginTabSlugFromPath } from "./tab-slugs.ts";
 
 type PluginTabRef = {
   pluginId: string;

@@ -20,6 +20,7 @@ import {
   restoreBridgedRouteLocation,
   routeIdFromPath,
   routePageSpec,
+  setPluginTabSlugs,
   type RouteId,
   type MemoryRouteTab,
   type PluginsHubRouteTab,
@@ -27,7 +28,6 @@ import {
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import type { AgentsPanel } from "./lib/agents/panels.ts";
-import { setPluginTabSlugs } from "./pages/plugin/tab-slugs.ts";
 import { createApplicationGateway } from "./test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "./test-helpers/gateway-methods.ts";
 

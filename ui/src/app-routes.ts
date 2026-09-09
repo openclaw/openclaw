@@ -10,18 +10,23 @@ import type {
 import {
   activityPersonFromPath,
   agentRouteFromPath,
+  canonicalPluginTabLocation,
   INTERNAL_ACTIVITY_PATH_PARAM,
   INTERNAL_AGENT_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
+  INTERNAL_PLUGIN_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
   INTERNAL_SESSION_PATH_PARAM,
   INTERNAL_WORKBOARD_PATH_PARAM,
   memoryTabFromPath,
   pathForAgentPanel,
   pathForRoute,
+  pluginSlugCandidate,
+  pluginTabSlugFromPath,
   pluginsHubTabFromPath,
   routeIdFromPath,
   sessionRouteNamespaceFromPath,
+  setPluginTabSlugs,
   workboardBoardIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";
@@ -54,13 +59,6 @@ import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
-import {
-  canonicalPluginTabLocation,
-  INTERNAL_PLUGIN_PATH_PARAM,
-  pluginSlugCandidate,
-  pluginTabSlugFromPath,
-  setPluginTabSlugs,
-} from "./pages/plugin/tab-slugs.ts";
 import { page as pluginsPage } from "./pages/plugins/route.ts";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";

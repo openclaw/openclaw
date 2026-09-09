@@ -15,10 +15,9 @@ import {
   sidebarMoreRoutes,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
+import { pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { pluginTabLocation } from "../pages/plugin/tab-slugs.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { icons, type IconName } from "./icons.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";

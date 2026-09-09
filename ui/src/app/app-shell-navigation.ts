@@ -1,5 +1,9 @@
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import {
+  isSessionRouteId,
+  pluginSlugCandidate,
+  pluginTabSlugFromPath,
+} from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import {
@@ -15,7 +19,6 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
-import { pluginSlugCandidate, pluginTabSlugFromPath } from "../pages/plugin/tab-slugs.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";

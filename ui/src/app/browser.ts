@@ -1,8 +1,11 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
+import {
+  inferBasePathFromPathname,
+  normalizeBasePath,
+  pluginSlugCandidate,
+} from "../app-route-paths.ts";
 import { uiDevGatewayResourceBasePath } from "../dev-gateway.ts";
-import { pluginSlugCandidate } from "../pages/plugin/tab-slugs.ts";
 import { isNativeEmbedHost } from "./native-web-chrome.ts";
 
 type WindowWithControlUiBasePath = Window &

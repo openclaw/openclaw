@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { routeIdFromPath } from "../../app-route-paths.ts";
-import { pluginTabRefFromSearch } from "./route.ts";
 import {
   canonicalPluginTabLocation,
   INTERNAL_PLUGIN_PATH_PARAM,
   pluginTabLocation,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
+  routeIdFromPath,
   setPluginTabSlugs,
-} from "./tab-slugs.ts";
+} from "../../app-route-paths.ts";
+import { pluginTabRefFromSearch } from "./route.ts";
 
 const ref = { pluginId: "reports-fixture", id: "summary" };
 const tab = { ...ref, slug: "reports" };
