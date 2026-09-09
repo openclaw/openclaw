@@ -39,6 +39,8 @@ function connectTunnel(env = proxyEnv): Promise<{ status: number; socket?: Socke
     const request = httpRequest({
       hostname: url.hostname,
       port: url.port,
+      // Exercise this fixture's proxy, not the runner's ambient proxy agent.
+      agent: false,
       method: "CONNECT",
       path: `localhost:${originPort}`,
       headers: {

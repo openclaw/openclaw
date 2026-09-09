@@ -55,6 +55,8 @@ export type SecretEgressSentinelBinding = Readonly<{
 export type SecretEgressProxyHandle = {
   caCertPath: string;
   proxyOrigin: string;
+  /** Captured traffic or bypass routing still needs a proxy when no secrets are bound. */
+  readonly requiresProxyWithoutBindings: boolean;
   getCertificateStatus: () => SecretEgressCertificateStatus;
   registerRun: (
     run: Readonly<{ instanceId: string; runId: string }>,
@@ -652,6 +654,7 @@ export async function startSecretEgressProxyServer(params: {
   return {
     caCertPath: certificates.caCertPath,
     proxyOrigin,
+    requiresProxyWithoutBindings: allowedHosts !== undefined || bypassHosts.size > 0,
     getCertificateStatus: certificates.getStatus,
     registerRun: (run, bindings = []) => {
       if (stopped) {

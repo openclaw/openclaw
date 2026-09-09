@@ -44,5 +44,10 @@ export function registerSecretEgressProxyRun(
   if (!proxy) {
     throw new Error("Secret egress proxy is not active in this Gateway process");
   }
+  // Consult the running owner, not a newer config snapshot. An explicit empty
+  // traffic allowlist is lockdown and must keep authenticated proxy routing.
+  if (bindings.length === 0 && !proxy.requiresProxyWithoutBindings) {
+    return {};
+  }
   return proxy.registerRun(run, bindings);
 }

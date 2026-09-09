@@ -2,6 +2,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
+import type { SecretEgressProxyHandle } from "../secrets/egress-proxy/proxy-server.js";
+import {
+  clearSecretEgressProxy,
+  publishSecretEgressProxy,
+} from "../secrets/egress-proxy/registry.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -10,7 +15,6 @@ import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.t
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 const mocks = vi.hoisted(() => ({
-  egressActive: false,
   proxyUrl: ["http://openclaw:", "fixture-password", "@127.0.0.1:19090"].join(""),
   gatewayParams: [] as Array<{
     env: Record<string, string>;
@@ -29,21 +33,25 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunnerRegistry: () => null,
 }));
 
-vi.mock("../secrets/egress-proxy/registry.js", () => ({
-  isSecretEgressProxyActive: () => mocks.egressActive,
-  registerSecretEgressProxyRun: (_run: unknown, bindings: unknown) => {
-    mocks.proxyBindings.push(bindings);
-    return {
-      HTTPS_PROXY: mocks.proxyUrl,
-      HTTP_PROXY: mocks.proxyUrl,
-      NODE_USE_ENV_PROXY: "1",
-      NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
-      SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
-      CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
-      REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
-    };
-  },
-}));
+let activeProxy: SecretEgressProxyHandle | undefined;
+
+function enableEgressProxy(requiresProxyWithoutBindings = false): void {
+  activeProxy = {
+    caCertPath: "/state/secret-egress/root-ca.pem",
+    proxyOrigin: "http://127.0.0.1:19090",
+    requiresProxyWithoutBindings,
+    getCertificateStatus: () => {
+      throw new Error("Certificate inspection is outside the exec environment boundary");
+    },
+    registerRun: (_run, bindings) => {
+      mocks.proxyBindings.push(bindings);
+      return { ...EGRESS_ENV };
+    },
+    revokeRun: vi.fn(),
+    stop: async () => {},
+  };
+  publishSecretEgressProxy(activeProxy);
+}
 
 vi.mock("../infra/shell-env.js", () => ({
   getShellEnvAppliedKeys: vi.fn(() => []),
@@ -251,15 +259,30 @@ describe("exec store environment", () => {
       });
     },
   );
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    if (activeProxy) {
+      clearSecretEgressProxy(activeProxy);
+      activeProxy = undefined;
+    }
+    vi.unstubAllEnvs();
+  });
   beforeAll(async () => {
     ({ createExecTool } = await import("./bash-tools.exec-run.js"));
     ({ createLazyExecTool } = await import("./lazy-exec-tool.js"));
   });
 
   beforeEach(() => {
+    // Model the Gateway owner, not the lease of the exec process running this test.
+    // Fixture store secrets are minted later and still exercise the complete boundary.
+    for (const [key, value] of Object.entries(process.env)) {
+      if (looksLikeSecretSentinel(value ?? "")) {
+        vi.stubEnv(key, undefined);
+      }
+    }
     vi.stubEnv("AWS_REGION", undefined);
-    mocks.egressActive = false;
+    for (const key of Object.keys(EGRESS_ENV)) {
+      vi.stubEnv(key, undefined);
+    }
     mocks.gatewayParams.length = 0;
     mocks.nodeHostParams.length = 0;
     mocks.spawnInputs.length = 0;
@@ -459,6 +482,90 @@ describe("exec store environment", () => {
     },
   );
 
+  it.each([false, true])(
+    "leaves caller network settings unchanged with zero secret bindings (inherited=%s)",
+    async (inherited) => {
+      const networkKeys = [
+        ...Object.keys(EGRESS_ENV),
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+      ];
+      for (const key of networkKeys) {
+        const value =
+          key.toLowerCase() === "no_proxy"
+            ? "localhost"
+            : key.toLowerCase().endsWith("_proxy")
+              ? "http://inherited-proxy.example:8080"
+              : key === "NODE_USE_ENV_PROXY"
+                ? "1"
+                : "/fixture/inherited-ca.pem";
+        vi.stubEnv(key, inherited ? value : undefined);
+      }
+      await withTeamStoreEntries([], async () => {
+        const baseline = await captureStoreExecEnvironment({
+          host: "gateway",
+          callId: "empty-egress-disabled",
+        });
+        const baselineChild = mocks.spawnInputs.at(-1)?.env;
+        enableEgressProxy();
+        const enabled = await captureStoreExecEnvironment({
+          host: "gateway",
+          callId: "empty-egress-enabled",
+          config: { secrets: { egressProxy: { enabled: true } } },
+        });
+        const enabledChild = mocks.spawnInputs.at(-1)?.env;
+        for (const key of networkKeys) {
+          expect(enabled[key], key).toBe(baseline[key]);
+          expect(enabledChild?.[key], `child ${key}`).toBe(baselineChild?.[key]);
+        }
+        expect(mocks.proxyBindings).toEqual([]);
+      });
+    },
+  );
+
+  it.each(["gateway", "sandbox", "node"] as const)(
+    "retains captured zero-binding traffic policy only for %s exec",
+    async (host) => {
+      await withTeamStoreEntries([], async () => {
+        enableEgressProxy(true);
+        const env = await captureStoreExecEnvironment({
+          host,
+          callId: `empty-policy-${host}`,
+          // The active proxy owns policy even when this later config differs.
+          config: { secrets: { egressProxy: { enabled: false } } },
+        });
+        for (const [key, value] of Object.entries(EGRESS_ENV)) {
+          if (host === "gateway") {
+            expect(env[key], key).toBe(value);
+            expect(mocks.spawnInputs.at(-1)?.env?.[key], `child ${key}`).toBe(value);
+          } else {
+            expect(env[key], key).not.toBe(value);
+          }
+        }
+        expect(mocks.proxyBindings).toEqual(host === "gateway" ? [[]] : []);
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "still requires an admitted run with zero bindings (traffic policy=%s)",
+    async (trafficPolicy) => {
+      await withTeamStoreEntries([], async () => {
+        enableEgressProxy(trafficPolicy);
+        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+        await expect(tool.execute("missing-run", { command: "echo ok" })).rejects.toThrow(
+          "Secret egress proxy requires an admitted agent run instance",
+        );
+        expect(mocks.proxyBindings).toEqual([]);
+        expect(mocks.spawnInputs).toEqual([]);
+      });
+    },
+  );
+
   it.each(
     (["gateway", "sandbox", "node"] as const).flatMap((host) =>
       [undefined, "off", "0", "false"].map((sentinelMode) => ({ host, sentinelMode })),
@@ -478,7 +585,7 @@ describe("exec store environment", () => {
           },
         ],
         async () => {
-          mocks.egressActive = true;
+          enableEgressProxy();
           const env = await captureStoreExecEnvironment({
             host,
             callId: `call-egress-enabled-${host}`,
@@ -491,8 +598,9 @@ describe("exec store environment", () => {
             expect(env).toMatchObject(EGRESS_ENV);
             const childEnv = mocks.spawnInputs.at(-1)?.env;
             expect(childEnv?.SERVICE_API_KEY).toBe(env.SERVICE_API_KEY);
-            expect(JSON.stringify(childEnv)).not.toContain("enabled-secret");
-            expect(JSON.stringify(env)).not.toContain("enabled-secret");
+            // Assert booleans so failures never render inherited environment values.
+            expect(JSON.stringify(childEnv).includes("enabled-secret")).toBe(false);
+            expect(JSON.stringify(env).includes("enabled-secret")).toBe(false);
             expect(mocks.proxyBindings).toEqual([
               [
                 expect.objectContaining({
@@ -507,7 +615,7 @@ describe("exec store environment", () => {
 
           expect(env).not.toHaveProperty("AWS_REGION");
           expect(env).not.toHaveProperty("SERVICE_API_KEY");
-          expect(JSON.stringify(env)).not.toContain("oc-sent-v2.");
+          expect(JSON.stringify(env).includes("oc-sent-v2.")).toBe(false);
           for (const [key, value] of Object.entries(EGRESS_ENV)) {
             expect(env[key]).not.toBe(value);
           }

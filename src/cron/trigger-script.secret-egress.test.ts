@@ -36,11 +36,15 @@ afterEach(async () => {
 describe("cron script gateway exec with secret egress", () => {
   it.each(
     (["trigger", "payload"] as const).flatMap((mode) =>
-      [false, true].map((enabled) => ({ mode, enabled })),
+      [
+        { enabled: false, requiresProxy: false },
+        { enabled: true, requiresProxy: false },
+        { enabled: true, requiresProxy: true },
+      ].map(({ enabled, requiresProxy }) => ({ mode, enabled, requiresProxy })),
     ),
   )(
-    "executes cold and warm $mode commands in a fresh agent with proxy enabled=$enabled",
-    async ({ mode, enabled }) => {
+    "executes cold and warm $mode commands with enabled=$enabled and required=$requiresProxy",
+    async ({ mode, enabled, requiresProxy }) => {
       state = await createOpenClawTestState({
         prefix: "openclaw-cron-secret-egress-",
         layout: "state-only",
@@ -53,12 +57,15 @@ describe("cron script gateway exec with secret egress", () => {
         },
         plugins: { enabled: false },
         tools: { exec: { host: "gateway", security: "full", ask: "off" } },
-        secrets: { egressProxy: { enabled } },
+        secrets: {
+          egressProxy: { enabled, ...(requiresProxy ? { allowedHosts: [] } : {}) },
+        },
       };
       await state.writeConfig(config);
       if (enabled) {
         proxy = await startSecretEgressProxyServer({
           caDir: state.path("proxy-ca"),
+          ...(requiresProxy ? { allowedHosts: [] } : {}),
           onAudit: () => {},
         });
         publishSecretEgressProxy(proxy);
@@ -99,7 +106,9 @@ describe("cron script gateway exec with secret egress", () => {
         expect(getAdmittedRunDelegatedAuthority(admitted[index]!)).toBeUndefined();
         if (enabled) {
           const expectedRuns = admitted.map((context) => context.operationalRunInstance);
-          expect(registrations?.mock.calls.map(([run]) => run)).toEqual(expectedRuns);
+          expect(registrations?.mock.calls.map(([run]) => run)).toEqual(
+            requiresProxy ? expectedRuns : [],
+          );
           expect(revocations?.mock.calls.map(([run]) => run)).toEqual(expectedRuns);
         }
       }

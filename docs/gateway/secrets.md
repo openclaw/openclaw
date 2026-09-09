@@ -374,6 +374,8 @@ When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `REQUESTS_CA_BUNDLE`, pointing at the ephemeral CA certificate
 - each team-store `secret` entry as an `oc-sent-v2...end` sentinel; `env` entries keep their existing behavior and precedence
 
+When a run has no secret bindings and the running proxy has neither an explicit traffic allowlist nor configured bypass hosts, exec leaves inherited proxy and CA settings unchanged instead of injecting a managed proxy. An explicit `allowedHosts` list, including `[]` (lockdown), or configured bypass hosts retains managed proxy routing even without secret bindings. Runs with secret bindings retain the authenticated proxy. This does not make authenticated proxy URLs compatible with tools that require credential-free proxies.
+
 Proxy authentication uses standard Basic proxy auth with username `openclaw` and a random per-run password. The token expires when the exact agent run closes, including cancellation and replacement. Base64 is not treated as encryption: the listener binds only to loopback, and a process that can read the proxy token from the agent environment can already read the sentinels in that environment. Missing, wrong, or expired credentials receive `407 Proxy Authentication Required` and are never forwarded.
 
 Run closure also tears down existing proxy connections, upstream requests, and bypass tunnels. Reusing the run id or registering a new token cannot revive the old connections or bindings. Bytes already handed to the upstream transport before closure cannot be recalled.

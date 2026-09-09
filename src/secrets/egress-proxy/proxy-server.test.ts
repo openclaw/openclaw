@@ -13,6 +13,11 @@ import {
   SECRET_SENTINEL_PREFIX,
 } from "../sentinel.js";
 import { startSecretEgressProxyServer, type SecretEgressProxyHandle } from "./proxy-server.js";
+import {
+  clearSecretEgressProxy,
+  publishSecretEgressProxy,
+  registerSecretEgressProxyRun,
+} from "./registry.js";
 
 type SecretEgressProxyAuditEvent = Parameters<
   typeof startSecretEgressProxyServer
@@ -190,6 +195,9 @@ async function forwardedRequest(
       {
         hostname: proxyUrl.hostname,
         port: proxyUrl.port,
+        // This client speaks directly to the loopback proxy under test; do not
+        // wrap that hop in the test runner's ambient environment proxy.
+        agent: false,
         path: requestTarget ?? `${protocol}://localhost:${originPort}/forwarded-auth`,
         method: "GET",
         headers: auth ? { "Proxy-Authorization": auth } : undefined,
@@ -276,6 +284,55 @@ describe("secret egress proxy", () => {
       expect(originRequests).toHaveLength(1);
     },
   );
+
+  it.each([
+    {
+      label: "no traffic policy",
+      allowedHosts: undefined,
+      bypassHosts: undefined,
+      required: false,
+    },
+    { label: "empty bypass list", allowedHosts: undefined, bypassHosts: [], required: false },
+    { label: "lockdown", allowedHosts: [], bypassHosts: undefined, required: true },
+    { label: "allowlist", allowedHosts: ["localhost"], bypassHosts: undefined, required: true },
+    {
+      label: "bypass routing",
+      allowedHosts: undefined,
+      bypassHosts: ["localhost"],
+      required: true,
+    },
+  ])("uses captured $label for zero-binding exec registration", async (testCase) => {
+    const policyProxy = await startSecretEgressProxyServer({
+      caDir,
+      allowedHosts: testCase.allowedHosts,
+      bypassHosts: testCase.bypassHosts,
+      onAudit: () => {},
+    });
+    proxies.push(policyProxy);
+    publishSecretEgressProxy(policyProxy);
+    try {
+      const emptyEnv = registerSecretEgressProxyRun(run, []);
+      expect(emptyEnv.NODE_USE_ENV_PROXY).toBe(testCase.required ? "1" : undefined);
+      if (!testCase.required) {
+        expect(Object.keys(emptyEnv)).toEqual([]);
+      }
+      const sentinel = mintSecretSentinel("registration-fixture", { label: "exec-registry" });
+      const boundEnv = registerSecretEgressProxyRun(run, [
+        { name: "SERVICE_API_KEY", sentinel, allowedHosts: ["localhost"] },
+      ]);
+      expect(boundEnv.NODE_USE_ENV_PROXY).toBe("1");
+      expect(boundEnv.HTTP_PROXY === boundEnv.HTTPS_PROXY).toBe(true);
+      expect(boundEnv.NODE_EXTRA_CA_CERTS === boundEnv.SSL_CERT_FILE).toBe(true);
+      expect(boundEnv.CURL_CA_BUNDLE === boundEnv.REQUESTS_CA_BUNDLE).toBe(true);
+      const auth = basicProxyAuth(registeredPassword(boundEnv));
+      policyProxy.revokeRun(run);
+      const refused = await rawConnect({ auth, proxyOrigin: policyProxy.proxyOrigin });
+      expect(refused.response).toContain("407 Proxy Authentication Required");
+      refused.socket.destroy();
+    } finally {
+      clearSecretEgressProxy(policyProxy);
+    }
+  });
 
   it("activates Node environment proxy support for registered Gateway runs", () => {
     expect(proxyEnv.NODE_USE_ENV_PROXY).toBe("1");
