@@ -29,7 +29,7 @@ import {
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
-import { parseReleaseVersion } from "./lib/release-version.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -146,7 +146,8 @@ function usage() {
 
 Dispatches or consumes release validation runs, validates the prepared npm tarball,
 builds plugin publish plans, writes a green evidence bundle, then prints the exact
-OpenClaw Release Publish command only after everything is green.
+publication commands. A protected --publish-workflow-ref also enables the
+prepare-once release button for complete regular beta/stable releases.
 
 Options:
   --tag <tag>                         Planned release tag. The tag must not exist yet.
@@ -1535,6 +1536,7 @@ export function buildPublishCommand(
     npmTelegramRunId?: string;
   },
   npmPreflightSource?: Awaited<ReturnType<typeof validateNpmPreflightRunSource>>,
+  mode: "publish" | "prepare" = "publish",
 ) {
   const workflowRef =
     options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef;
@@ -1572,16 +1574,38 @@ export function buildPublishCommand(
   if (options.plugins.trim()) {
     fields.push(["plugins", options.plugins]);
   }
+  if (
+    mode === "prepare" &&
+    (!/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(workflowRef) ||
+      options.pluginPublishScope !== "all-publishable" ||
+      options.tag.includes("-alpha.") ||
+      options.npmDistTag === "extended-stable")
+  ) {
+    throw new Error(
+      "Prepared publication requires a protected tooling tag and the complete regular-release plugin roster.",
+    );
+  }
+  if (mode === "prepare") {
+    const version = parseReleaseVersion(options.tag.slice(1));
+    if (!version || !["beta", "stable"].includes(classifyReleaseTrain(version))) {
+      throw new Error("Prepared publication requires a regular beta or stable release train.");
+    }
+  }
   return [
     "gh",
     "workflow",
     "run",
-    "openclaw-release-publish.yml",
+    mode === "prepare" ? "openclaw-release-prepare.yml" : "openclaw-release-publish.yml",
     "--repo",
     options.repo,
     "--ref",
     workflowRef,
-    ...fields.flatMap(([key, value]) => ["-f", `${key}=${String(value)}`]),
+    ...(mode === "prepare"
+      ? [
+          "-f",
+          `publish_inputs=${JSON.stringify(Object.fromEntries(fields.filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])))}`,
+        ]
+      : fields.flatMap(([key, value]) => ["-f", `${key}=${String(value)}`])),
   ]
     .map(shellQuote)
     .join(" ");
@@ -2230,14 +2254,22 @@ async function main() {
     targetSha,
     fullValidationEvidence.coveragePolicy,
   );
-  const publishCommand = buildPublishCommand(
-    {
-      ...options,
-      fullReleaseRunAttempt: fullRun.runAttempt,
-      npmTelegramRunId: npmTelegram.runId,
-    },
-    npmPreflightSource,
-  );
+  const publicationOptions = {
+    ...options,
+    fullReleaseRunAttempt: fullRun.runAttempt,
+    npmTelegramRunId: npmTelegram.runId,
+  };
+  const publishCommand = buildPublishCommand(publicationOptions, npmPreflightSource);
+  const preparedWorkflowRef = options.publishWorkflowRef || npmPreflightSource?.workflowRef;
+  const preparedVersion = parseReleaseVersion(options.tag.slice(1));
+  const prepareCommand =
+    /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(preparedWorkflowRef ?? "") &&
+    options.pluginPublishScope === "all-publishable" &&
+    preparedVersion &&
+    ["beta", "stable"].includes(classifyReleaseTrain(preparedVersion)) &&
+    options.npmDistTag !== "extended-stable"
+      ? buildPublishCommand(publicationOptions, npmPreflightSource, "prepare")
+      : undefined;
   const evidence = {
     version: 1,
     tag: options.tag,
@@ -2277,6 +2309,7 @@ async function main() {
     pluginNpmPlan,
     pluginClawHubPlan,
     publishCommand,
+    prepareCommand,
   };
   mkdirSync(options.outputDir, { recursive: true });
   const evidencePath = join(options.outputDir, "release-candidate-evidence.json");
@@ -2325,7 +2358,19 @@ async function main() {
         npmTelegram.runId ? ` ${npmTelegram.runId} ${npmTelegram.url}` : ""
       }`,
       "",
-      "Publish command:",
+      ...(prepareCommand
+        ? [
+            "Prepare once for the release button (after creating the frozen release tag):",
+            "",
+            "```bash",
+            prepareCommand,
+            "```",
+            "",
+            "When preparation succeeds, its summary supplies the single input for OpenClaw Release Button.",
+            "",
+          ]
+        : []),
+      "Direct publication / recovery command:",
       "",
       "```bash",
       publishCommand,
@@ -2340,7 +2385,11 @@ async function main() {
   if (androidVersionCheck) {
     console.log(androidVersionCheck.message);
   }
-  console.log("publish command:");
+  if (prepareCommand) {
+    console.log("prepare once for the release button (after creating the frozen release tag):");
+    console.log(prepareCommand);
+  }
+  console.log("direct publication / recovery command:");
   console.log(publishCommand);
 }
 

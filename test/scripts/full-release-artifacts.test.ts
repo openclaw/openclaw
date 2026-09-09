@@ -508,7 +508,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         failure === "producer failed"
           ? "Artifact npm producer failed"
           : failure === "digest changed"
-            ? "GitHub Actions artifact digest"
+            ? "GitHub Actions artifact download digest"
             : "ZIP",
       );
       if (failure === "producer failed") {

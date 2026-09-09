@@ -438,7 +438,13 @@ function api(path) {
   }
   return JSON.parse(raw);
 }
-export async function downloadClawHubTransactions({ identity, token, runGhJson = api, fetchImpl }) {
+export async function downloadClawHubTransactions({
+  identity,
+  token,
+  runGhJson = api,
+  fetchImpl,
+  archivePath,
+}) {
   validateClawHubIdentity(identity);
   const run = validateClawHubWorkflowRun(
     runGhJson(`actions/runs/${identity.runId}/attempts/${identity.runAttempt}`),
@@ -506,6 +512,7 @@ export async function downloadClawHubTransactions({ identity, token, runGhJson =
     },
     token,
     fetchImpl,
+    archivePath,
     maxArchiveBytes: MAX_JSON_BYTES,
     retryAttempts: 1,
   });
