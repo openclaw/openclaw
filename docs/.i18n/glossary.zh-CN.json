@@ -432,6 +432,22 @@
     "target": "模型提供商"
   },
   {
+    "source": "Quick rules",
+    "target": "快速规则"
+  },
+  {
+    "source": "Control UI and API keys",
+    "target": "Control UI 与 API 密钥"
+  },
+  {
+    "source": "Official provider plugins",
+    "target": "官方提供商插件"
+  },
+  {
+    "source": "Custom providers and local runtimes",
+    "target": "自定义提供商与本地运行时"
+  },
+  {
     "source": "Model Providers",
     "target": "模型提供商"
   },

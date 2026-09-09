@@ -2112,6 +2112,15 @@
                 "pages": [
                   "concepts/models",
                   "concepts/model-providers",
+                  {
+                    "group": "Model providers",
+                    "pages": [
+                      "concepts/model-providers/quick-rules",
+                      "concepts/model-providers/control-ui-and-keys",
+                      "concepts/model-providers/official-provider-plugins",
+                      "concepts/model-providers/custom-providers"
+                    ]
+                  },
                   "concepts/model-failover"
                 ]
               },
