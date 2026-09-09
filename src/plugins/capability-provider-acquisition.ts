@@ -2,10 +2,15 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { acquireBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import {
+  preparePluginCapabilityProviderLookup,
   preparePluginCapabilityProviderResolution,
   type CapabilityProviderFor,
 } from "./capability-provider-runtime.js";
-import { acquirePluginRegistryForInspection, isPluginRegistryLoadInFlight } from "./loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  isPluginRegistryLoadInFlight,
+  resolvePluginRegistryLoadCacheKey,
+} from "./loader.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -16,6 +21,7 @@ export async function acquirePluginCapabilityProviders<
 >(params: Parameters<typeof preparePluginCapabilityProviderResolution<K>>[0]) {
   const work = new AsyncWorkScope();
   const releases: Array<() => Promise<void>> = [];
+  const loads = new Map<string, Promise<PluginRegistry>>();
   const retained = new Set<PluginRegistry>();
   const authorities = new Map<PluginRegistry, (() => boolean) | undefined>();
   const captureAuthority = (registry: PluginRegistry) => {
@@ -59,42 +65,77 @@ export async function acquirePluginCapabilityProviders<
         await work.drain();
       }
     }));
-  try {
-    const providers = await work.track(async () => {
-      const resolution = preparePluginCapabilityProviderResolution(params, retain);
-      let entries: PluginRegistry[K] = [];
-      if (resolution.load) {
-        const load = resolution.prepareLoad();
-        let registry = load.loadedRegistry;
-        if (!registry) {
-          const loadOptions = load.resolveLoadOptions();
-          if (!isPluginRegistryLoadInFlight(loadOptions)) {
-            const acquired = await acquirePluginRegistryForInspection(loadOptions);
-            releases.push(acquired.release);
-            registry = acquired.registry;
-            captureAuthority(registry);
+  const run = <T>(operation: () => T | Promise<T>) =>
+    releaseCompletion
+      ? Promise.reject(new Error("Capability provider acquisition has been released"))
+      : work.track(operation);
+  type LoadResolution = Extract<
+    ReturnType<typeof preparePluginCapabilityProviderResolution<K>>,
+    { prepareLoad: () => unknown }
+  >;
+  const execute = async <T>(
+    resolution: { resolve: (entries: PluginRegistry[K]) => T } & (
+      | { load: undefined }
+      | { load: LoadResolution["load"]; prepareLoad: LoadResolution["prepareLoad"] }
+    ),
+  ): Promise<T> => {
+    let entries: PluginRegistry[K] = [];
+    if (resolution.load) {
+      const load = resolution.prepareLoad();
+      let registry = load.loadedRegistry;
+      if (!registry) {
+        const loadOptions = load.resolveLoadOptions();
+        if (!isPluginRegistryLoadInFlight(loadOptions)) {
+          const key = resolvePluginRegistryLoadCacheKey(loadOptions);
+          let pending = loads.get(key);
+          if (!pending) {
+            pending = acquirePluginRegistryForInspection(loadOptions).then((acquired) => {
+              releases.push(acquired.release);
+              captureAuthority(acquired.registry);
+              return acquired.registry;
+            });
+            loads.set(key, pending);
           }
-        }
-        const fallback = load.fallback(registry);
-        entries = fallback.entries;
-        if (fallback.pluginIds.length > 0) {
-          const captured = await acquireBundledCapabilityRuntimeRegistry({
-            ...resolution.load.loadOptions,
-            pluginIds: fallback.pluginIds,
-          });
-          releases.push(captured.release);
-          captureAuthority(captured.registry);
-          entries = load.merge(entries, captured.registry);
+          registry = await pending;
         }
       }
-      return resolution.resolve(entries);
-    });
+      const fallback = load.fallback(registry);
+      entries = fallback.entries;
+      if (fallback.pluginIds.length > 0) {
+        const captured = await acquireBundledCapabilityRuntimeRegistry({
+          ...resolution.load.loadOptions,
+          pluginIds: fallback.pluginIds,
+        });
+        releases.push(captured.release);
+        captureAuthority(captured.registry);
+        entries = load.merge(entries, captured.registry);
+      }
+    }
+    return resolution.resolve(entries);
+  };
+  const resolveProviders = (
+    query: Omit<Parameters<typeof preparePluginCapabilityProviderResolution<K>>[0], "key">,
+  ) =>
+    run(() =>
+      execute<CapabilityProviderFor<K>[]>(
+        preparePluginCapabilityProviderResolution({ ...query, key: params.key }, retain),
+      ),
+    );
+  const resolveProvider = (
+    query: Omit<Parameters<typeof preparePluginCapabilityProviderLookup<K>>[0], "key">,
+  ) =>
+    run(() =>
+      execute<CapabilityProviderFor<K> | undefined>(
+        preparePluginCapabilityProviderLookup({ ...query, key: params.key }, retain),
+      ),
+    );
+  try {
+    const providers = await resolveProviders(params);
     return {
       providers,
-      run: <T>(run: () => T | Promise<T>) =>
-        releaseCompletion
-          ? Promise.reject(new Error("Capability provider acquisition has been released"))
-          : work.track(run),
+      run,
+      resolveProviders,
+      resolveProvider,
       assertOpen: () => {
         if (releaseCompletion || [...authorities.values()].some((isCurrent) => !isCurrent?.())) {
           throw new Error(
@@ -140,12 +181,18 @@ export async function withAcquiredPluginCapabilityProviders<
   T,
 >(
   params: Parameters<typeof preparePluginCapabilityProviderResolution<K>>[0],
-  run: (providers: CapabilityProviderFor<K>[]) => T | Promise<T>,
+  run: (
+    providers: CapabilityProviderFor<K>[],
+    queries: Pick<
+      Awaited<ReturnType<typeof acquirePluginCapabilityProviders<K>>>,
+      "resolveProvider" | "resolveProviders"
+    >,
+  ) => T | Promise<T>,
 ): Promise<T> {
   const acquired = await acquirePluginCapabilityProviders(params);
   let outcome: Result<T, unknown>;
   try {
-    outcome = { ok: true, value: await acquired.run(() => run(acquired.providers)) };
+    outcome = { ok: true, value: await acquired.run(() => run(acquired.providers, acquired)) };
   } catch (error) {
     outcome = { ok: false, error };
   }

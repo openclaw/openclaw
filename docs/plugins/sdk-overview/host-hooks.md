@@ -61,6 +61,14 @@ completed video assets and result metadata. Video assets may contain buffers or
 provider-hosted URLs. Downloads after the call returns belong to the caller;
 registration disposal must not invalidate those completed artifacts.
 
+`api.runtime.tts.textToSpeechTelephony(...)` also owns fresh provider registrations
+through configuration, persona preparation, synthesis, and PCM result metadata.
+It retains managed registrations during the operation and preserves raw host
+ownership. Configured fallback catalogs stay separate from direct preference and
+override lookups. Returned audio buffers outlive registration disposal. The
+separate synchronous speech lookup and request-preparation APIs keep their
+existing caller lifetime; streaming speech is not part of this finite operation.
+
 For `image_generate` and `music_generate` tools prepared from an owned inspection,
 resources remain held through preflight and, once accepted, through generation, media saving, and
 any rollback. A `started` result acknowledges acceptance; it does not mean the
