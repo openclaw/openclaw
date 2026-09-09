@@ -5,7 +5,8 @@ import {
   createNoopLogger,
   installCronTestHooks,
 } from "../service.test-harness.js";
-import type { CronDelivery, CronJobCreate } from "../types.js";
+import { loadCronStore } from "../store.js";
+import type { CronDelivery, CronJob, CronJobCreate } from "../types.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 
 function createInput(params: {
@@ -87,6 +88,73 @@ function createDirectCronService(storePath: string) {
 }
 
 describe("CronService initial delivery", () => {
+  it("persists Telegram topic delivery without a duplicate threadId", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createDirectCronService(storePath);
+    await cron.start();
+
+    try {
+      const added = await cron.add(
+        createInput({
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "hello" },
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "telegram:-1001234567890:topic:99",
+            threadId: "99",
+          },
+        }),
+      );
+
+      expect(added.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:99",
+      });
+      await expect(loadCronStore(storePath)).resolves.toMatchObject({
+        jobs: [{ delivery: added.delivery }],
+      });
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("normalizes legacy split Telegram topic routing during an unrelated update", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createDirectCronService(storePath);
+    await cron.start();
+
+    try {
+      const added = await cron.add(
+        createInput({
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "hello" },
+        }),
+      );
+      const legacy = cron.getJob(added.id) as CronJob;
+      legacy.delivery = {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:99",
+        threadId: "99",
+      };
+
+      const updated = await cron.update(added.id, { name: "updated topic job" });
+
+      expect(updated.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:99",
+      });
+      await expect(loadCronStore(storePath)).resolves.toMatchObject({
+        jobs: [{ name: "updated topic job", delivery: updated.delivery }],
+      });
+    } finally {
+      cron.stop();
+    }
+  });
+
   it.each(["current", "session:project-alpha"] as const)(
     "persists announce delivery for direct %s jobs",
     async (sessionTarget) => {

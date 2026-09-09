@@ -1,5 +1,6 @@
 /** Resolves create-time default delivery for new cron jobs. */
 import { shouldDefaultCronDeliveryToAnnounce } from "../delivery-defaults.js";
+import { cronDeliveryTargetIncludesTelegramTopic } from "../delivery-topic-routing.js";
 import type { CronDelivery, CronJobCreate } from "../types.js";
 
 /**
@@ -12,6 +13,11 @@ import type { CronDelivery, CronJobCreate } from "../types.js";
  */
 export function resolveInitialCronDelivery(input: CronJobCreate): CronDelivery | undefined {
   if (input.delivery) {
+    if (cronDeliveryTargetIncludesTelegramTopic(input.delivery)) {
+      const delivery = structuredClone(input.delivery);
+      delete delivery.threadId;
+      return delivery;
+    }
     return input.delivery;
   }
   if (

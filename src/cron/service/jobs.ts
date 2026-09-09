@@ -7,6 +7,7 @@ import {
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { cronDeliveryTargetIncludesTelegramTopic } from "../delivery-topic-routing.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
@@ -394,6 +395,9 @@ export function applyJobPatch(
   if (patch.delivery) {
     const implicitMode = resolveCronDeliveryPlan(job).mode;
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery, implicitMode);
+  }
+  if (job.delivery && cronDeliveryTargetIncludesTelegramTopic(job.delivery)) {
+    delete job.delivery.threadId;
   }
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
