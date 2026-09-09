@@ -179,6 +179,10 @@ and unresolved local SecretRefs still fail closed. Only recognized credential
 entries can narrow a legacy refusal; metadata-only objects and unknown layouts
 remain owner-wide.
 
+Credential writes check migration readiness owner-wide for their destination
+database only. A shared-store refusal does not block refreshing an unrelated
+agent-local OAuth credential; a refusal on the write destination still blocks it.
+
 Session migration guards use the same pinned runtime config as model discovery
 and the requested model's endpoint to resolve endpoint-dependent provider aliases.
 Prepared session views retain canonical profiles from both owners and validate

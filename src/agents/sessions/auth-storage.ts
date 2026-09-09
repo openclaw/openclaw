@@ -22,6 +22,7 @@ import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles
 import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
+  assertAuthProfileMigrationReady,
 } from "../auth-profiles/legacy-source-diagnostic.js";
 import { normalizeOAuthRefreshCredential } from "../auth-profiles/oauth-refresh-fence.js";
 import {
@@ -225,14 +226,14 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
   }
 
   private readRaw(): AuthProfileStore {
-    this.assertProviderReady();
+    assertAuthProfileMigrationReady(this.agentDir);
     return loadSqliteAuthStorageStore(this.agentDir);
   }
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
-    this.assertProviderReady();
+    assertAuthProfileMigrationReady(this.agentDir);
     const snapshots = this.resolveMaterializedRuntimeStores();
-    this.assertProviderReady();
+    assertAuthProfileMigrationReady(this.agentDir);
     const selected = runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
       const store = loadSqliteAuthStorageStore(this.agentDir, database);
       const materializedData = projectAuthoritativeAuthStorageData(store, snapshots);
@@ -264,7 +265,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
   }
 
   async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
-    this.assertProviderReady();
+    assertAuthProfileMigrationReady(this.agentDir);
     return await withFileLock(
       resolveAuthProfileDatabasePath(this.agentDir),
       OAUTH_REFRESH_LOCK_OPTIONS,
@@ -279,7 +280,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
           this.captureCredentialSources(initialRaw, resolveAuthProfileDatabasePath(this.agentDir));
           return result;
         }
-        this.assertProviderReady();
+        assertAuthProfileMigrationReady(this.agentDir);
         const selected = runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
           const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
           if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
