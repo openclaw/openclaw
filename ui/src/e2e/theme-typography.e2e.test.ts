@@ -228,7 +228,10 @@ suite.define(() => {
     async (theme) => {
       const { gateway, page } = await openThemedChat(theme, "dark");
       await page.goto(`${suite.server.baseUrl}chat`);
-      const vietnamese = "ếệắặ";
+      // ở/ứ/ự decompose through U+031B COMBINING HORN, the highest-frequency
+      // Vietnamese letter class; their decomposed forms must stay inside the
+      // bundled Noto range (issue #133930 covers decomposed combining marks).
+      const vietnamese = "ếệắặởứự";
       await renderAssistantProse(gateway, page, `${vietnamese}${vietnamese.normalize("NFD")}`);
       const chat = page.locator(".chat-text").last();
       await chat.evaluate((element) => {

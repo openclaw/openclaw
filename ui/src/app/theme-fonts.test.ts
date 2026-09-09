@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyChatFontSmoothing,
@@ -98,6 +101,33 @@ describe("typeface presentation", () => {
       } else {
         expect(typeface.stack).toContain('"Noto Sans"');
       }
+    }
+  });
+
+  it("covers every combining mark Vietnamese decompositions need", () => {
+    // jsdom's URL resolves against a document base, so derive the path from
+    // import.meta.url via node:url instead of `new URL(relative, base)`.
+    const css = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../public/fonts/noto-sans-vietnamese.css",
+      ),
+      "utf8",
+    );
+    const range = (css.match(/U\+[0-9A-F]+(?:-U?\+?[0-9A-F]+)?/gu) ?? []).map((token) => {
+      const [start, end = start] = token.replaceAll("U+", "").split("-");
+      return [parseInt(start, 16), parseInt(end, 16)] as const;
+    });
+    const covered = (codepoint: number) =>
+      range.some(([start, end]) => start <= codepoint && codepoint <= end);
+    // Vietnamese NFD text combines bases with U+0300-U+0309 plus the horn
+    // (U+031B), dot below (U+0323), and hook above (U+0329); a missing entry
+    // here silently pushes decomposed letters back to OS fallbacks.
+    for (let codepoint = 0x300; codepoint <= 0x309; codepoint += 1) {
+      expect(covered(codepoint), `U+${codepoint.toString(16)}`).toBe(true);
+    }
+    for (const codepoint of [0x31b, 0x323, 0x329]) {
+      expect(covered(codepoint), `U+${codepoint.toString(16)}`).toBe(true);
     }
   });
 
