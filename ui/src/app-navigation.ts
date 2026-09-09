@@ -328,8 +328,8 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   cron: ["calendarClock", "tabs.cron", "subtitles.cron"],
   tasks: ["listChecks", "tabs.tasks", "subtitles.tasks"],
   skills: ["zap", "tabs.skills", "subtitles.skills"],
-  plugins: ["puzzle", "tabs.plugins", "subtitles.plugins"],
-  "plugin-settings": ["puzzle", "tabs.plugins", "subtitles.plugins"],
+  plugins: ["plug", "tabs.plugins", "subtitles.plugins"],
+  "plugin-settings": ["plug", "tabs.plugins", "subtitles.plugins"],
   "skill-workshop": ["wrench", "tabs.skillWorkshop", "subtitles.skillWorkshop"],
   device: ["monitor", "tabs.device", "subtitles.device"],
   "device-permissions": ["shieldCheck", "tabs.devicePermissions", "subtitles.devicePermissions"],
@@ -362,7 +362,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   advanced: ["fileCode", "routeTitles.advanced", "subtitles.advanced"],
   debug: ["bug", "tabs.debug", "subtitles.debug"],
   logs: ["scrollText", "tabs.logs", "subtitles.logs"],
-  plugin: ["puzzle", "tabs.plugin", "subtitles.plugin"],
+  plugin: ["plug", "tabs.plugin", "subtitles.plugin"],
   "new-session": ["plus", "newSession.title", "newSession.hint"],
 };
 

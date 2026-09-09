@@ -472,12 +472,17 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
 
 .plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon {
   box-sizing: border-box;
+  flex: 0 0 34px;
   width: 34px;
   min-width: 34px;
+  max-width: 34px;
   height: 34px;
   min-height: 34px;
+  max-height: 34px;
+  aspect-ratio: 1;
   padding: 7px;
   border-color: var(--border);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
 }
@@ -1865,10 +1870,12 @@ h3.plugins-subheader {
 
 .plugins-settings-detail-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: flex-end;
   gap: var(--space-2);
   align-self: start;
+  margin-inline-start: auto;
 }
 
 .plugins-settings-advanced-access {
@@ -1968,15 +1975,20 @@ h3.plugins-subheader {
 }
 
 .plugin-catalog-detail__title-row {
+  align-items: flex-start;
+  flex-wrap: nowrap;
   justify-content: space-between;
   gap: var(--space-4);
 }
 
 .plugin-catalog-detail__title-row h1 {
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   color: var(--text-strong);
   font-size: clamp(28px, 4vw, 42px);
   line-height: 1.05;
+  overflow-wrap: anywhere;
 }
 
 .plugin-catalog-detail__summary {
@@ -2531,11 +2543,6 @@ h3.plugins-subheader {
 
   .plugins-settings-detail-hero {
     grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .plugins-settings-detail-actions {
-    grid-column: 1 / -1;
-    justify-self: end;
   }
 
   .plugins-toolbar--fields > .settings-segmented {

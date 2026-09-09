@@ -173,7 +173,7 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
               </span>
             </wa-dropdown-item>
             <wa-dropdown-item class="agent-chat__capability-menu-item" value="open-connectors">
-              <span slot="icon" aria-hidden="true">${icons.puzzle}</span>
+              <span slot="icon" aria-hidden="true">${icons.plug}</span>
               <span>${t("chat.composer.menu.connectors")}</span>
               <span slot="details" class="agent-chat__capability-menu-details">
                 <span class="agent-chat__capability-menu-badge">${connectorCount}</span>
@@ -193,7 +193,7 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
             })}
             ${menuDivider()}
             <wa-dropdown-item class="agent-chat__capability-menu-item" value="manage-plugins">
-              <span slot="icon" aria-hidden="true">${icons.puzzle}</span>
+              <span slot="icon" aria-hidden="true">${icons.plug}</span>
               ${internalLink(
                 pathForRoute("plugins", props.basePath),
                 t("chat.composer.menu.managePlugins"),
