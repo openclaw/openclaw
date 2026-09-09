@@ -3350,5 +3350,45 @@
   {
     "source": "Policy findings, repair, and exit codes",
     "target": "策略发现项、修复与退出码"
+  },
+  {
+    "source": "Telegram setup",
+    "target": "Telegram 设置"
+  },
+  {
+    "source": "Telegram access control",
+    "target": "Telegram 访问控制"
+  },
+  {
+    "source": "Telegram message behavior",
+    "target": "Telegram 消息行为"
+  },
+  {
+    "source": "Telegram threads and sessions",
+    "target": "Telegram 话题与会话"
+  },
+  {
+    "source": "Telegram rich messages and approvals",
+    "target": "Telegram 富文本消息与审批"
+  },
+  {
+    "source": "Telegram media and attachments",
+    "target": "Telegram 媒体与附件"
+  },
+  {
+    "source": "Telegram events and operations",
+    "target": "Telegram 事件与运维"
+  },
+  {
+    "source": "Telegram transports",
+    "target": "Telegram 传输方式"
+  },
+  {
+    "source": "Telegram Dashboard Mini App",
+    "target": "Telegram 仪表盘小程序"
+  },
+  {
+    "source": "Telegram troubleshooting",
+    "target": "Telegram 故障排查"
   }
 ]

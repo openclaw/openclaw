@@ -1531,7 +1531,22 @@
                     ]
                   },
                   "channels/sms",
-                  "channels/telegram",
+                  {
+                    "group": "Telegram",
+                    "pages": [
+                      "channels/telegram",
+                      "channels/telegram/setup",
+                      "channels/telegram/access-control",
+                      "channels/telegram/messaging",
+                      "channels/telegram/threads-and-sessions",
+                      "channels/telegram/rich-messages",
+                      "channels/telegram/media",
+                      "channels/telegram/events",
+                      "channels/telegram/transports",
+                      "channels/telegram/mini-app",
+                      "channels/telegram/troubleshooting"
+                    ]
+                  },
                   "channels/whatsapp"
                 ]
               },
