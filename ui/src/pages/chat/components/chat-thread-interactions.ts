@@ -12,7 +12,9 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
+import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
@@ -30,7 +32,7 @@ import { resetChatThreadState } from "../chat-thread.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { RunOutputUsage } from "../tool-stream-contract.ts";
+import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import type { MessageActionDetails } from "./chat-message-markdown.ts";
@@ -67,10 +69,14 @@ type ReplyMessageAccess = {
 };
 
 export type ChatThreadProps = ChatSendStatusActions & {
+  compactionStatus?: CompactionStatus | null;
   paneId: string;
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
+  presented?: boolean;
+  /** Mounted transcript visibility, independent of which split pane owns input. */
+  transcriptVisible?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
@@ -113,11 +119,12 @@ export type ChatThreadProps = ChatSendStatusActions & {
   userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  avatarPlacement?: "none";
   basePath?: string;
   resourceBasePath?: string;
   fullMessageAgentId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
-  localMediaPreviewRoots?: string[];
+  mediaPolicyEpoch?: number;
   connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -125,6 +132,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   fetchLinkFavicon?: LinkFaviconFetcher;
+  githubRepo?: MarkdownRenderOptions["githubRepo"];
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   typingActors?: readonly { id: string; label: string; preview?: string }[];
@@ -145,6 +153,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
+  onAddToChat?: (question: string) => void;
   onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
@@ -161,6 +170,7 @@ type TranscriptInteractionProps = Pick<
   | "onRewindMessage"
   | "onForkMessage"
   | "onFocusComposer"
+  | "onAddToChat"
   | "onCompanionPrefill"
 >;
 
@@ -201,6 +211,8 @@ export function dismissThreadPortals(paneId?: string, owner?: ParentNode): void 
 
 export function resetTranscriptSession(paneId: string, owner?: ParentNode): void {
   dismissThreadPortals(paneId, owner);
+  // Retained panes keep their DOM, so their native table modals need explicit retirement.
+  owner?.querySelectorAll<HTMLElement>(".chat-thread").forEach(releaseMarkdownTables);
   const state = transcriptStates.get(paneId);
   if (state) {
     // Search input belongs to the outgoing transcript. Other fields are pane
@@ -240,18 +252,20 @@ export function renderTranscriptSearch(
         placeholder=${t("chat.thread.searchPlaceholder")}
         aria-label=${t("chat.thread.search")}
         .value=${state.searchQuery}
-        ${state.searchFocusPending
-          ? ref((element) => {
-              if (element instanceof HTMLInputElement) {
-                state.searchFocusPending = false;
-                queueMicrotask(() => {
-                  if (element.isConnected) {
-                    element.focus({ preventScroll: true });
-                  }
-                });
-              }
-            })
-          : nothing}
+        ${
+          state.searchFocusPending
+            ? ref((element) => {
+                if (element instanceof HTMLInputElement) {
+                  state.searchFocusPending = false;
+                  queueMicrotask(() => {
+                    if (element.isConnected) {
+                      element.focus({ preventScroll: true });
+                    }
+                  });
+                }
+              })
+            : nothing
+        }
         @input=${(event: Event) => {
           state.searchQuery = (event.target as HTMLInputElement).value;
           requestUpdate();
@@ -406,6 +420,15 @@ export function handleTranscriptPointerUp(event: PointerEvent, props: Transcript
     return;
   }
   handleChatSelectionPointerUp(event, {
+    onAddToChat: props.onAddToChat
+      ? (selection) => {
+          const question = buildCompanionQuestionPrefill(selection);
+          if (question) {
+            props.onAddToChat?.(question);
+            props.onFocusComposer?.();
+          }
+        }
+      : undefined,
     onAskSideChat: (selection) => {
       const question = buildCompanionQuestionPrefill(selection);
       if (question) {

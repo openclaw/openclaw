@@ -10,6 +10,7 @@ import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
   clearPluginModuleRequireCache,
   tryNativeRequireJavaScriptModule,
+  tryNativeRequireModule,
 } from "./native-module-require.js";
 import {
   bindPluginCacheRoot,
@@ -23,6 +24,7 @@ import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderModuleCacheKey,
   preparePluginLoaderAliases,
+  isPluginSdkAliasSpecifier,
   resolvePluginLoaderTryNative,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
@@ -51,7 +53,6 @@ type PluginModuleLoaderCacheEntry = {
   resolveAlias: (specifier: string) => string | undefined;
   tryNative: boolean;
   transformOpenClawDependencies: boolean;
-  cacheKey: string;
   scopedCacheKey: string;
 };
 type PluginModuleLoaderStatsSnapshot = {
@@ -187,7 +188,6 @@ function resolvePluginModuleLoaderCacheEntry(
     resolveAlias: aliases.resolveAlias,
     tryNative,
     transformOpenClawDependencies,
-    cacheKey,
     scopedCacheKey,
   };
 }
@@ -211,6 +211,34 @@ function createLazySourceTransformLoader(params: {
       params.loaderFilename,
       {
         ...jitiOptions,
+        // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
+        // matcher misses them. Keep host state native while plugin source remains
+        // transformable and reloadable within its cache generation.
+        virtualModules: params.transformOpenClawDependencies
+          ? undefined
+          : new Proxy<Record<string, unknown>>(
+              {},
+              {
+                has(_target, key) {
+                  return (
+                    typeof key === "string" &&
+                    isPluginSdkAliasSpecifier(key) &&
+                    Boolean(params.resolveAlias(key))
+                  );
+                },
+                get(_target, key) {
+                  const target = typeof key === "string" ? params.resolveAlias(key) : undefined;
+                  if (!target) {
+                    return undefined;
+                  }
+                  const native = tryNativeRequireModule(target, {
+                    allowWindows: true,
+                    fallbackOnMissingDependency: true,
+                  });
+                  return native.ok ? native.moduleExport : jitiLoader(target);
+                },
+              },
+            ),
         nativeModules: params.transformOpenClawDependencies
           ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
           : jitiOptions.nativeModules,
@@ -255,7 +283,10 @@ function createPluginModuleLoader(params: {
     return loaded;
   };
   // When the caller has explicitly opted out of native loading, route every
-  // target through jiti so caller-provided alias rewrites still apply.
+  // target through jiti so caller-provided alias rewrites still apply. jiti's
+  // module cache is Node's CJS require cache: a natively required ESM entry is
+  // visible there, but its ESM-imported chunks are not, so this graph re-evaluates
+  // shared chunks beside a native graph. Callers keep the two graphs disjoint.
   if (!params.tryNative) {
     return (target) =>
       loadCachedTarget(target, () => {

@@ -101,10 +101,6 @@ internal class AndroidChatDictationRecognizer(
     generation += 1
     val operation = generation
     retireRecognizer()
-    if (!isAvailable) {
-      onEvent(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_SERVER_DISCONNECTED))
-      return
-    }
     val active = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
     active.setRecognitionListener(
       object : RecognitionListener {
@@ -205,8 +201,6 @@ internal class ChatDictationController(
   private val lock = Any()
   private val _state = MutableStateFlow<ChatDictationState>(ChatDictationState.Idle)
   val state: StateFlow<ChatDictationState> = _state.asStateFlow()
-  val isAvailable: Boolean
-    get() = recognizer.isAvailable
 
   private var completion: CompletableDeferred<String?>? = null
   private var ownsMic = false
@@ -350,17 +344,22 @@ internal class ChatDictationController(
 internal fun dictationFailureForError(code: Int): ChatDictationFailure =
   when (code) {
     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> ChatDictationFailure.PermissionRequired
+
     SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> ChatDictationFailure.Busy
+
     SpeechRecognizer.ERROR_NETWORK,
     SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
     -> ChatDictationFailure.Network
+
     SpeechRecognizer.ERROR_NO_MATCH,
     SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
     -> ChatDictationFailure.NoSpeech
+
     SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
     SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
     SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
     -> ChatDictationFailure.Unavailable
+
     else -> ChatDictationFailure.Generic
   }
 

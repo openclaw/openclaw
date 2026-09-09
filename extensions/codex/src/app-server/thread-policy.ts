@@ -1,3 +1,4 @@
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   isCodexAppServerOverloadError,
   isCodexAppServerPrewriteRequestCancellationError,
@@ -10,8 +11,18 @@ import {
 } from "./request.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
+/** A refusal, not a failed native write: the ephemeral conversation must stay alive. */
+export class CodexIncognitoPolicyChangeError extends AgentHarnessPreflightError {
+  constructor() {
+    super(
+      "Codex cannot change generic instructions in a live incognito conversation. No turn was sent and the conversation is preserved. Restore the previous instructions to continue it, or start a new incognito conversation for the changed policy.",
+    );
+    this.name = "CodexIncognitoPolicyChangeError";
+  }
+}
+
 /** Never replay a handoff: native persistence can precede an unsuccessful RPC response. */
-export class CodexThreadPolicyHandoffError extends Error {
+export class CodexThreadPolicyHandoffError extends AgentHarnessPreflightError {
   constructor(
     readonly outcome: "not-written" | "unknown" | "acknowledged",
     cause: unknown,
@@ -34,7 +45,7 @@ export async function refreshCodexThreadPolicy(params: {
   assertCurrent: () => void;
 }): Promise<void> {
   const notice =
-    "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including OpenClaw-carried workspace text and sections now absent. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\n";
+    "The following is the complete current OpenClaw-supplied generic instruction policy. It replaces earlier OpenClaw-supplied generic policy, including sections removed from that generic policy. Parent-local instructions supplied for the current inference request are outside this policy replacement. Independently supplied native managed, guardian, security, collaboration, and project instructions retain their authority. User requests retain their own authority.\n\n";
   const text =
     notice +
     (params.developerInstructions === ""

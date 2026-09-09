@@ -229,7 +229,7 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    const warning = container.querySelector(".md-preview-dialog__body .callout");
+    const warning = container.querySelector(".skill-reader-dialog__body .callout");
     expect(normalizeText(expectDefined(warning, "alternative binary requirement"))).toContain(
       "bin:any of (claude, codex, opencode)",
     );

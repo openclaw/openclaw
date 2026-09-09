@@ -31,6 +31,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -57,6 +58,7 @@ import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel
 import { getSlackWriteClient } from "./client.js";
 import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
+import { resolveSlackEnterpriseUserTeamId } from "./enterprise-user-route.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
@@ -67,6 +69,7 @@ import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
 import { slackSecurityAdapter } from "./security.js";
+import { setSlackSessionStatus } from "./session-status.js";
 import { createSlackSetupWizardProxy, slackSetupContract } from "./setup-core.js";
 import {
   createSlackPluginBase,
@@ -80,7 +83,11 @@ import {
   parseSlackTarget,
 } from "./target-parsing.js";
 import { slackContextTargetsMatch } from "./targets.js";
-import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
+import {
+  normalizeSlackThreadTsCandidate,
+  resolveSlackReplyThreadTs,
+  resolveSlackThreadTsValue,
+} from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 // Lazy SDK loaders. The dynamic import is hidden behind a string-literal
@@ -186,7 +193,7 @@ async function setSlackHeartbeatThreadStatus(params: {
   to: string;
   accountId?: string | null;
   threadId?: string | number | null;
-  status: string;
+  status: "processing" | "active";
 }) {
   const threadTs = resolveSlackThreadTsValue({ threadId: params.threadId });
   const target = parseSlackTarget(params.to, { defaultKind: "channel" });
@@ -213,10 +220,11 @@ async function setSlackHeartbeatThreadStatus(params: {
             accountId: account.accountId,
             token: botToken,
           });
-    await client.assistant.threads.setStatus({
+    await setSlackSessionStatus({
+      client,
       token: botToken,
-      channel_id: channelId,
-      thread_ts: threadTs,
+      channelId,
+      threadTs,
       status: params.status,
     });
   } catch (error) {
@@ -301,6 +309,7 @@ async function resolveSlackOutboundSessionRoute(params: {
   agentId: string;
   accountId?: string | null;
   target: string;
+  deliveryPurpose?: "heartbeat-owner";
   replyToId?: string | null;
   threadId?: string | number | null;
   currentSessionKey?: string | null;
@@ -311,6 +320,22 @@ async function resolveSlackOutboundSessionRoute(params: {
   }
   const apiTargetId = canonicalizeSlackApiTargetId(parsed.kind, parsed.id, params.target);
   const isDm = parsed.kind === "user";
+  if (
+    params.deliveryPurpose === "heartbeat-owner" &&
+    isDm &&
+    !parsed.teamId &&
+    /^[UW][A-Z0-9]{8,}$/.test(apiTargetId)
+  ) {
+    const teamId = await resolveSlackEnterpriseUserTeamId({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      userId: apiTargetId,
+    });
+    if (teamId) {
+      parsed.teamId = teamId;
+      parsed.id = apiTargetId;
+    }
+  }
   let peerKind: "direct" | "channel" | "group" = isDm ? "direct" : "channel";
   let peerId = formatSlackTarget(parsed);
   let recipientSessionExact = isDm
@@ -678,7 +703,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           to,
           accountId,
           threadId,
-          status: "is typing...",
+          status: "processing",
         });
       },
       clearTyping: async ({ cfg, to, accountId, threadId }) => {
@@ -687,7 +712,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           to,
           accountId,
           threadId,
-          status: "",
+          status: "active",
         });
       },
     },
@@ -825,7 +850,15 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
     },
     mentions: {
-      stripPatterns: () => ["<@[^>\\s]+>"],
+      stripPatterns: ({ ctx }) => {
+        const preparedPatterns = ctx.ChannelContext?.chat?.mentionStripPatterns;
+        const exactPatterns = Array.isArray(preparedPatterns)
+          ? preparedPatterns.flatMap((pattern) =>
+              typeof pattern === "string" ? [escapeRegExp(pattern)] : [],
+            )
+          : [];
+        return [...exactPatterns, "<@[^>\\s]+>"];
+      },
     },
   },
   pairing: {
@@ -876,14 +909,19 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               toolContext,
             }),
           ),
-    resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
-      const allowedReplyToId = replyDelivery?.replyToMode === "off" ? undefined : replyToId;
-      // Slack's thread_ts identifies the root. Only known inherited replies may let
-      // that root replace a child timestamp; explicit and unknown callers stay reply-first.
-      const preferThreadId = replyToIsExplicit === false;
-      const resolvedReplyToId = resolveSlackThreadTsValue({
-        replyToId: preferThreadId ? threadId : allowedReplyToId,
-        threadId: preferThreadId ? allowedReplyToId : threadId,
+    resolveReplyTransport: ({
+      threadId,
+      replyToId,
+      replyToIsExplicit,
+      replyToCurrent,
+      replyDelivery,
+    }) => {
+      const resolvedReplyToId = resolveSlackReplyThreadTs({
+        replyToId: normalizeSlackThreadTsCandidate(replyToId),
+        threadId: normalizeSlackThreadTsCandidate(threadId),
+        replyToMode: replyDelivery?.replyToMode,
+        replyToIsExplicit,
+        replyToCurrent,
       });
       return {
         replyToId:

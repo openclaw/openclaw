@@ -3,6 +3,7 @@ import type {
   SkillLibraryEntry,
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
@@ -39,15 +40,20 @@ export function renderLibraryPinRead(props: {
     style="--openclaw-modal-width: 960px;"
     @modal-cancel=${props.onClose}
   >
-    <div class="md-preview-dialog__panel">
-      <div class="md-preview-dialog__header">
-        <strong>${read.entry.slug}</strong
-        ><button type="button" class="btn btn--sm" @click=${props.onClose}>
-          ${t("common.close")}
+    <div class="exec-approval-card skill-reader-dialog">
+      <div class="exec-approval-header">
+        <strong class="exec-approval-title">${read.entry.slug}</strong
+        ><button
+          type="button"
+          class="btn btn--icon btn--ghost"
+          aria-label=${t("common.close")}
+          @click=${props.onClose}
+        >
+          ${icons.x}
         </button>
       </div>
       <div
-        class="md-preview-dialog__body"
+        class="skill-reader-dialog__body"
         style="display: grid; gap: var(--space-4); min-width: 0;"
       >
         <p>
@@ -74,19 +80,21 @@ export function renderLibraryPinRead(props: {
             )}
           </select></label
         >
-        ${text === null
-          ? html`<p class="muted">${t("skillLibrary.binaryRead")}</p>`
-          : html`<label class="field"
-              ><span>${props.file}</span
-              ><textarea
-                class="settings-input"
-                readonly
-                spellcheck="false"
-                rows="16"
-                style="font-family: var(--mono); min-width: 0; max-width: 100%; box-sizing: border-box; resize: vertical;"
-                .value=${text}
-              ></textarea>
-            </label>`}
+        ${
+          text === null
+            ? html`<p class="muted">${t("skillLibrary.binaryRead")}</p>`
+            : html`<label class="field"
+                ><span>${props.file}</span
+                ><textarea
+                  class="settings-input"
+                  readonly
+                  spellcheck="false"
+                  rows="16"
+                  style="font-family: var(--mono); min-width: 0; max-width: 100%; box-sizing: border-box; resize: vertical;"
+                  .value=${text}
+                ></textarea>
+              </label>`
+        }
         ${renderLibraryIdentity(read.entry)}
       </div>
     </div>

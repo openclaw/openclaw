@@ -1,5 +1,6 @@
 // Generates postbuild runtime artifacts: plugin metadata, SDK aliases, stable
 // runtime aliases, static assets, and compatibility chunks for live upgrades.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -13,10 +14,21 @@ import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
+  readRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+  type RuntimeDependencyOwnership,
+} from "./lib/runtime-dependency-ownership-contract.mts";
+import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
-  listStaticExtensionAssetOutputs,
 } from "./lib/static-extension-assets.mts";
+import {
+  isUpdateCompatibilityChunk,
+  listUpdateCompatibilityChunkPaths,
+  readUpdateCompatibilityInventory,
+  UPDATE_COMPATIBILITY_INVENTORY_FILE,
+  writeUpdateCompatibilityChunks,
+} from "./lib/update-compat-chunks.mts";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
 import { writeBuildInfo } from "./write-build-info.ts";
@@ -39,14 +51,21 @@ type LegacyRuntimeAlias = {
   sourceIncludes?: readonly string[];
 };
 
-/** @internal Shared repository-script contract. */
-export { listStaticExtensionAssetOutputs };
+const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK = [
+  'import path from "node:path";',
+  "export function resolveNodeRunner() {",
+  "  const base = path.basename(process.execPath).trim().toLowerCase();",
+  '  return base === "node" || base === "node.exe" ? process.execPath : "node";',
+  "}",
+  "",
+].join("\n");
 
 const ROOT = resolveRepoRoot(import.meta.url);
-const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
+const UPDATE_COMPATIBILITY_INVENTORY = path.join(ROOT, "scripts/lib/update-compat-inventory.json");
+const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.m?js$/u;
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
-  /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
+  /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.m?js)\1/gu;
 const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
 const EXPORT_HTML_SOURCE_DIR = "src/auto-reply/reply/export-html";
 const EXPORT_HTML_OUTPUT_DIR = "dist/export-html";
@@ -183,16 +202,18 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
   aliasFileName: PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName,
   sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
 }));
-/** Compatibility chunks kept for live gateways loading old CLI exit modules. */
+/** Compatibility chunks for old updater and CLI exit modules after package replacement. */
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
-  {
-    dest: "dist/memory-state-CcqRgDZU.js",
+  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
+  // Remove only after the source artifacts fall outside the supported upgrade window.
+  ...["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"].map((fileName) => ({
+    dest: `dist/${fileName}`,
+    contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
+  })),
+  ...["memory-state-CcqRgDZU.js", "memory-state-DwGdReW4.js"].map((fileName) => ({
+    dest: `dist/${fileName}`,
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
-  },
-  {
-    dest: "dist/memory-state-DwGdReW4.js",
-    contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
-  },
+  })),
 ];
 
 /**
@@ -207,7 +228,7 @@ function collectStableRootRuntimeAliasCandidates(distDir: string, fsImpl: typeof
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
   } catch {
-    return new Map();
+    return { entries: [], candidatesByAlias: new Map<string, string[]>() };
   }
 
   const candidatesByAlias = new Map<string, string[]>();
@@ -219,12 +240,20 @@ function collectStableRootRuntimeAliasCandidates(distDir: string, fsImpl: typeof
     if (!match?.groups?.base) {
       continue;
     }
+    try {
+      if (isUpdateCompatibilityChunk(fsImpl.readFileSync(path.join(distDir, entry.name), "utf8"))) {
+        continue;
+      }
+    } catch {
+      // Unreadable candidates still participate in ambiguity detection below.
+    }
     const aliasFileName = `${match.groups.base}.js`;
     const candidates = candidatesByAlias.get(aliasFileName) ?? [];
     candidates.push(entry.name);
     candidatesByAlias.set(aliasFileName, candidates);
   }
-  return candidatesByAlias;
+  // Importer rewrites retain directory order; only alias candidates are sorted.
+  return { entries, candidatesByAlias };
 }
 
 function resolveStableRootRuntimeAliasCandidate(
@@ -280,7 +309,7 @@ function listStableRootRuntimeAliasOutputs(params: RuntimeFsParams = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
-  return [...collectStableRootRuntimeAliasCandidates(distDir, fsImpl)]
+  return [...collectStableRootRuntimeAliasCandidates(distDir, fsImpl).candidatesByAlias]
     .filter(([aliasFileName, candidates]) =>
       resolveStableRootRuntimeAliasCandidate(aliasFileName, candidates, distDir, fsImpl),
     )
@@ -340,6 +369,10 @@ export function listCoreRuntimePostBuildOutputs(
     ...listStableRootRuntimeAliasOutputs(params),
     ...listLegacyRootRuntimeCompatOutputs(params),
     ...listLegacyCliExitCompatOutputs(params),
+    `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
+    ...listUpdateCompatibilityChunkPaths(
+      readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
+    ).map((fileName) => `dist/${fileName}`),
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -452,6 +485,19 @@ function buildRuntimeAliasSource(targetFileName: string, distDir: string, fsImpl
   );
 }
 
+function writeRuntimeDependencyOwnership(
+  rootDir: string,
+  ownership: RuntimeDependencyOwnership | null,
+  fsImpl: typeof fs,
+) {
+  if (ownership) {
+    fsImpl.writeFileSync(
+      path.join(rootDir, RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH),
+      `${JSON.stringify({ chunks: Object.fromEntries(Object.entries(ownership.chunks).toSorted(([a], [b]) => a.localeCompare(b))) })}\n`,
+    );
+  }
+}
+
 /**
  * Writes stable aliases for current hashed runtime chunks.
  * @internal Directly tested script implementation detail.
@@ -463,8 +509,9 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
   // Alias rewrites delete files under dist; fail closed on a symlinked root
   // so a stale alias removal cannot land inside the link target.
   assertRealOutputRoot(distDir, { fs: fsImpl });
-  const candidatesByAlias = collectStableRootRuntimeAliasCandidates(distDir, fsImpl);
+  const { candidatesByAlias } = collectStableRootRuntimeAliasCandidates(distDir, fsImpl);
 
+  const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
     const candidate = resolveStableRootRuntimeAliasCandidate(
@@ -475,10 +522,30 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
     );
     if (!candidate) {
       fsImpl.rmSync?.(aliasPath, { force: true });
+      if (ownership) {
+        delete ownership.chunks[aliasFileName];
+      }
       continue;
     }
-    writeTextFileIfChanged(aliasPath, buildRuntimeAliasSource(candidate, distDir, fsImpl));
+    const source = buildRuntimeAliasSource(candidate, distDir, fsImpl);
+    const owner = ownership?.chunks[candidate];
+    if (ownership && owner) {
+      const targetSource = fsImpl.readFileSync(path.join(distDir, candidate));
+      if (createHash("sha256").update(targetSource).digest("hex") !== owner.sha256) {
+        throw new Error(
+          `runtime dependency ownership no longer matches ${candidate}; rebuild dist`,
+        );
+      }
+      ownership.chunks[aliasFileName] = {
+        extensions: owner.extensions,
+        sha256: createHash("sha256").update(source).digest("hex"),
+      };
+    } else if (ownership) {
+      delete ownership.chunks[aliasFileName];
+    }
+    writeTextFileIfChanged(aliasPath, source);
   }
+  writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
 /**
@@ -489,26 +556,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
-  let entries;
-  try {
-    entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  const candidatesByAlias = new Map<string, string[]>();
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isFile()) {
-      continue;
-    }
-    const match = entry.name.match(ROOT_RUNTIME_ALIAS_PATTERN);
-    if (match?.groups?.base) {
-      const aliasFileName = `${match.groups.base}.js`;
-      const candidates = candidatesByAlias.get(aliasFileName) ?? [];
-      candidates.push(entry.name);
-      candidatesByAlias.set(aliasFileName, candidates);
-    }
-  }
+  const { entries, candidatesByAlias } = collectStableRootRuntimeAliasCandidates(distDir, fsImpl);
   const runtimeAliasFiles = new Map<string, string>();
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const candidate = resolveStableRootRuntimeAliasCandidate(
@@ -528,8 +576,9 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
     return;
   }
 
+  const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".js")) {
+    if (!entry.isFile() || !/\.m?js$/u.test(entry.name)) {
       continue;
     }
     if (ROOT_STABLE_RUNTIME_ALIAS_PATTERN.test(entry.name)) {
@@ -550,9 +599,21 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
       },
     );
     if (rewritten !== source) {
+      const owner = ownership?.chunks[entry.name];
+      // Carry the producer's proof through this exact transformation; never
+      // rehash unknown or independently modified build outputs.
+      if (owner) {
+        if (createHash("sha256").update(source).digest("hex") !== owner.sha256) {
+          throw new Error(
+            `runtime dependency ownership no longer matches ${entry.name}; rebuild dist`,
+          );
+        }
+        owner.sha256 = createHash("sha256").update(rewritten).digest("hex");
+      }
       writeTextFileIfChanged(filePath, rewritten);
     }
   }
+  writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
 function resolveRootRuntimeCandidateByMarkers(
@@ -569,7 +630,10 @@ function resolveRootRuntimeCandidateByMarkers(
     return null;
   }
   const aliasBaseFileName = aliasFileName.replace(/\.js$/u, "");
-  const hashedPattern = new RegExp(`^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.js$`, "u");
+  const hashedPattern = new RegExp(
+    `^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.m?js$`,
+    "u",
+  );
   let entries;
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
@@ -732,6 +796,13 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
     writeLegacyRootRuntimeCompatAliases(phaseParams),
   );
   runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(phaseParams));
+  runPhase("previous release update compat chunks", () =>
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(rootDir, "dist"),
+      sourceDir: rootDir,
+      inventory: readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
+    }),
+  );
   runPhase("built plugin control-plane loads", () =>
     verifyBuiltPluginControlPlaneModules(phaseParams),
   );

@@ -519,7 +519,6 @@ export async function applyClawAddPlan(
       );
       if (existingAgent) {
         if (sameCommittedAgent(existingAgent, plan)) {
-          configCommitted = true;
           return config;
         }
         const nextConfig = replaceLegacyCommittedAgent({
@@ -532,7 +531,6 @@ export async function applyClawAddPlan(
           matchesPlan: sameCommittedAgent,
         });
         if (nextConfig) {
-          configCommitted = true;
           return nextConfig;
         }
         throw new ClawAddMutationError(
@@ -558,9 +556,11 @@ export async function applyClawAddPlan(
           ),
         },
       };
-      configCommitted = true;
       return nextConfig;
     });
+    // The transform runs before persistence can still fail; record the fact only after commit.
+    // Moving this into the callback retains the workspace and reports a write that never landed.
+    configCommitted = true;
     try {
       recordAgentProvenance(plan.agent.finalId, { createdVia: "claw" }, options);
     } catch (error) {

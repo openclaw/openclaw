@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { registerModelsAccountsCli } from "./models-accounts-cli.js";
 import { isModelsStatusJsonOutput } from "./models-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 
@@ -53,10 +54,12 @@ export function registerModelsCli(program: Command) {
   setCommandJsonMode(models, "output", ({ argv, command }) =>
     isModelsStatusJsonOutput(argv, command),
   );
+  registerModelsAccountsCli(models);
 
   models
     .command("list")
     .description("List models (configured by default)")
+    .option("--refresh", "Refresh provider discovery before listing", false)
     .option("--all", "Show full model catalog", false)
     .option("--local", "Filter to local models", false)
     .option("--provider <id>", "Filter by provider id")
@@ -84,7 +87,7 @@ export function registerModelsCli(program: Command) {
     .option("--plain", "Plain output", false)
     .option(
       "--check",
-      "Exit non-zero if auth is expiring/expired (1=expired/missing, 2=expiring)",
+      "Check auth/runtime readiness (1=missing/expired/unavailable/incompatible/indeterminate, 2=expiring)",
       false,
     )
     .option("--probe", "Probe configured provider auth (live)", false)
@@ -317,7 +320,9 @@ export function registerModelsCli(program: Command) {
     });
   });
 
-  const auth = models.command("auth").description("Manage model auth profiles");
+  const auth = models
+    .command("auth")
+    .description("Manage system/agent credentials on this machine");
   auth.option("--agent <id>", "Agent id for auth commands");
   auth.action(() => {
     auth.help();
@@ -379,7 +384,7 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("login")
-    .description("Run a provider plugin auth flow (OAuth/API key)")
+    .description("Sign in for system/agent use on this machine (OAuth/API key)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")

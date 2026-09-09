@@ -55,11 +55,13 @@ function buildExecutableResolution(
   params: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
+    useCache?: boolean;
   },
 ): ExecutableResolution {
   const resolvedPath = resolveExecutableCandidatePath(rawExecutable, {
     cwd: params.cwd,
     env: params.env,
+    useCache: params.useCache,
   });
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
@@ -77,6 +79,7 @@ function buildCommandResolution(params: {
   policyRawExecutable?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  useCache?: boolean;
   effectiveArgv: string[];
   wrapperChain: string[];
   policyBlocked: boolean;
@@ -122,6 +125,7 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
+  options?: { useCache?: boolean },
 ): CommandResolution | null {
   const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
   const effectiveArgv = plan.argv;
@@ -136,6 +140,7 @@ export function resolveCommandResolutionFromArgv(
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
+    useCache: options?.useCache,
     cwd,
     env,
   });
@@ -273,6 +278,28 @@ export function isGeneratedHashedArgPattern(value: string | null | undefined): b
 
 export function isCwdBoundHashedArgPattern(value: string | null | undefined): boolean {
   return typeof value === "string" && value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX);
+}
+
+export type ExecAllowlistScope = "command text" | "argv+cwd" | "argv" | "any args" | "inactive";
+
+export function classifyExecAllowlistScope(
+  entry: Pick<ExecAllowlistEntry, "pattern" | "source" | "argPattern">,
+): ExecAllowlistScope {
+  const pattern = entry.pattern.trim();
+  const generated = entry.source === "allow-always";
+  // Reserved command markers require generated source; manual patterns remain executable globs.
+  if (generated && (pattern.startsWith("=command:") || pattern.startsWith("=node-command:"))) {
+    return "command text";
+  }
+  // Legacy hashes never match, including on manual entries that Doctor must retain.
+  const legacyHashed = entry.argPattern?.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX) === true;
+  if (legacyHashed || (generated && !isCwdBoundHashedArgPattern(entry.argPattern))) {
+    return "inactive";
+  }
+  if (isCwdBoundHashedArgPattern(entry.argPattern)) {
+    return "argv+cwd";
+  }
+  return entry.argPattern ? "argv" : "any args";
 }
 
 function renderGeneratedArgPatternSubject(argv: string[]): string {

@@ -10,7 +10,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { inspectClawWorkspaceFile } from "./lifecycle-delete-support.js";
-import { clawRemoveFixtures } from "./lifecycle-remove.test-support.js";
+import {
+  clawRemoveFixtures,
+  quiescentClawMonitorGateway,
+} from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { persistClawInstallRecord } from "./provenance.js";
@@ -94,12 +97,10 @@ describe("Claw remove with an adopted workspace", () => {
       config: current.getConfig(),
     });
     const removed = await applyClawRemovePlan(plan, {
+      monitorGateway: quiescentClawMonitorGateway,
       env: current.env,
       config: current.getConfig(),
       consentPlanIntegrity: plan.planIntegrity,
-      commitConfig: async (transform) => {
-        transform(current.getConfig());
-      },
       purgeSessions: async () => undefined,
       // Delete for real: a trash stub that only records calls cannot tell a retained directory
       // from one the canonical path spelling hid from the assertion.
@@ -206,12 +207,10 @@ describe("Claw remove with an adopted workspace", () => {
       config: current.getConfig(),
     });
     await applyClawRemovePlan(plan, {
+      monitorGateway: quiescentClawMonitorGateway,
       env: current.env,
       config: current.getConfig(),
       consentPlanIntegrity: plan.planIntegrity,
-      commitConfig: async (transform) => {
-        transform(current.getConfig());
-      },
       purgeSessions: async () => undefined,
       trashPath: async () => true,
     });

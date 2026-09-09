@@ -2,7 +2,9 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { CliPluginInvocationResources } from "../cli/plugin-invocation-resources.js";
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
+import { getCliPluginInvocationResources } from "../cli/runtime-cleanup-scope.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -14,7 +16,11 @@ import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
 import { getCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { loadOpenClawPluginCliRegistry, loadPluginRegistryHandle } from "./loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadOpenClawPluginCliRegistry,
+  loadPluginRegistryHandle,
+} from "./loader.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   resolvePluginMetadataEnvFingerprint,
@@ -60,6 +66,7 @@ type PreparedPluginCliLoad = {
   context: PluginRuntimeLoadContext;
   assertCurrent: () => void;
   withCache: <T>(run: () => T) => T;
+  resources?: CliPluginInvocationResources;
   metadataRegistry?: Promise<PluginRegistry>;
   entries?: Promise<PluginCliCommandGroupEntry[]>;
 };
@@ -67,7 +74,13 @@ type PreparedPluginCliLoad = {
 export type PluginCliLoadSession = ReturnType<typeof createPluginCliLoadSession>;
 
 /** Invocation authority closes before actions; its package generation lives through them. */
-export function createPluginCliLoadSession(cache = createPluginCache()) {
+export function createPluginCliLoadSession(
+  cache = createPluginCache(),
+  ownership: { resources?: CliPluginInvocationResources } = {
+    resources: getCliPluginInvocationResources(),
+  },
+) {
+  const { resources } = ownership;
   const withCache = <T>(run: () => T): T => withPluginCache(cache, run);
   let closed = false;
   let revision = getCurrentPluginMetadataSnapshotState().revision;
@@ -102,6 +115,7 @@ export function createPluginCliLoadSession(cache = createPluginCache()) {
     }
   };
   return {
+    resources,
     withCache,
     readConfig: async <T>(read: () => Promise<T>): Promise<T> => {
       refreshRevision();
@@ -165,6 +179,7 @@ export function createPluginCliLoadSession(cache = createPluginCache()) {
         const prepared: PreparedPluginCliLoad = {
           context,
           withCache,
+          resources,
           assertCurrent() {
             assertRevision(captured);
             if (
@@ -305,16 +320,18 @@ async function loadPluginCliCommandRegistryWithContext(params: {
   if (onlyPluginIds && onlyPluginIds.length === 0) {
     return createEmptyPluginRegistry();
   }
+  const options = buildPluginRuntimeLoadOptions(context, {
+    ...params.loaderOptions,
+    ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+    cache: false,
+    channelPluginLoadIntent: "full",
+    runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
+  });
+  const resources = params.prepared.resources;
   return params.prepared.withCache(() =>
-    loadPluginRegistryHandle(
-      buildPluginRuntimeLoadOptions(context, {
-        ...params.loaderOptions,
-        ...(onlyPluginIds && onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
-        cache: false,
-        channelPluginLoadIntent: "full",
-        runtimeOptions: { nodes: createPluginCliGatewayNodesRuntime() },
-      }),
-    ),
+    resources
+      ? resources.acquire(() => acquirePluginRegistryForInspection(options))
+      : loadPluginRegistryHandle(options),
   );
 }
 
@@ -325,6 +342,7 @@ function buildPluginCliCommandGroupEntries(params: {
   logger: PluginLogger;
   assertCurrent: () => void;
   withCache: PreparedPluginCliLoad["withCache"];
+  resources?: CliPluginInvocationResources;
 }): PluginCliCommandGroupEntry[] {
   return params.registry.cliRegistrars.map((entry) => ({
     pluginId: entry.pluginId,
@@ -333,15 +351,17 @@ function buildPluginCliCommandGroupEntries(params: {
     names: entry.commands,
     register: async (program) => {
       params.assertCurrent();
-      await params.withCache(() =>
-        entry.register({
-          program,
-          parentPath: entry.parentPath ?? [],
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          logger: params.logger,
-        }),
-      );
+      const register = () =>
+        params.withCache(() =>
+          entry.register({
+            program,
+            parentPath: entry.parentPath ?? [],
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            logger: params.logger,
+          }),
+        );
+      await (params.resources ? params.resources.run(register) : register());
       params.assertCurrent();
     },
   }));
@@ -386,6 +406,7 @@ export async function loadPluginCliRegistrationEntriesWithDefaults(
       registry,
       assertCurrent: prepared.assertCurrent,
       withCache: prepared.withCache,
+      resources: prepared.resources,
     });
   }));
   prepared.assertCurrent();

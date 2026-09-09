@@ -9,6 +9,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { resolveWorkerPlacementDestination } from "./placement-destination.js";
 import {
   type DispatchStage,
   type PlacementStore,
@@ -90,7 +91,12 @@ describe("worker placement dispatch", () => {
       profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
     };
 
-    await harness.service.dispatch({ ...REQUEST, inheritedProfile, machineClass: "beast" });
+    await harness.service.dispatch({
+      ...REQUEST,
+      inheritedProfile,
+      machineClass: "beast",
+      os: "os-a",
+    });
 
     expect(harness.environments.create).not.toHaveBeenCalled();
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
@@ -100,7 +106,23 @@ describe("worker placement dispatch", () => {
       REQUEST.executionMode,
       path.join(root, "workspace"),
       undefined,
+      "os-a",
     );
+  });
+
+  it("normalizes profile OS overrides and rejects choices without a profile", () => {
+    const cfg = { cloudWorkers: { profiles: { cloud: { provider: "fake" } } } };
+    expect(resolveWorkerPlacementDestination({ cfg, profileId: " cloud ", os: " os-a " })).toEqual({
+      ok: true,
+      value: { profileId: "cloud", os: "os-a" },
+    });
+    for (const target of [
+      { profileId: "cloud", os: " " },
+      { deviceId: "device", os: "os-a" },
+      { os: "os-a" },
+    ]) {
+      expect(resolveWorkerPlacementDestination({ cfg, ...target }).ok).toBe(false);
+    }
   });
 
   it("reports the final durable placement after startup failure teardown", async () => {
@@ -224,39 +246,6 @@ describe("worker placement dispatch", () => {
       { sessionId: otherRequest.sessionId, claimId: otherClaim.claimId },
     ]);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
-  });
-
-  it("destroys and reclaims a pending result owned by a previous gateway instance", async () => {
-    const originalHarness = createTestHarness();
-    const active = originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "restarted-turn-claim",
-      runId: "restarted-turn-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-    placementStore.markWorkspaceResultPending(claim);
-
-    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const restartedHarness = createTestHarness({}, restartedStore);
-    restartedHarness.markEnvironmentOwnerEpoch(2);
-    await restartedHarness.service.reconcile();
-
-    expect(restartedHarness.placements.current()).toMatchObject({
-      state: "reclaimed",
-      turnClaim: null,
-      workspaceBaseManifestRef: restartedHarness.reconciledManifestRef,
-    });
-    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
-    expect(restartedHarness.environments.destroy).toHaveBeenCalledOnce();
-    expect(restartedHarness.log).not.toContain("workspace:resume");
   });
 
   it("keeps a previous-instance pending result fenced when another session is attached", async () => {

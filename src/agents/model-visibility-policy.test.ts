@@ -76,7 +76,8 @@ describe("explicit model visibility policy", () => {
       "demo/primary",
       "demo/fallback",
     ];
-    expect(configuredRefs.filter((key) => !policy.configuredKeys.has(key))).toEqual([]);
+    const configuredKeys = configuredRefs.map((ref) => JSON.stringify(["demo", ref.slice(5)]));
+    expect(configuredKeys.filter((key) => !policy.configuredKeys.has(key))).toEqual([]);
   });
 
   it("keeps overrides open when model entries only configure aliases or params", () => {
@@ -150,7 +151,9 @@ describe("explicit model visibility policy", () => {
         (entry) => entry.provider === "external" && entry.id === "sensitive",
       ),
     ).toBe(false);
-    expect(policy.retainedKeys).toEqual(new Set(["openai/gpt-5.5", "external/sensitive"]));
+    expect(policy.retainedKeys).toEqual(
+      new Set(['["openai","gpt-5.5"]', '["external","sensitive"]']),
+    );
   });
 
   it("allows a configured fallback when the explicit policy also allows it", () => {

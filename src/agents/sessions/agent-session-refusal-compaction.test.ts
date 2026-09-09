@@ -33,6 +33,7 @@ describe("AgentSession refusal compaction", () => {
       overlap: true,
       threshold: false,
       queued: false,
+      later: false,
       expectedRequests: 1,
     },
     {
@@ -41,6 +42,7 @@ describe("AgentSession refusal compaction", () => {
       overlap: false,
       threshold: true,
       queued: false,
+      later: false,
       expectedRequests: 1,
     },
     {
@@ -49,6 +51,7 @@ describe("AgentSession refusal compaction", () => {
       overlap: false,
       threshold: true,
       queued: true,
+      later: false,
       expectedRequests: 2,
     },
     {
@@ -57,9 +60,19 @@ describe("AgentSession refusal compaction", () => {
       overlap: false,
       threshold: false,
       queued: false,
+      later: false,
       expectedRequests: 2,
     },
-  ])("$name", async ({ overflow, overlap, threshold, queued, expectedRequests }) => {
+    {
+      name: "explicit later user turn after refusal",
+      overflow: false,
+      overlap: false,
+      threshold: false,
+      queued: false,
+      later: true,
+      expectedRequests: 1,
+    },
+  ])("$name", async ({ overflow, overlap, threshold, queued, later, expectedRequests }) => {
     const requests: Array<{ url: string | undefined; body: unknown }> = [];
     const explanation = overlap
       ? "This request is refused; prompt is too long."
@@ -145,7 +158,7 @@ describe("AgentSession refusal compaction", () => {
         api: "anthropic-messages",
         provider: "anthropic",
         baseUrl: `http://127.0.0.1:${address.port}`,
-        contextWindow: threshold ? 100 : 1000,
+        contextWindow: threshold ? 32_768 : 65_536,
         maxTokens: 16,
       } satisfies Model<"anthropic-messages">;
       const sessionManager = SessionManager.inMemory();
@@ -155,7 +168,7 @@ describe("AgentSession refusal compaction", () => {
           model,
           [{ type: "text", text: "Earlier answer." }],
           "stop",
-          threshold ? 85 : 10,
+          threshold ? model.contextWindow - 15 : 10,
         ),
       );
       streamMocks.streamSimple.mockImplementation(
@@ -201,6 +214,9 @@ describe("AgentSession refusal compaction", () => {
           expect.objectContaining({ type: "provider_refusal" }),
         );
       }
+      if (later) {
+        await session.prompt("explicit later user turn");
+      }
       expect(firstTurnRequests).toBe(expectedRequests);
       expect(requests.every(({ url }) => url === "/v1/messages")).toBe(true);
       if (threshold) {
@@ -223,8 +239,13 @@ describe("AgentSession refusal compaction", () => {
           compactions.some(({ outcome }) => outcome.status === "completed" && outcome.willRetry),
         ).toBe(false);
       }
-      if (queued) {
-        expect(JSON.stringify(requests[1]?.body)).toContain("explicit queued user turn");
+      if (queued || later) {
+        expect(JSON.stringify(requests[1]?.body)).toContain(
+          later ? "explicit later user turn" : "explicit queued user turn",
+        );
+      }
+      if (later) {
+        expect(requests).toHaveLength(2);
       }
     } finally {
       await new Promise<void>((resolve, reject) => {

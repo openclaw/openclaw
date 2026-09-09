@@ -630,6 +630,7 @@ public enum OpenClawChatGatewayRequests {
         agentID: String?,
         limit: Int? = nil,
         maxChars: Int? = nil,
+        inputRunIDs: [String]? = nil,
         timeoutMs: Int? = nil) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = ["sessionKey": AnyCodable(sessionKey)]
@@ -640,16 +641,29 @@ public enum OpenClawChatGatewayRequests {
         if let maxChars {
             params["maxChars"] = AnyCodable(maxChars)
         }
+        if let inputRunIDs, !inputRunIDs.isEmpty {
+            params["inputRunIds"] = AnyCodable(inputRunIDs)
+        }
         return OpenClawChatGatewayRequest(
             method: "chat.history",
             params: params,
             timeoutMs: timeoutMs.map(Double.init) ?? self.defaultTimeoutMs)
     }
 
-    public static func progressCardGet(sessionKey: String) -> OpenClawChatGatewayRequest {
-        OpenClawChatGatewayRequest(
+    public static func progressCardGet(sessionKey: String, agentID: String?) -> OpenClawChatGatewayRequest {
+        let target = OpenClawChatSessionTarget.resolve(
+            sessionKey,
+            selectedAgentID: nil,
+            overrideAgentID: agentID,
+            policy: .scopeBareKeysToSelectedAgent)
+        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(target.sessionKey)]
+        // Released gateways reject extra fields; qualified keys already carry their owner.
+        if target.agentID != OpenClawChatSessionKey.agentID(from: target.sessionKey)?.lowercased() {
+            self.add(target.agentID, to: &params, key: "agentId")
+        }
+        return OpenClawChatGatewayRequest(
             method: "progressCard.get",
-            params: ["sessionKey": AnyCodable(sessionKey)],
+            params: params,
             timeoutMs: self.defaultTimeoutMs)
     }
 

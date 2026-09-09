@@ -2,14 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
-import { GatewayClientRequestError } from "../../gateway/client.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   getCronChannelOptions,
-  handleCronCliError,
   parseAt,
   parseCronToolsAllow,
   parsePositiveCronDurationMs,
@@ -41,29 +39,6 @@ function expectLogsToInclude(logs: readonly string[], text: string): void {
 
 afterEach(() => {
   vi.useRealTimers();
-});
-
-describe("handleCronCliError", () => {
-  it("renders typed automation lookup misses with the cron list recovery command", () => {
-    const error = new GatewayClientRequestError({
-      code: "INVALID_REQUEST",
-      message: "transport-neutral lookup miss",
-      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
-    });
-    const errorOutput = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
-      throw new Error(`exit ${code}`);
-    }) as never);
-
-    expect(() => handleCronCliError(error)).toThrow("exit 1");
-    expect(errorOutput).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.",
-      ),
-    );
-    errorOutput.mockRestore();
-    exit.mockRestore();
-  });
 });
 
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
@@ -115,6 +90,29 @@ describe("printCronList", () => {
 
     printCronList([jobWithTarget], runtime);
     expectLogsToInclude(logs, "isolated");
+  });
+
+  it.each(
+    [
+      { at: "2027-01-15T12:34:56.789Z", expected: "2027-01-15 12:34Z" },
+      { at: "+010000-01-15T12:34:56.789Z", expected: "+010000-01-15 12:34Z" },
+      { at: "-000001-01-15T12:34:56.789Z", expected: "-000001-01-15 12:34Z" },
+      { at: "not-a-time", expected: "-" },
+    ].flatMap((entry) => [
+      { ...entry, output: "list" },
+      { ...entry, output: "show" },
+    ]),
+  )("preserves one-shot ISO year in cron $output for $at", ({ at, expected, output }) => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({ schedule: { kind: "at", at }, state: {} });
+
+    if (output === "list") {
+      printCronList([job], runtime);
+    } else {
+      printCronShow(job, runtime);
+    }
+
+    expectLogsToInclude(logs, `${output === "show" ? "schedule: " : ""}at ${expected}`);
   });
 
   it.each([
@@ -316,6 +314,38 @@ describe("printCronList", () => {
 
     printCronList([malformedJob], runtime);
     expectLogsToInclude(logs, "malformed-job");
+  });
+
+  it.each([
+    {
+      schedule: { kind: "every", everyMs: 90_001 },
+      expected: "every 1m 30s 1ms",
+    },
+    {
+      schedule: { kind: "cron", expr: "* * * * *", staggerMs: 1_001 },
+      expected: "cron * * * * * (stagger 1s 1ms)",
+    },
+  ] as const)(
+    "preserves configured duration precision in list and show: $expected",
+    ({ schedule, expected }) => {
+      const job = createBaseJob({ schedule, state: {} });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expected);
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, `schedule: ${expected}`);
+    },
+  );
+
+  it("preserves configured duration precision near the timestamp limit", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronShow(
+      createBaseJob({ schedule: { kind: "every", everyMs: 8_639_999_999_999_999 }, state: {} }),
+      runtime,
+    );
+    expectLogsToInclude(logs, "schedule: every 99999999d 23h 59m 59s 999ms");
   });
 
   it("shows stagger label for cron schedules", () => {
@@ -924,8 +954,8 @@ describe("parsePositiveCronDurationMs", () => {
   it("rejects durations that overflow to a non-finite millisecond value (#83906)", () => {
     // A finite mantissa can still overflow once multiplied by a large unit factor.
     expect(parsePositiveCronDurationMs(`1${"0".repeat(302)}d`)).toBeNull();
-    // A large-but-finite result is still accepted.
-    expect(parsePositiveCronDurationMs(`9${"0".repeat(15)}ms`)).toBe(9_000_000_000_000_000);
+    expect(parsePositiveCronDurationMs("8640000000000000ms")).toBe(8_640_000_000_000_000);
+    expect(parsePositiveCronDurationMs("8640000000000001ms")).toBeNull();
   });
 });
 

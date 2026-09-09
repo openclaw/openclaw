@@ -20,6 +20,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each(["session", "profile"] as const)(
+  "labels the shared owner avatar in %s context",
+  async (variant) => {
+    const avatar = document.createElement("openclaw-viewer-avatar");
+    avatar.user = { id: "gateway-owner", name: "Saved owner name", watchedSessions: [] };
+    avatar.variant = variant;
+    document.body.append(avatar);
+    await avatar.updateComplete;
+    expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
+      variant === "profile" ? "Saved owner name" : "Shared owner",
+    );
+  },
+);
+
 it("uses the same user initials and identity hue in the roster and attributed chat", async () => {
   const user: PresenceViewer = {
     id: "profile-riley",
@@ -150,7 +164,7 @@ it.each(
         provenance !== "unqualified" ? `/api/users/${id}/avatar` : undefined,
       );
       expect(facepile.querySelector("a")?.getAttribute("href")).toBe(
-        provenance !== "unqualified" ? `/activity?person=${id}` : undefined,
+        provenance !== "unqualified" ? "/activity/ada-lovelace-c3e324520467" : undefined,
       );
       expect(facepile.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count")).toBe(
         provenance === "mixed" ? "2" : "1",
@@ -166,7 +180,7 @@ it.each(
 );
 
 it("shares an authenticated avatar blob between the same user in the roster and profile", async () => {
-  setAvatarGatewayOrigin("https://gateway.example.test", "Bearer viewer-token");
+  setAvatarGatewayOrigin("https://gateway.example.test", ["viewer-token"]);
   const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(new Uint8Array([1, 2, 3]), {
       headers: { "content-type": "image/png" },
@@ -419,7 +433,7 @@ it("links faces only when the host opts in, so nested facepiles stay plain", asy
     [...linked.querySelectorAll<HTMLAnchorElement>("a.person-activity-avatar-link")].map((link) =>
       link.getAttribute("href"),
     ),
-  ).toEqual(["/activity?person=profile-ada", "/activity?person=profile-mira"]);
+  ).toEqual(["/activity/profile-ada", "/activity/profile-mira"]);
 
   // Sidebar rows and collapsed group headers render facepiles inside an anchor or button;
   // a nested link there would break the parent's click target.

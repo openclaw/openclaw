@@ -3,6 +3,7 @@ import { ref } from "lit/directives/ref.js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
+import { scrollState } from "../../../components/scroll-state.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatGoalAction } from "../../../lib/chat/chat-types.ts";
 import {
@@ -25,32 +26,6 @@ function clearGoalElapsedTimer(el: HTMLElement) {
     clearInterval(timer);
     goalElapsedTimers.delete(el);
   }
-}
-
-function updateGoalObjectiveScrollState(element: HTMLElement): void {
-  const scrollable = element.scrollHeight > element.clientHeight + 1;
-  element.dataset.scrollable = String(scrollable);
-  element.dataset.atStart = String(!scrollable || element.scrollTop <= 1);
-  element.dataset.atEnd = String(
-    !scrollable || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
-  );
-}
-
-function createGoalObjectiveScrollRef() {
-  let observer: ResizeObserver | undefined;
-  return (element: Element | undefined) => {
-    observer?.disconnect();
-    observer = undefined;
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
-    const sync = () => updateGoalObjectiveScrollState(element);
-    sync();
-    if (typeof ResizeObserver === "function") {
-      observer = new ResizeObserver(sync);
-      observer.observe(element);
-    }
-  };
 }
 
 // Ticks the elapsed span in place so an idle active goal does not force
@@ -148,42 +123,50 @@ export function renderChatGoal(
         <span class="agent-chat__goal-elapsed" ${ref(createGoalElapsedRef(goal))}></span>
         <span class="agent-chat__goal-actions">
           <span class="agent-chat__goal-command-actions">
-            ${showActions && actions.onGoalEdit && goal.status !== "complete"
-              ? renderChatGoalActionButton({
-                  className: "agent-chat__goal-edit",
-                  label: t("chat.goals.edit"),
-                  chipLabel: t("chat.goals.editChip"),
-                  icon: icons.penLine,
-                  onClick: () => actions.onGoalEdit?.(goal),
-                })
-              : nothing}
-            ${showActions && goal.status === "active"
-              ? renderChatGoalActionButton({
-                  className: "agent-chat__goal-pause",
-                  label: t("chat.goals.pause"),
-                  chipLabel: t("chat.goals.pauseChip"),
-                  icon: icons.pause,
-                  onClick: () => actions.onGoalAction?.(goal.id, "pause"),
-                })
-              : nothing}
-            ${showActions && canResume
-              ? renderChatGoalActionButton({
-                  className: "agent-chat__goal-resume",
-                  label: t("chat.goals.resume"),
-                  chipLabel: t("chat.goals.resumeChip"),
-                  icon: icons.play,
-                  onClick: () => actions.onGoalAction?.(goal.id, "resume"),
-                })
-              : nothing}
-            ${showActions
-              ? renderChatGoalActionButton({
-                  className: "agent-chat__goal-clear",
-                  label: t("chat.goals.clear"),
-                  chipLabel: t("chat.goals.clearChip"),
-                  icon: icons.trash,
-                  onClick: () => actions.onGoalAction?.(goal.id, "clear"),
-                })
-              : nothing}
+            ${
+              showActions && actions.onGoalEdit && goal.status !== "complete"
+                ? renderChatGoalActionButton({
+                    className: "agent-chat__goal-edit",
+                    label: t("chat.goals.edit"),
+                    chipLabel: t("chat.goals.editChip"),
+                    icon: icons.penLine,
+                    onClick: () => actions.onGoalEdit?.(goal),
+                  })
+                : nothing
+            }
+            ${
+              showActions && goal.status === "active"
+                ? renderChatGoalActionButton({
+                    className: "agent-chat__goal-pause",
+                    label: t("chat.goals.pause"),
+                    chipLabel: t("chat.goals.pauseChip"),
+                    icon: icons.pause,
+                    onClick: () => actions.onGoalAction?.(goal.id, "pause"),
+                  })
+                : nothing
+            }
+            ${
+              showActions && canResume
+                ? renderChatGoalActionButton({
+                    className: "agent-chat__goal-resume",
+                    label: t("chat.goals.resume"),
+                    chipLabel: t("chat.goals.resumeChip"),
+                    icon: icons.play,
+                    onClick: () => actions.onGoalAction?.(goal.id, "resume"),
+                  })
+                : nothing
+            }
+            ${
+              showActions
+                ? renderChatGoalActionButton({
+                    className: "agent-chat__goal-clear",
+                    label: t("chat.goals.clear"),
+                    chipLabel: t("chat.goals.clearChip"),
+                    icon: icons.trash,
+                    onClick: () => actions.onGoalAction?.(goal.id, "clear"),
+                  })
+                : nothing
+            }
           </span>
           <button
             class="agent-chat__goal-action agent-chat__goal-expand"
@@ -205,25 +188,23 @@ export function renderChatGoal(
         <div class="agent-chat__goal-detail-content">
           <div
             class="agent-chat__goal-detail-objective"
-            ${ref(createGoalObjectiveScrollRef())}
+            ${scrollState()}
             .textContent=${goal.objective}
-            @scroll=${(event: Event) => {
-              const element = event.currentTarget;
-              if (element instanceof HTMLElement) {
-                updateGoalObjectiveScrollState(element);
-              }
-            }}
           ></div>
-          ${goal.lastStatusNote
-            ? html`<div class="agent-chat__goal-detail-note">${goal.lastStatusNote}</div>`
-            : nothing}
+          ${
+            goal.lastStatusNote
+              ? html`<div class="agent-chat__goal-detail-note">${goal.lastStatusNote}</div>`
+              : nothing
+          }
           <div class="agent-chat__goal-detail-meta">
-            ${usage
-              ? html`
-                  <span class="agent-chat__goal-detail-usage">${usage}</span>
-                  <span class="agent-chat__goal-detail-separator" aria-hidden="true">·</span>
-                `
-              : nothing}
+            ${
+              usage
+                ? html`
+                    <span class="agent-chat__goal-detail-usage">${usage}</span>
+                    <span class="agent-chat__goal-detail-separator" aria-hidden="true">·</span>
+                  `
+                : nothing
+            }
             <span class="agent-chat__goal-detail-duration">${elapsed}</span>
           </div>
         </div>

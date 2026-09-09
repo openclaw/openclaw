@@ -29,12 +29,14 @@ on:
       - "scripts/lib/actions-artifact-archive.mjs"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-publication-artifact.mjs"
+      - "scripts/plugin-npm-bootstrap-approval.mjs"
       - "scripts/release-tooling-identity.d.mts"
       - "scripts/release-tooling-identity.mjs"
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
       - "scripts/verify-plugin-npm-published-runtime.mts"
       - "src/plugins/package-entrypoints.ts"
+      - "src/utils/run-with-concurrency.ts"
   workflow_dispatch:
     inputs:
       publish_scope:
@@ -322,6 +324,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Validate publishable plugin metadata
         env:
           TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
@@ -376,6 +385,7 @@ jobs:
           fi
 
           cat .local/plugin-npm-release-plan.json
+          jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-npm-release-plan.json >> "$GITHUB_STEP_SUMMARY"
 
           candidate_count="$(jq -r '.candidates | length' .local/plugin-npm-release-plan.json)"
           selection_count="$(jq -r '.all | length' .local/plugin-npm-release-plan.json)"
@@ -492,9 +502,6 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
-          sparse-checkout: |
-            packages/normalization-core
-            scripts
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -503,15 +510,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
-      - name: Preview publish command
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-tooling
         env:
-          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --dry-run "${{ matrix.plugin.packageDir }}"
-
-      - name: Preview npm pack contents
-        env:
-          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --pack-dry-run "${{ matrix.plugin.packageDir }}"
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact
@@ -540,8 +544,7 @@ jobs:
           pack_output="${RUNNER_TEMP}/${EXTENSION_ID}-npm-pack-output.txt"
           pack_json="${artifact_dir}/npm-pack.json"
 
-          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \
-            OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
+          OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
             bash .release-tooling/scripts/plugin-npm-publish.sh \
               --repo-root "$GITHUB_WORKSPACE" \
               --pack "${PACKAGE_DIR}" > "${pack_output}"
@@ -766,6 +769,10 @@ jobs:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
+          sparse-checkout: |
+            .github/workflows
+            scripts
+            src/plugins
 
       - name: Download immutable npm preflight artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -792,15 +799,18 @@ jobs:
               "fetch",
               "--no-tags",
               "--depth=1",
+              "--filter=blob:none",
               "origin",
               source_sha,
               timeout=120,
               reclaim_locks=True,
           )
+          # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
               "show",
               f"{source_sha}:{os.environ['PACKAGE_DIR']}/package.json",
+              timeout=120,
           )
           target = os.path.join(
               os.environ["RUNNER_TEMP"],
@@ -1253,6 +1263,7 @@ jobs:
     environment: npm-release
     permissions:
       actions: read
+      attestations: read
       contents: read
       id-token: write
     strategy:
@@ -1406,15 +1417,18 @@ jobs:
               "fetch",
               "--no-tags",
               "--depth=1",
+              "--filter=blob:none",
               "origin",
               target_sha,
               timeout=120,
               reclaim_locks=True,
           )
+          # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
               "show",
               f"{target_sha}:{os.environ['PACKAGE_DIR']}/package.json",
+              timeout=120,
           )
           target = os.path.join(
               os.environ["RUNNER_TEMP"],
@@ -1630,6 +1644,55 @@ jobs:
           console.log("already_published=true");
           NODE
 
+      - name: Download stable npm bootstrap approval
+        if: ${{ steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.publication_evidence.outputs.publish_tag == 'latest' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: npm-stable-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
+          path: ${{ runner.temp }}/npm-stable-bootstrap-approval
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_publish_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Authorize bootstrap release
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+          PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
+          RELEASE_TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch }}
+          EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_publish_full_ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]]; then
+            exit 0
+          fi
+          [[ "$PUBLISH_TAG" == "latest" ]] || {
+            echo "npm bootstrap requires beta or an attested regular stable/latest approval." >&2
+            exit 1
+          }
+          approval="${RUNNER_TEMP}/npm-stable-bootstrap-approval/approval.json"
+          gh attestation verify "$approval" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/openclaw-release-publish.yml" \
+            --signer-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-digest "$EXPECTED_WORKFLOW_SHA" \
+            --source-ref "$EXPECTED_WORKFLOW_FULL_REF" \
+            --deny-self-hosted-runners
+          direct_recovery=false
+          if [[ "$GITHUB_ACTOR" != "github-actions[bot]" ]]; then
+            direct_recovery=true
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" \
+            --jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, runAttempt: .run_attempt, repository: .repository.full_name, path}' |
+            APPROVAL_PATH="$approval" RELEASE_APPROVAL_KIND=npm-stable-bootstrap \
+              DIRECT_RELEASE_RECOVERY="$direct_recovery" node scripts/validate-release-publish-approval.mjs
+
       - name: Publish approved bootstrap tarball
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.bootstrap_npm_package_version.outputs.already_published != 'true'
         env:
@@ -1650,10 +1713,6 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]] || {
-            echo "npm token bootstrap requires an approved beta package and beta tag." >&2
-            exit 1
-          }
           [[ -n "${NPM_TOKEN// }" ]] || {
             echo "npm token bootstrap requires the protected npm release token." >&2
             exit 1
@@ -1708,14 +1767,31 @@ jobs:
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
         run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
-      - name: Record Meta trusted publisher checkpoint
+      - name: Verify bootstrap npm dist-tag
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+          PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
+        run: |
+          set -euo pipefail
+          npm view "$PACKAGE_NAME" dist-tags --json --prefer-online |
+            node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              const tags = JSON.parse(readFileSync(0, "utf8"));
+              if (tags[process.env.PUBLISH_TAG] !== process.env.PACKAGE_VERSION) {
+                throw new Error("Bootstrap dist-tag does not match the approved version; use credential-isolated selector recovery without republishing.");
+              }
+            '
+
+      - name: Record plugin trusted publisher checkpoint
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
         env:
           ALREADY_PUBLISHED: ${{ steps.bootstrap_npm_package_version.outputs.already_published }}
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
         run: |
           {
-            echo "## Meta npm bootstrap follow-up"
+            echo "## Plugin npm bootstrap follow-up"
             echo
             if [[ "$ALREADY_PUBLISHED" == "true" ]]; then
               echo "- Verified existing \`${PACKAGE_NAME}\` against the approved immutable tarball."

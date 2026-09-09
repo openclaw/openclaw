@@ -53,7 +53,7 @@ internal fun ChatMessageDisclosure(
   val scope = key(owner, selectionGeneration, catalogRevision) { rememberCoroutineScope() }
   var selected by remember(scope) { mutableStateOf<ChatMessageDisclosureRead?>(null) }
   var expanded by remember(scope) { mutableStateOf(false) }
-  val onManualNavigation = LocalChatReaderNavigation.current
+  val navigation = LocalChatReaderNavigation.current
   val selection = selected
   val active = selection?.takeIf { messages.any(it.message::matchesFullRead) }
   if (selection != null && active == null) {
@@ -81,7 +81,7 @@ internal fun ChatMessageDisclosure(
   ) {
     // Admission happens in the tap, before queued coroutine work can outlive this render.
     val admitted = prepareRead(message) ?: return
-    onManualNavigation()
+    navigation?.pause()
     if (retry || selected?.message?.matchesFullRead(message) != true) {
       selected?.job?.cancel()
       val next = ChatMessageDisclosureRead(message, admitted)
@@ -92,6 +92,7 @@ internal fun ChatMessageDisclosure(
   }
 
   fun close() {
+    navigation?.pause()
     expanded = false
     // Retry can replace the holder before recomposition; cancel it in this tap,
     // before a queued transport write can resume ahead of the next frame.
@@ -120,15 +121,22 @@ internal fun ChatMessageDisclosure(
         if (result !is ChatFullMessageState.Loaded) {
           Text(
             when (result) {
-              is ChatFullMessageState.Unavailable ->
+              is ChatFullMessageState.Unavailable -> {
                 when (result.reason) {
                   ChatFullMessageUnavailable.GatewayUpdate -> nativeString("Update the Gateway to load the full message.")
                   ChatFullMessageUnavailable.Disconnected -> nativeString("Reconnect to load the full message.")
                   ChatFullMessageUnavailable.NotFound -> nativeString("The full message is no longer available.")
                   ChatFullMessageUnavailable.TooLarge -> nativeString("The full message is too large to display.")
                 }
-              ChatFullMessageState.Failed -> nativeString("The full message could not be loaded.")
-              else -> nativeString("Loading full message…")
+              }
+
+              ChatFullMessageState.Failed -> {
+                nativeString("The full message could not be loaded.")
+              }
+
+              else -> {
+                nativeString("Loading full message…")
+              }
             },
             style = ClawTheme.type.caption,
           )
