@@ -55,6 +55,7 @@ async function writeProviderUsageProofPlugin(params: {
         id: "provider-usage-proof",
         providers: ["provider-usage-proof"],
         contracts: { usageProviders: ["provider-usage-proof"] },
+        activation: { onStartup: true },
         configSchema: { type: "object", additionalProperties: false, properties: {} },
       },
       null,
@@ -495,17 +496,35 @@ describe("diagnostics-prometheus managed install runtime", () => {
       });
       return { body: await response.text(), response };
     };
-    await expect
-      .poll(
-        async () => {
-          const capability = JSON.parse(await fs.readFile(capabilityPath, "utf8")) as {
-            observeProviderUsage?: unknown;
-          };
-          return capability.observeProviderUsage;
-        },
-        { timeout: 10_000 },
-      )
-      .toBe(false);
+    try {
+      await expect
+        .poll(
+          async () => {
+            const rawCapability = await fs
+              .readFile(capabilityPath, "utf8")
+              .catch((error: unknown) => {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                  return undefined;
+                }
+                throw error;
+              });
+            if (rawCapability === undefined) {
+              return undefined;
+            }
+            const capability = JSON.parse(rawCapability) as {
+              observeProviderUsage?: unknown;
+            };
+            return capability.observeProviderUsage;
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(false);
+    } catch (cause) {
+      const startupLogs = await fs.readFile(gatewayLog, "utf8").catch(() => "");
+      throw new Error(`Provider usage proof service did not start:\n${startupLogs.slice(-8_000)}`, {
+        cause,
+      });
+    }
     const unauthenticated = await fetch(url);
     expect([401, 403]).toContain(unauthenticated.status);
     const { body, response: authenticated } = await scrapeMetrics();
@@ -710,8 +729,10 @@ describe("diagnostics-prometheus managed install runtime", () => {
     expect(sanitizedGatewayLogs).not.toMatch(
       /(?:127\.0\.0\.1|https?:\/\/|wss?:\/\/|restricted-scraper@example\.com)/iu,
     );
+    const evidenceDir = process.env.OPENCLAW_E2E_EVIDENCE_DIR?.trim() || root;
+    await fs.mkdir(evidenceDir, { recursive: true });
     await fs.writeFile(
-      path.join(root, "provider-usage-proof-gateway.sanitized.log"),
+      path.join(evidenceDir, "provider-usage-proof-gateway.sanitized.log"),
       sanitizedGatewayLogs,
       "utf8",
     );
@@ -726,6 +747,10 @@ describe("diagnostics-prometheus managed install runtime", () => {
     };
     const evidenceText = `${JSON.stringify(sanitizedEvidence, null, 2)}\n`;
     expect(evidenceText).not.toMatch(/(?:127\.0\.0\.1|https?:\/\/|password|token)/iu);
-    await fs.writeFile(path.join(root, "provider-usage-proof-evidence.json"), evidenceText, "utf8");
+    await fs.writeFile(
+      path.join(evidenceDir, "provider-usage-proof-evidence.json"),
+      evidenceText,
+      "utf8",
+    );
   }, 480_000);
 });
