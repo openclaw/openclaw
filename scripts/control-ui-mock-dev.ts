@@ -1,5 +1,7 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
 import { createHash } from "node:crypto";
+import fs, { rmSync } from "node:fs";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
@@ -14,6 +16,7 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
+import { controlUiPluginAssetRoot } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
@@ -21,33 +24,44 @@ import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
+  createControlUiMockSameOriginGatewayScript,
+  prepareControlUiMockGatewayScenario,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
+import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture.ts";
+import { createOfflineDeviceNode } from "../ui/src/test-helpers/devices-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
+import { approvalMockInitScript } from "./control-ui-mock-approvals.ts";
 import {
   buildChatAttachmentHistory,
   createChatAttachmentFixturePlugin,
 } from "./control-ui-mock-attachments.ts";
-import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
+import {
+  backgroundTasksMockInitScript,
+  buildBackgroundTasksMock,
+} from "./control-ui-mock-background-tasks.ts";
 import {
   buildChannelsPairingMock,
   buildChannelsStatusMock,
   buildChannelWizardMocks,
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
+import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
 import {
   buildPluginCatalogMock,
-  buildPluginInspectMock,
-  buildPluginSetEnabledMock,
+  pluginLifecycleMockInitScript,
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
 import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
-import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
+import {
+  buildSkillWorkshopMocks,
+  skillWorkshopMockInitScript,
+} from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
@@ -56,6 +70,7 @@ type CliOptions = {
     | "attachments"
     | "board"
     | "code-fences"
+    | "dashboards"
     | "goal"
     | "swarm"
     | "update-available"
@@ -294,6 +309,7 @@ const boardFixtureHtml = `<!doctype html>
     <link rel="stylesheet" href="/src/styles.css" />
     <style>
       body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); }
+      #app { height: 100%; overflow: auto; }
       .board-fixture-shell { box-sizing: border-box; margin: 0 auto; max-width: 1440px; padding: 36px; }
       .board-fixture-header { align-items: end; display: flex; justify-content: space-between; margin-bottom: 24px; }
       .board-fixture-header span { color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .15em; }
@@ -357,6 +373,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "attachments" &&
     value !== "board" &&
     value !== "code-fences" &&
+    value !== "dashboards" &&
     value !== "goal" &&
     value !== "swarm" &&
     value !== "update-available" &&
@@ -391,7 +408,7 @@ function sessionRow(
   const { model, modelProvider, ...extra } = options;
   return createControlUiSessionRow(key, label, updatedAt, {
     contextTokens: 200_000,
-    model: model ?? "gpt-5.6-luna",
+    model: model ?? "gpt-5-mini",
     modelProvider: modelProvider ?? "openai",
     ...extra,
   });
@@ -402,7 +419,7 @@ function sessionsListResponse(sessions: Array<{ key: string }>, options: Session
     count: sessions.length,
     defaults: {
       contextTokens: 200_000,
-      model: "gpt-5.6-luna",
+      model: "gpt-5-mini",
       modelProvider: "openai",
     },
     hasMore: options.hasMore,
@@ -486,10 +503,10 @@ function buildActivitySessionRows(baseTime: number) {
     molty: { type: "agent", id: "profile-molty", label: "Molty" },
     riley: { type: "human", id: "presence-riley", label: "Riley" },
     colin: { type: "human", id: "presence-colin", label: "Colin" },
-    patricia: {
+    patrick: {
       type: "human",
       id: "presence-patricia",
-      label: "patricia.erichsen@example.com",
+      label: "Patrick",
     },
     unresolved: { type: "human", id: "147591189530201337" },
   } as const;
@@ -500,16 +517,16 @@ function buildActivitySessionRows(baseTime: number) {
     ["api-notes", "Gateway API notes", owners.molty, 20 * 60_000],
     ["design-review", "Activity feed design review", owners.colin, hour],
     ["archive-audit", "Archive retention audit", owners.unresolved, 3 * hour],
-    ["support-handoff", "Support handoff", owners.patricia, 6 * hour],
+    ["support-handoff", "Support handoff", owners.patrick, 6 * hour],
     ["mobile-smoke", "Mobile layout smoke test", owners.riley, 18 * hour],
     ["provider-matrix", "Provider matrix cleanup", owners.molty, 30 * hour],
     ["docs-pass", "Operator docs pass", owners.colin, 2 * day],
-    ["queue-review", "Queue behavior review", owners.patricia, 2.5 * day],
+    ["queue-review", "Queue behavior review", owners.patrick, 2.5 * day],
     ["identity-trace", "Identity trace", owners.unresolved, 3 * day],
     ["channel-followup", "Channel delivery follow-up", owners.riley, 4 * day],
     ["tooling-refresh", "Tooling refresh", owners.molty, 5 * day],
     ["fixture-polish", "Mock fixture polish", owners.colin, 6 * day],
-    ["weekly-summary", "Weekly activity summary", owners.patricia, 6.5 * day],
+    ["weekly-summary", "Weekly activity summary", owners.patrick, 6.5 * day],
   ] as const;
   const automationKeys = new Set(["release-check", "api-notes", "design-review"]);
   return fixtures.map(([key, label, owner, age]) =>
@@ -796,9 +813,32 @@ function buildModelProviderMocks(baseTime: number) {
         name: "Claude Sonnet 4.6",
         provider: "anthropic",
         available: true,
+        contextWindow: 200_000,
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ],
+        thinkingDefault: "medium",
+        reasoning: true,
+        supportsTools: true,
       },
-      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", available: true },
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", available: true },
+      {
+        id: "gpt-5-mini",
+        name: "GPT-5 Mini",
+        provider: "openai",
+        available: true,
+        contextWindow: 200_000,
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ],
+        thinkingDefault: "medium",
+        reasoning: true,
+        supportsTools: true,
+      },
+      { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
       { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
       { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter", available: true },
     ],
@@ -876,7 +916,7 @@ function buildProfileUsageMocks(baseTime: number) {
           },
           {
             provider: "openai",
-            model: "gpt-5.6-luna",
+            model: "gpt-5-mini",
             count: 4_000,
             totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)),
           },
@@ -918,7 +958,7 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
-    gateway: { port: 18789, bind: "127.0.0.1" },
+    gateway: { port: 18789, bind: "127.0.0.1", publicOrigin: "https://gateway.example" },
     agents: { defaults: { thinkingDefault: "medium" } },
     commands: { native: "auto", nativeSkills: "auto" },
     models: { mode: "merge" },
@@ -928,7 +968,7 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
     channels: {
       whatsapp: {
         enabled: true,
-        allowFrom: ["+15551234567"],
+        allowFrom: ["whatsapp-demo-user"],
         dmPolicy: "pairing",
         groupPolicy: "allowlist",
         selfChatMode: "off",
@@ -1038,6 +1078,9 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
         properties: {
           port: { type: "integer", title: "Port", minimum: 1, maximum: 65535 },
           bind: { type: "string", title: "Bind address" },
+          // Zod's .url() emits `format`; keep one such leaf in the fixture so the
+          // form stays provably editable for plugin URL/email settings.
+          publicOrigin: { type: "string", title: "Public origin", format: "uri" },
         },
       },
       agents: {
@@ -1283,35 +1326,20 @@ function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp:
 }
 
 function buildScrollableChatHistory(baseTime: number): unknown[] {
-  const messages: unknown[] = [
-    chatHistoryMessage(
-      "assistant",
-      'Mock Control UI is running. Open the chat picker, search for "telegram" or "claude", then use Load more repeatedly.',
-      baseTime,
-    ),
-  ];
-
-  for (let index = 1; index <= 36; index += 1) {
-    const timestamp = baseTime + index * 60_000;
-    messages.push(
-      chatHistoryMessage(
-        "user",
-        `Mock scroll request ${index}: add enough transcript content to exercise the chat scroll container in focused mode.`,
-        timestamp,
-      ),
+  const messages: unknown[] = Array.from({ length: 10 }, (_, index) => {
+    const timestamp = baseTime + index * 3 * 60_000;
+    return [
+      chatHistoryMessage("user", `Review section ${index + 1}.`, timestamp),
       chatHistoryMessage(
         "assistant",
-        `Mock scroll response ${index}: this deterministic history keeps the mock chat long enough to scroll while testing focus mode, header collapse, and composer anchoring. `.repeat(
-          2,
-        ),
-        timestamp + 30_000,
+        `## Section ${index + 1}\n\n- Source reviewed.\n- **Follow-up:** capture the result.`,
+        timestamp + 35_000,
       ),
-    );
-  }
+    ];
+  }).flat();
 
-  // Completed work turn: commentary + tool results ahead of the final reply
-  // exercise the collapsed "Worked for X" rollup at the end of the thread.
-  const workTurnBase = baseTime + 37 * 60_000;
+  // Paired tool calls/results exercise the collapsed activity rollup.
+  const workTurnBase = baseTime + 31 * 60_000;
   messages.push(
     chatHistoryMessage(
       "user",
@@ -1324,27 +1352,148 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
       workTurnBase + 5_000,
     ),
     {
-      role: "toolResult",
-      toolCallId: "mock-work-read",
-      toolName: "read",
-      content: [{ type: "text", text: "Read ui/src/pages/chat/chat-thread.ts (120 lines)." }],
+      role: "assistant",
+      content: [
+        {
+          type: "tool_call",
+          id: "mock-work-read",
+          name: "read",
+          args: { path: "ui/src/pages/chat/chat-thread.ts" },
+        },
+        {
+          type: "tool_result",
+          id: "mock-work-read",
+          name: "read",
+          text: "Read the transcript grouping boundary and its caller.",
+        },
+      ],
       timestamp: workTurnBase + 12_000,
     },
     {
-      role: "toolResult",
-      toolCallId: "mock-work-exec",
-      toolName: "exec",
-      content: [{ type: "text", text: "pnpm test chat-thread — 12 passed." }],
+      role: "assistant",
+      content: [
+        {
+          type: "tool_call",
+          id: "mock-work-exec",
+          name: "exec",
+          args: { command: "focused transcript tests" },
+        },
+        {
+          type: "tool_result",
+          id: "mock-work-exec",
+          name: "exec",
+          text: "Synthetic command completed.",
+        },
+      ],
       timestamp: workTurnBase + 95_000,
     },
-    chatHistoryMessage(
-      "assistant",
-      "Refactored the render guard and reran the suite; all 12 tests pass.",
-      workTurnBase + 172_000,
-    ),
+    chatHistoryMessage("assistant", "The sample command completed.", workTurnBase + 172_000),
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "mock-work-yield",
+          name: "yield",
+          arguments: {
+            message:
+              "Waiting for the two visible implementation owners; resume on progress/completion to coordinate shared review and verification.",
+          },
+        },
+      ],
+      timestamp: workTurnBase + 173_000,
+    },
   );
 
   return messages;
+}
+
+function buildApprovalChatHistory(baseTime: number): unknown[] {
+  const runId = "mock-production-export-run";
+  return [
+    chatHistoryMessage(
+      "user",
+      "Trace the scroll-anchor regression and prepare a safe production export.",
+      baseTime,
+    ),
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "I found the expansion boundary and will inspect the export command before running it.",
+        },
+        {
+          type: "tool_call",
+          id: "approval-read",
+          name: "read",
+          args: { path: "ui/src/pages/chat/chat-thread.ts" },
+        },
+        {
+          type: "tool_result",
+          id: "approval-read",
+          name: "read",
+          text: "The final code block expands after the virtual row is measured.",
+        },
+      ],
+      timestamp: baseTime + 20_000,
+      __openclaw: { id: "approval-analysis", runId, seq: 1 },
+    },
+    {
+      ...chatHistoryMessage(
+        "assistant",
+        "The export requires operator approval before it can leave the mock workstation.",
+        baseTime + 45_000,
+      ),
+      __openclaw: { id: "approval-wait", runId, seq: 2 },
+    },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "The preview process exited before the export receipt arrived." },
+      ],
+      stopReason: "error",
+      errorMessage: "Preview process exited with status 1.",
+      timestamp: baseTime + 90_000,
+      __openclaw: { id: "approval-error", runId, seq: 3 },
+    },
+  ];
+}
+
+function buildCancelledChatHistory(baseTime: number): unknown[] {
+  const runId = "mock-cancelled-run";
+  return [
+    chatHistoryMessage(
+      "user",
+      "Reconcile model usage and stop if the provider session expires.",
+      baseTime,
+    ),
+    {
+      ...chatHistoryMessage(
+        "assistant",
+        "I collected the usage window and started comparing the configured default.",
+        baseTime + 15_000,
+      ),
+      __openclaw: { id: "cancelled-partial", runId, seq: 1 },
+    },
+    {
+      ...chatHistoryMessage(
+        "assistant",
+        "The operator cancelled the run before it changed any defaults.",
+        baseTime + 35_000,
+      ),
+      stopReason: "stop",
+      openclawAbort: { aborted: true, origin: "operator", runId },
+      __openclaw: { id: "cancelled-terminal", runId, seq: 2 },
+    },
+  ];
+}
+
+function buildFixtureSummaryHistory(baseTime: number, title: string, details: string): unknown[] {
+  return [
+    chatHistoryMessage("user", title, baseTime),
+    chatHistoryMessage("assistant", details, baseTime + 35_000),
+  ];
 }
 
 function buildCodeFenceChatHistory(baseTime: number): unknown[] {
@@ -1494,7 +1643,7 @@ async function createChatPickerScenario(
       updatedAtMs: baseTime - 420_000,
     },
   ];
-  const sessionWorkspaceRoot = repoRoot;
+  const sessionWorkspaceRoot = "/mock/workspace";
   const sessionFileContentByPath = new Map([
     [
       "ui/src/ui/views/chat.ts",
@@ -1693,6 +1842,37 @@ async function createChatPickerScenario(
   const workboardMocks = buildWorkboardMocks(baseTime);
   const activityTime = Date.now();
   const activitySessions = buildActivitySessionRows(activityTime);
+  const dashboardGallerySessions =
+    fixture === "dashboards"
+      ? [
+          sessionRow("agent:main:dashboard:release-health", "Release health", baseTime - 3_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+            hasActiveRun: true,
+            status: "running",
+          }),
+          sessionRow("agent:main:dashboard:model-spend", "Model spend", baseTime - 8_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+          sessionRow("agent:main:dashboard:support-radar", "Support radar", baseTime - 18_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+          }),
+          sessionRow("agent:main:dashboard:ci-signal", "CI signal", baseTime - 42_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+          sessionRow("agent:main:dashboard:community-pulse", "Community pulse", baseTime - 75_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+          }),
+          sessionRow("agent:main:dashboard:gateway-fleet", "Gateway fleet", baseTime - 130_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+        ]
+      : [];
   const activeGoal = {
     schemaVersion: 1 as const,
     id: "goal-mobile-parity",
@@ -1709,6 +1889,7 @@ async function createChatPickerScenario(
   };
   const sessions = [
     ...activitySessions,
+    ...dashboardGallerySessions,
     ...(fixture === "workboard"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {
@@ -1787,22 +1968,29 @@ async function createChatPickerScenario(
       {
         category: "Research",
         createdActor: MOCK_ACTOR_MIRA,
-        execCwd: "/Users/peter/Projects/clawdbot",
+        execCwd: "/Users/demo/Projects/clawdbot",
         owner: { actor: MOCK_ACTOR_MIRA },
       },
     ),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
       category: "Research",
-      execCwd: "/Users/peter/Projects/openclaw",
+      execCwd: "/Users/demo/Projects/openclaw",
       owner: { actor: { type: "human", id: "presence-riley", label: "Riley" } },
       status: "failed",
-      lastRunError: "Model out of credits: openai/gpt-5.6",
+      lastRunError: "Model access expired: openai/gpt-5-mini",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
       createdActor: MOCK_ACTOR_PETER,
-      execCwd: "/Users/peter/Work/openclaw",
+      execCwd: "/Users/demo/Work/openclaw",
       lastReadAt: baseTime - 120_000,
       owner: { actor: MOCK_ACTOR_PETER },
+      participantCount: 4,
+      participants: [
+        { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+        { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
+      ],
       observerDigest: {
         headline: "Done: fixed the flaky retry-window test",
         health: "done",
@@ -1814,7 +2002,7 @@ async function createChatPickerScenario(
     }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
-      execCwd: "/Users/peter/Projects",
+      execCwd: "/Users/demo/Projects",
       execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       hasAutomation: true,
       pinned: true,
@@ -1938,12 +2126,34 @@ async function createChatPickerScenario(
     swarmEnabled: fixture === "swarm",
     workboardEnabled: fixture === "workboard",
   });
-  const historyMessages =
-    fixture === "attachments"
-      ? buildChatAttachmentHistory(baseTime)
-      : fixture === "code-fences"
-        ? buildCodeFenceChatHistory(baseTime)
-        : buildScrollableChatHistory(baseTime);
+  const fixtureSessionKey =
+    fixture === "approval"
+      ? "agent:main:production-export"
+      : fixture === "dashboards"
+        ? "agent:main:dashboard:release-health"
+        : fixture === "update-available"
+          ? "agent:main:home-server"
+          : fixture === "update-blocked"
+            ? "agent:main:model-budget"
+            : fixture === "update-failed"
+              ? "agent:main:cloud-refactor"
+              : fixture === "workboard"
+                ? workboardMocks.sessionKey
+                : "agent:main:main";
+  const summaryHistory = buildFixtureSummaryHistory(
+    baseTime,
+    "Inspect this session.",
+    "The current state is available in the session controls.",
+  );
+  const fixtureHistories: Partial<Record<NonNullable<CliOptions["fixture"]>, unknown[]>> = {
+    approval: buildApprovalChatHistory(baseTime),
+    attachments: buildChatAttachmentHistory(baseTime),
+    "code-fences": buildCodeFenceChatHistory(baseTime),
+    "update-blocked": buildCancelledChatHistory(baseTime),
+  };
+  const historyMessages = fixture
+    ? (fixtureHistories[fixture] ?? summaryHistory)
+    : buildScrollableChatHistory(baseTime);
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,
     text: "",
@@ -2026,6 +2236,13 @@ async function createChatPickerScenario(
       "chat.send",
       "config.patch",
       "config.schema",
+      "cron.add",
+      "cron.list",
+      "cron.remove",
+      "cron.run",
+      "cron.runs",
+      "cron.status",
+      "cron.update",
       "chat.metadata",
       "chat.startup",
       "question.list",
@@ -2033,6 +2250,12 @@ async function createChatPickerScenario(
       "openclaw.chat",
       "openclaw.chat.history",
       "progressCard.get",
+      "plugins.inspect",
+      "plugins.install",
+      "plugins.list",
+      "plugins.search",
+      "plugins.setEnabled",
+      "plugins.uninstall",
       "sessions.delete",
       "sessions.diff",
       "sessions.files.set",
@@ -2044,10 +2267,31 @@ async function createChatPickerScenario(
       "sessions.patch",
       "sessions.patchMany",
       "sessions.search",
+      "skills.workshop.read",
+      "skills.proposals.apply",
+      "skills.proposals.evaluate",
+      "skills.proposals.historyScan",
+      "skills.proposals.historyStatus",
+      "skills.proposals.inspect",
+      "skills.proposals.list",
+      "skills.proposals.reject",
+      "skills.proposals.requestRevision",
+      "skills.library.activate",
+      "skills.library.import",
+      "skills.library.list",
+      "skills.library.mutate",
+      "skills.library.read",
+      "skills.library.save",
+      "skills.library.upload",
+      "tasks.cancel",
+      "tasks.get",
+      "tasks.list",
       "sessions.catalog.list",
       "sessions.catalog.read",
       "sessions.create",
       "system.info",
+      "desktop.observe",
+      "environments.list",
       "terminal.open",
       ...(updateFixture ? ["update.hold", "update.run", "update.status"] : []),
       ...(fixture === "workboard"
@@ -2060,19 +2304,7 @@ async function createChatPickerScenario(
           ]
         : []),
     ],
-    controlUiTabs:
-      fixture === "workboard"
-        ? [
-            {
-              group: "control",
-              icon: "kanban",
-              id: "workboard",
-              label: "Workboard",
-              placement: "route:workboard",
-              pluginId: "workboard",
-            },
-          ]
-        : [],
+    ...(fixture === "workboard" ? workboardUi : {}),
     controlUiWidgetKinds: [
       { pluginId: "session", kind: "session:progress", label: "Session progress" },
       ...(fixture === "workboard"
@@ -2093,7 +2325,42 @@ async function createChatPickerScenario(
     sessionGroups: ["Research"],
     sessionTranscripts: {
       ...backgroundTasks.sessionTranscripts,
-      "agent:main:main": { messages: historyMessages, inFlightRun: planInFlightRun },
+      "agent:main:main": {
+        messages:
+          fixtureSessionKey === "agent:main:main"
+            ? historyMessages
+            : buildScrollableChatHistory(baseTime),
+        ...(fixture === undefined || fixture === "goal" ? { inFlightRun: planInFlightRun } : {}),
+      },
+      "agent:main:production-export": { messages: buildApprovalChatHistory(baseTime) },
+      "agent:main:tax-research": { messages: summaryHistory },
+      "agent:main:model-budget": { messages: buildCancelledChatHistory(baseTime) },
+      "agent:main:archived-launch-notes": {
+        messages: buildFixtureSummaryHistory(
+          baseTime,
+          "Save the launch decision for the archive.",
+          "Launch notes archived: rollout completed, the rollback window closed, and no follow-up action remains.",
+        ),
+      },
+      [OBSERVER_DEMO_SESSION_KEY]: {
+        messages: buildFixtureSummaryHistory(
+          baseTime,
+          "Rerun the focused observer test and stream the result.",
+          "I reproduced the assertion and am checking the narrowed event path now.",
+        ),
+        inFlightRun: {
+          runId: OBSERVER_DEMO_RUN_ID,
+          text: "Rerunning the focused test and comparing the latest event sequence…",
+          startedAt: baseTime - 4_000,
+          events: [],
+        },
+      },
+      "agent:main:dashboard:release-health": {
+        messages: summaryHistory,
+      },
+      "agent:main:home-server": { messages: summaryHistory },
+      "agent:main:cloud-refactor": { messages: summaryHistory },
+      [workboardMocks.sessionKey]: { messages: summaryHistory },
     },
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
@@ -2103,6 +2370,7 @@ async function createChatPickerScenario(
         id: selfProfile.id,
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
+        avatarUrl: `/api/users/${selfProfile.id}/avatar`,
       },
       {
         id: "presence-colin",
@@ -2128,7 +2396,8 @@ async function createChatPickerScenario(
       },
       {
         id: "presence-patricia",
-        email: "patricia.erichsen@example.com",
+        name: "Patrick",
+        email: "patrick.erichsen@example.com",
         onlineSince: activityTime - 12 * 60_000,
         lastActivityAt: activityTime - 30_000,
         deviceFamily: "iPhone",
@@ -2138,7 +2407,6 @@ async function createChatPickerScenario(
       },
     ],
     methodResponses: {
-      ...backgroundTasks.methodResponses,
       ...cronMocks,
       "progressCard.get": { card: null },
       "users.self": { profile: selfProfile },
@@ -2160,12 +2428,7 @@ async function createChatPickerScenario(
               configured: true,
               defaultModel: "gpt-realtime-2.1",
               transports: ["webrtc", "gateway-relay"],
-              models: [
-                "gpt-realtime-2.1",
-                "gpt-realtime-2.1-mini",
-                "gpt-realtime-2",
-                "gpt-live-1-codex",
-              ],
+              models: ["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"],
               voices: [
                 "alloy",
                 "ash",
@@ -2205,7 +2468,7 @@ async function createChatPickerScenario(
           {
             id: "codex",
             label: "Codex",
-            capabilities: { continueSession: true, archive: false },
+            capabilities: { continueSession: true, archive: false, startTerminal: true },
             hosts: [
               {
                 hostId: "gateway",
@@ -2320,21 +2583,22 @@ async function createChatPickerScenario(
         ],
       },
       "system.info": {
-        machineName: "Peters-Mac-Studio",
-        hostname: "peters-mac-studio.local",
+        machineName: "Mock-Workstation",
+        hostname: "mock-workstation.invalid",
         platform: "darwin",
         release: "25.0.0",
         arch: "arm64",
         osLabel: "macOS 26.5",
         nodeVersion: "24.15.0",
         pid: 4242,
-        uptimeMs: 86_400_000,
+        uptimeMs: (11 * 24 + 4) * 3_600_000,
+        loadAverage: [3.2, 2.8, 2.4],
         cpuCount: 16,
         memoryTotalBytes: 68_719_476_736,
         memoryFreeBytes: 34_359_738_368,
         diskTotalBytes: 1_000_000_000_000,
         diskAvailableBytes: 640_000_000_000,
-        diskPath: "/Users/peter/.openclaw",
+        diskPath: "/Users/demo/.openclaw",
         defaultAgentUtilityModel: {
           status: "auto",
           model: "anthropic/claude-haiku-4-5",
@@ -2343,43 +2607,43 @@ async function createChatPickerScenario(
       "fs.listDir": {
         cases: [
           {
-            match: { path: "/Users/peter/Projects/openclaw" },
+            match: { path: "/Users/demo/Projects/openclaw" },
             response: {
-              path: "/Users/peter/Projects/openclaw",
-              parent: "/Users/peter/Projects",
-              home: "/Users/peter",
+              path: "/Users/demo/Projects/openclaw",
+              parent: "/Users/demo/Projects",
+              home: "/Users/demo",
               entries: [
-                { name: "ui", path: "/Users/peter/Projects/openclaw/ui" },
-                { name: "src", path: "/Users/peter/Projects/openclaw/src" },
-                { name: "docs", path: "/Users/peter/Projects/openclaw/docs" },
-                { name: "packages", path: "/Users/peter/Projects/openclaw/packages" },
+                { name: "ui", path: "/Users/demo/Projects/openclaw/ui" },
+                { name: "src", path: "/Users/demo/Projects/openclaw/src" },
+                { name: "docs", path: "/Users/demo/Projects/openclaw/docs" },
+                { name: "packages", path: "/Users/demo/Projects/openclaw/packages" },
               ],
             },
           },
           {
-            match: { path: "/Users/peter/Projects" },
+            match: { path: "/Users/demo/Projects" },
             response: {
-              path: "/Users/peter/Projects",
-              parent: "/Users/peter",
-              home: "/Users/peter",
+              path: "/Users/demo/Projects",
+              parent: "/Users/demo",
+              home: "/Users/demo",
               entries: [
-                { name: "openclaw", path: "/Users/peter/Projects/openclaw" },
-                { name: "clawdbot", path: "/Users/peter/Projects/clawdbot" },
-                { name: "sweetistics", path: "/Users/peter/Projects/sweetistics" },
-                { name: "Peekaboo", path: "/Users/peter/Projects/Peekaboo" },
+                { name: "openclaw", path: "/Users/demo/Projects/openclaw" },
+                { name: "clawdbot", path: "/Users/demo/Projects/clawdbot" },
+                { name: "sweetistics", path: "/Users/demo/Projects/sweetistics" },
+                { name: "Peekaboo", path: "/Users/demo/Projects/Peekaboo" },
               ],
             },
           },
           {
             match: {},
             response: {
-              path: "/Users/peter",
+              path: "/Users/demo",
               parent: "/Users",
-              home: "/Users/peter",
+              home: "/Users/demo",
               entries: [
-                { name: "Projects", path: "/Users/peter/Projects" },
-                { name: "Downloads", path: "/Users/peter/Downloads" },
-                { name: ".config", path: "/Users/peter/.config", hidden: true },
+                { name: "Projects", path: "/Users/demo/Projects" },
+                { name: "Downloads", path: "/Users/demo/Downloads" },
+                { name: ".config", path: "/Users/demo/.config", hidden: true },
               ],
             },
           },
@@ -2388,25 +2652,27 @@ async function createChatPickerScenario(
       "worktrees.branches": {
         cases: [
           {
-            match: { repoRoot: "/Users/peter/Projects/openclaw" },
+            match: { repoRoot: "/Users/demo/Projects/openclaw" },
             response: {
-              repoRoot: "/Users/peter/Projects/openclaw",
+              repoRoot: "/Users/demo/Projects/openclaw",
               branches: [
                 { kind: "local", name: "main" },
                 { kind: "local", name: "steipete/place-picker" },
               ],
+              repositoryStatus: "git",
               defaultBranch: "main",
               headBranch: "main",
             },
           },
           {
-            match: { repoRoot: "/Users/peter/Projects/clawdbot" },
+            match: { repoRoot: "/Users/demo/Projects/clawdbot" },
             response: {
-              repoRoot: "/Users/peter/Projects/clawdbot",
+              repoRoot: "/Users/demo/Projects/clawdbot",
               branches: [
                 { kind: "local", name: "main" },
                 { kind: "local", name: "steipete/storage-selector-design" },
               ],
+              repositoryStatus: "git",
               defaultBranch: "main",
               headBranch: "main",
             },
@@ -2414,6 +2680,22 @@ async function createChatPickerScenario(
         ],
       },
       "environments.list": {
+        environments: [
+          {
+            id: "gateway",
+            type: "gateway",
+            label: "Gateway host",
+            status: "available",
+            desktop: true,
+          },
+          {
+            id: "node:a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            type: "node",
+            label: "Mac Studio",
+            status: "available",
+            desktop: true,
+          },
+        ],
         profiles: [{ id: "aws", providerId: "aws" }],
       },
       // config.set/config.apply are served statefully by the mock gateway
@@ -2449,48 +2731,9 @@ async function createChatPickerScenario(
           },
         ],
       },
-      // Pending exec approvals recover through the same list seam as the real
-      // Inbox. Keep this fixture small enough to inspect both rows at once.
-      "exec.approval.list":
-        fixture === "approval"
-          ? [
-              {
-                id: "mock-production-export-approval",
-                request: {
-                  command: "openclaw export --target production",
-                  agentId: "main",
-                  sessionKey: "agent:main:production-export",
-                  host: "peters-mac-studio.local",
-                  cwd: "/Users/peter/Projects/openclaw",
-                  security: "full",
-                  ask: "on-miss",
-                  allowedDecisions: ["allow-once", "allow-always", "deny"],
-                },
-                createdAtMs: updateFixtureNow - 7 * 60_000,
-                expiresAtMs: updateFixtureNow + 4 * 60 * 60_000,
-              },
-              {
-                id: "mock-worktree-cleanup-approval",
-                request: {
-                  command: "git -C /mock/workspace clean -nd",
-                  agentId: "release",
-                  sessionKey: "agent:main:worktree-cleanup",
-                  host: "peters-mac-studio.local",
-                  cwd: "/mock/workspace",
-                  security: "sandboxed",
-                  ask: "always",
-                  allowedDecisions: ["allow-once", "deny"],
-                },
-                createdAtMs: updateFixtureNow - 6 * 60_000,
-                expiresAtMs: updateFixtureNow + 4 * 60 * 60_000,
-              },
-            ]
-          : [],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
-      "exec.approval.resolve": { ok: true },
       "plugin.approval.resolve": { ok: true },
-      "approval.resolve": { ok: true },
       "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
       // The worktrees page assumes the gateway contract shape; without this
@@ -2523,9 +2766,6 @@ async function createChatPickerScenario(
           },
         ],
       },
-      "plugins.list": buildPluginCatalogMock(),
-      "plugins.inspect": buildPluginInspectMock(),
-      "plugins.setEnabled": buildPluginSetEnabledMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
       "channels.pairing.list": buildChannelsPairingMock(baseTime),
       "channels.pairing.approve": {
@@ -2534,7 +2774,7 @@ async function createChatPickerScenario(
             match: { requestId: "pairing-req-1" },
             response: {
               requestId: "pairing-req-1",
-              senderId: "552731142",
+              senderId: "telegram-demo-user",
               notification: "sent",
               commandOwnerBootstrap: "not-requested",
             },
@@ -2542,7 +2782,7 @@ async function createChatPickerScenario(
           {
             response: {
               requestId: "pairing-req-2",
-              senderId: "+1 555 0192",
+              senderId: "whatsapp-demo-user",
               notification: "unsupported",
               commandOwnerBootstrap: "not-requested",
             },
@@ -2553,9 +2793,9 @@ async function createChatPickerScenario(
         cases: [
           {
             match: { requestId: "pairing-req-1" },
-            response: { requestId: "pairing-req-1", senderId: "552731142" },
+            response: { requestId: "pairing-req-1", senderId: "telegram-demo-user" },
           },
-          { response: { requestId: "pairing-req-2", senderId: "+1 555 0192" } },
+          { response: { requestId: "pairing-req-2", senderId: "whatsapp-demo-user" } },
         ],
       },
       "web.login.start": {
@@ -2566,10 +2806,7 @@ async function createChatPickerScenario(
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
-      "skills.proposals.list": skillWorkshop.list,
-      "skills.proposals.inspect": skillWorkshop.inspect,
-      "skills.proposals.historyStatus": skillWorkshop.historyStatus,
-      "skills.proposals.historyScan": skillWorkshop.historyScan,
+      "skills.proposals.requestRevision": skillWorkshop.requestRevision,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelAuthStatus,
@@ -2603,7 +2840,7 @@ async function createChatPickerScenario(
           },
           {
             deviceId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
-            displayName: "Mac Studio",
+            displayName: "Mac mini",
             platform: "darwin",
             clientId: "node-host",
             clientMode: "node",
@@ -2674,20 +2911,43 @@ async function createChatPickerScenario(
       },
       "node.list": {
         nodes: [
+          createOfflineDeviceNode(),
           {
             nodeId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
             displayName: "Mac Studio",
             platform: "darwin",
             deviceFamily: "Mac",
-            modelIdentifier: "Mac14,12",
+            modelIdentifier: "Mac15,14",
             remoteIp: "192.168.1.11",
             version: "2026.6.11",
             connected: true,
             paired: true,
             approvalState: "approved",
             connectedAtMs: baseTime - 60_000,
-            caps: ["canvas", "screen"],
+            hostStats: {
+              cpuCount: 24,
+              loadAverage: [3.2, 2.8, 2.4],
+              memoryTotalBytes: 192 * 1024 ** 3,
+              memoryFreeBytes: 41 * 1024 ** 3,
+              diskTotalBytes: 2 * 1024 ** 4,
+              diskAvailableBytes: 1.2 * 1024 ** 4,
+              updatedAtMs: baseTime,
+            },
+            caps: [
+              "browser",
+              "canvas",
+              "screen",
+              "computer",
+              "file",
+              "system",
+              "mcp",
+              "local-inference",
+              "claude-sessions",
+              "codex-cli-sessions",
+              "pi-sessions",
+            ],
             commands: [
+              "desktop.stream",
               "screen.snapshot",
               "system.execApprovals.get",
               "system.execApprovals.set",
@@ -2698,18 +2958,27 @@ async function createChatPickerScenario(
           },
           {
             nodeId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
-            displayName: "Mac Studio",
+            displayName: "Mac mini",
             platform: "darwin",
             deviceFamily: "Mac",
-            modelIdentifier: "Mac15,14",
+            modelIdentifier: "Mac16,11",
             remoteIp: "192.168.1.12",
             version: "2026.6.10",
             connected: true,
             paired: true,
             approvalState: "approved",
             lastSeenAtMs: baseTime - 82_800_000,
-            caps: ["canvas", "screen"],
-            commands: ["screen.snapshot", "system.run"],
+            hostStats: {
+              cpuCount: 12,
+              loadAverage: [15.4, 13.8, 11.2],
+              memoryTotalBytes: 32 * 1024 ** 3,
+              memoryFreeBytes: 2 * 1024 ** 3,
+              diskTotalBytes: 1024 ** 4,
+              diskAvailableBytes: 64 * 1024 ** 3,
+              updatedAtMs: baseTime,
+            },
+            caps: ["browser", "computer", "file", "system", "codex-cli-sessions"],
+            commands: ["desktop.stream", "screen.snapshot", "system.run"],
           },
           {
             nodeId: "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
@@ -3059,8 +3328,8 @@ async function createChatPickerScenario(
       ...claudeSessions,
       taxChildRow,
     ],
-    sessionKey: fixture === "workboard" ? workboardMocks.sessionKey : "agent:main:main",
-    workspace: "/Users/peter/Projects/openclaw",
+    sessionKey: fixtureSessionKey,
+    workspace: "/Users/demo/Projects/openclaw",
     workspaceGit: true,
   };
 }
@@ -3069,15 +3338,27 @@ function escapeScriptContent(script: string): string {
   return script.replaceAll("</script", "<\\/script");
 }
 
-function createMockGatewayPlugin(
+async function createMockGatewayPlugin(
   scenario: ControlUiMockGatewayScenario,
   fixture?: CliOptions["fixture"],
-): Plugin {
-  const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
+): Promise<Plugin> {
+  const prepared = await prepareControlUiMockGatewayScenario(scenario);
+  const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
+  const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
   const statefulInitScript = escapeScriptContent(
-    createControlUiPreviewInitScript() + skillLibraryMockInitScript(scenario.models),
+    createControlUiPreviewInitScript() +
+      skillLibraryMockInitScript(prepared.scenario.models) +
+      pluginLifecycleMockInitScript() +
+      skillWorkshopMockInitScript(Date.now()) +
+      backgroundTasksMockInitScript(Date.now()) +
+      approvalMockInitScript(fixture === "approval"),
   );
-  const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
+  const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario));
+  const pluginIconIds = new Set(
+    buildPluginCatalogMock()
+      .plugins.filter((plugin) => plugin.hasIcon)
+      .map((plugin) => plugin.id),
+  );
   const attachmentThemeToggle =
     fixture === "attachments"
       ? `    <style data-openclaw-control-ui-mock-theme-toggle>
@@ -3117,6 +3398,40 @@ function createMockGatewayPlugin(
       : "";
   return {
     configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const prefix = "/__openclaw__/plugin-icon/";
+        const pathname = new URL(req.url ?? "/", "http://openclaw.invalid").pathname;
+        if (!pathname.startsWith(prefix)) {
+          next();
+          return;
+        }
+        const pluginId = decodeURIComponent(pathname.slice(prefix.length));
+        if (!pluginIconIds.has(pluginId)) {
+          next();
+          return;
+        }
+        const icon = path.join(repoRoot, "extensions", pluginId, "assets", "icon.png");
+        if (!fs.existsSync(icon)) {
+          next();
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("content-type", "image/png");
+        res.end(fs.readFileSync(icon));
+      });
+      server.middlewares.use((req, res, next) => {
+        const pathname = req.url?.split("?", 1)[0];
+        if (!pathname?.startsWith(controlUiPluginAssetRoot())) {
+          next();
+          return;
+        }
+        const asset = prepared.assets.get(pathname);
+        res.statusCode = asset ? 200 : 404;
+        if (asset) {
+          res.setHeader("content-type", asset.contentType);
+        }
+        res.end(asset?.body);
+      });
       server.middlewares.use(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (_req, res) => {
         res.statusCode = 200;
         res.setHeader("content-type", "application/json");
@@ -3131,7 +3446,7 @@ function createMockGatewayPlugin(
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-storage>\n      try {\n        localStorage.setItem("openclaw.i18n.locale", "en");\n      } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };
@@ -3187,58 +3502,71 @@ const scenario = await createChatPickerScenario(options.fixture);
 if (options.operatorScopes) {
   scenario.operatorScopes = options.operatorScopes;
 }
-const server = await createServer({
-  base: "/",
-  cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
-  clearScreen: false,
-  configFile: path.join(uiRoot, "vite.config.ts"),
-  define: {
-    "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
-      version: "2026.7.10",
-      commit: "0123456789abcdef0123456789abcdef01234567",
-      commitAt: "2026-07-10T11:22:33.000Z",
-      builtAt: "2026-07-10T12:34:56.000Z",
-      branch: null,
-      dirty: null,
-      release: false,
-      buildId: scenario.serverBuildId,
-    }),
-  },
-  logLevel: "error",
-  optimizeDeps: {
-    ...(options.fixture === "board"
-      ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
-      : {}),
-    include: ["lit/directives/repeat.js"],
-  },
-  plugins: [
-    createMockGatewayPlugin(scenario, options.fixture),
-    createBoardFixturePlugin(),
-    ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
-  ],
-  publicDir: path.join(uiRoot, "public"),
-  resolve: {
-    alias: [
-      ...resolveExternalPackageAliasesForVite(),
-      ...resolveSourcePackageAliasesForVite(),
-      ...resolveTsconfigPathAliasesForVite(),
+// Vite replaces its deps cache when fixture plugins or mode change. Concurrent
+// mocks need separate owners so one startup cannot invalidate another's modules.
+const cacheRoot = path.join(repoRoot, ".artifacts", "control-ui-mock-vite");
+await mkdir(cacheRoot, { recursive: true });
+const cacheDir = await mkdtemp(path.join(cacheRoot, "server-"));
+// Vite's SIGTERM handler calls process.exit() after closing, bypassing finally.
+// The process owns this cache, so its exit hook is the single cleanup path.
+process.once("exit", () => rmSync(cacheDir, { recursive: true, force: true }));
+let server: ViteDevServer | undefined;
+try {
+  server = await createServer({
+    base: "/",
+    cacheDir,
+    clearScreen: false,
+    configFile: path.join(uiRoot, "vite.config.ts"),
+    define: {
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
+        version: "2026.7.10",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        commitAt: "2026-07-10T11:22:33.000Z",
+        builtAt: "2026-07-10T12:34:56.000Z",
+        branch: null,
+        dirty: null,
+        release: false,
+        buildId: scenario.serverBuildId,
+      }),
+    },
+    logLevel: "error",
+    optimizeDeps: {
+      ...(options.fixture === "board"
+        ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
+        : {}),
+      include: ["diff", "lit/directives/repeat.js"],
+    },
+    plugins: [
+      ...createStandaloneMockIsolationPlugins(),
+      await createMockGatewayPlugin(scenario, options.fixture),
+      createBoardFixturePlugin(),
+      ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
     ],
-  },
-  root: uiRoot,
-  server: {
-    allowedHosts: options.allowedHosts,
-    host: options.host,
-    port: options.port,
-    strictPort: true,
-  },
-});
+    publicDir: path.join(uiRoot, "public"),
+    resolve: {
+      alias: [
+        ...resolveExternalPackageAliasesForVite(),
+        ...resolveSourcePackageAliasesForVite(),
+        ...resolveTsconfigPathAliasesForVite(),
+      ],
+    },
+    root: uiRoot,
+    server: {
+      allowedHosts: options.allowedHosts,
+      host: options.host,
+      port: options.port,
+      strictPort: true,
+    },
+  });
 
-await server.listen();
-console.log(
-  `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
-);
-console.log(
-  `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
-);
-await waitForShutdown();
-await server.close();
+  await server.listen();
+  console.log(
+    `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
+  );
+  console.log(
+    `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
+  );
+  await waitForShutdown();
+} finally {
+  await server?.close();
+}

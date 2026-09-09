@@ -13,7 +13,7 @@ import type { CurrentUserProfileDisplay } from "./current-user-profile-display.j
 
 export type GatewayModelThinkingProfile = {
   thinkingLevels: ReturnType<typeof listThinkingLevelOptions>;
-  thinkingDefault: ThinkLevel;
+  thinkingDefault?: ThinkLevel;
 };
 
 export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
@@ -48,3 +48,9 @@ export function createSessionRowModelCacheKey(
 ) {
   return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
 }
+
+export type SessionListActiveRunProjector = (
+  key: string,
+  entry: SessionEntry,
+  agentId: string,
+) => { active: boolean; status?: "queued" };

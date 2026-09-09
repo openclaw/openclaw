@@ -49,6 +49,7 @@ export function findOverlappingWorkspaceAgentIds(
   cfg: OpenClawConfig,
   agentId: string,
   workspaceDir: string,
+  env?: NodeJS.ProcessEnv,
 ): string[] {
   const entries = listAgentEntries(cfg);
   const normalizedAgentId = normalizeAgentId(agentId);
@@ -58,7 +59,7 @@ export function findOverlappingWorkspaceAgentIds(
     if (otherAgentId === normalizedAgentId) {
       continue;
     }
-    const otherWorkspace = resolveAgentWorkspaceDir(cfg, otherAgentId);
+    const otherWorkspace = resolveAgentWorkspaceDir(cfg, otherAgentId, env);
     if (workspacePathsOverlap(workspaceDir, otherWorkspace)) {
       overlappingAgentIds.push(otherAgentId);
     }

@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  AuthStorage as PublicAuthStorage,
+  ModelRegistry as PublicModelRegistry,
+} from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerOAuthMocks = vi.hoisted(() => ({
@@ -253,6 +257,64 @@ describe("SQLite auth storage", () => {
     expect(
       loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"],
     ).not.toMatchObject({ expires: 1 });
+  });
+
+  it("keeps stored OAuth identity fields through the published agent sessions SDK", async () => {
+    const agentDir = makeAgentDir();
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "test-oauth:default": {
+            type: "oauth",
+            provider: "test-oauth",
+            access: "fake-expired-access",
+            refresh: "fake-refresh",
+            expires: 1,
+            accountId: "fake-account-id",
+            email: "fake-user@example.com",
+            subscriptionType: "max",
+            rateLimitTier: "default_max_20x",
+          },
+        },
+      },
+      agentDir,
+    );
+    const storage = PublicAuthStorage.forAgent(agentDir);
+    PublicModelRegistry.inMemory(storage).registerProvider("test-oauth", {
+      oauth: {
+        name: "Test OAuth",
+        async login() {
+          throw new Error("not used");
+        },
+        async refreshToken() {
+          return {
+            access: "fake-fresh-access",
+            refresh: "fake-rotated-refresh",
+            expires: Date.now() + 60_000,
+          };
+        },
+        getApiKey(credentials: { access: string }) {
+          return credentials.access;
+        },
+      },
+    });
+
+    await expect(storage.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"]).toMatchObject({
+      type: "oauth",
+      provider: "test-oauth",
+      access: "fake-fresh-access",
+      refresh: "fake-rotated-refresh",
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
+      subscriptionType: "max",
+      rateLimitTier: "default_max_20x",
+    });
+    expect(storage.get("test-oauth")).toMatchObject({
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
+    });
   });
 
   it("keeps AuthStorage.create(path) as a named SQLite-backed deprecation", () => {
@@ -558,7 +620,7 @@ describe("SQLite auth storage", () => {
     );
   });
 
-  it("serializes asynchronous OAuth refreshes across SQLite-backed instances", async () => {
+  it("fails closed for an identityless SQLite peer until the owner commits its rotation", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
       {
@@ -609,9 +671,10 @@ describe("SQLite auth storage", () => {
 
     await expect(
       Promise.all([left.getApiKey("test-oauth"), right.getApiKey("test-oauth")]),
-    ).resolves.toEqual(["fake-fresh-access", "fake-fresh-access"]);
+    ).resolves.toEqual(["fake-fresh-access", undefined]);
     expect(refreshCalls).toBe(1);
     expect(maxActiveRefreshes).toBe(1);
+    await expect(right.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
   });
 
   it("falls back to environment auth when a stored token is expired", async () => {

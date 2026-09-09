@@ -197,6 +197,18 @@ describe("formatAssistantErrorText", () => {
     },
   );
 
+  it.each([
+    "Session transcript projection is rebuilding: private-session",
+    "opaque-private-provider-detail",
+  ])("keeps model context without assigning an unclassified failure: %s", (raw) => {
+    expect(
+      formatUserFacingAssistantErrorText(makeAssistantError(raw), {
+        provider: "openai",
+        model: "test-model",
+      }),
+    ).toBe("⚠️ Agent run failed (model: openai/test-model).");
+  });
+
   it("keeps the generic last resort when no classified facts are available", () => {
     const raw = "opaque-private-provider-detail";
     const msg = makeAssistantMessageFixture({
@@ -546,6 +558,20 @@ describe("formatAssistantErrorText", () => {
     // Keep provider signal; do not rewrite to the timeout string (formatAssistantErrorText
     // may return undefined for some paths — assert the concrete copy we preserve).
     expect(formatAssistantErrorText(msg)).toBe("Provider finish_reason: error");
+  });
+
+  it.each([
+    ["EAI_AGAIN", "LLM request failed: DNS lookup for the provider endpoint failed."],
+    ["ENOTFOUND", "LLM request failed: DNS lookup for the provider endpoint failed."],
+    ["ECONNREFUSED", "LLM request failed: connection refused by the provider endpoint."],
+    ["ECONNRESET", "LLM request failed: network connection was interrupted."],
+    ["ENETUNREACH", "LLM request failed: the provider endpoint is unreachable from this host."],
+    ["UNRECOGNIZED", "LLM request failed: network connection error."],
+    ["DNS_CONFIG_INVALID", "LLM request failed: network connection error."],
+  ])("uses structured transport code %s with a generic provider message", (errorCode, expected) => {
+    const message = { ...makeAssistantError("Connection error."), errorCode };
+    expect(formatAssistantErrorText(message)).toBe(expected);
+    expect(formatUserFacingAssistantErrorText(message)).toBe(expected);
   });
 
   it("returns a connection-refused message for ECONNREFUSED failures", () => {

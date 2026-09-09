@@ -51,7 +51,8 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     if (!user) {
       return nothing;
     }
-    const label = presenceViewerLabel(user);
+    const label =
+      this.variant === "profile" ? (user.name ?? user.email ?? user.id) : presenceViewerLabel(user);
     const view = resolveIdentityAvatarView({
       identity: this.identity ?? user.identity,
       id: user.id,
@@ -131,19 +132,25 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
                 variant="session"
               ></openclaw-viewer-avatar>`,
               user.identity?.type === "profile"
-                ? personActivityLink(user.identity.id, this.personActivity)
+                ? personActivityLink(
+                    user.identity.id,
+                    this.personActivity,
+                    presenceViewerLabel(user),
+                  )
                 : null,
             )}
           </span>
         </openclaw-tooltip>`,
       )}
-      ${overflowCount > 0
-        ? html`<openclaw-tooltip .content=${overflowLabel}>
-            <span class="viewer-avatar viewer-avatar--overflow" aria-label=${overflowLabel}
-              >+${overflowCount}</span
-            >
-          </openclaw-tooltip>`
-        : nothing}
+      ${
+        overflowCount > 0
+          ? html`<openclaw-tooltip .content=${overflowLabel}>
+              <span class="viewer-avatar viewer-avatar--overflow" aria-label=${overflowLabel}
+                >+${overflowCount}</span
+              >
+            </openclaw-tooltip>`
+          : nothing
+      }
     </span>`;
   }
 }

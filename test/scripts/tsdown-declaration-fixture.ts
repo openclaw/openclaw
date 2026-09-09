@@ -4,10 +4,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
+import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -50,6 +52,10 @@ export function runFixture(
   });
 }
 
+export function runFixtureModule(root: string, source: string, privateQa = false) {
+  return runFixture(root, ["--import", loader, "--input-type=module", "--eval", source], privateQa);
+}
+
 type ConfigEntries = {
   inputs: string[];
   selected: Record<string, string>;
@@ -63,14 +69,9 @@ function readConfigEntries(
   privateQa: boolean,
   groups: readonly string[],
 ): ConfigEntries {
-  const result = runFixture(
+  const result = runFixtureModule(
     root,
-    [
-      "--import",
-      loader,
-      "--input-type=module",
-      "--eval",
-      `
+    `
 import path from "node:path";
 import configs from ${JSON.stringify(pathToFileURL(path.join(root, "tsdown.config.ts")).href)};
 const groups = configs.filter(config => ${JSON.stringify(groups)}.includes(config.name));
@@ -83,7 +84,6 @@ const inputs = configs.filter(config => config.name === "openclaw-unified")
   .flatMap(config => Object.values(config.entry));
 process.stdout.write(JSON.stringify({ inputs, selected, declarations }));
 `,
-    ],
     privateQa,
   );
   expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -106,7 +106,25 @@ export function createFixture(
 ) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.join(root, ".artifacts"));
-  fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+  // Link the selected graph's real toolchain and runtime packages: each writer
+  // validates the fixture's entire dependency topology before and after emit.
+  for (const name of [
+    ".bin",
+    "@openclaw/fs-safe",
+    "@typescript/native-preview",
+    "playwright-core",
+    "tsx",
+    ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS ? ["pretty-ms"] : []),
+  ]) {
+    const target = path.join(root, "node_modules", name);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.symlinkSync(
+      fs.realpathSync(path.join(sourceRoot, "node_modules", name)),
+      target,
+      "junction",
+    );
+  }
+  materializeDeclarationPackages(root, groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
   const write = (source: string, contents: string) => {
     const relative = path.relative(root, path.resolve(root, source));
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -120,6 +138,7 @@ export function createFixture(
     "package.json",
     '{"name":"sdk-declaration-fixture","version":"0.0.0","private":true,"type":"module"}',
   );
+  write("pnpm-workspace.yaml", "packages: []\n");
   write("tsdown.config.ts", fs.readFileSync(path.join(sourceRoot, "tsdown.config.ts"), "utf8"));
   fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
   fs.mkdirSync(path.join(root, "extensions"));
@@ -145,8 +164,10 @@ export function createFixture(
   // These owners derive runtime inputs from import.meta.url; keep that graph inside the fixture.
   const runtimeEntryOwners = new Set([
     "src/infra/runtime-process-entrypoints.ts",
+    "src/infra/update-managed-service-handoff-runtime-assets.ts",
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
+    "packages/normalization-core/src/record-coerce.ts",
   ]);
   for (const source of runtimeEntryOwners) {
     write(source, fs.readFileSync(path.join(sourceRoot, source), "utf8"));
@@ -163,6 +184,9 @@ export function createFixture(
     "src/worker/worker-deploy-browser-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",
+    "packages/gateway-client/src/websocket.ts",
+    "src/gateway/server-runtime-state.ts",
+    "src/realtime-transcription/websocket-session.ts",
   ]) {
     write(source, "export {};\n");
   }
@@ -170,7 +194,10 @@ export function createFixture(
     // Exercise every real extension partition, even in the small compiler fixture.
     for (const id of ["fixture-a", "fixture-b", "fixture-c", "fixture-d", "fixture-e"]) {
       write(`extensions/${id}/openclaw.plugin.json`, JSON.stringify({ id }));
-      write(`extensions/${id}/package.json`, JSON.stringify({ name: `@openclaw/${id}` }));
+      write(
+        `extensions/${id}/package.json`,
+        JSON.stringify({ name: `@openclaw/${id}`, exports: { ".": "./dist/index.js" } }),
+      );
       write(`extensions/${id}/index.ts`, "export {};\n");
     }
   }
@@ -281,11 +308,8 @@ export function runWriter(root: string, privateQa = false, env: NodeJS.ProcessEn
 }
 
 export function runUnifiedBuild(root: string) {
-  return runFixture(root, [
-    "--import",
-    loader,
-    "--input-type=module",
-    "--eval",
+  return runFixtureModule(
+    root,
     `
 import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/build-all.mts")).href)};
 import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
@@ -296,7 +320,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
   process.exitCode = result.exitCode;
 });
 `,
-  ]);
+  );
 }
 
 export function runUnifiedWriter(root: string, env: NodeJS.ProcessEnv = {}) {
@@ -321,6 +345,15 @@ export function treeHashes(root: string) {
           .digest("hex"),
       ]),
   );
+}
+
+export function declarationCacheRecords(root: string) {
+  const cache = path.join(root, ".artifacts/build-all-cache");
+  return fs.readdirSync(cache).map((name) => {
+    const record = readArtifactRecord(path.join(cache, name, "stamp.json"));
+    expect(record, name).toBeDefined();
+    return record!;
+  });
 }
 
 export function expectOutputs(root: string, entries: readonly string[], files: string[]) {

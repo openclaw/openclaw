@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
@@ -39,9 +40,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     "package.json",
     "pnpm-lock.yaml",
     "scripts/lib/vitest-worker-artifacts.mts",
+    "scripts/lib/managed-handoff-build-config.mts",
     "scripts/lib/vitest-worker-run.mts",
     "scripts/lib/vitest-worker-compiler.mts",
     "scripts/lib/managed-child-process.mts",
+    "scripts/lib/vitest-resource-ownership.mts",
     "scripts/lib/windows-taskkill.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/runtime-process-build-entries.mts",
@@ -58,7 +61,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   };
   const schemaPlugin = createStateSchemaInlinePlugin(root);
   const outDir = path.join(directory, "dist");
-  await build({
+  const config: NonNullable<Parameters<typeof build>[0]> = {
     config: false,
     cwd: root,
     entry,
@@ -71,7 +74,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     clean: false,
     outExtensions: () => ({ js: ".js" }),
     deps: {
-      neverBundle: true,
+      // Root runtime dependencies stay external; bundled workspace code owns its private deps.
       alwaysBundle: (id) =>
         (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
         id !== "@openclaw/fs-safe" &&
@@ -79,6 +82,23 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     },
     logLevel: "warn",
     plugins: [
+      {
+        name: "openclaw:maintenance-service-boundary",
+        resolveId(id, importer) {
+          if (
+            importer &&
+            id.startsWith(".") &&
+            path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
+              path.join(root, "src/daemon/service.ts")
+          ) {
+            return {
+              id: pathToFileURL(path.join(outDir, "triage-maintenance/service.js")).href,
+              external: "absolute",
+            };
+          }
+          return null;
+        },
+      },
       {
         name: "openclaw:worker-build-inputs",
         load(id) {
@@ -119,6 +139,16 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         },
       },
     ],
+  };
+  await build(config);
+  await build({
+    ...createManagedHandoffBuildConfig(),
+    config: false,
+    cwd: root,
+    outDir,
+    clean: false,
+    logLevel: config.logLevel,
+    plugins: config.plugins,
   });
   for (const name of Object.keys(entry)) {
     fs.accessSync(path.join(directory, "dist", `${name}.js`));
@@ -135,7 +165,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     outputs: sortedOutputs,
     durationMs: performance.now() - started,
   };
-  verifyVitestWorkerArtifacts(directory, manifest);
+  await verifyVitestWorkerArtifacts(directory, manifest);
+  manifest.durationMs = performance.now() - started;
   fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, {
     flag: "wx",
   });

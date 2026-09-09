@@ -57,7 +57,7 @@ import {
   logClawAddPlanSummary,
   logClawExperimentalWarning,
 } from "./claws-cli-output.js";
-import { waitUntilGatewayConfigApplied } from "./claws-cli.gateway-readiness.js";
+import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
 import type {
   ClawsAddOptions,
   ClawsExportOptions,
@@ -65,6 +65,7 @@ import type {
   ClawsRemoveOptions,
   ClawsStatusOptions,
 } from "./claws-cli.js";
+import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -437,7 +438,7 @@ export async function runClawsAddCommand(
         add: async (input) => await callGatewayFromCli("cron.add", {}, input),
         list: async (agentId) =>
           await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
-        waitUntilAgentAvailable: async () => await waitUntilGatewayConfigApplied(),
+        waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
       },
     });
   } catch (error) {
@@ -521,7 +522,10 @@ export async function runClawsRemoveCommand(
     : opts.removeUnused
       ? { mode: "remove-if-unused" as const }
       : { mode: "retain" as const };
-  const plan = await buildClawRemovePlan(target, { referencedCleanup });
+  const plan = await buildClawRemovePlan(target, {
+    referencedCleanup,
+    monitorGateway: clawMonitorCleanupGateway,
+  });
   if (opts.dryRun || plan.blockers.length > 0) {
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
@@ -550,6 +554,7 @@ export async function runClawsRemoveCommand(
   }
   try {
     const result = await applyClawRemovePlan(plan, {
+      monitorGateway: clawMonitorCleanupGateway,
       consentPlanIntegrity: opts.planIntegrity,
       referencedCleanup,
       cronGateway: {

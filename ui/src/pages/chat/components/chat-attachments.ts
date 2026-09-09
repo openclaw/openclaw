@@ -1,9 +1,9 @@
 // Shared attachment controls for chat and new-session composers.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { scrollState } from "../../../components/scroll-state.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -18,7 +18,6 @@ import {
 } from "../attachment-payload-store.ts";
 import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
-import { syncChatAttachmentRailScroll } from "./chat-attachment-viewport.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
@@ -547,9 +546,9 @@ export function renderChatAttachmentMenuTrigger(
     <button
       slot="trigger"
       type="button"
-      class="agent-chat__input-btn agent-chat__input-btn--attach ${hasOverrides
-        ? "agent-chat__input-btn--has-overrides"
-        : ""}"
+      class="agent-chat__input-btn agent-chat__input-btn--attach ${
+        hasOverrides ? "agent-chat__input-btn--has-overrides" : ""
+      }"
       aria-label=${t("chat.composer.addAttachment")}
       ?disabled=${disabled}
       title=${t("chat.composer.addAttachment")}
@@ -679,15 +678,7 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
     return nothing;
   }
   return html`
-    <div
-      class="chat-attachments-preview"
-      ${ref(syncChatAttachmentRailScroll)}
-      @scroll=${(event: Event) => {
-        if (event.currentTarget instanceof Element) {
-          syncChatAttachmentRailScroll(event.currentTarget);
-        }
-      }}
-    >
+    <div class="chat-attachments-preview" ${scrollState(true)}>
       ${attachments.map((att) =>
         att.browserAnnotation
           ? renderBrowserAnnotationAttachment(att, att.browserAnnotation, props)
@@ -701,35 +692,37 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                   .filter(Boolean)
                   .join(" ")}
               >
-                ${att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
-                  ? renderAttachmentImage(
-                      att,
-                      att.fileName?.trim() || t("chat.composer.attachmentPreview"),
-                      att.fileName?.trim() || t("chat.imageLightbox.untitled"),
-                      props,
-                    )
-                  : isLargePastedTextAttachment(att)
-                    ? html`
-                        <div class="chat-attachment-file chat-attachment-file--pasted-text">
-                          <span class="chat-attachment-file__icon">${icons.fileText}</span>
-                          <span class="chat-attachment-file__body">
-                            <span class="chat-attachment-file__name"
-                              >${pastedTextPreview(att)}</span
-                            >
-                            <button
-                              class="chat-attachment-text-action"
-                              type="button"
-                              aria-label=${t("chat.attachments.showInTextField")}
-                              ?disabled=${props.disabled}
-                              @click=${() => showPastedTextInComposer(att, props)}
-                            >
-                              ${t("chat.attachments.showInTextField")}
-                              <span aria-hidden="true">${icons.chevronRight}</span>
-                            </button>
-                          </span>
-                        </div>
-                      `
-                    : renderCompactAttachmentFile(att)}
+                ${
+                  att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
+                    ? renderAttachmentImage(
+                        att,
+                        att.fileName?.trim() || t("chat.composer.attachmentPreview"),
+                        att.fileName?.trim() || t("chat.imageLightbox.untitled"),
+                        props,
+                      )
+                    : isLargePastedTextAttachment(att)
+                      ? html`
+                          <div class="chat-attachment-file chat-attachment-file--pasted-text">
+                            <span class="chat-attachment-file__icon">${icons.fileText}</span>
+                            <span class="chat-attachment-file__body">
+                              <span class="chat-attachment-file__name"
+                                >${pastedTextPreview(att)}</span
+                              >
+                              <button
+                                class="chat-attachment-text-action"
+                                type="button"
+                                aria-label=${t("chat.attachments.showInTextField")}
+                                ?disabled=${props.disabled}
+                                @click=${() => showPastedTextInComposer(att, props)}
+                              >
+                                ${t("chat.attachments.showInTextField")}
+                                <span aria-hidden="true">${icons.chevronRight}</span>
+                              </button>
+                            </span>
+                          </div>
+                        `
+                      : renderCompactAttachmentFile(att)
+                }
                 <openclaw-tooltip .content=${t("chat.composer.removeAttachment")}>
                   <button
                     class="chat-attachment-remove"

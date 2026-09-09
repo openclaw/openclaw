@@ -39,8 +39,8 @@ import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
   isNoopGatewayReloadPlan,
-  listPluginInstallTimestampMetadataPaths,
-  listPluginInstallWholeRecordPaths,
+  listConfigReloadRefinementPrefixes,
+  resolvePluginInstallReloadMetadata,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
@@ -75,25 +75,6 @@ function resolveChokidarUsePolling(degradedToPolling: boolean): boolean {
     return Boolean(envLower);
   }
   return Boolean(process.env.VITEST) || degradedToPolling;
-}
-
-/**
- * Paths under `skills.*` always change the snapshot that sessions cache in
- * sessions.json. Any prefix match here (for example `skills.allowBundled`,
- * `skills.entries.X.enabled`, `skills.profile`) forces sessions to rebuild
- * their snapshot on the next turn rather than silently advertising stale
- * tools to the model.
- */
-const SKILLS_INVALIDATION_PREFIXES = ["skills"] as const;
-
-function matchesSkillsInvalidationPrefix(path: string): boolean {
-  return SKILLS_INVALIDATION_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
-}
-
-function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
-  return changedPaths.find(matchesSkillsInvalidationPrefix);
 }
 
 type GatewayConfigReloader = {
@@ -445,15 +426,6 @@ export function startGatewayConfigReloader(opts: {
     return true;
   };
 
-  const handleInvalidSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
-    if (snapshot.valid) {
-      return false;
-    }
-    const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
-    opts.log.warn(`config reload skipped (invalid config): ${issues}`);
-    return true;
-  };
-
   const applySnapshot = async (
     candidateRuntimeConfig: OpenClawConfig,
     nextSourceConfig: OpenClawConfig,
@@ -537,12 +509,12 @@ export function startGatewayConfigReloader(opts: {
         appliedRevision.defer(plan, nextConfigRevisionHash);
       },
     };
-    const configChangedPaths = diffGatewayReloadPaths(currentCompareConfig, nextCompareConfig);
-    const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+    const configChangedPaths = diffGatewayReloadPaths(
       currentCompareConfig,
       nextCompareConfig,
+      listConfigReloadRefinementPrefixes(),
     );
-    const configPluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
+    const configInstallMetadata = resolvePluginInstallReloadMetadata(
       currentCompareConfig,
       nextCompareConfig,
     );
@@ -558,23 +530,11 @@ export function startGatewayConfigReloader(opts: {
       previousPluginInstallConfig,
       nextPluginInstallConfig,
     );
-    const pluginInstallRecordTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
-      previousPluginInstallConfig,
-      nextPluginInstallConfig,
-    );
-    const pluginInstallRecordWholeRecordPaths = listPluginInstallWholeRecordPaths(
+    const installMetadata = resolvePluginInstallReloadMetadata(
       previousPluginInstallConfig,
       nextPluginInstallConfig,
     );
     const changedPaths = [...configChangedPaths, ...pluginInstallRecordChangedPaths];
-    const pluginInstallTimestampNoopPaths = [
-      ...configPluginInstallTimestampNoopPaths,
-      ...pluginInstallRecordTimestampNoopPaths,
-    ];
-    const pluginInstallWholeRecordPaths = [
-      ...configPluginInstallWholeRecordPaths,
-      ...pluginInstallRecordWholeRecordPaths,
-    ];
     // Publication can be superseded after its runtime commit but before its
     // lifecycle owner is applied. Finish that owner before the next candidate
     // prepares state that acceptance or restart policy may discard.
@@ -699,11 +659,10 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
 
-    // Invalidate cached skills snapshots (persisted in sessions.json) whenever
-    // the user touches skills.* config. Without this, sessions keep advertising
-    // tools that no longer exist in the allowlist, which causes infinite
-    // tool-not-found loops against the model.
-    const skillsChangedPath = firstSkillsChangedPath(changedPaths);
+    // Rebuild skills on the next turn so sessions do not advertise removed tools.
+    const skillsChangedPath = changedPaths.find(
+      (path) => path === "skills" || path.startsWith("skills."),
+    );
     if (skillsChangedPath !== undefined) {
       bumpSkillsSnapshotVersion({ reason: "config-change", changedPath: skillsChangedPath });
       opts.log.info(`skills snapshot invalidated by config change (${skillsChangedPath})`);
@@ -722,9 +681,15 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     const plan = buildGatewayReloadPlan(changedPaths, {
-      noopPaths: pluginInstallTimestampNoopPaths,
-      forceChangedPaths: pluginInstallWholeRecordPaths,
+      noopPaths: [...configInstallMetadata.noopPaths, ...installMetadata.noopPaths],
+      forceChangedPaths: [
+        ...configInstallMetadata.forceChangedPaths,
+        ...installMetadata.forceChangedPaths,
+      ],
       candidateConfig: nextConfig,
+      candidateCompareConfig: nextCompareConfig,
+      previousCompareConfig: currentCompareConfig,
+      previousConfig: currentConfig,
     });
     if (forcePluginMetadataReload && !plan.restartGateway) {
       plan.restartGateway = true;
@@ -736,55 +701,26 @@ export function startGatewayConfigReloader(opts: {
       application?.settle("failed");
       return;
     }
-    if (isNoopGatewayReloadPlan(plan) && !followUp.requiresRestart) {
-      await opts.onConfigChange?.(plan, nextConfig);
-      // No-op plans still change the runtime config snapshot. Commit before
-      // marking applied so getRuntimeConfig() readers do not stay stale until restart.
-      let applicationStatus: void | GatewayHotReloadApplicationStatus;
-      try {
-        applicationStatus = await opts.onNoopConfigCommit(
-          plan,
-          nextConfig,
-          ownership,
-          nextSourceConfig,
-        );
-      } catch (error) {
-        ownership.rollbackRuntimeEnv();
-        throw error;
-      }
-      assertCurrent();
-      await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
-      await commitReloadBaseline();
-      settleRuntimeApplication(applicationStatus ?? "applied");
-      return;
-    }
     if (followUp.requiresRestart) {
-      const restartPlan = {
-        ...plan,
-        restartGateway: true,
-        restartReasons: [...plan.restartReasons, followUp.reason],
-      };
-      await opts.onConfigChange?.(restartPlan, nextConfig);
-      await prepareRestart(restartPlan, nextConfig, ownership, nextSourceConfig);
+      plan.restartGateway = true;
+      plan.restartReasons.push(followUp.reason);
+    }
+    if (plan.restartGateway) {
+      await opts.onConfigChange?.(plan, nextConfig);
+      await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
       // The accepted restart owns snapshot republication at next startup.
       markPluginMetadataRefreshApplied();
       application?.settle("restart-pending");
       return;
     }
-    if (plan.restartGateway) {
-      await opts.onConfigChange?.(plan, nextConfig);
-      await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
-      await commitReloadBaseline();
-      markPluginMetadataRefreshApplied();
-      application?.settle("restart-pending");
-      return;
-    }
 
+    // No-op plans also publish the runtime snapshot before its applied receipt.
+    const applyRuntime = isNoopGatewayReloadPlan(plan) ? opts.onNoopConfigCommit : opts.onHotReload;
     await opts.onConfigChange?.(plan, nextConfig);
-    let applicationStatus: GatewayHotReloadApplicationStatus;
+    let applicationStatus: void | GatewayHotReloadApplicationStatus;
     try {
-      applicationStatus = await opts.onHotReload(plan, nextConfig, ownership, nextSourceConfig);
+      applicationStatus = await applyRuntime(plan, nextConfig, ownership, nextSourceConfig);
     } catch (error) {
       ownership.rollbackRuntimeEnv();
       throw error;
@@ -792,7 +728,7 @@ export function startGatewayConfigReloader(opts: {
     assertCurrent();
     await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
-    settleRuntimeApplication(applicationStatus);
+    settleRuntimeApplication(applicationStatus ?? "applied");
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
@@ -1059,7 +995,8 @@ export function startGatewayConfigReloader(opts: {
             ),
           });
         }
-        handleInvalidSnapshot(snapshot);
+        const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
+        opts.log.warn(`config reload skipped (invalid config): ${issues}`);
         await appliedRevision.flush(currentConfig);
         return;
       }

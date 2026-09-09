@@ -53,6 +53,7 @@ export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): Plugin
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -77,6 +78,7 @@ export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): Plugin
 
 function createEmptyPreparedModelRuntimeSnapshot(
   input: PreparedModelRuntimeInput,
+  pluginRegistry?: PreparedModelRuntimeSnapshot["pluginRegistry"],
 ): PreparedModelRuntimeSnapshot {
   return {
     catalogOwner: undefined,
@@ -86,9 +88,11 @@ function createEmptyPreparedModelRuntimeSnapshot(
     ...(input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {}),
     activeProjectKeys: [],
     config: input.config,
+    observationConfig: input.config,
+    isCurrent: () => true,
     authModes: {},
     metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
-    pluginRegistry: createEmptyPluginRegistry(),
+    pluginRegistry: pluginRegistry ?? createEmptyPluginRegistry(),
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
@@ -103,6 +107,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
 /** Installs baseline mocks for hook runner, context engine, and runtime plugin loading. */
 export function installEmbeddedRunnerBaseE2eMocks(options?: {
   hookRunner?: "minimal" | "full";
+  pluginRegistry?: PreparedModelRuntimeSnapshot["pluginRegistry"];
 }): void {
   vi.doMock("../../plugins/hook-runner-global.js", () =>
     options?.hookRunner === "full"
@@ -145,7 +150,9 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
     }),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
-    loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()),
+    loadAgentRuntimePluginRegistryHandle: vi.fn(
+      () => options?.pluginRegistry ?? createEmptyPluginRegistry(),
+    ),
   }));
   vi.doMock("../prepared-model-runtime.js", () => {
     const acquire = async (input: PreparedModelRuntimeInput) => {
@@ -158,7 +165,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
         );
       }
       return {
-        snapshot: createEmptyPreparedModelRuntimeSnapshot(input),
+        snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
         release: vi.fn(),
       };
     };
@@ -166,7 +173,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       acquireAgentRunPreparedModelRuntime: vi.fn(acquire),
       acquireReadOnlyPreparedModelRuntime: vi.fn(acquire),
       prepareModelRuntimeSnapshot: vi.fn(async (input: PreparedModelRuntimeInput) =>
-        createEmptyPreparedModelRuntimeSnapshot(input),
+        createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
       ),
     };
   });
@@ -385,6 +392,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
+    providerOwnsDynamicModelPreparation: vi.fn(() => false),
     shouldDeferProviderSyntheticProfileAuthWithPlugin: vi.fn(() => false),
   }));
 }

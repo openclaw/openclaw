@@ -59,8 +59,11 @@ export async function ensureOnboardingAgent(params: {
   preserveCandidateRoster?: boolean;
   baseConfig?: OpenClawConfig;
   expectedConfigHash?: string | null;
+  beforePersistentApply?: () => void;
 }): Promise<{
   config: OpenClawConfig;
+  /** Comparison basis for the returned proposal, including any agent-creation rebase. */
+  configBase: OpenClawConfig;
   agentId: string;
   bootstrapPending: boolean;
   createdAgent: boolean;
@@ -97,6 +100,7 @@ export async function ensureOnboardingAgent(params: {
   ) {
     return {
       config: params.config,
+      configBase: params.baseConfig ?? params.config,
       agentId: resolveAmbientOwnerAgentId(params.config),
       bootstrapPending: false,
       createdAgent: false,
@@ -115,6 +119,7 @@ export async function ensureOnboardingAgent(params: {
         candidate: params.config,
         currentRuntime: effective,
       }),
+      configBase: effective,
       agentId: resolveAmbientOwnerAgentId(effective),
       bootstrapPending: false,
       createdAgent: false,
@@ -132,6 +137,7 @@ export async function ensureOnboardingAgent(params: {
     ...(hasExpectedConfigHash ? { expectedConfigHash: params.expectedConfigHash } : {}),
     skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
     skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
+    beforePersistentApply: params.beforePersistentApply,
   });
   if (created.status === "error") {
     throw new Error(created.message);
@@ -151,6 +157,8 @@ export async function ensureOnboardingAgent(params: {
   const sessionMigration = await migrateLegacyMainSessionKeys({
     cfg: after.config,
     mode: "automatic",
+    // Unlike creation bookkeeping, convergence can wait for the next startup.
+    beforePersistentApply: params.beforePersistentApply,
   });
   const sessionMigrationWarnings =
     sessionMigration.armed && !sessionMigration.complete
@@ -160,6 +168,7 @@ export async function ensureOnboardingAgent(params: {
       : [];
   return {
     config,
+    configBase: after.config,
     agentId: created.agentId,
     bootstrapPending: created.bootstrapPending,
     createdAgent: created.status === "created",

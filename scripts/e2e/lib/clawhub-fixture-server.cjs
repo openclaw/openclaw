@@ -18,7 +18,9 @@ async function assertPrepublishRequests(
   baseUrl,
   requestedPackage,
   version,
-  securityMode = "required",
+  securityMode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE === requestedPackage
+    ? "absent"
+    : "required",
   attempts = "1",
   minimumAttempts = "1",
 ) {
@@ -77,6 +79,29 @@ async function assertNoRequests(baseUrl) {
   if (!Array.isArray(payload?.requests)) {
     throw new Error("ClawHub fixture request ledger must contain a requests array");
   }
+  const legacyPackage = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE;
+  if (legacyPackage) {
+    const packagePath = `/api/v1/packages/${encodeURIComponent(legacyPackage)}`;
+    const artifactPrefix = `GET ${packagePath}/versions/`;
+    const artifactSuffix = "/artifact";
+    const artifactRequest = payload.requests[1] ?? "";
+    const version =
+      artifactRequest.startsWith(artifactPrefix) && artifactRequest.endsWith(artifactSuffix)
+        ? decodeURIComponent(artifactRequest.slice(artifactPrefix.length, -artifactSuffix.length))
+        : "";
+    const expected = [
+      `GET ${packagePath}`,
+      `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact`,
+      `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact/download`,
+    ];
+    if (!version || JSON.stringify(payload.requests) !== JSON.stringify(expected)) {
+      throw new Error(
+        `unexpected legacy ClawHub fixture requests: ${JSON.stringify(payload.requests)}`,
+      );
+    }
+    console.log("Verified complete legacy ClawHub artifact audit sequence.");
+    return;
+  }
   if (payload.requests.length !== 0) {
     throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
   }
@@ -88,7 +113,7 @@ function startPrepublishArtifactServer() {
     throw new Error("prepublish artifact manifest must contain packages");
   }
   const artifacts = new Map(
-    manifest.packages.map((entry) => {
+    manifest.packages.flatMap((entry) => {
       if (
         typeof entry.name !== "string" ||
         typeof entry.version !== "string" ||
@@ -105,29 +130,37 @@ function startPrepublishArtifactServer() {
           encoding: "utf8",
         }),
       );
+      if (
+        sha256 !== entry.sha256 ||
+        packedPackage.name !== entry.name ||
+        packedPackage.version !== entry.version
+      ) {
+        throw new Error(`prepublish artifact metadata mismatch for ${entry.name}`);
+      }
+      // The shared npm set also carries root and core packages; only declared
+      // plugin entrypoints belong in the ClawHub install fixture.
+      if (!Array.isArray(packedPackage.openclaw?.extensions)) {
+        return [];
+      }
       const packedPlugin = JSON.parse(
         execFileSync("tar", ["-xOf", tarballPath, "package/openclaw.plugin.json"], {
           encoding: "utf8",
         }),
       );
-      if (
-        sha256 !== entry.sha256 ||
-        packedPackage.name !== entry.name ||
-        packedPackage.version !== entry.version ||
-        typeof packedPlugin.id !== "string" ||
-        packedPlugin.id.length === 0
-      ) {
+      if (typeof packedPlugin.id !== "string" || packedPlugin.id.length === 0) {
         throw new Error(`prepublish artifact metadata mismatch for ${entry.name}`);
       }
       return [
-        entry.name,
-        {
-          ...entry,
-          archive,
-          runtimeId: packedPlugin.id,
-          npmIntegrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
-          npmShasum: crypto.createHash("sha1").update(archive).digest("hex"),
-        },
+        [
+          entry.name,
+          {
+            ...entry,
+            archive,
+            runtimeId: packedPlugin.id,
+            npmIntegrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
+            npmShasum: crypto.createHash("sha1").update(archive).digest("hex"),
+          },
+        ],
       ];
     }),
   );

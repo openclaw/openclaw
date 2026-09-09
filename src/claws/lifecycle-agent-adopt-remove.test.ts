@@ -1,22 +1,36 @@
 // Removal coverage for historical state retained after configured-agent adoption.
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { applyClawAddPlan } from "./add.js";
+import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
+let state: OpenClawTestState;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ prefix: "claw-agent-adopt-remove-" });
+  await state.writeConfig({});
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
+  await state.cleanup();
+});
 
 async function adoptedAgentFixture() {
   const root = tempDirs.make("openclaw-claw-agent-adopt-remove-");
@@ -40,31 +54,42 @@ async function adoptedAgentFixture() {
     byteLength: 1,
   };
   let config: OpenClawConfig = {
-    agents: { entries: { worker: { name: "Worker", workspace, default: true } } },
+    agents: { entries: { worker: { name: "Worker", workspace } } },
   };
+  // applyClawRemovePlan below commits agent-entry deletion through the real config file
+  // (deleteAgentConfigEntry -> mutateConfigFileWithRetry); keep the real file and this
+  // closure in lockstep so removal and the test's own assertions agree on one config.
+  await state.writeConfig(config);
   const plan = await buildClawAddPlan({
     manifest: parsed.manifest,
     source,
     context: {
       workspace,
       adoptExistingAgent: true,
-      existingAgents: [{ id: "worker", name: "Worker", workspace, default: true }],
+      existingAgents: [{ id: "worker", name: "Worker", workspace }],
     },
   });
-  const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+  const env = { OPENCLAW_STATE_DIR: state.stateDir };
   await applyClawAddPlan(plan, {
     env,
     consentPlanIntegrity: plan.planIntegrity,
     readConfig: () => config,
     commitConfig: async (transform) => {
       config = transform(config);
+      await state.writeConfig(config);
     },
   });
   return {
     env,
     workspace,
-    getConfig: () => config,
-    setConfig: (next: OpenClawConfig) => (config = next),
+    // Read fresh: this fixture writes the real config file directly (state.writeConfig),
+    // bypassing the mutateConfigFileWithRetry path that invalidates loadConfig's pinned
+    // runtime snapshot, so a pinned read here would serve a stale pre-write config.
+    getConfig: () => loadConfig({ pin: false }),
+    setConfig: async (next: OpenClawConfig) => {
+      config = next;
+      await state.writeConfig(next);
+    },
   };
 }
 
@@ -75,7 +100,7 @@ describe("Claw remove after configured-agent adoption", () => {
     if (!agent) {
       throw new Error("fixture agent missing");
     }
-    current.setConfig({ agents: { entries: { WORKER: agent } } });
+    await current.setConfig({ agents: { entries: { WORKER: agent } } });
 
     await expect(
       readClawStatus("worker", { env: current.env, config: current.getConfig() }),
@@ -106,7 +131,7 @@ describe("Claw remove after configured-agent adoption", () => {
     if (!agent) {
       throw new Error("fixture agent missing");
     }
-    current.setConfig({ agents: { entries: { WORKER: agent } } });
+    await current.setConfig({ agents: { entries: { WORKER: agent } } });
     const databasePath = join(
       current.env.OPENCLAW_STATE_DIR,
       "agents",
@@ -124,9 +149,7 @@ describe("Claw remove after configured-agent adoption", () => {
       env: current.env,
       config: current.getConfig(),
       consentPlanIntegrity: plan.planIntegrity,
-      commitConfig: async (transform) => {
-        current.setConfig(transform(current.getConfig()));
-      },
+      monitorGateway: quiescentClawMonitorGateway,
       purgeSessions: vi.fn(),
       trashPath: vi.fn(async () => true),
     });
@@ -145,7 +168,7 @@ describe("Claw remove after configured-agent adoption", () => {
     if (!agent) {
       throw new Error("fixture agent missing");
     }
-    current.setConfig({ agents: { entries: { WORKER: agent } } });
+    await current.setConfig({ agents: { entries: { WORKER: agent } } });
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,
       config: current.getConfig(),
@@ -157,15 +180,15 @@ describe("Claw remove after configured-agent adoption", () => {
       env: current.env,
       config: current.getConfig(),
       consentPlanIntegrity: plan.planIntegrity,
-      commitConfig: async (transform) => {
-        current.setConfig(transform(current.getConfig()));
-      },
+      monitorGateway: quiescentClawMonitorGateway,
       purgeSessions,
       trashPath,
     });
 
     expect(result.status).toBe("complete");
-    expect(Object.keys(current.getConfig().agents?.entries ?? {})).toEqual([]);
+    // Real config normalization materializes a default "main" agent once entries is
+    // fully empty, so assert the case-mismatched entry is gone rather than entries=={}.
+    expect(current.getConfig().agents?.entries?.WORKER).toBeUndefined();
     expect(purgeSessions).not.toHaveBeenCalled();
     expect(trashPath).not.toHaveBeenCalled();
   });
@@ -182,7 +205,7 @@ describe("Claw remove after configured-agent adoption", () => {
       tools: { agentToAgent: { allow: ["worker"] } },
       hooks: { mappings: [{ id: "h", agentId: "worker", action: "agent" }] },
     };
-    current.setConfig(referencedConfig);
+    await current.setConfig(referencedConfig);
 
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,
@@ -203,15 +226,16 @@ describe("Claw remove after configured-agent adoption", () => {
         env: current.env,
         config: current.getConfig(),
         consentPlanIntegrity: plan.planIntegrity,
-        commitConfig: async (transform) => {
-          current.setConfig(transform(current.getConfig()));
-        },
+        monitorGateway: quiescentClawMonitorGateway,
       }),
     ).rejects.toMatchObject({ code: "remove_blocked" });
-    expect(current.getConfig()).toEqual(referencedConfig);
+    // toMatchObject: the real config-loading pipeline fills in unrelated top-level
+    // defaults (commands, messages, agents.defaults) on every read; the blocked
+    // removal only needs to have left referencedConfig's own fields untouched.
+    expect(current.getConfig()).toMatchObject(referencedConfig);
 
     // Once the operator clears the references the same agent removes cleanly.
-    current.setConfig({ agents: { entries: { worker: agent } } });
+    await current.setConfig({ agents: { entries: { worker: agent } } });
     const clearedPlan = await buildClawRemovePlan("worker", {
       env: current.env,
       config: current.getConfig(),
@@ -221,9 +245,7 @@ describe("Claw remove after configured-agent adoption", () => {
       env: current.env,
       config: current.getConfig(),
       consentPlanIntegrity: clearedPlan.planIntegrity,
-      commitConfig: async (transform) => {
-        current.setConfig(transform(current.getConfig()));
-      },
+      monitorGateway: quiescentClawMonitorGateway,
       purgeSessions: vi.fn(),
       trashPath: vi.fn(async () => true),
     });

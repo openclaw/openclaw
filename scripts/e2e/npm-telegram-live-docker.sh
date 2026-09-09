@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Installs an OpenClaw package candidate in Docker, performs Telegram
 # onboarding/doctor recovery, then runs the Telegram QA live harness.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-telegram-live-e2e" OPENCLAW_NPM_TELEGRAM_LIVE_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
@@ -158,9 +163,8 @@ else
   validate_openclaw_package_spec "$PACKAGE_SPEC"
 fi
 if [ -n "$resolved_prepublish_plugin_registry_dir" ]; then
-  prepublish_registry_mount_args=(
-    -v "$resolved_prepublish_plugin_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"
-  )
+  openclaw_prepublish_plugin_registry_configure_docker_args "$resolved_prepublish_plugin_registry_dir"
+  prepublish_registry_mount_args=("${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}")
 fi
 if [ -z "$PACKAGE_LABEL" ]; then
   if [ -n "$resolved_package_tgz" ]; then
@@ -261,15 +265,6 @@ fi
 if [ -n "$credential_role" ]; then
   docker_env+=(-e OPENCLAW_QA_CREDENTIAL_ROLE="$credential_role")
 fi
-if [ -n "$resolved_prepublish_plugin_registry_dir" ]; then
-  docker_env+=(
-    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry
-    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:?missing selected SHA}"
-    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
-    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:?missing manifest SHA-256}"
-  )
-fi
-
 for key in \
   OPENAI_API_KEY \
   ANTHROPIC_API_KEY \
@@ -297,6 +292,7 @@ for key in \
   OPENCLAW_NPM_TELEGRAM_MODEL \
   OPENCLAW_NPM_TELEGRAM_ALT_MODEL \
   OPENCLAW_NPM_TELEGRAM_SCENARIOS \
+  OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS \
   OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES \
   OPENCLAW_NPM_TELEGRAM_RTT_CHECKS \
   OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS \
@@ -317,6 +313,7 @@ run_logged_print_heartbeat "npm-telegram-package-install" 60 docker_e2e_docker_r
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SET="$([ -n "$resolved_package_dir" ] && printf 1 || printf 0)" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
   ${registry_helper_mount_args[@]+"${registry_helper_mount_args[@]}"} \
+  ${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
@@ -366,12 +363,15 @@ process.stdin.on("end", () => {
 });
 '
     )"
-    mapfile -t package_fields <<<"$package_metadata"
+    package_fields=()
+    while IFS= read -r package_field; do
+      package_fields+=("$package_field")
+    done <<<"$package_metadata"
     registry_args+=("${package_fields[0]}" "${package_fields[1]}" "$package_tgz")
   done
   registry_port_file="$(mktemp)"
   registry_log="$(mktemp)"
-  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}" \
     node /tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs \
     "$registry_port_file" \
     "${registry_args[@]}" >"$registry_log" 2>&1 &
@@ -441,11 +441,10 @@ run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harn
   -v "$ROOT_DIR/.agents:/app/.agents:ro" \
   -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
   -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
-  -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
   ${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
-set -euo pipefail
+set -Eeuo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 
@@ -549,10 +548,14 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
     hotpath_model_value="$OPENAI_API_KEY"
   fi
   hotpath_channel_value="$(printf '%s:%s' 123456 "$hotpath_placeholder")"
-  # Non-interactive onboarding cannot approve plugin capabilities. This release
-  # harness explicitly accepts the staged Codex artifact before testing setup.
-  openclaw_e2e_run_command "$sut_command" plugins install @openclaw/codex \
-    --accept-capabilities >/tmp/openclaw-npm-telegram-codex-install.log 2>&1 </dev/null
+  # Older packages own their automatic setup. Successful candidate help, not a
+  # version guess, establishes whether this harness must preinstall Codex.
+  plugin_install_help="$(openclaw_e2e_run_command "$sut_command" plugins install --help)"
+  fixture_consent="$(printf '%s' "$plugin_install_help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)"
+  if [ -n "$fixture_consent" ]; then
+    openclaw_e2e_fixture_plugin_command "$sut_command" -- plugins install @openclaw/codex \
+      >/tmp/openclaw-npm-telegram-codex-install.log 2>&1 </dev/null
+  fi
   OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command "$sut_command" onboard \
     --non-interactive --accept-risk \
     --mode local \

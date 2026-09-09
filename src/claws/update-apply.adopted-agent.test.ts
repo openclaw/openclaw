@@ -6,12 +6,16 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import type { PersistedClawInstall } from "./provenance.js";
 import type { ClawAddPlan } from "./types.js";
 import { applyClawUpdatePlan } from "./update-apply.js";
-import { clawUpdateFixtures } from "./update-apply.test-support.js";
+import { addPlan, consent, install, manifest, plan, source } from "./update-apply.test-helpers.js";
 
 afterEach(closeOpenClawStateDatabaseForTest);
 
-const { source, manifest, install, addPlan, adoptedTargetAgentDigest, plan, consent } =
-  clawUpdateFixtures();
+// Mirrors applyClawUpdatePlan's update_changed guard (see update-apply.test.ts): the
+// adopted-agent config carries `default: true`, so its digest differs from the shared
+// fixture's plain targetAgentDigest and must be computed the same way, locally.
+const adoptedTargetAgentDigest = `sha256:${createHash("sha256")
+  .update(stableStringify({ ...addPlan.agent.config, default: true }))
+  .digest("hex")}`;
 
 describe("applyClawUpdatePlan adopted agent", () => {
   it("preserves an adopted agent default marker in config and provenance", async () => {

@@ -1,6 +1,4 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
@@ -8,7 +6,10 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
-import { expectedIntegrityForUpdate } from "../../../infra/package-update-utils.js";
+import {
+  comparePackageUpdateVersions,
+  readInstalledPackageVersion,
+} from "../../../infra/package-update-utils.js";
 import type { UpdateChannel } from "../../../infra/update-channels.js";
 import {
   capturePluginCapabilityConsentHandlerErrors,
@@ -20,6 +21,7 @@ import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-
 import { installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import {
   installWithSourceFallback,
+  NpmChannelResolutionError,
   resolvePluginInstallSources,
   installWithChannelFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
@@ -45,7 +47,10 @@ import {
   resolveLegacyNpmPackageInstallPath,
   resolveNpmPackageInstallPath,
 } from "./missing-configured-plugin-install.records.js";
-import { isPostCoreConvergencePass } from "./update-phase.js";
+import {
+  resolveRecordedInstallCandidate,
+  type InstallCandidateRepairReason,
+} from "./missing-configured-plugin-install.targets.js";
 
 export function isActionableClawHubSkippedOutcome(outcome: {
   status: string;
@@ -58,8 +63,6 @@ export function isClawHubReviewNotice(message: string): boolean {
   const audit = stripAnsi(message);
   return audit.includes("ClawHub Security Audit") && audit.includes("Outcome: Review");
 }
-
-type InstallCandidateRepairReason = "stale-version-bound-runtime";
 
 function formatInstalledConfiguredPluginChange(params: {
   pluginId: string;
@@ -100,7 +103,10 @@ export async function installCandidate(params: {
     return result;
   } catch (error) {
     consent.rethrowCallbackError();
-    if (!(error instanceof ManagedPluginLifecycleError)) {
+    if (
+      !(error instanceof ManagedPluginLifecycleError) &&
+      !(error instanceof NpmChannelResolutionError)
+    ) {
       throw error;
     }
     return {
@@ -109,7 +115,11 @@ export async function installCandidate(params: {
       notices: [],
       warnings: [sanitizeTerminalText(error.message)],
       failedPluginId: params.candidate.pluginId,
-      ...(error.capabilityConsent ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED } : {}),
+      ...(error instanceof NpmChannelResolutionError
+        ? { code: error.code }
+        : error.capabilityConsent
+          ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED }
+          : {}),
     };
   }
 }
@@ -121,35 +131,11 @@ async function installCandidatePackage(
   const recordedSource =
     record?.source === "npm" || record?.source === "clawhub" ? record.source : undefined;
   const staleRuntimeRepair = params.repairReason === "stale-version-bound-runtime";
-  const declaredSource = recordedSource
-    ? resolvePluginInstallSources(params.candidate, recordedSource)[0]
-    : undefined;
-  // Only the admitted cohort repair replaces a recorded target. Its new artifact
-  // uses the declared source's integrity; ordinary payload repair retains both pins.
-  const recordedSpec = staleRuntimeRepair
-    ? declaredSource?.spec
-    : (record?.spec ?? declaredSource?.spec);
-  const candidate =
-    record && recordedSource
-      ? {
-          ...params.candidate,
-          defaultChoice: recordedSource,
-          ...(recordedSource === "npm"
-            ? { npmSpec: recordedSpec, clawhubSpec: undefined }
-            : { clawhubSpec: recordedSpec, npmSpec: undefined }),
-          expectedIntegrity: staleRuntimeRepair
-            ? declaredSource?.expectedIntegrity
-            : expectedIntegrityForUpdate(record.spec, record.integrity),
-          trustedSourceLinkedOfficialInstall:
-            params.candidate.trustedSourceLinkedOfficialInstall &&
-            (!record.spec ||
-              (recordedSource === "npm"
-                ? parseRegistryNpmSpec(record.spec)?.name ===
-                  parseRegistryNpmSpec(params.candidate.npmSpec ?? "")?.name
-                : parseClawHubPluginSpec(record.spec)?.name ===
-                  parseClawHubPluginSpec(params.candidate.clawhubSpec ?? "")?.name)),
-        }
-      : params.candidate;
+  const candidate = resolveRecordedInstallCandidate({
+    candidate: params.candidate,
+    record,
+    repairReason: params.repairReason,
+  });
   const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
   const warnings: string[] = [];
   // A channel fallback changes which artifact the operator gets, so it must stay
@@ -174,7 +160,7 @@ async function installCandidatePackage(
       })
     : null;
   const npmSpecs = candidate.npmSpec
-    ? resolveNpmInstallSpecsForUpdateChannel({
+    ? await resolveNpmInstallSpecsForUpdateChannel({
         spec: candidate.npmSpec,
         updateChannel: params.updateChannel,
         officialPackageName: candidate.trustedSourceLinkedOfficialInstall
@@ -207,37 +193,31 @@ async function installCandidatePackage(
   const existingNpmPackagePath = npmInstallSpec
     ? resolveExistingCandidateNpmPackagePath({ candidate, npmDir })
     : null;
-  const existingNpmPackageVersion = existingNpmPackagePath
-    ? await readNpmPackageVersion(existingNpmPackagePath)
-    : undefined;
-  if (
-    recordedSource !== "clawhub" &&
-    existingNpmPackagePath &&
-    existingNpmPackageVersion &&
-    npmInstallSpec &&
-    params.mode !== "update" &&
-    isPostCoreConvergencePass(params.env)
-  ) {
-    const capabilityConsent = await prepareConsent(
-      "npm",
-      npmInstallSpec,
-      candidate.expectedIntegrity,
+  if (staleRuntimeRepair && npmSpecs?.npmResolution?.version) {
+    const installPath = resolveRecordInstallPath(record, params.env) ?? existingNpmPackagePath;
+    const installedVersion = installPath
+      ? await readInstalledPackageVersion(installPath)
+      : undefined;
+    const selectedVersion = npmSpecs.npmResolution.version;
+    if (npmSpecs.channelReason) {
+      channelNotices.push(
+        `Plugin "${candidate.pluginId}" refresh: tag-behind-latest; beta follows latest ${selectedVersion}.`,
+      );
+    }
+    if (installedVersion && comparePackageUpdateVersions(selectedVersion, installedVersion) <= 0) {
+      return {
+        records: params.records,
+        changes: [],
+        notices: [
+          ...channelNotices,
+          `Plugin "${candidate.pluginId}" refresh: already-current (${installedVersion}).`,
+        ],
+        warnings: [],
+      };
+    }
+    channelNotices.push(
+      `Plugin "${candidate.pluginId}" refresh: newer-available (${installedVersion ?? "unknown"} -> ${selectedVersion}).`,
     );
-    await capabilityConsent.onBeforePluginArtifactCommit({
-      pluginId: candidate.pluginId,
-      stagedArtifactDir: existingNpmPackagePath,
-      mode: "install",
-    });
-    return await adoptExistingNpmPackage({
-      candidate,
-      capabilityConsent,
-      records: params.records,
-      npmInstallSpec,
-      npmRecordSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
-      pinResolvedRegistrySpec: pinResolvedSpecForStaleRepair,
-      packagePath: existingNpmPackagePath,
-      version: existingNpmPackageVersion,
-    });
   }
   const sources = resolvePluginInstallSources(candidate, recordedSource);
   if (sources.length === 0) {
@@ -333,6 +313,7 @@ async function installCandidatePackage(
   }
   const pluginId = installResult.pluginId;
   const recordSpec =
+    (record?.source === installedSource.source ? record.spec : undefined) ??
     (installedSource.source === "npm" ? npmSpecs : clawhubSpecs)?.recordSpec ??
     installedSource.spec;
   const installedRecord: PluginInstallRecord =
@@ -413,117 +394,6 @@ function resolveExistingCandidateClawHubPackagePath(params: {
   } catch {
     return null;
   }
-}
-
-async function readNpmPackageVersion(packagePath: string): Promise<string | undefined> {
-  try {
-    const parsed = JSON.parse(await readFile(path.join(packagePath, "package.json"), "utf-8")) as {
-      version?: unknown;
-    };
-    return typeof parsed.version === "string" && parsed.version.trim()
-      ? parsed.version.trim()
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function adoptExistingNpmPackage(params: {
-  candidate: DownloadableInstallCandidate;
-  capabilityConsent: Awaited<ReturnType<typeof prepareManagedPluginArtifactConsentHandler>>;
-  records: Record<string, PluginInstallRecord>;
-  npmInstallSpec: string;
-  npmRecordSpec: string;
-  pinResolvedRegistrySpec: boolean;
-  packagePath: string;
-  version: string;
-}): Promise<{
-  records: Record<string, PluginInstallRecord>;
-  changes: string[];
-  notices: string[];
-  warnings: string[];
-}> {
-  const npmName = parseRegistryNpmSpec(params.npmInstallSpec)?.name;
-  const npmResolution = npmName
-    ? {
-        name: npmName,
-        version: params.version,
-        resolvedSpec: `${npmName}@${params.version}`,
-      }
-    : undefined;
-  return {
-    records: {
-      ...params.records,
-      [params.candidate.pluginId]: params.capabilityConsent.applyAcceptedSurface(
-        params.candidate.pluginId,
-        {
-          source: "npm",
-          // Adoption discovers local bytes; only a registry reinstall can establish official trust.
-          sourcePath: params.packagePath,
-          spec: resolveNpmInstallRecordSpec({
-            requestedSpec: params.npmRecordSpec,
-            resolution: npmResolution,
-            pinResolvedRegistrySpec: params.pinResolvedRegistrySpec,
-          }),
-          installPath: params.packagePath,
-          installedAt: new Date().toISOString(),
-          version: params.version,
-          resolvedVersion: params.version,
-          ...(npmName ? { resolvedName: npmName } : {}),
-          ...(npmResolution ? { resolvedSpec: npmResolution.resolvedSpec } : {}),
-        },
-      ),
-    },
-    changes: [
-      `Repaired missing configured plugin "${params.candidate.pluginId}" from existing npm payload ${params.npmInstallSpec}.`,
-    ],
-    notices: [],
-    warnings: [],
-  };
-}
-
-export function resolveCandidateInstallSpec(params: {
-  candidate: DownloadableInstallCandidate;
-  updateChannel: UpdateChannel;
-  coreVersion: string;
-}): string | undefined {
-  if (
-    resolvePluginInstallSources(params.candidate)[0]?.source === "clawhub" &&
-    params.candidate.clawhubSpec
-  ) {
-    return resolveClawHubInstallSpecsForUpdateChannel({
-      spec: params.candidate.clawhubSpec,
-      updateChannel: params.updateChannel,
-      officialPackageName: params.candidate.trustedSourceLinkedOfficialInstall
-        ? parseClawHubPluginSpec(params.candidate.clawhubSpec)?.name
-        : undefined,
-      coreVersion: params.coreVersion,
-      versionBoundToCore: params.candidate.versionBoundToOpenClaw,
-    }).installSpec;
-  }
-  if (params.candidate.npmSpec) {
-    return resolveNpmInstallSpecsForUpdateChannel({
-      spec: params.candidate.npmSpec,
-      updateChannel: params.updateChannel,
-      officialPackageName: params.candidate.trustedSourceLinkedOfficialInstall
-        ? parseRegistryNpmSpec(params.candidate.npmSpec)?.name
-        : undefined,
-      coreVersion: params.coreVersion,
-      versionBoundToCore: params.candidate.versionBoundToOpenClaw,
-    }).installSpec;
-  }
-  if (params.candidate.clawhubSpec) {
-    return resolveClawHubInstallSpecsForUpdateChannel({
-      spec: params.candidate.clawhubSpec,
-      updateChannel: params.updateChannel,
-      officialPackageName: params.candidate.trustedSourceLinkedOfficialInstall
-        ? parseClawHubPluginSpec(params.candidate.clawhubSpec)?.name
-        : undefined,
-      coreVersion: params.coreVersion,
-      versionBoundToCore: params.candidate.versionBoundToOpenClaw,
-    }).installSpec;
-  }
-  return undefined;
 }
 
 export function resolveRecordInstallPath(

@@ -16,11 +16,11 @@ import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
 } from "../../agents/auth-profiles.js";
-import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store-runtime.js";
 import { buildExplicitSessionIdSessionKey } from "../../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../../agents/model-selection.js";
-import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -31,19 +31,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { convertHeicToJpeg } from "../../media/media-services.js";
-import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   providerHasGenericConfig,
-  providerSummaryText,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
@@ -60,21 +56,11 @@ const HEIC_MODEL_RUN_MIMES = new Set([
   "image/heif-sequence",
 ]);
 
-async function loadModelCatalogForInspection(cfg: OpenClawConfig, agentId?: string) {
-  const prepared = await loadPreparedModelCatalog({ config: cfg, agentId, readOnly: true });
-  const metadataSnapshot = loadManifestMetadataSnapshot({ config: cfg, env: process.env });
-  const manifest = planEffectiveModelCatalogRows({
-    registry: metadataSnapshot.manifestRegistry,
-    config: cfg,
-  }).rows;
-  const entries = new Map<string, (typeof prepared)[number] | (typeof manifest)[number]>();
-  for (const entry of manifest) {
-    entries.set(`${entry.provider}\0${entry.id}`, entry);
-  }
-  for (const entry of prepared) {
-    entries.set(`${entry.provider}\0${entry.id}`, entry);
-  }
-  return [...entries.values()].toSorted(
+async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: string) {
+  const agentId =
+    rawAgentId === undefined ? undefined : resolveCapabilityProviderAgentId(cfg, rawAgentId);
+  const prepared = await readPreparedModelCatalog({ config: cfg, agentId, readOnly: true });
+  return prepared.toSorted(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
   );
 }
@@ -82,13 +68,15 @@ async function loadModelCatalogForInspection(cfg: OpenClawConfig, agentId?: stri
 async function canonicalizeModelRunRef(params: {
   raw: string | undefined;
   cfg: OpenClawConfig;
+  agentId: string;
   preserveAuthProfile: boolean;
 }): Promise<string | undefined> {
   return await canonicalizeCaseOnlyCatalogModelRef({
     cfg: params.cfg,
     raw: params.raw,
     defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () => loadPreparedModelCatalog({ config: params.cfg, readOnly: true }),
+    loadCatalog: () =>
+      readPreparedModelCatalog({ config: params.cfg, agentId: params.agentId, readOnly: true }),
     preserveAuthProfile: params.preserveAuthProfile,
   });
 }
@@ -188,6 +176,7 @@ async function runModelRun(params: {
   const modelRef = await canonicalizeModelRunRef({
     raw: params.model,
     cfg,
+    agentId,
     preserveAuthProfile: params.transport === "local",
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
@@ -494,9 +483,12 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .command("list")
     .description("List known models")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await loadModelCatalogForInspection(getRuntimeConfig());
+        const result = await loadModelCatalogForInspection(
+          getRuntimeConfig(),
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
@@ -506,10 +498,13 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .description("Inspect one model catalog entry")
     .requiredOption("--model <provider/model>", "Model id")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
-        const catalog = await loadModelCatalogForInspection(getRuntimeConfig());
+        const catalog = await loadModelCatalogForInspection(
+          getRuntimeConfig(),
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
           catalog.find((candidate) => candidate.id === target);

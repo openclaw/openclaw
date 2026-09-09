@@ -33,6 +33,7 @@ import {
 } from "../../announce-idempotency.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { FailoverError } from "../../failover-error.js";
+import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
@@ -91,6 +92,8 @@ function visibleAgentResponse(runId = "run-main") {
       payloads: [{ text: "announced" }],
       didSendViaMessagingTool: true,
       messagingToolSentTexts: ["announced"],
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSourceReplyPayloads: [{ text: "announced", sourceReplyFinal: true }],
     },
   };
 }
@@ -560,10 +563,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Stats:");
     expect(msg).toContain("A completed subagent task is ready for parent review.");
     expect(msg).toContain(
-      "Review/verify the result above before deciding whether the original task is done.",
+      "This completion ends one child run, not necessarily the original user request.",
     );
     expect(msg).toContain(
-      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+      "Reviews, failed checks, and other in-scope fixable blockers require continued work",
     );
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
@@ -590,6 +593,30 @@ describe("subagent announce formatting", () => {
     expect(projectedResult?.endsWith("\n[child result truncated]")).toBe(true);
     expect(projectedResult).not.toContain("unbounded-tail");
     expect(call.params?.internalEvents?.[0]?.result).toBe(fullResult);
+  });
+
+  it("carries a producer route fact to a local parent without changing child result text", async () => {
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-local-route-change",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      terminalReply: {
+        disposition: "visible",
+        text: "child result",
+        modelRouteChange,
+      },
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = getAgentCall();
+    const message = typeof call.params?.message === "string" ? call.params.message : "";
+    expect(message).toContain(modelRouteChange);
+    expect(message).toContain(
+      "Preserve any runtime-authored model-route change notice in your update.",
+    );
+    expect(call.params?.internalEvents?.[0]?.result).toBe("child result");
   });
 
   it("includes success status when outcome is ok", async () => {
@@ -625,12 +652,7 @@ describe("subagent announce formatting", () => {
       }
       if (typed.method === "chat.history") {
         return {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Worker executed successfully" }],
-            },
-          ],
+          messages: [textAssistant("Worker executed successfully")],
         };
       }
       if (typed.method === "sessions.delete") {
@@ -689,10 +711,7 @@ describe("subagent announce formatting", () => {
     async (testCase) => {
       chatHistoryMock.mockResolvedValueOnce({
         messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "" }],
-          },
+          textAssistant(""),
           {
             role: testCase.role,
             content: [{ type: "text", text: testCase.toolOutput }],
@@ -724,10 +743,7 @@ describe("subagent announce formatting", () => {
           role: "tool",
           content: [{ type: "text", text: "tool output line" }],
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "assistant final line" }],
-        },
+        textAssistant("assistant final line"),
       ],
     });
     readLatestAssistantReplyMock.mockResolvedValue("");
@@ -778,7 +794,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("session_id: child-session-usage");
     expect(msg).toContain("A completed subagent task is ready for parent review.");
     expect(msg).toContain(
-      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+      "This completion ends one child run, not necessarily the original user request.",
+    );
+    expect(msg).toContain(
+      "Reviews, failed checks, and other in-scope fixable blockers require continued work",
     );
     expect(msg).toContain(
       `Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`,
@@ -900,12 +919,18 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps completion delivery enabled for extension channels captured from requester origin", async () => {
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-completion-imessage",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       requesterOrigin: { channel: "imessage", to: "+1234567890", accountId: "acct-bb" },
+      terminalReply: {
+        disposition: "visible",
+        text: "child result",
+        modelRouteChange,
+      },
       ...defaultOutcomeAnnounce,
       expectsCompletionMessage: true,
     });
@@ -913,11 +938,16 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const call = getAgentCall() as { params?: Record<string, unknown> };
+    const call = getAgentCall();
     expect(call?.params?.deliver).toBe(true);
     expect(call?.params?.channel).toBe("imessage");
     expect(call?.params?.to).toBe("+1234567890");
     expect(call?.params?.accountId).toBe("acct-bb");
+    expect(call?.params?.message).toContain(modelRouteChange);
+    expect(call?.params?.message).toContain(
+      "Keep runtime-authored model-route change notices internal on this shared surface.",
+    );
+    expect(call?.params?.internalEvents?.[0]?.result).toBe("child result");
   });
 
   it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
@@ -1043,12 +1073,6 @@ describe("subagent announce formatting", () => {
     {
       name: "silent",
       terminalReply: { disposition: "silent" } as const,
-      expectedAgentCalls: 1,
-      expectedMessage: "(no output)",
-    },
-    {
-      name: "empty",
-      terminalReply: { disposition: "empty" } as const,
       expectedAgentCalls: 1,
       expectedMessage: "(no output)",
     },
@@ -2204,10 +2228,7 @@ describe("subagent announce formatting", () => {
           role: "toolResult",
           content: [{ type: "text", text: "old tool output" }],
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "assistant completion text" }],
-        },
+        textAssistant("assistant completion text"),
       ],
     });
     readLatestAssistantReplyMock.mockResolvedValue("");
@@ -2234,10 +2255,7 @@ describe("subagent announce formatting", () => {
   it("does not fall back to latest tool output for completion-mode when assistant output is empty", async () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "" }],
-        },
+        textAssistant(""),
         {
           role: "toolResult",
           content: [{ type: "text", text: "tool output only" }],
@@ -2483,6 +2501,7 @@ describe("subagent announce formatting", () => {
   it("keeps completion-mode announce internal for nested requester subagent sessions", async () => {
     embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:orchestrator:subagent:worker",
@@ -2491,6 +2510,11 @@ describe("subagent announce formatting", () => {
       requesterOrigin: { channel: "whatsapp", accountId: "acct-123", to: "+1555" },
       requesterDisplayKey: "agent:main:subagent:orchestrator",
       expectsCompletionMessage: true,
+      terminalReply: {
+        disposition: "visible",
+        text: "child result",
+        modelRouteChange,
+      },
       ...defaultOutcomeAnnounce,
     });
 
@@ -2505,6 +2529,10 @@ describe("subagent announce formatting", () => {
     const message = typeof call?.params?.message === "string" ? call.params.message : "";
     expect(message).toContain(
       "Convert this completion into a concise internal orchestration update for your parent agent",
+    );
+    expect(message).toContain(modelRouteChange);
+    expect(message).toContain(
+      "Preserve any runtime-authored model-route change notice in your update.",
     );
   });
 

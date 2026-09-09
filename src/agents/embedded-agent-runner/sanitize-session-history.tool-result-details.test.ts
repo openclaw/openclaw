@@ -4,6 +4,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { sanitizeSessionHistory } from "./replay-history.js";
 
@@ -43,11 +44,7 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
         },
         timestamp: 2,
       } satisfies ToolResultMessage<{ raw: string }>,
-      {
-        role: "user",
-        content: "continue",
-        timestamp: 3,
-      } satisfies UserMessage,
+      makeUserMessage("continue", 3) satisfies UserMessage,
     ];
 
     const sanitized = await sanitizeSessionHistory({

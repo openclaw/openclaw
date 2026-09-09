@@ -9,6 +9,7 @@ import {
   extractAgentEventPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 type ReplyMock = ReturnType<typeof vi.fn>;
 type ReplyPayload = { text?: string };
@@ -544,10 +545,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       blockReplyBreak: "message_end",
     });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello block" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("Hello block") as AssistantMessage;
 
     emit({ type: "message_end", message: assistantMessage });
     await Promise.resolve();

@@ -17,8 +17,9 @@ import type { ClawAddPlan } from "./types.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
 // Adoption release unwinds a config commit that never landed, so no deletion journal was opened
-// for this agent (beginAgentDeletion runs only in claimClawAgentConfigRemoval) and there is no
-// fence to complete when the rows go.
+// for this agent (beginAgentDeletion runs only inside a live removal) and there is no fence to
+// assert or complete when the rows go.
+const noAssertCurrent = () => {};
 const noDeletionJournal = () => {};
 
 /**
@@ -45,7 +46,7 @@ export async function releaseUnclaimedClawAdoption(params: {
     removals.push(
       adoptedPaths.has(file.path)
         ? { path: file.path, action: "missing" }
-        : await removeClawWorkspaceFile({ ...file, state: "unchanged" }),
+        : await removeClawWorkspaceFile({ ...file, state: "unchanged" }, noAssertCurrent),
     );
   }
   let bootstrapRemoval: RemovedWorkspaceFile | undefined;
@@ -57,6 +58,7 @@ export async function releaseUnclaimedClawAdoption(params: {
         contentDigest: params.install.bootstrap.contentDigest,
         state: "unchanged",
       },
+      noAssertCurrent,
       MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
     );
     removals.push(bootstrapRemoval);
@@ -79,7 +81,8 @@ export async function releaseUnclaimedClawAdoption(params: {
     releaseClawRemoveRows(
       params.install.agentId,
       removals,
-      false,
+      retained,
+      noAssertCurrent,
       noDeletionJournal,
       params.options,
       true,
@@ -105,7 +108,8 @@ export async function releaseUnclaimedClawAdoption(params: {
     releaseClawRemoveRows(
       params.install.agentId,
       removals,
-      false,
+      retained,
+      noAssertCurrent,
       noDeletionJournal,
       params.options,
       true,
@@ -117,7 +121,8 @@ export async function releaseUnclaimedClawAdoption(params: {
   releaseClawRemoveRows(
     params.install.agentId,
     removals,
-    true,
+    [],
+    noAssertCurrent,
     noDeletionJournal,
     params.options,
     true,

@@ -2,7 +2,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { makeCfg } from "./isolated-agent.test-harness.js";
 import {
   DEFAULT_MESSAGE,
@@ -27,7 +27,7 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
   beforeAll(async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
-    vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
+    vi.mocked(readPreparedModelCatalog).mockResolvedValue([]);
     await withTempHome(async (home) => {
       await runCronTurn(home, {
         jobPayload: { kind: "agentTurn", message: "warm runtime" },
@@ -41,7 +41,7 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedAgent).mockClear();
-    vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
+    vi.mocked(readPreparedModelCatalog).mockResolvedValue([]);
   });
 
   it("wraps external hook content by default", async () => {

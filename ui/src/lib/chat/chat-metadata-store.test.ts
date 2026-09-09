@@ -28,10 +28,9 @@ function clientWith(request: ReturnType<typeof vi.fn>): GatewayBrowserClient {
   return { request } as unknown as GatewayBrowserClient;
 }
 
-function metadata(modelId: string): ChatMetadataResult {
+function metadata(name: string): ChatMetadataResult {
   return {
-    commands: [],
-    models: [{ id: modelId, name: modelId, provider: "openai" }],
+    commands: [{ name, description: name, source: "native", scope: "text", acceptsArgs: false }],
   };
 }
 
@@ -50,9 +49,27 @@ afterEach(() => {
 });
 
 describe("chat metadata store", () => {
-  it("isolates session publications and releases their snapshots and writers with the last subscriber", async () => {
+  it("keeps legacy startup and RPC models out of the commands cache", async () => {
+    const commands = metadata("status");
+    const legacy = {
+      ...commands,
+      models: [{ id: "old", name: "Old", provider: "example" }],
+      accountSelection: { kind: "automatic", label: "Automatic" },
+    };
+    const client = clientWith(vi.fn().mockResolvedValue(legacy));
+    beginChatMetadataPublication(client, { agentId: "main" }).publish(legacy);
+    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(commands);
+    invalidateChatMetadataStore(client);
+    expect(await loadChatMetadata(client, { agentId: "main" })).toEqual(commands);
+    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(commands);
+  });
+
+  it.each([
+    { sessionKey: "agent:main:locked" },
+    { authProfileId: "personal:person-a:anthropic:one" },
+  ])("isolates selected metadata %j and releases its last subscriber", async (selection) => {
     const client = clientWith(vi.fn().mockResolvedValue(metadata("neutral")));
-    const scope = { agentId: "main", sessionKey: "agent:main:locked" };
+    const scope = { agentId: "main", ...selection };
     const first = subscribeChatMetadata(client, scope, () => {});
     const second = subscribeChatMetadata(client, scope, () => {});
     beginChatMetadataPublication(client, scope).publish(metadata("locked"));
@@ -84,11 +101,11 @@ describe("chat metadata store", () => {
     const startup = beginChatMetadataPublication(client, scope);
     const oldRead = loadChatMetadata(client, scope).catch(() => undefined);
     invalidateChatMetadataStore(client);
-    await vi.waitFor(() => expect(peekChatMetadata(client, scope)).toBe(replacement));
+    await vi.waitFor(() => expect(peekChatMetadata(client, scope)).toEqual(replacement));
     startup.publish(metadata("obsolete-startup"));
     older.reject(new Error("obsolete-read"));
     await oldRead;
-    expect(peekChatMetadata(client, scope)).toBe(replacement);
+    expect(peekChatMetadata(client, scope)).toEqual(replacement);
     expect(updates).not.toContain("error");
     expect(request).toHaveBeenLastCalledWith("chat.metadata", scope);
     unsubscribe();
@@ -99,8 +116,8 @@ describe("chat metadata store", () => {
     const request = vi.fn().mockResolvedValue(result);
     const client = clientWith(request);
 
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toBe(result);
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toBe(result);
+    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
+    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
 
     expect(request).toHaveBeenCalledOnce();
   });
@@ -130,7 +147,7 @@ describe("chat metadata store", () => {
     await expect(loadChatMetadata(client, { agentId: "main" })).rejects.toThrow(
       "metadata unavailable",
     );
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toBe(result);
+    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
 
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -142,8 +159,8 @@ describe("chat metadata store", () => {
 
     beginChatMetadataPublication(client, { agentId: "main" }).publish(result);
 
-    expect(peekChatMetadata(client, { agentId: "main" })).toBe(result);
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toBe(result);
+    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(result);
+    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -171,8 +188,8 @@ describe("chat metadata store", () => {
 
     unsubscribe();
 
-    expect(peekChatMetadata(client, { agentId: "main" })).toBe(result);
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toBe(result);
+    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(result);
+    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -188,7 +205,7 @@ describe("chat metadata store", () => {
 
     expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
     expect(peekChatMetadata(client, { agentId: "worker" })).toBeUndefined();
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toBe(main);
+    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(main);
     expect(request).toHaveBeenCalledOnce();
   });
 
@@ -204,11 +221,11 @@ describe("chat metadata store", () => {
     const second = revalidateChatMetadata(client, { agentId: "main" });
 
     expect(second).toBe(first);
-    expect(peekChatMetadata(client, { agentId: "main" })).toBe(oldResult);
+    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(oldResult);
     expect(request).toHaveBeenCalledOnce();
     refresh.resolve(nextResult);
-    await expect(first).resolves.toBe(nextResult);
-    expect(peekChatMetadata(client, { agentId: "main" })).toBe(nextResult);
+    await expect(first).resolves.toEqual(nextResult);
+    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(nextResult);
   });
 
   it("does not let an older plain load clobber a newer revalidation", async () => {
@@ -227,7 +244,7 @@ describe("chat metadata store", () => {
     expect(peekChatMetadata(client, { agentId: "main" })).toEqual(metadata("new-model"));
   });
 
-  it("retries canonical startup unavailability and caches the recovered catalog", async () => {
+  it("retries canonical startup unavailability and caches the recovered commands", async () => {
     vi.useFakeTimers();
     const result = metadata("recovered-model");
     const request = vi
@@ -247,9 +264,9 @@ describe("chat metadata store", () => {
     expect(request).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
 
-    await expect(refresh).resolves.toBe(result);
+    await expect(refresh).resolves.toEqual(result);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(peekChatMetadata(client, { agentId: "main" })).toBe(result);
+    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(result);
   });
 
   it("does not retry unrelated retryable unavailable errors", async () => {

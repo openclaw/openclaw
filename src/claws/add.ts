@@ -534,8 +534,8 @@ export async function applyClawAddPlan(
       };
       return nextConfig;
     });
-    // The transform runs again on every write retry, so only a returned commit proves the write
-    // landed; setting this inside the transform kept a stale claim after a losing retry.
+    // The transform runs before persistence can still fail; record the fact only after commit.
+    // Moving this into the callback retains the workspace and reports a write that never landed.
     configCommitted = true;
     // Creation provenance belongs to whoever created the agent. Adoption claims an agent the
     // operator already made, so recording "claw" here would rewrite that origin and make a later

@@ -15,6 +15,7 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+          - "docs/plugins/sdk-runtime/**"
 "plugin: linux-node":
   - changed-files:
       - any-glob-to-any-file:
@@ -41,6 +42,7 @@
       - any-glob-to-any-file:
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+          - "docs/channels/discord/**"
 "channel: irc":
   - changed-files:
       - any-glob-to-any-file:
@@ -94,6 +96,12 @@
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
+"plugin: team-reports":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/team-reports/**"
+          - "docs/plugins/team-reports.md"
+          - "docs/plugins/reference/team-reports.md"
 "plugin: beam":
   - changed-files:
       - any-glob-to-any-file:
@@ -185,6 +193,7 @@
           - "qa/scenarios/**"
           - "docs/maturity/**"
           - "docs/concepts/qa-e2e-automation.md"
+          - "docs/concepts/qa-e2e-automation/**"
           - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
 "channel: signal":
@@ -197,6 +206,7 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+          - "docs/channels/slack/**"
 "channel: sms":
   - changed-files:
       - any-glob-to-any-file:
@@ -276,6 +286,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "ui/**"
+          - "extensions/*/browser/**"
+          - "src/plugin-sdk/control-ui*.ts"
+          - "src/gateway/control-ui-plugin-assets*.ts"
+          - "docs/plugins/feature-plugins.md"
           - "src/gateway/control-ui.ts"
           - "src/gateway/control-ui-shared.ts"
           - "packages/gateway-protocol/src/**"
@@ -587,6 +601,7 @@
       - any-glob-to-any-file:
           - "extensions/codex/**"
           - "docs/plugins/codex-harness.md"
+          - "docs/plugins/codex-harness/**"
           - "docs/plugins/codex-harness-reference.md"
           - "docs/plugins/codex-harness-runtime.md"
           - "docs/plugins/codex-supervision.md"

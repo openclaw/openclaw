@@ -11,24 +11,22 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import type { ErrorShape } from "../../packages/gateway-protocol/src/frame-guards.js";
 import {
   type HelloOk,
-  GATEWAY_SERVER_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type CommandEntry,
   type CommandsListParams,
   type CommandsListResult,
-  type EnvironmentsListResult,
   type SessionsListParams,
   type SessionsResolveParams,
+  type SessionsResolveResult,
   type SessionsPatchResult,
   type SessionsPatchParams,
   type TaskSuggestionsAcceptResult,
-  type TaskSuggestionsAcceptParams,
   type TaskSuggestionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -65,7 +63,6 @@ import type {
   TuiSessionCreateOptions,
   TuiSessionMutationResult,
   TuiChatSendResult,
-  TuiTaskSuggestionAcceptMode,
 } from "./tui-backend.js";
 
 type GatewayConnectionOptions = {
@@ -165,15 +162,6 @@ type GatewayModelChoice = TuiModelChoice;
 type HandoffSessionResolveParams = Required<
   Pick<SessionsResolveParams, "key" | "agentId" | "includeGlobal" | "allowMissing">
 >;
-type HandoffSessionResolveResult =
-  | { ok: true; key: string; agentId: string }
-  | { ok: true; missing: true }
-  | {
-      ok: true;
-      ambiguous: true;
-      candidates: Array<{ key: string; agentId: string; displayName?: string }>;
-    }
-  | { ok: false; error: ErrorShape };
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
@@ -208,7 +196,6 @@ export class GatewayChatClient implements TuiBackend {
       clientName: GATEWAY_CLIENT_NAMES.TUI,
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
-      platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
       scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
       caps: [
@@ -397,8 +384,8 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request<GatewaySessionList>("sessions.list", opts ?? {});
   }
 
-  async resolveSession(opts: HandoffSessionResolveParams): Promise<HandoffSessionResolveResult> {
-    return await this.client.request<HandoffSessionResolveResult>("sessions.resolve", opts);
+  async resolveSession(opts: HandoffSessionResolveParams): Promise<SessionsResolveResult> {
+    return await this.client.request<SessionsResolveResult>("sessions.resolve", opts);
   }
 
   async listAgents() {
@@ -456,8 +443,18 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async listModels(opts?: { agentId?: string }): Promise<GatewayModelChoice[]> {
-    const res = await this.client.request("models.list", opts ?? {});
-    return Array.isArray(res?.models) ? res.models : [];
+    const published = this.hello?.features.capabilities?.includes(
+      GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
+    );
+    const res = await this.client.request("models.list", {
+      ...opts,
+      ...(published ? { includeDetails: true } : {}),
+    });
+    const models: GatewayModelChoice[] = Array.isArray(res?.models) ? res.models : [];
+    // Released Gateways reject includeDetails and collapse unknown availability to false.
+    return published
+      ? models
+      : models.map(({ available: _available, unavailableReason: _reason, ...model }) => model);
   }
 
   async listCommands(opts?: CommandsListParams): Promise<CommandEntry[]> {
@@ -479,7 +476,6 @@ export class GatewayChatClient implements TuiBackend {
   getTaskSuggestionActionCapabilities() {
     const auth = this.hello?.auth;
     const methods = this.hello?.features?.methods;
-    const capabilities = this.hello?.features?.capabilities;
     const allows = (method: string, scope: "operator.admin" | "operator.write") =>
       Array.isArray(methods) &&
       methods.includes(method) &&
@@ -493,9 +489,6 @@ export class GatewayChatClient implements TuiBackend {
       );
     return {
       canAccept: allows("taskSuggestions.accept", "operator.admin"),
-      canAcceptModes:
-        Array.isArray(capabilities) &&
-        capabilities.includes(GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES),
       canDismiss: allows("taskSuggestions.dismiss", "operator.write"),
     };
   }
@@ -512,29 +505,11 @@ export class GatewayChatClient implements TuiBackend {
     return result.suggestions;
   }
 
-  async listCloudWorkerProfiles() {
-    if (this.hello?.features?.methods?.includes("environments.list") !== true) {
-      return [];
-    }
-    try {
-      const result = await this.client.request<EnvironmentsListResult>("environments.list", {});
-      return result.profiles?.map((profile) => profile.id) ?? [];
-    } catch {
-      // Cloud placement is optional; older or temporarily failing gateways stay quiet.
-      return [];
-    }
-  }
-
-  async acceptTaskSuggestion(
-    taskId: string,
-    mode?: TuiTaskSuggestionAcceptMode,
-    cloudProfileId?: string,
-  ) {
-    const params: TaskSuggestionsAcceptParams =
-      !mode || mode === "worktree"
-        ? { taskId }
-        : { taskId, mode, ...(cloudProfileId ? { cloudProfileId } : {}) };
-    return await this.client.request<TaskSuggestionsAcceptResult>("taskSuggestions.accept", params);
+  async acceptTaskSuggestion(taskId: string) {
+    return await this.client.request<TaskSuggestionsAcceptResult>("taskSuggestions.accept", {
+      taskId,
+      mode: "local",
+    });
   }
 
   async dismissTaskSuggestion(taskId: string) {

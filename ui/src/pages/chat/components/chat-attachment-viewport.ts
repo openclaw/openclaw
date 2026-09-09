@@ -20,19 +20,3 @@ export function observeChatAttachmentViewport(element: Element, onVisible: () =>
   observer.observe(element);
   return () => observer.disconnect();
 }
-
-export function syncChatAttachmentRailScroll(element: Element | undefined): void {
-  if (!(element instanceof HTMLElement)) {
-    return;
-  }
-  const sync = () => {
-    const scrollable = element.scrollWidth > element.clientWidth + 1;
-    element.dataset.scrollable = String(scrollable);
-    element.dataset.atStart = String(!scrollable || element.scrollLeft <= 1);
-    element.dataset.atEnd = String(
-      !scrollable || element.scrollLeft + element.clientWidth >= element.scrollWidth - 1,
-    );
-  };
-  sync();
-  requestAnimationFrame(sync);
-}

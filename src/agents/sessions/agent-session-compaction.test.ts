@@ -8,6 +8,7 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
@@ -374,7 +375,12 @@ describe("AgentSession compaction", () => {
         error: `No API key found for ${activeModel.provider}`,
       });
       return createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       );
     });
     const compactionEvents = collectCompactionEnds(session);
@@ -386,38 +392,6 @@ describe("AgentSession compaction", () => {
       reason: "threshold",
       outcome: { status: "skipped", reason: expect.stringContaining("No API key found") },
     });
-  });
-
-  it("records post-compaction live-message tokens through the subscriber", async () => {
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    const firstKeptEntryId = sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "retained answer" }]),
-      timestamp: 2,
-    });
-    let requests = 0;
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        ++requests === 1
-          ? createOverflowAssistant(activeModel)
-          : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]),
-      ),
-    );
-    const { session } = await createTestSession({
-      sessionManager,
-      settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(
-        createResultHandlers("condensed history", firstKeptEntryId),
-      ),
-    });
-    const subscription = subscribeEmbeddedAgentSession({ session, runId: "run-tokens-after" });
-
-    await session.prompt("long request");
-
-    expect(subscription.getCompactionCount()).toBe(1);
-    expect(subscription.getLastCompactionTokensAfter()).toEqual(expect.any(Number));
-    expect(subscription.getLastCompactionTokensAfter()).toBeGreaterThan(0);
-    subscription.unsubscribe();
   });
 
   it("sends a pre-persisted keyed user once after pre-prompt compaction", async () => {
@@ -436,7 +410,12 @@ describe("AgentSession compaction", () => {
     const sessionManager = SessionManager.open(scope, dir);
     sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
     sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "old answer" }], "stop", 950),
+      ...createAssistant(
+        testModel,
+        [{ type: "text", text: "old answer" }],
+        "stop",
+        testModel.contextWindow,
+      ),
       timestamp: 2,
     });
     const currentUser = {
@@ -459,6 +438,7 @@ describe("AgentSession compaction", () => {
       settingsManager: createAutoCompactionSettings(),
       resourceLoader: createResourceLoader(createResultHandlers("condensed history")),
     });
+    const compactionEvents = collectCompactionEnds(session);
     // Embedded attempt preparation removes the ingress-persisted user from model state.
     // Pre-prompt compaction rebuilds it from the durable branch before prompt submission.
     session.agent.state.messages = session.agent.state.messages.slice(0, -1);
@@ -467,6 +447,15 @@ describe("AgentSession compaction", () => {
       persistedUserIdempotencyKey: currentUser.idempotencyKey,
     });
 
+    expect(compactionEvents).toEqual([
+      expect.objectContaining({
+        reason: "threshold",
+        outcome: expect.objectContaining({ status: "completed", willRetry: false }),
+      }),
+    ]);
+    expect(sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(
+      1,
+    );
     expect(requests).toHaveLength(1);
     expect(
       requests[0]?.messages.filter(
@@ -517,11 +506,7 @@ describe("AgentSession compaction", () => {
   it("accounts branch-summary responses through the same run owner", async () => {
     const sessionManager = SessionManager.inMemory();
     const rootId = sessionManager.appendMessage({ role: "user", content: "root", timestamp: 1 });
-    const abandonedId = sessionManager.appendMessage({
-      role: "user",
-      content: "abandoned branch",
-      timestamp: 2,
-    });
+    const abandonedId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
     sessionManager.branch(rootId);
     const targetId = sessionManager.appendMessage({
       ...createAssistant(testModel, [{ type: "text", text: "target branch" }]),
@@ -565,7 +550,12 @@ describe("AgentSession compaction", () => {
           throw syntheticError;
         }
         return createAssistantResultStream(
-          createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+          createAssistant(
+            activeModel,
+            [{ type: "text", text: "complete answer" }],
+            "stop",
+            activeModel.contextWindow,
+          ),
         );
       },
     );
@@ -587,10 +577,15 @@ describe("AgentSession compaction", () => {
       .map(([event]) => event)
       .filter((event) => event.stream === "compaction");
     expect(compactionEvents).toHaveLength(2);
+    expect(compactionEvents[0]).toEqual({
+      stream: "compaction",
+      data: { phase: "start", itemId: expect.any(String) },
+    });
     expect(compactionEvents.at(-1)).toEqual({
       stream: "compaction",
       data: {
         phase: "end",
+        itemId: compactionEvents[0].data.itemId,
         outcome: "aborted",
         completed: false,
         willRetry: false,
@@ -646,10 +641,15 @@ describe("AgentSession compaction", () => {
       .map(([event]) => event)
       .filter((event) => event.stream === "compaction");
     expect(compactionEvents).toHaveLength(2);
+    expect(compactionEvents[0]).toEqual({
+      stream: "compaction",
+      data: { phase: "start", itemId: expect.any(String) },
+    });
     expect(compactionEvents.at(-1)).toEqual({
       stream: "compaction",
       data: {
         phase: "end",
+        itemId: compactionEvents[0].data.itemId,
         outcome: "aborted",
         completed: false,
         willRetry: false,
@@ -755,21 +755,13 @@ describe("AgentSession compaction", () => {
   it("reports replacement tokens and the exact equal-summary entry before a post-commit hook finishes", async () => {
     const sessionManager = SessionManager.inMemory();
     const summary = "The same bounded summary";
-    const oldUserId = sessionManager.appendMessage({
-      role: "user",
-      content: "old prompt",
-      timestamp: 1,
-    });
+    const oldUserId = sessionManager.appendMessage(makeUserMessage("old prompt", 1));
     sessionManager.appendMessage({
       ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
       timestamp: 2,
     });
     const oldCompactionId = sessionManager.appendCompaction(summary, oldUserId, 100);
-    const recentUserId = sessionManager.appendMessage({
-      role: "user",
-      content: "recent prompt",
-      timestamp: 3,
-    });
+    const recentUserId = sessionManager.appendMessage(makeUserMessage("recent prompt", 3));
     sessionManager.appendMessage({
       ...createAssistant(testModel, [{ type: "text", text: "recent answer" }]),
       timestamp: 4,

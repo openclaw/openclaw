@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  type TerminalUploadResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -91,10 +94,15 @@ function makeOpts(
       cwd: "/work",
       buffer: "replay",
       seq: 6,
+      title: "codex",
+      owner: "conn" as const,
     })),
     snapshot: vi.fn(() => "10%\r100%"),
     list: vi.fn((): TerminalSessionSummary[] => []),
-    upload: vi.fn(async () => ({ path: "/tmp/upload/report.pdf", size: 4 })),
+    upload: vi.fn(async (): Promise<TerminalUploadResult> => ({
+      path: "/tmp/upload/report.pdf",
+      size: 4,
+    })),
   };
   const runtimeConfig = { gateway: { terminal: terminalConfig } } as OpenClawConfig;
   const policy = createTerminalLaunchPolicy(runtimeConfig);
@@ -269,13 +277,16 @@ describe("terminal gateway policy", () => {
 
   it("returns the attach snapshot offset to capable clients", async () => {
     const { opts, respond } = makeOpts({ sessionId: "terminal-1" }, { enabled: true });
-    opts.client!.connect.caps = [GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ];
+    opts.client!.connect.caps = [
+      GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
+      GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
+    ];
 
     await expectDefined(terminalHandlers["terminal.attach"], "terminal.attach")(opts);
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ buffer: "replay", seq: 6 }),
+      expect.objectContaining({ buffer: "replay", seq: 6, title: "codex", owner: "conn" }),
     );
   });
 
@@ -791,47 +802,70 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it("rejects a replacement node connection that lacks the terminal command", async () => {
-    const command = "anthropic.claude.terminal.resume.v1";
-    const policy = deferred<null>();
-    policyMocks.applyPluginNodeInvokePolicy.mockImplementationOnce(() => policy.promise);
-    installCatalog({
-      id: "claude",
-      label: "Claude",
-      list: async () => [],
-      read: async (request) => ({ ...request, items: [] }),
-      openTerminal: async () => ({
-        kind: "node",
+  it.each(["commands removed", "connection replaced", "pairing promoted"])(
+    "rejects a changed node admission: %s",
+    async (change) => {
+      const command = "anthropic.claude.terminal.resume.v1";
+      const policy = deferred<null>();
+      policyMocks.applyPluginNodeInvokePolicy.mockImplementationOnce(() => policy.promise);
+      installCatalog({
+        id: "claude",
+        label: "Claude",
+        list: async () => [],
+        read: async (request) => ({ ...request, items: [] }),
+        openTerminal: async () => ({
+          kind: "node",
+          nodeId: "node-1",
+          command,
+          paramsJSON: JSON.stringify({ threadId: "thread" }),
+        }),
+      });
+      let node = {
         nodeId: "node-1",
-        command,
-        paramsJSON: JSON.stringify({ threadId: "thread" }),
-      }),
-    });
-    let node = { nodeId: "node-1", connId: "conn-old", commands: [command] };
-    const { opts, sessions, respond } = makeOpts(
-      {
-        cols: 80,
-        rows: 24,
-        catalog: { catalogId: "claude", hostId: "node:node-1", threadId: "thread" },
-      },
-      { enabled: true },
-      undefined,
-      { get: () => node },
-    );
+        connId: "conn-old",
+        pairingGeneration: "generation-old",
+        commands: [command],
+      };
+      const { opts, sessions, respond } = makeOpts(
+        {
+          cols: 80,
+          rows: 24,
+          catalog: { catalogId: "claude", hostId: "node:node-1", threadId: "thread" },
+        },
+        { enabled: true },
+        undefined,
+        { get: () => node },
+      );
 
-    const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    await waitForFast(() => expect(policyMocks.applyPluginNodeInvokePolicy).toHaveBeenCalledOnce());
-    node = { nodeId: "node-1", connId: "conn-new", commands: [] };
-    policy.resolve(null);
-    await opening;
+      const opening = expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+      await waitForFast(() =>
+        expect(policyMocks.applyPluginNodeInvokePolicy).toHaveBeenCalledOnce(),
+      );
+      if (change === "pairing promoted") {
+        node.pairingGeneration = "generation-new";
+      } else {
+        node = {
+          ...node,
+          connId: "conn-new",
+          commands: change === "commands removed" ? [] : [command],
+        };
+      }
+      policy.resolve(null);
+      await opening;
 
-    expect(sessions.open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "terminal node command is not available" }),
-    );
-  });
+      expect(sessions.open).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message:
+            change === "commands removed"
+              ? "terminal node command is not available"
+              : "terminal node connection changed; refresh the host and retry",
+        }),
+      );
+    },
+  );
 
   it("reports plugin invoke policy denial as unavailable", async () => {
     const command = "codex.terminal.resume.v1";
@@ -954,59 +988,103 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it("binds paired-node uploads to the catalog terminal host", async () => {
-    const command = "codex.terminal.resume.v1";
-    const uploadCommand = "terminal.upload";
-    installCatalog({
-      id: "codex",
-      label: "Codex",
-      list: async () => [],
-      read: async (request) => ({ ...request, items: [] }),
-      openTerminal: async () => ({
-        kind: "node",
+  it.each([
+    { caps: [] },
+    { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA] },
+    { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE] },
+  ])(
+    "only returns insertion metadata to clients advertising its capability: $caps",
+    async ({ caps }: { caps: string[] }) => {
+      const { opts, sessions, respond } = makeOpts(
+        { sessionId: "s1", name: "report.pdf", contentBase64: "dGVzdA==" },
+        { enabled: true },
+      );
+      expectDefined(opts.client, "authenticated upload client").connect.caps = caps;
+      sessions.upload.mockResolvedValue({
+        path: "/tmp/upload/report.pdf",
+        size: 4,
+        uploadPathStyle: "native",
+      });
+
+      await expectDefined(terminalHandlers["terminal.upload"], "terminal.upload")(opts);
+
+      expect(respond).toHaveBeenCalledWith(true, {
+        path: "/tmp/upload/report.pdf",
+        size: 4,
+        ...(caps.includes(GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE)
+          ? { uploadPathStyle: "native" }
+          : {}),
+      });
+    },
+  );
+
+  it.each([undefined, "native"] as const)(
+    "binds paired-node uploads and insertion style to the admitted plan: %s",
+    async (uploadPathStyle) => {
+      const command = "codex.terminal.resume.v1";
+      const uploadCommand = "terminal.upload";
+      const plan = {
+        kind: "node" as const,
         nodeId: "node-1",
         command,
         paramsJSON: JSON.stringify({ threadId: "thread" }),
-      }),
-    });
-    const node = {
-      nodeId: "node-1",
-      connId: "conn-node",
-      pairingGeneration: "generation-node",
-      commands: [command, uploadCommand],
-    };
-    const invoke = vi.fn(async () => ({
-      ok: true,
-      payloadJSON: JSON.stringify({ path: "/tmp/node/report.pdf", size: 4 }),
-    }));
-    const { opts, sessions } = makeOpts(
-      {
-        cols: 80,
-        rows: 24,
-        catalog: { catalogId: "codex", hostId: "node:node-1", threadId: "thread" },
-      },
-      { enabled: true },
-      undefined,
-      { get: () => node, invoke },
-    );
+        uploadPathStyle,
+      };
+      installCatalog({
+        id: "codex",
+        label: "Codex",
+        list: async () => [],
+        read: async (request) => ({ ...request, items: [] }),
+        openTerminal: async () => plan,
+      });
+      const node = {
+        nodeId: "node-1",
+        connId: "conn-node",
+        pairingGeneration: "generation-node",
+        commands: [command, uploadCommand],
+      };
+      const nodePayload = {
+        path: "/tmp/node/report.pdf",
+        size: 4,
+        // A remote reply cannot opt an undeclared receiver into native insertion.
+        ...(uploadPathStyle === undefined ? { uploadPathStyle: "native" } : {}),
+      };
+      const invoke = vi.fn(async () => ({ ok: true, payloadJSON: JSON.stringify(nodePayload) }));
+      const { opts, sessions } = makeOpts(
+        {
+          cols: 80,
+          rows: 24,
+          catalog: { catalogId: "codex", hostId: "node:node-1", threadId: "thread" },
+        },
+        { enabled: true },
+        undefined,
+        { get: () => node, invoke },
+      );
 
-    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
-    const openRequest = sessions.open.mock.calls[0]?.[0] as
-      | { stageUpload?: (file: { name: string; contentBase64: string }) => Promise<unknown> }
-      | undefined;
-    const result = await openRequest?.stageUpload?.({
-      name: "report.pdf",
-      contentBase64: "dGVzdA==",
-    });
+      await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+      plan.nodeId = "node-2";
+      plan.uploadPathStyle = uploadPathStyle === undefined ? "native" : undefined;
+      const openRequest = sessions.open.mock.calls[0]?.[0] as
+        | { stageUpload?: (file: { name: string; contentBase64: string }) => Promise<unknown> }
+        | undefined;
+      const result = await openRequest?.stageUpload?.({
+        name: "report.pdf",
+        contentBase64: "dGVzdA==",
+      });
 
-    expect(invoke).toHaveBeenCalledWith({
-      nodeId: "node-1",
-      expectedConnId: "conn-node",
-      expectedPairingGeneration: "generation-node",
-      command: uploadCommand,
-      params: { name: "report.pdf", contentBase64: "dGVzdA==" },
-      timeoutMs: 120_000,
-    });
-    expect(result).toEqual({ path: "/tmp/node/report.pdf", size: 4 });
-  });
+      expect(invoke).toHaveBeenCalledWith({
+        nodeId: "node-1",
+        expectedConnId: "conn-node",
+        expectedPairingGeneration: "generation-node",
+        command: uploadCommand,
+        params: { name: "report.pdf", contentBase64: "dGVzdA==" },
+        timeoutMs: 120_000,
+      });
+      expect(result).toEqual({
+        path: "/tmp/node/report.pdf",
+        size: 4,
+        ...(uploadPathStyle ? { uploadPathStyle } : {}),
+      });
+    },
+  );
 });

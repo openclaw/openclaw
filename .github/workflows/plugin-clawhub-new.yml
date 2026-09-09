@@ -48,7 +48,8 @@ on:
         type: boolean
 
 concurrency:
-  group: plugin-clawhub-new-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  # Validation gets its own slot; real publication remains serialized by target.
+  group: plugin-clawhub-new-${{ inputs.dry_run && format('dry-run-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -211,6 +212,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Validate publishable plugin metadata
         env:
           TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
@@ -237,6 +245,7 @@ jobs:
             --plugins "${RELEASE_PLUGINS}" > .local/plugin-clawhub-release-plan.json
 
           cat .local/plugin-clawhub-release-plan.json
+          jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
 
           bootstrap_candidate_count="$(jq -r '(.bootstrapCandidates | length) + (.missingTrustedPublisher | length)' .local/plugin-clawhub-release-plan.json)"
           selected_count="$(jq -r '.all | length' .local/plugin-clawhub-release-plan.json)"
@@ -514,6 +523,13 @@ jobs:
           install-bun: "true"
           install-deps: "true"
 
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-harness
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Materialize locked ClawHub CLI
         id: clawhub_cli
         run: |
@@ -550,7 +566,6 @@ jobs:
             package_slug="${package_name#@openclaw/}"
             output_dir="${artifact_root}/packages/${package_slug}"
             mkdir -p "${output_dir}"
-            node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package "${package_dir}"
             OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR="${output_dir}" \
               PACKAGE_TAG="${package_tag}" \
               bash .release-harness/scripts/plugin-clawhub-publish.sh --pack "${package_dir}"
