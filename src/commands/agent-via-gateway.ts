@@ -27,7 +27,7 @@ import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { recordCliGatewayRunFailure } from "../cli/failure-output.js";
+import { readCliGatewayRunFailure, recordCliGatewayRunFailure } from "../cli/failure-output.js";
 import { withProgress } from "../cli/progress.js";
 import {
   readGatewayDispatchConfig,
@@ -526,6 +526,26 @@ function resolveGatewayAgentFailureHint(
   return err.kind === "timeout" ? "timed out" : "connection closed";
 }
 
+function formatGatewayAgentTransportLossHint(err: unknown): string | undefined {
+  const failureHint = resolveGatewayAgentFailureHint(err);
+  if (!failureHint) {
+    return undefined;
+  }
+  // Transport loss is ambiguous: the Gateway may have accepted and may still
+  // finish this turn. Recommending a blind retry or --local here could
+  // double-execute the message, so point at verification first.
+  const acceptedRun = readCliGatewayRunFailure(err);
+  const acceptedNote = acceptedRun
+    ? ` (accepted run ${acceptedRun.runId}` +
+      (failureHint === "timed out" ? "; use --timeout <seconds> to extend the CLI wait" : "") +
+      ")"
+    : "";
+  return (
+    `Gateway agent call ${failureHint}; the Gateway may still be running this turn${acceptedNote}. ` +
+    "Check `openclaw gateway status` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice."
+  );
+}
+
 function isTransientGatewayAgentConnectClose(err: unknown): boolean {
   if (!isGatewayTransportError(err) || err.kind !== "closed") {
     return false;
@@ -681,9 +701,9 @@ async function normalizeSessionKeyOptsForDispatch(
     cfg && rawSessionKey && isLegacySessionKey && !isUnscopedSessionKeySentinel(rawSessionKey)
       ? resolvePersistedSessionStoreOwnerForKey(cfg, rawSessionKey)
       : undefined;
-  if (persistedBareOwner?.kind === "configured") {
-    // Fixed-store rows keep their durable bare key. The selected owner travels separately so
-    // request-time resolution can validate it without changing the storage identity.
+  if (persistedBareOwner?.kind === "configured" || isUnscopedSessionKeySentinel(rawSessionKey)) {
+    // Fixed-store rows and sentinels keep their logical key. Request-time resolution validates
+    // the selected owner separately without changing storage or placement identity.
     return normalizedOpts;
   }
   const sessionKey = scopeLegacySessionKeyToAgent({
@@ -1095,7 +1115,6 @@ async function agentViaGatewayCommand(
             timeout: timeoutSeconds,
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
-            cleanupBundleMcpOnRunEnd: true,
             idempotencyKey,
           },
           expectFinal: true,
@@ -1232,8 +1251,16 @@ export async function agentCliCommand(
   runtime: RuntimeEnv,
   deps?: AgentCliDeps,
 ) {
-  if (opts.agent !== undefined && !opts.agent.trim()) {
-    throw new Error("--agent must not be blank");
+  // A present blank selector must not become an omitted target during normalization.
+  for (const [flag, value] of [
+    ["--agent", opts.agent],
+    ["--session-id", opts.sessionId],
+    ["--session-key", opts.sessionKey],
+    ["--to", opts.to],
+  ]) {
+    if (value !== undefined && !value.trim()) {
+      throw new Error(`${flag} must not be blank`);
+    }
   }
   protectJsonStdout(opts);
   const messageOpts = await resolveAgentMessageOpts(opts);
@@ -1298,14 +1325,9 @@ export async function agentCliCommand(
         }
         throw err;
       }
-      const failureHint = resolveGatewayAgentFailureHint(err);
+      const failureHint = formatGatewayAgentTransportLossHint(err);
       if (failureHint) {
-        // Transport loss is ambiguous: the Gateway may have accepted and may still
-        // finish this turn. Recommending a blind retry or --local here could
-        // double-execute the message, so point at verification first.
-        runtime.error?.(
-          `Gateway agent call ${failureHint}; the Gateway may still be running this turn. Check \`openclaw gateway status\` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice.`,
-        );
+        runtime.error?.(failureHint);
       }
       throw err;
     }

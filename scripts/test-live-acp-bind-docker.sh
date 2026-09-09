@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -123,8 +127,9 @@ case "$agent" in
       unset ANTHROPIC_AUTH_TOKEN
       unset ANTHROPIC_OAUTH_TOKEN
     fi
+    # Resolve through ACPX so pnpm cannot select an unrelated root or hoisted SDK.
     claude_code_version="$(
-      node -e 'const path = require("node:path"); const packagePath = path.join(path.dirname(require.resolve("@anthropic-ai/claude-agent-sdk")), "package.json"); process.stdout.write(require(packagePath).claudeCodeVersion);'
+      node -e 'const path = require("node:path"); const { createRequire } = require("node:module"); const acpxRequire = createRequire(path.resolve("extensions/acpx/package.json")); const adapterPackagePath = acpxRequire.resolve("@agentclientprotocol/claude-agent-acp/package.json"); const adapterRequire = createRequire(adapterPackagePath); const sdkEntry = adapterRequire.resolve("@anthropic-ai/claude-agent-sdk"); const packagePath = path.join(path.dirname(sdkEntry), "package.json"); process.stdout.write(require(packagePath).claudeCodeVersion);'
     )"
     claude_package_json="$NPM_CONFIG_PREFIX/lib/node_modules/@anthropic-ai/claude-code/package.json"
     real_claude="$NPM_CONFIG_PREFIX/bin/claude-real"
@@ -162,7 +167,7 @@ WRAP
       chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
     export CLAUDE_CODE_EXECUTABLE="$NPM_CONFIG_PREFIX/bin/claude"
-    echo "Using Claude Code $claude_code_version declared by the installed Claude Agent SDK"
+    echo "Using Claude Code $claude_code_version declared by the ACPX-owned Claude Agent SDK"
     claude --version
     claude auth status || true
     ;;
@@ -210,7 +215,7 @@ openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
-node --import tsx scripts/test-live.mts -- ${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-src/gateway/gateway-acp-bind.live.test.ts}
+openclaw_live_run_staged_script scripts/test-live -- ${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-src/gateway/gateway-acp-bind.live.test.ts}
 EOF
 
 openclaw_live_acp_bind_append_build_extension acpx

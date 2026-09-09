@@ -364,14 +364,31 @@ describe("agentCliCommand", () => {
     expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
   });
 
-  it("rejects a blank agent before selecting a local or Gateway target", async () => {
-    await expect(agentCliCommand({ message: "hi", agent: "" }, runtime)).rejects.toThrow(
-      "--agent must not be blank",
-    );
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(agentCommand).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["agent", "--agent"],
+    ["sessionId", "--session-id"],
+    ["sessionKey", "--session-key"],
+    ["to", "--to"],
+  ] as const)(
+    "rejects blank %s selectors before local or Gateway dispatch",
+    async (option, flag) => {
+      await withTempStore(async () => {
+        mockGatewaySuccessReply();
+        for (const local of [false, true]) {
+          for (const value of ["", "   "]) {
+            await expect(
+              agentCliCommand(
+                { message: "hi", to: "agent:main:explicit-target", local, [option]: value },
+                runtime,
+              ),
+            ).rejects.toThrow(`${flag} must not be blank`);
+          }
+        }
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(agentCommand).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("clamps oversized gateway timeout seconds at the command boundary", async () => {
     await withTempStore(async () => {
@@ -407,7 +424,7 @@ describe("agentCliCommand", () => {
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request.scopes).toEqual(["operator.admin"]);
-      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
+      expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
       expect(agentModuleLoadCount).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
@@ -1267,25 +1284,28 @@ describe("agentCliCommand", () => {
     );
   });
 
-  it("scopes legacy global session keys to the requested agent before gateway dispatch", async () => {
-    await withTempStore(
-      async () => {
-        mockGatewaySuccessReply();
+  it.each(["global", "unknown"])(
+    "preserves logical %s keys with an explicit agent before gateway dispatch",
+    async (sessionKey) => {
+      await withTempStore(
+        async () => {
+          mockGatewaySuccessReply();
 
-        await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "global" }, runtime);
+          await agentCliCommand({ message: "hi", agent: "ops", sessionKey }, runtime);
 
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBe("ops");
-        expect(params.sessionKey).toBe("agent:ops:global");
-      },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
-    );
-  });
+          expect(callGateway).toHaveBeenCalledTimes(1);
+          const request = requireRecord(
+            requireFirstCallArg(callGateway, "gateway"),
+            "gateway request",
+          );
+          const params = requireRecord(request.params, "gateway request params");
+          expect(params.agentId).toBe("ops");
+          expect(params.sessionKey).toBe(sessionKey);
+        },
+        { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      );
+    },
+  );
 
   it("preserves unscoped global session keys when no agent is requested", async () => {
     await withTempStore(
@@ -2443,6 +2463,58 @@ describe("agentCliCommand", () => {
       });
     }, remoteGatewayConfig);
   });
+
+  it.each([
+    {
+      label: "timed out",
+      createError: createGatewayTimeoutError,
+      expectTimeoutAdvice: true,
+    },
+    {
+      label: "connection closed",
+      createError: createGatewayClosedError,
+      expectTimeoutAdvice: false,
+    },
+  ])(
+    "names the accepted run in the transport-loss hint after the Gateway $label",
+    async ({ createError, expectTimeoutAdvice }) => {
+      await withTempStore(async () => {
+        const error = createError();
+        const signal = createSignalProcess();
+        callGateway.mockImplementation(
+          async (request: { onAccepted?: (payload: unknown) => void }) => {
+            request.onAccepted?.({ status: "accepted", runId: "gateway-accepted" });
+            throw error;
+          },
+        );
+
+        await expect(
+          agentCliCommand(
+            { message: "hi", sessionKey: "agent:ops:run-proof", json: true },
+            jsonRuntime,
+            { process: signal.processLike },
+          ),
+        ).rejects.toBe(error);
+
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(agentCommand).not.toHaveBeenCalled();
+        const hint = mockMessages(jsonRuntime.error).join("\n");
+        expect(hint).toContain("Gateway agent call");
+        expect(hint).toContain("accepted run gateway-accepted");
+        if (expectTimeoutAdvice) {
+          expect(hint).toContain("--timeout <seconds>");
+        }
+        // The documented JSON failure envelope keeps ok:false and error.type/message
+        // alongside the accepted run provenance for the shared failure renderer.
+        expect(formatCliJsonFailure(error, { env: {} })).toEqual({
+          ok: false,
+          runId: "gateway-accepted",
+          origin: "gateway",
+          error: { type: "cli_error", message: error.message },
+        });
+      }, remoteGatewayConfig);
+    },
+  );
 
   it("rejects gateway timeout errors unchanged with a local retry hint", async () => {
     await withTempStore(async () => {

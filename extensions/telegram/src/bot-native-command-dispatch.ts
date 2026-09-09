@@ -641,6 +641,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
           silent:
             dispatch.runtimeTelegramCfg.silentErrorReplies === true && payload.isError === true,
           onPlatformSendDispatch: info.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
         });
         if (result.delivered) {
           deliveryState.delivered = true;
@@ -693,6 +694,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
   )(turnPlan);
   if (
     !deliveryState.delivered &&
+    (!turnResult.dispatched || !turnResult.dispatchResult.sendPolicyDenied) &&
     finalReplyOutcome !== "suppressed" &&
     (deliveryState.skippedNonSilent > 0 || deliveryState.failedNonSilent > 0) &&
     (!turnResult.dispatched ||

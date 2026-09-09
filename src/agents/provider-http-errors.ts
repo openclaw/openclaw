@@ -98,8 +98,7 @@ function readProviderResponseBytes(
   label: string,
   kind: string,
   opts?: ProviderResponseReadOptions,
-  onOverflow?: ProviderResponseReadOptions["onOverflow"],
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   return readResponseWithLimit(response, opts?.maxBytes ?? PROVIDER_RESPONSE_MAX_BYTES, {
     ...opts,
     chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
@@ -108,7 +107,7 @@ function readProviderResponseBytes(
       (({ chunkTimeoutMs }) =>
         new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
     onOverflow:
-      onOverflow ??
+      opts?.onOverflow ??
       (({ maxBytes: limit }) => new Error(`${label}: ${kind} response exceeds ${limit} bytes`)),
   });
 }
@@ -175,13 +174,18 @@ export async function readProviderTextResponse(
   return new TextDecoder().decode(bytes);
 }
 
-/** Formats common provider JSON error payload shapes into one readable detail string. */
-export function formatProviderErrorPayload(payload: unknown): string | undefined {
+type ProviderErrorPayloadMetadata = {
+  detail?: string;
+  code?: string;
+  type?: string;
+};
+
+function resolveProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
   const root = asOptionalRecord(payload);
   const detailObject = asOptionalRecord(root?.detail);
   const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
   if (!subject) {
-    return undefined;
+    return { detail: undefined };
   }
   const errorDescription =
     trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
@@ -198,50 +202,21 @@ export function formatProviderErrorPayload(payload: unknown): string | undefined
   const metadata = [type ? `type=${type}` : undefined, code ? `code=${code}` : undefined]
     .filter((value): value is string => Boolean(value))
     .join(", ");
-  if (message && metadata) {
-    return `${truncateErrorDetail(message)} [${metadata}]`;
-  }
-  if (message) {
-    return truncateErrorDetail(message);
-  }
-  if (metadata) {
-    return `[${metadata}]`;
-  }
-  return undefined;
+  const detail = message
+    ? `${truncateErrorDetail(message)}${metadata ? ` [${metadata}]` : ""}`
+    : metadata
+      ? `[${metadata}]`
+      : undefined;
+  return { detail, code, type };
 }
 
-type ProviderErrorPayloadMetadata = {
-  detail?: string;
-  code?: string;
-  type?: string;
-};
-
-function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
-  const root = asOptionalRecord(payload);
-  const detailObject = asOptionalRecord(root?.detail);
-  const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
-  if (!subject) {
-    return {};
-  }
-
-  const detail = formatProviderErrorPayload(payload);
-  const type = trimToUndefined(subject.type);
-  const errorDescription =
-    trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
-  const oauthCode = errorDescription ? trimToUndefined(root?.error) : undefined;
-  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status) ?? oauthCode;
-  return {
-    ...(detail ? { detail: redactSensitiveText(detail) } : {}),
-    ...(code ? { code } : {}),
-    ...(type ? { type } : {}),
-  };
+/** Formats common provider JSON error payload shapes into one readable detail string. */
+export function formatProviderErrorPayload(payload: unknown): string | undefined {
+  return resolveProviderErrorPayloadMetadata(payload).detail;
 }
 
 /** Metadata extracted from a non-2xx provider response body and headers. */
-type ProviderHttpErrorInfo = {
-  detail?: string;
-  code?: string;
-  type?: string;
+type ProviderHttpErrorInfo = ProviderErrorPayloadMetadata & {
   body?: string;
   requestId?: string;
 };
@@ -275,6 +250,10 @@ async function extractProviderErrorInfo(
     if (error instanceof ProviderErrorBodyTimeout) {
       throw error.timeoutError;
     }
+    // Fetch keeps its request deadline active while the response body is consumed.
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw error;
+    }
     return undefined;
   });
   const rawRequestId = extractProviderRequestId(response);
@@ -284,7 +263,7 @@ async function extractProviderErrorInfo(
       : rawRequestId;
   const rawBody = trimToUndefined(prefix?.text);
   if (!rawBody) {
-    return requestId ? { requestId } : {};
+    return { requestId };
   }
   // Redact before metadata extraction or preview truncation can split a credential.
   const safeBody = options?.requestHeaders
@@ -294,19 +273,20 @@ async function extractProviderErrorInfo(
     : rawBody;
   const body = redactProviderErrorBody(safeBody);
   try {
-    const metadata = extractProviderErrorPayloadMetadata(JSON.parse(safeBody));
+    const metadata = resolveProviderErrorPayloadMetadata(JSON.parse(safeBody));
     return {
-      ...(metadata.detail ? { detail: metadata.detail } : { detail: body }),
-      ...(metadata.code ? { code: metadata.code } : {}),
-      ...(metadata.type ? { type: metadata.type } : {}),
+      // Public formatting stays raw; HTTP details are redacted before choosing the fallback.
+      detail: (metadata.detail && redactSensitiveText(metadata.detail)) || body,
+      code: metadata.code,
+      type: metadata.type,
       body,
-      ...(requestId ? { requestId } : {}),
+      requestId,
     };
   } catch {
     return {
       detail: body,
       body,
-      ...(requestId ? { requestId } : {}),
+      requestId,
     };
   }
 }
@@ -503,7 +483,7 @@ export async function readProviderBinaryResponse(
   label: string,
   kind = "binary",
   opts?: ProviderResponseReadOptions,
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   try {
     assertProviderBinaryResponseContent(response, label, kind);
   } catch (error) {
@@ -512,7 +492,7 @@ export async function readProviderBinaryResponse(
     void response.body?.cancel().catch(() => undefined);
     throw error;
   }
-  const bytes = await readProviderResponseBytes(response, label, kind, opts, opts?.onOverflow);
+  const bytes = await readProviderResponseBytes(response, label, kind, opts);
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);
   }

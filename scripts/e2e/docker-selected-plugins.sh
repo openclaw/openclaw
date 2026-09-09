@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -9,7 +13,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
 IMAGE_NAME="${OPENCLAW_DOCKER_SELECTED_PLUGINS_E2E_IMAGE:-openclaw-docker-selected-plugins-e2e:local}"
 DEPENDENCY_ONLY_IMAGE="${IMAGE_NAME}-dependency-only"
 CONTAINER_NAME="openclaw-docker-selected-plugins-e2e-$$"
-SELECTED_PLUGINS="${OPENCLAW_DOCKER_SELECTED_PLUGINS:-slack,msteams clickclack,slack}"
+SELECTED_PLUGINS="${OPENCLAW_DOCKER_SELECTED_PLUGINS:-slack,msteams clickclack,slack,whatsapp}"
 BUILD_GIT_COMMIT="${OPENCLAW_DOCKER_SELECTED_PLUGINS_E2E_GIT_COMMIT:-0123456789abcdef0123456789abcdef01234567}"
 BUILD_TIMESTAMP="${OPENCLAW_DOCKER_SELECTED_PLUGINS_E2E_BUILD_TIMESTAMP:-2026-07-10T12:34:56.000Z}"
 UNKNOWN_LOG="$(mktemp -t openclaw-docker-selected-plugins-unknown.XXXXXX)"
@@ -47,7 +51,7 @@ else
     exit 1
   fi
 
-  echo "Proving manifest ids and known dependency-only plugins remain stageable..."
+  echo "Proving manifest ids and selected plugin dependencies remain stageable..."
   docker_build_run docker-selected-plugins-dependency-only \
     --target workspace-deps \
     --build-arg OPENCLAW_EXTENSIONS=whatsapp,kimi \

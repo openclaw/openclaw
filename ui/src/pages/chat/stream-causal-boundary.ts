@@ -1,4 +1,7 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import {
+  readAssistantStreamSegmentIdentity,
+  readSessionMessageIdentity,
+} from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -7,7 +10,7 @@ import {
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { userTurnSendIdentity } from "./chat-thread-items.ts";
+import { userTurnRunId } from "./chat-thread-items.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 
 export type StreamCausalBoundaryState = {
@@ -40,9 +43,9 @@ export function persistedSteerTargetRunId(message: unknown): string | null {
 
 function turnRunId(messages: unknown[]): string | null {
   for (const message of messages) {
-    const identity = userTurnSendIdentity(message);
-    if (identity?.startsWith("send:")) {
-      return identity.slice("send:".length);
+    const runId = userTurnRunId(message);
+    if (runId) {
+      return runId;
     }
   }
   return null;
@@ -111,9 +114,9 @@ export function latestPersistedSteerBoundary(
     ) {
       continue;
     }
-    const identity = userTurnSendIdentity(messages[index]);
-    if (identity?.startsWith("send:")) {
-      return { index, runId: identity.slice("send:".length) };
+    const runId = userTurnRunId(messages[index]);
+    if (runId) {
+      return { index, runId };
     }
   }
   return null;
@@ -134,13 +137,11 @@ export function streamCausalInterval(
   messages: unknown[],
   part: { afterBoundaryRunId?: string; boundaryRunId?: string; runId?: string },
 ): { start: number; end: number } {
-  const afterBoundaryIdentity = part.afterBoundaryRunId ? `send:${part.afterBoundaryRunId}` : null;
-  const afterBoundaryIndex = afterBoundaryIdentity
-    ? messages.findIndex((message) => userTurnSendIdentity(message) === afterBoundaryIdentity)
+  const afterBoundaryIndex = part.afterBoundaryRunId
+    ? messages.findIndex((message) => userTurnRunId(message) === part.afterBoundaryRunId)
     : -1;
-  const boundaryIdentity = part.boundaryRunId ? `send:${part.boundaryRunId}` : null;
-  const boundaryIndex = boundaryIdentity
-    ? messages.findIndex((message) => userTurnSendIdentity(message) === boundaryIdentity)
+  const boundaryIndex = part.boundaryRunId
+    ? messages.findIndex((message) => userTurnRunId(message) === part.boundaryRunId)
     : -1;
   if (boundaryIndex >= 0) {
     return {
@@ -158,9 +159,8 @@ export function streamCausalInterval(
     );
     return { start: afterBoundaryIndex + 1, end: end >= 0 ? end : messages.length };
   }
-  const runIdentity = part.runId ? `send:${part.runId}` : null;
-  const runUserIndex = runIdentity
-    ? messages.findIndex((message) => userTurnSendIdentity(message) === runIdentity)
+  const runUserIndex = part.runId
+    ? messages.findIndex((message) => userTurnRunId(message) === part.runId)
     : -1;
   if (runUserIndex >= 0) {
     const end = messages.findIndex(
@@ -350,7 +350,9 @@ type TerminalStreamBoundaryReconciliation =
   | { kind: "none" }
   | {
       kind: "split";
-      afterBoundaryRunId: string;
+      afterBoundaryRunId?: string;
+      afterSequence: number | null;
+      preserveKeyedCommentary?: boolean;
       replacedSegmentIndexes: number[];
       tailMessage: Record<string, unknown> | null;
     };
@@ -367,7 +369,44 @@ function terminalBoundaryCandidateMatches(
   return Boolean(candidate?.boundaryRunId && terminalText.startsWith(candidate.prefix));
 }
 
-/** Reconciles a run-level cumulative terminal against its last persisted steer. */
+function retiredCommentaryBoundary(
+  state: StreamCausalBoundaryState,
+  terminalText: string,
+  boundary: TerminalBoundaryCandidate | null,
+) {
+  const runId = state.chatRunId;
+  if (!runId) {
+    return null;
+  }
+  const messages = state.chatMessages ?? [];
+  const interval = streamCausalInterval(messages, {
+    runId,
+    ...(boundary ? { afterBoundaryRunId: boundary.boundaryRunId } : {}),
+  });
+  for (const segment of (state.chatStreamSegments ?? []).toReversed()) {
+    if (
+      segment.runId !== runId ||
+      segment.persisted !== true ||
+      !segment.retiredItemId ||
+      !streamSegmentUsesAccumulatedText(segment) ||
+      (boundary && !segment.text.startsWith(boundary.prefix)) ||
+      !terminalText.startsWith(segment.text)
+    ) {
+      continue;
+    }
+    const owner = messages.slice(interval.start, interval.end).find((message) => {
+      const identity = readAssistantStreamSegmentIdentity(message);
+      return identity?.runId === runId && identity.itemId === segment.retiredItemId;
+    });
+    const identity = readSessionMessageIdentity(owner);
+    if (identity?.id && !identity.isImported && identity.sequence !== null) {
+      return { prefix: segment.text, afterSequence: identity.sequence };
+    }
+  }
+  return null;
+}
+
+/** Reconciles a cumulative terminal against its persisted steer or retired commentary. */
 export function reconcileTerminalStreamBoundary(
   message: Record<string, unknown>,
   state: StreamCausalBoundaryState,
@@ -402,15 +441,31 @@ export function reconcileTerminalStreamBoundary(
     : terminalBoundaryCandidateMatches(persistedBoundary, terminalText)
       ? persistedBoundary
       : null;
-  if (!selectedBoundary) {
+  const commentary = retiredCommentaryBoundary(state, terminalText, selectedBoundary);
+  const retiredPrefix = commentary ?? selectedBoundary;
+  if (!retiredPrefix) {
     return { kind: "none" };
   }
-  const tail = terminalText.slice(selectedBoundary.prefix.length).trimStart();
+  // A later retired item extends the cumulative prefix without moving the steer
+  // boundary. Keep its durable sequence so the answer cannot adopt either owner.
+  const suffix = terminalText.slice(retiredPrefix.prefix.length);
+  const tail = commentary ? suffix : suffix.trimStart();
   return {
     kind: "split",
-    afterBoundaryRunId: selectedBoundary.boundaryRunId,
+    ...(selectedBoundary ? { afterBoundaryRunId: selectedBoundary.boundaryRunId } : {}),
+    afterSequence:
+      commentary?.afterSequence ??
+      readSessionMessageIdentity(
+        state.chatMessages?.find(
+          (entry) => userTurnRunId(entry) === selectedBoundary?.boundaryRunId,
+        ),
+      )?.sequence ??
+      null,
+    ...(commentary ? { preserveKeyedCommentary: true } : {}),
     replacedSegmentIndexes:
-      selectedBoundary === persistedBoundary && liveBoundary ? liveBoundary.segmentIndexes : [],
+      selectedBoundary && selectedBoundary === persistedBoundary && liveBoundary
+        ? liveBoundary.segmentIndexes
+        : [],
     tailMessage: tail ? replaceTerminalText(message, tail) : null,
   };
 }
@@ -428,12 +483,10 @@ function interveningUserBoundaryRunId(params: {
     return undefined;
   }
   const boundaryIndex = messages.findIndex(
-    (message) => userTurnSendIdentity(message) === `send:${params.boundaryRunId}`,
+    (message) => userTurnRunId(message) === params.boundaryRunId,
   );
   const floorRunId = params.afterBoundaryRunId ?? params.runId;
-  const floorIndex = messages.findIndex(
-    (message) => userTurnSendIdentity(message) === `send:${floorRunId}`,
-  );
+  const floorIndex = messages.findIndex((message) => userTurnRunId(message) === floorRunId);
   if (floorIndex < 0 || boundaryIndex <= floorIndex) {
     return undefined;
   }
@@ -441,9 +494,9 @@ function interveningUserBoundaryRunId(params: {
     if (readSessionMessageIdentity(messages[index])?.role !== "user") {
       continue;
     }
-    const identity = userTurnSendIdentity(messages[index]);
-    if (identity?.startsWith("send:")) {
-      return identity.slice("send:".length);
+    const runId = userTurnRunId(messages[index]);
+    if (runId) {
+      return runId;
     }
   }
   return undefined;

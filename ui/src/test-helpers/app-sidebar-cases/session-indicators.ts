@@ -263,64 +263,109 @@ describe("AppSidebar session indicators", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("keeps Home activity and its active composer draft in the trailing endcap", async () => {
-    const mainKey = "agent:main:main";
-    const workingKey = "agent:main:working";
-    const sessions = createSessionsHarness("main", [mainKey, workingKey]);
-    const result = sessions.sessions.state.result;
-    if (!result) {
-      throw new Error("expected session list");
-    }
-    for (const row of result.sessions) {
-      row.hasActiveRun = true;
-      row.status = "running";
-      if (row.key === mainKey) {
-        row.unread = true;
+  it.each(["running", "queued"] as const)(
+    "rings Home for %s activity while keeping its draft and outbox badges trailing",
+    async (status) => {
+      const mainKey = "agent:main:main";
+      const workingKey = "agent:main:working";
+      const sessions = createSessionsHarness("main", [mainKey, workingKey]);
+      const result = sessions.sessions.state.result;
+      if (!result) {
+        throw new Error("expected session list");
       }
-    }
-    const { sidebar } = await mountSidebar(
-      createGatewayHarness({} as GatewayBrowserClient).gateway,
-      sessions.sessions,
-    );
-    sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = workingKey;
-    sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
-    sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
-    sidebar.requestUpdate();
-    await sidebar.updateComplete;
+      for (const row of result.sessions) {
+        row.hasActiveRun = true;
+        row.status = status;
+        if (row.key === mainKey) {
+          row.unread = true;
+        }
+      }
+      const { sidebar } = await mountSidebar(
+        createGatewayHarness({} as GatewayBrowserClient).gateway,
+        sessions.sessions,
+      );
+      sidebar.activeRouteId = "chat";
+      sidebar.sessionKey = workingKey;
+      sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
+      sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
 
-    const home = sidebar.querySelector(".nav-item--home");
-    const workingSession = sidebar.querySelector(`[data-session-key="${workingKey}"]`);
-    const homeSpinner = home?.querySelector(".nav-item__state .session-run-spinner");
-    const sessionSpinner = workingSession?.querySelector(".session-row-aside .session-run-spinner");
+      const home = sidebar.querySelector(".nav-item--home");
+      const homeRing = home?.querySelector(".session-glyph--running .session-glyph__ring");
+      expect(home?.querySelector(".session-glyph__content .nav-item__icon")).not.toBeNull();
+      expect(homeRing).not.toBeNull();
+      expect(home?.querySelector(".nav-item__state .session-run-spinner")).toBeNull();
+      expect(home?.querySelector(".session-unread-dot")).toBeNull();
+      const activityLabel = status === "queued" ? "Queued" : "Active run";
+      expect(homeRing?.getAttribute("aria-label")).toBe(activityLabel);
+      expect(homeRing?.classList.contains("session-glyph__ring--queued")).toBe(status === "queued");
+      expect(home?.getAttribute("aria-label")).toBe(`Home · ${activityLabel} · Unread`);
+      expect(
+        home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
+      ).toContain("2");
+      expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
+    },
+  );
 
-    expect(home?.querySelector(".nav-item__icon")).not.toBeNull();
-    expect(home?.querySelector(".session-glyph__ring")).toBeNull();
-    expect(homeSpinner).not.toBeNull();
-    expect(homeSpinner?.className).toBe(sessionSpinner?.className);
-    expect(homeSpinner?.getAttribute("role")).toBe(sessionSpinner?.getAttribute("role"));
-    expect(homeSpinner?.getAttribute("aria-label")).toBe(
-      sessionSpinner?.getAttribute("aria-label"),
-    );
-    expect(home?.querySelector(".session-unread-dot")).toBeNull();
-    expect(home?.getAttribute("aria-label")).toBe("Home · Active run · Unread");
-    expect(
-      home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
-    ).toContain("2");
-    expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
-  });
+  it.each(["running", "queued"] as const)(
+    "announces %s and unread once with an owner chip or an empty leading slot",
+    async (status) => {
+      const keys = ["agent:main:owned-running", "agent:main:plain-running"];
+      const sessions = createSessionsHarness("main", keys);
+      const result = sessions.sessions.state.result!;
+      for (const row of result.sessions) {
+        row.hasActiveRun = true;
+        row.status = status;
+        row.unread = true;
+        if (row.key === keys[0]) {
+          row.owner = { actor: { type: "human", id: "ada", label: "Ada" } };
+        }
+      }
+      result.owners = [
+        { type: "human", id: "ada", label: "Ada" },
+        { type: "human", id: "bob", label: "Bob" },
+      ];
+      const { sidebar } = await mountSidebar(
+        createGatewayHarness({} as GatewayBrowserClient).gateway,
+        sessions.sessions,
+      );
+      for (const key of keys) {
+        const row = sidebar.querySelector(`[data-session-key="${key}"]`)!;
+        const ring = row.querySelector(
+          ".sidebar-session-indicator .session-glyph--running .session-glyph__ring",
+        );
+        expect.soft(ring).not.toBeNull();
+        expect.soft(row.querySelector(".session-row-state")).toBeNull();
+        expect(row.querySelector(".session-unread-dot")).toBeNull();
+        expect(row.querySelector(".session-glyph__badge--unread")).toBeNull();
+        expect(row.querySelector(".session-owner-chip") !== null).toBe(key === keys[0]);
+        const link = row.querySelector("a")!;
+        const description = sidebar.querySelector(
+          `[id="${link.getAttribute("aria-describedby")}"]`,
+        )!;
+        expect.soft(description.textContent).toBe("Unread");
+        expect.soft(description.getAttribute("aria-hidden")).toBe("true");
+        expect
+          .soft(ring?.getAttribute("aria-label"))
+          .toBe(status === "queued" ? "Queued" : "Active run");
+        expect.soft(row.querySelectorAll('[aria-label="Unread"]')).toHaveLength(0);
+      }
+    },
+  );
 
   it("preserves child PR indicators and leads a pinned child like any other", async () => {
     const parentKey = "agent:main:parent";
     const pinnedKey = "agent:main:pinned-child";
     const runningKey = "agent:main:running-child";
+    const queuedKey = "agent:main:queued-child";
     const openPullRequestKey = "agent:main:open-pr-child";
     const mergedPullRequestKey = "agent:main:merged-pr-child";
     const sessions = createSessionsHarness("main", [parentKey]);
     sessions.list.mockResolvedValue({
       ts: 2,
       path: "",
-      count: 4,
+      count: 5,
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [
         {
@@ -347,13 +392,22 @@ describe("AppSidebar session indicators", () => {
           worktree: { id: "wt-running", branch: "feature/running", repoRoot: "/repo" },
         },
         {
+          key: queuedKey,
+          spawnedBy: parentKey,
+          kind: "direct",
+          label: "Queued child",
+          updatedAt: 2,
+          hasActiveRun: true,
+          status: "queued",
+        },
+        {
           key: openPullRequestKey,
           spawnedBy: parentKey,
           kind: "direct",
           label: "Open PR child",
           updatedAt: 2,
           hasActiveRun: true,
-          status: "running",
+          status: "queued",
           unread: true,
           agentStatus: {
             note: "Waiting for input",
@@ -386,7 +440,13 @@ describe("AppSidebar session indicators", () => {
             kind: "direct",
             label: "Parent",
             updatedAt: 1,
-            childSessions: [pinnedKey, runningKey, openPullRequestKey, mergedPullRequestKey],
+            childSessions: [
+              pinnedKey,
+              runningKey,
+              queuedKey,
+              openPullRequestKey,
+              mergedPullRequestKey,
+            ],
           },
         ],
       },
@@ -395,6 +455,10 @@ describe("AppSidebar session indicators", () => {
     sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(4),
+    );
+    sidebar.querySelector<HTMLButtonElement>("[data-show-more-children]")?.click();
+    await waitForFast(() =>
+      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(5),
     );
     sessions.sessions.setPullRequestSummary(openPullRequestKey, { numbers: [1], state: "open" });
     sessions.sessions.setPullRequestSummary(mergedPullRequestKey, {
@@ -427,11 +491,32 @@ describe("AppSidebar session indicators", () => {
     expect(pinnedLead?.querySelector("[data-pull-request-state]")).toBeNull();
     expect(pinnedRow?.querySelector(".session-row-state")).toBeNull();
 
+    for (const [key, label] of [
+      [pinnedKey, "Active run"],
+      [runningKey, "Active run"],
+      [queuedKey, "Queued"],
+    ] as const) {
+      const ring = sidebar.querySelector(
+        `[data-session-key="${key}"] .sidebar-session-indicator .session-glyph--running .session-glyph__ring`,
+      );
+      expect.soft(ring).not.toBeNull();
+      expect.soft(ring?.getAttribute("aria-label")).toBe(label);
+      expect.soft(ring?.classList.contains("session-glyph__ring--queued")).toBe(label === "Queued");
+    }
+    expect(
+      sidebar.querySelectorAll(
+        ".sidebar-recent-session .sidebar-session-indicator .session-run-spinner",
+      ),
+    ).toHaveLength(0);
+
     const attentionLead = sidebar.querySelector(
       `[data-session-key="${openPullRequestKey}"] .sidebar-session-indicator`,
     );
     expect(attentionLead?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
     expect(attentionLead?.querySelector(".session-glyph__ring")).not.toBeNull();
+    expect(
+      attentionLead?.querySelector(".session-glyph__ring--queued")?.getAttribute("aria-label"),
+    ).toBe("Queued");
     expect(attentionLead?.querySelector(".session-glyph__badge--unread")).toBeNull();
     expect(attentionLead?.querySelector("[data-pull-request-state]")).toBeNull();
     const attentionLink = sidebar.querySelector(
@@ -543,22 +628,20 @@ describe("AppSidebar session indicators", () => {
     expect(forked?.querySelector(".session-row-state")).toBeNull();
 
     const unread = sidebar.querySelector(`[data-session-key="${keys.unread}"]`);
-    expectEmptyLead(unread);
-    expect(
-      unread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
-    ).not.toBeNull();
+    expect(unread?.querySelector(".sidebar-session-indicator .session-unread-dot")).not.toBeNull();
+    expect(unread?.querySelector(".session-row-state")).toBeNull();
+    expect(unread?.querySelector("a")?.hasAttribute("aria-describedby")).toBe(false);
 
     const runningUnread = sidebar.querySelector(`[data-session-key="${keys.runningUnread}"]`);
     expect(runningUnread?.classList.contains("session-row-host--running")).toBe(true);
-    expectEmptyLead(runningUnread);
     expect(
-      runningUnread?.querySelector(".session-row-aside > .session-row-state .session-run-spinner"),
+      runningUnread?.querySelector(".sidebar-session-indicator .session-glyph__ring"),
     ).not.toBeNull();
-    expect(
-      runningUnread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
-    ).toBeNull();
+    expect(runningUnread?.querySelector(".session-row-state")).toBeNull();
+    expect(runningUnread?.querySelector(".session-unread-dot")).toBeNull();
+    expect(runningUnread?.querySelector(".session-glyph__badge--unread")).toBeNull();
 
-    for (const key of [keys.unread, keys.runningUnread]) {
+    for (const key of [keys.forked, keys.runningUnread]) {
       const link = sidebar.querySelector(`[data-session-key="${key}"] a`);
       const descriptionId = link?.getAttribute("aria-describedby");
       expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);
@@ -567,9 +650,7 @@ describe("AppSidebar session indicators", () => {
     for (const row of [forked, unread, runningUnread]) {
       expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
     }
-    expect(runningUnread?.querySelector(".session-row-state")?.getAttribute("aria-label")).toBe(
-      "Active run · Unread",
-    );
+    expect(runningUnread?.querySelector(".sr-only")?.textContent).toBe("Unread");
 
     const openPullRequestIcon = sidebar.querySelector(
       `[data-session-key="${keys.openPullRequest}"] [data-pull-request-state="open"] svg`,
@@ -600,5 +681,24 @@ describe("AppSidebar session indicators", () => {
       expect(sidebar.querySelector('[data-pull-request-state="open"]')).toBeNull();
       expectEmptyLead(sidebar.querySelector(`[data-session-key="${keys.openPullRequest}"]`));
     });
+  });
+
+  it("keeps an idle parent's glyph unringed while a hidden child runs", async () => {
+    const parentKey = "agent:main:idle-parent";
+    const sessions = createSessionsHarness("main", [parentKey]);
+    const row = sessions.sessions.state.result!.sessions[0]!;
+    row.hasActiveRun = false;
+    row.hasActiveSubagentRun = true;
+    row.childSessions = ["agent:main:idle-parent-child"];
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({} as GatewayBrowserClient).gateway,
+      sessions.sessions,
+    );
+    const parent = sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
+    // Descendant activity is a right-side summary on the collapsed toggle; only
+    // the row's own run may ring its glyph.
+    expectEmptyLead(parent);
+    expect(parent.querySelector(".sidebar-child-session-toggle--running")).not.toBeNull();
+    expect(parent.querySelector(".session-row-state .session-run-spinner")).toBeNull();
   });
 });

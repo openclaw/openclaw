@@ -29,8 +29,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import {
-  bindWorkerTurnAdmissionContinuation,
-  bindWorkerTurnExecutionIdentity,
+  bindWorkerTurnOwner,
   getWorkerTurnExecutionIdentityCapability,
   runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
@@ -96,6 +95,45 @@ function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-
   }
   return active;
 }
+
+it("rejects an unbounded claim wait when its signal is already aborted", async () => {
+  const active = advanceToActive();
+  const claim = store.claimTurn({
+    ...SESSION,
+    owner: placementTurnOwner(active),
+    claimId: "claim-aborted-wait",
+    runId: "run-aborted-wait",
+  });
+  const controller = new AbortController();
+  controller.abort();
+
+  await expect(
+    store.waitForTurnClaimRelease(SESSION.sessionId, { signal: controller.signal }),
+  ).rejects.toThrow(`Turn claim wait aborted for session ${SESSION.sessionId}`);
+  expect(store.validateTurnClaim(claim)).toBe(true);
+});
+
+it.each([
+  { executionMode: "worker-turn", visibleBeforeStaging: true },
+  { executionMode: "remote-exec", visibleBeforeStaging: false },
+] as const)(
+  "projects $executionMode workspace reconciliation at its owned boundary",
+  (scenario) => {
+    const active = advanceToActive(scenario.executionMode);
+    const claim = store.claimTurn({
+      ...SESSION,
+      owner: placementTurnOwner(active),
+      claimId: `workspace-result-${scenario.executionMode}`,
+      runId: `run-${scenario.executionMode}`,
+    });
+    store.markWorkspaceResultPending(claim);
+
+    const readReconciling = () => store.getWorkspaceResultReconcilingSessionIds([active.sessionId]);
+    expect(readReconciling().has(active.sessionId)).toBe(scenario.visibleBeforeStaging);
+    store.recordStagedWorkspaceResult(claim, `refs/openclaw/worker-results/${claim.claimId}`);
+    expect(readReconciling()).toEqual(new Set([active.sessionId]));
+  },
+);
 
 it("emits exact worker claim closure after release and owner fencing", () => {
   const closed = vi.fn();
@@ -214,12 +252,13 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   });
   const placementClosedRun = createOperationalRunInstanceRef(placementClosedClaim.runId);
   const placementClosedAuthority = claimAgentRunDelegatedAuthority(placementClosedRun);
-  bindWorkerTurnExecutionIdentity(
+  bindWorkerTurnOwner(
     store,
     placementClosedClaim,
     createExecutionIdentityAdmissionToken(placementClosedClaim.runId),
     placementClosedRun,
     { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    () => {},
   );
   const placementCapability = getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim);
   if (!placementCapability) {
@@ -245,12 +284,13 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
   });
   const runClosedOperational = createOperationalRunInstanceRef(runClosedClaim.runId);
   const runClosedAuthority = claimAgentRunDelegatedAuthority(runClosedOperational);
-  bindWorkerTurnExecutionIdentity(
+  bindWorkerTurnOwner(
     store,
     runClosedClaim,
     createExecutionIdentityAdmissionToken(runClosedClaim.runId),
     runClosedOperational,
     { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
+    () => {},
   );
   const runCapability = getWorkerTurnExecutionIdentityCapability(store, runClosedClaim);
   if (!runCapability) {
@@ -286,9 +326,11 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
   }
   try {
     await rootAdmission.run(async () =>
-      bindWorkerTurnAdmissionContinuation(store, claim, operationalRunInstance),
+      bindWorkerTurnOwner(store, claim, undefined, operationalRunInstance, SESSION, () => {}),
     );
-    expect(getWorkerTurnExecutionIdentityCapability(store, claim)).toBeUndefined();
+    await getWorkerTurnExecutionIdentityCapability(store, claim)?.run((owner) => {
+      expect(owner.executionIdentityToken).toBeUndefined();
+    });
     const identity: WorkerConnectionIdentity = {
       environmentId: active.environmentId,
       credentialHash: "worker-terminal-continuation",
@@ -372,7 +414,8 @@ it.each([
     });
     let replacement: typeof claim | undefined;
     try {
-      const bind = () => bindWorkerTurnAdmissionContinuation(store, claim, instance, prepare);
+      const bind = () =>
+        bindWorkerTurnOwner(store, claim, undefined, instance, SESSION, () => {}, prepare);
       if (scenario === "root admission") {
         if (!admission) {
           throw new Error("expected root admission");
@@ -405,6 +448,8 @@ it.each([
       });
       const userText = "Keep this example\nMEDIA:./user.png";
       const result = await committer.commit({
+        // This suite isolates projection from the RPC-owned persistence authority.
+        assertCurrent: () => {},
         identity,
         request: {
           runEpoch: identity.ownerEpoch,

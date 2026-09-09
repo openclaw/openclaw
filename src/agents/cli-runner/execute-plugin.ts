@@ -3,6 +3,7 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
+import { mergePathPrepend } from "../../infra/path-prepend.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import type {
   CliBackendExecute,
@@ -12,18 +13,19 @@ import type {
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
-import { isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
+import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
+import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
+import { resolveExecToolConfig } from "../lazy-exec-tool.js";
+import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
-import { callGatewayTool } from "../tools/gateway.js";
 import {
-  closeCliLiveSession,
+  restartCliLiveSession,
   createCliLiveSessionCapability,
   getCliLiveSessionApprovalGrants,
 } from "./cli-live-session-registry.js";
@@ -32,7 +34,9 @@ import {
   resolveCliNativeToolApprovalPlan,
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
-import { resolveCliNoOutputTimeoutDecision } from "./no-output-timeout-policy.js";
+import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { createCliFailoverError as failover } from "./exit-error.js";
+import * as noOutputPolicy from "./no-output-timeout-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS = 5_000;
@@ -45,6 +49,7 @@ function createPluginToolPermissionHandler(params: {
   context: PreparedCliRunContext;
   abortSignal: AbortSignal;
   onPendingApproval: (delta: 1 | -1) => void;
+  env: NodeJS.ProcessEnv;
 }): (request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult> {
   const run = params.context.params;
   const permission = resolveExecDefaults({
@@ -60,10 +65,7 @@ function createPluginToolPermissionHandler(params: {
     const signal = request.abortSignal
       ? AbortSignal.any([params.abortSignal, request.abortSignal])
       : params.abortSignal;
-    const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
-    if (!assertActive) {
-      return denyTool("OpenClaw denied native tool use: the admitted run is no longer active.");
-    }
+    const assertActive = createCliRunCurrentAssertion(run, signal);
     try {
       assertActive();
     } catch {
@@ -217,7 +219,17 @@ function createPluginToolPermissionHandler(params: {
         sessionKey: run.sessionKey,
         agentId: run.agentId,
         toolCallId: request.toolCallId,
-        cwd: params.context.cwd ?? params.context.workspaceDir,
+        cwd: request.cwd,
+        fallbackCwd: params.context.cwd ?? params.context.workspaceDir,
+        bindingEnv: params.env,
+        env: {
+          ...params.env,
+          PATH: mergePathPrepend(
+            params.env.PATH,
+            resolveExecToolConfig({ cfg: run.config, agentId: run.agentId }).pathPrepend ?? [],
+          ),
+        },
+        assertActive,
         abortSignal: signal,
         ask: permission.ask,
       });
@@ -242,7 +254,7 @@ function createPluginToolPermissionHandler(params: {
     if (outcome.grantAlways) {
       currentGrants.add(toolName);
     }
-    return { behavior: "allow", updatedInput: toolInput };
+    return { behavior: "allow", updatedInput: outcome.updatedInput ?? toolInput };
   };
 }
 
@@ -260,12 +272,7 @@ function createPluginUserInputHandler(params: {
     const signal = request.abortSignal
       ? AbortSignal.any([params.abortSignal, request.abortSignal])
       : params.abortSignal;
-    const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
-    if (!assertActive) {
-      return cancelUserInput(
-        "OpenClaw cancelled operator input: the admitted run is no longer active.",
-      );
-    }
+    const assertActive = createCliRunCurrentAssertion(run, signal);
     try {
       assertActive();
     } catch {
@@ -289,38 +296,44 @@ function createPluginUserInputHandler(params: {
       return cancelUserInput("OpenClaw cancelled an invalid operator input request.");
     }
 
+    const questionAuthority = params.context.bindQuestionAnswerAuthority?.(assertActive);
+    const assertQuestionActive = () => {
+      assertActive();
+      questionAuthority?.assertActive();
+    };
     params.onPendingInput(1);
     try {
-      const result = await runStructuredInput({
-        input: compileStructuredInputQuestions({
-          questions: request.questions.map((question) => ({
-            ...question,
-            isSecret: false,
-          })),
-          intro: request.intro?.trim() || "Agent needs input:",
+      const result = await withAgentQuestionAnswerAuthority(questionAuthority, () =>
+        runStructuredInput({
+          input: compileStructuredInputQuestions({
+            questions: request.questions.map((question) => ({
+              ...question,
+              isSecret: false,
+            })),
+            intro: request.intro?.trim() || "Agent needs input:",
+          }),
+          sessionKey: run.sessionKey ?? run.sessionId,
+          agentId: run.agentId,
+          runId: run.runId,
+          timeoutMs: run.timeoutMs,
+          delivery: {
+            onBlockReply: run.onBlockReply,
+            onPartialReply: run.onPartialReply,
+          },
+          signal,
+          isActive: () => {
+            try {
+              assertQuestionActive();
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
         }),
-        sessionKey: run.sessionKey ?? run.sessionId,
-        agentId: run.agentId,
-        runId: run.runId,
-        timeoutMs: run.timeoutMs,
-        gatewayCall: callGatewayTool,
-        delivery: {
-          onBlockReply: run.onBlockReply,
-          onPartialReply: run.onPartialReply,
-        },
-        signal,
-        isActive: () => {
-          try {
-            assertActive();
-            return true;
-          } catch {
-            return false;
-          }
-        },
-        questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
-      });
+      );
       try {
-        assertActive();
+        assertQuestionActive();
       } catch {
         return cancelUserInput(
           "OpenClaw cancelled operator input: the admitted run closed before the answer was committed.",
@@ -384,6 +397,9 @@ async function closePluginIterator(
         timeout.unref();
       }),
     ]);
+  } catch (error) {
+    recordAgentCleanupFailure();
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -394,6 +410,7 @@ export async function executePluginOwnedProcess(params: {
   context: PreparedCliRunContext;
   execute: CliBackendExecute;
   executionCommand: string;
+  executionArgv0?: string;
   executionArgs: readonly string[];
   env: Record<string, string>;
   prompt: string;
@@ -403,7 +420,10 @@ export async function executePluginOwnedProcess(params: {
   sessionId?: string;
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
+  onOutstandingWorkChange?: (active: boolean) => void;
   activeToolCount?: () => number;
+  getActiveLoopbackAskUserDeadline?: () => number | undefined;
+  onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
   liveSession?: {
@@ -424,6 +444,7 @@ export async function executePluginOwnedProcess(params: {
   const signal = run.abortSignal
     ? AbortSignal.any([controller.signal, run.abortSignal])
     : controller.signal;
+  const assertCurrent = createCliRunCurrentAssertion(run, signal);
   const termination: { reason: TerminationReason } = { reason: "exit" };
   const outstanding = {
     approvals: 0,
@@ -431,6 +452,12 @@ export async function executePluginOwnedProcess(params: {
     lastOutputAt: startedAt,
     observed: false,
     replayUnsafe: false,
+  };
+  const reportOutstandingWork = () =>
+    params.onOutstandingWorkChange?.(outstanding.approvals > 0 || outstanding.background > 0);
+  const updatePendingApproval = (delta: number) => {
+    outstanding.approvals = Math.max(0, outstanding.approvals + delta);
+    reportOutstandingWork();
   };
   let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
   const overallTimeoutMs = clampPositiveTimerTimeoutMs(run.timeoutMs);
@@ -442,14 +469,26 @@ export async function executePluginOwnedProcess(params: {
           termination.reason = "overall-timeout";
           controller.abort(new Error("CLI plugin runtime exceeded its execution timeout."));
         }, overallTimeoutMs);
-  const resetNoOutputTimer = (delayMs = noOutputTimeoutMs) => {
+  const activeToolCount = () => Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals);
+  const resetNoOutputTimer = (delayMs?: number) => {
     clearTimeout(noOutputTimer);
-    if (delayMs === undefined || noOutputTimeoutMs === undefined) {
+    if (noOutputTimeoutMs === undefined) {
       return;
     }
+    const activeAskUserDeadline = params.getActiveLoopbackAskUserDeadline?.();
+    const baselineDeadline = outstanding.lastOutputAt + noOutputTimeoutMs;
+    const effectiveDelayMs =
+      delayMs ??
+      Math.max(
+        0,
+        (activeAskUserDeadline === undefined
+          ? baselineDeadline
+          : Math.max(baselineDeadline, activeAskUserDeadline)) - Date.now(),
+      );
     noOutputTimer = setTimeout(() => {
       const quietDurationMs = Date.now() - outstanding.lastOutputAt;
-      const decision = resolveCliNoOutputTimeoutDecision({
+      const askUserDeadline = params.getActiveLoopbackAskUserDeadline?.();
+      const decision = noOutputPolicy.resolveCliNoOutputTimeoutDecision({
         context: {
           provider: run.provider,
           model: params.context.modelId,
@@ -462,14 +501,20 @@ export async function executePluginOwnedProcess(params: {
           mode: "no-output",
           timeoutSeconds: Math.round(quietDurationMs / 1000),
           observedActivity: outstanding.observed,
-          activeToolCount: Math.max(params.activeToolCount?.() ?? 0, outstanding.approvals),
+          activeToolCount: activeToolCount(),
           backgroundTaskCount: outstanding.background,
         },
         hasOutputText: false,
         useResume: params.useResume,
         hasReplayUnsafeActivity: outstanding.replayUnsafe,
         allowResumeControlOnlyRetry: true,
-        outstandingWorkGraceMs: BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+        outstandingWorkGraceMs:
+          askUserDeadline === undefined
+            ? BLOCKED_TOOL_CALL_ABORT_FLOOR_MS
+            : Math.max(
+                BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+                askUserDeadline - outstanding.lastOutputAt,
+              ),
       });
       if (decision.deferMs !== undefined) {
         resetNoOutputTimer(decision.deferMs);
@@ -478,8 +523,11 @@ export async function executePluginOwnedProcess(params: {
       termination.reason = "no-output-timeout";
       params.onNoOutputTimeout?.(decision.error);
       controller.abort(decision.error);
-    }, delayMs);
+    }, effectiveDelayMs);
   };
+  const stopAskUserDeadlineListener = params.onActiveLoopbackAskUserDeadlineChange?.(() =>
+    resetNoOutputTimer(),
+  );
 
   const replyBackendHandle = run.replyOperation
     ? {
@@ -497,9 +545,10 @@ export async function executePluginOwnedProcess(params: {
   }
 
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
-  let terminalResultSeen = false;
-  let terminalErrorSeen = false;
+  let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
+  let terminalResult: "none" | "success" | "error" = "none";
   try {
+    assertCurrent();
     resetNoOutputTimer();
     if (
       params.liveSession &&
@@ -509,15 +558,24 @@ export async function executePluginOwnedProcess(params: {
       if (params.liveSession.requiredGeneration) {
         throw new Error("The required CLI live session cannot be replaced by a fresh process.");
       }
-      await closeCliLiveSession(params.context, "restart");
-      const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
-      if (!assertActive) {
-        throw new Error("CLI live session turn closed while restarting its process.");
-      }
-      assertActive();
+      await restartCliLiveSession(params.context, signal);
     }
+    assertCurrent();
+    if (params.liveSession) {
+      liveSession = createCliLiveSessionCapability({
+        context: params.context,
+        argv: [command, ...params.executionArgs],
+        argv0: params.executionArgv0,
+        env: params.env,
+        ...params.liveSession,
+        abortSignal: signal,
+        claimResources: params.context.preparedBackend.claimLiveSessionResources,
+      });
+    }
+    assertCurrent();
     const execution = params.execute({
       command,
+      argv0: params.executionArgv0,
       args: params.executionArgs,
       cwd,
       env: params.env,
@@ -528,36 +586,21 @@ export async function executePluginOwnedProcess(params: {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       useResume: params.useResume,
       abortSignal: signal,
+      assertCurrent,
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
-      ...(params.liveSession
-        ? {
-            liveSession: createCliLiveSessionCapability({
-              context: params.context,
-              argv: [command, ...params.executionArgs],
-              env: params.env,
-              captureKey: params.liveSession.captureKey,
-              beginCapture: params.liveSession.beginCapture,
-              abortSignal: signal,
-              requiredGeneration: params.liveSession.requiredGeneration,
-              claimResources: params.context.preparedBackend.claimLiveSessionResources,
-            }),
-          }
-        : {}),
+      ...(liveSession ? { liveSession } : {}),
       requestToolPermission: createPluginToolPermissionHandler({
         context: params.context,
         abortSignal: signal,
-        onPendingApproval: (delta) => {
-          outstanding.approvals = Math.max(0, outstanding.approvals + delta);
-        },
+        onPendingApproval: updatePendingApproval,
+        env: params.env,
       }),
       requestUserInput: createPluginUserInputHandler({
         context: params.context,
         abortSignal: signal,
-        onPendingInput: (delta) => {
-          outstanding.approvals = Math.max(0, outstanding.approvals + delta);
-        },
+        onPendingInput: updatePendingApproval,
       }),
     });
     iterator = execution[Symbol.asyncIterator]();
@@ -568,13 +611,16 @@ export async function executePluginOwnedProcess(params: {
         break;
       }
       if (!isRecord(next.value)) {
+        outstanding.replayUnsafe = true;
         throw new Error("CLI plugin runtime emitted an invalid structured stream event.");
       }
       if (next.value.type === "result") {
-        terminalResultSeen = true;
-        terminalErrorSeen ||=
+        terminalResult =
+          terminalResult === "error" ||
           next.value.is_error === true ||
-          (typeof next.value.subtype === "string" && next.value.subtype.startsWith("error_"));
+          (typeof next.value.subtype === "string" && next.value.subtype.startsWith("error_"))
+            ? "error"
+            : "success";
       }
       if (
         next.value.type === "system" &&
@@ -582,6 +628,7 @@ export async function executePluginOwnedProcess(params: {
         Array.isArray(next.value.tasks)
       ) {
         outstanding.background = next.value.tasks.filter(isRecord).length;
+        reportOutstandingWork();
       }
       params.consumeStdout(`${JSON.stringify(next.value)}\n`);
       outstanding.observed = true;
@@ -595,7 +642,7 @@ export async function executePluginOwnedProcess(params: {
       resetNoOutputTimer();
     }
 
-    if (!terminalResultSeen) {
+    if (terminalResult === "none") {
       throw new Error("CLI plugin runtime completed without a terminal result.");
     }
   } catch (error) {
@@ -606,14 +653,31 @@ export async function executePluginOwnedProcess(params: {
       }
       termination.reason = "manual-cancel";
     }
-    // SDKs can throw after emitting an authoritative failed terminal record.
-    // Preserve that record so the existing parser owns auth/rate-limit failover.
-    if (termination.reason === "exit" && !terminalErrorSeen) {
+    if (termination.reason === "exit" && terminalResult !== "error") {
+      if (
+        params.liveSession?.requiredGeneration &&
+        noOutputPolicy.isReplaySafeCliResumeControlOnly(
+          params.useResume,
+          outstanding.replayUnsafe,
+          Boolean(outstanding.approvals || outstanding.background || params.activeToolCount?.()),
+        )
+      ) {
+        try {
+          liveSession?.current();
+        } catch (sessionError) {
+          if (sessionError instanceof FailoverError && sessionError.reason === "session_expired") {
+            const { code, message, reason } = sessionError;
+            throw failover(message, reason, sessionError, { cause: error, code });
+          }
+        }
+      }
       throw error;
     }
   } finally {
     clearTimeout(overallTimer);
     clearTimeout(noOutputTimer);
+    stopAskUserDeadlineListener?.();
+    params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
     if (!controller.signal.aborted) {

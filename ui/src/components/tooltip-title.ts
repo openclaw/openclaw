@@ -1,4 +1,9 @@
 import "./tooltip.ts";
+import {
+  GITHUB_HOVERCARD_PROVIDER_TAG,
+  githubLinkAnchorFromEvent,
+  parseGitHubLinkTarget,
+} from "./github-link-target.ts";
 import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
 
 function titleNamesElement(element: Element) {
@@ -28,6 +33,8 @@ export function installTitleTooltips(ownerDocument: Document) {
   let tooltip: HTMLElementTagNameMap["openclaw-tooltip"] | null = null;
   let active: {
     anchor: HTMLElement | SVGElement;
+    link: HTMLAnchorElement | null;
+    previewOwned: boolean;
     title: string | null;
     label: string | null;
     pointer: boolean;
@@ -55,7 +62,18 @@ export function installTitleTooltips(ownerDocument: Document) {
     }
   };
 
-  const content = () => active?.anchor.getAttribute("data-tooltip") ?? active?.title ?? "";
+  // Preview eligibility owns the hint before its lazy runtime or request settles.
+  // Title suppression and accessible naming still use the normal restoration lifecycle.
+  const ownsPreview = (link: HTMLAnchorElement | null | undefined) =>
+    Boolean(link?.closest(GITHUB_HOVERCARD_PROVIDER_TAG) && parseGitHubLinkTarget(link.href));
+  const content = () => {
+    if (ownsPreview(active?.link)) {
+      return "";
+    }
+    return active?.anchor.matches('[aria-haspopup="dialog"][aria-expanded="true"]')
+      ? ""
+      : (active?.anchor.getAttribute("data-tooltip") ?? active?.title ?? "");
+  };
   const update = (records: MutationRecord[]) => {
     if (!active) {
       return;
@@ -64,7 +82,18 @@ export function installTitleTooltips(ownerDocument: Document) {
       restore();
       return;
     }
-    if (!records.some((record) => active?.anchor.contains(record.target))) {
+    // Reparenting changes eligibility even when mutation targets are ancestors.
+    if (ownsPreview(active.link)) {
+      active.previewOwned = true;
+      if (tooltip) {
+        tooltip.content = "";
+      }
+    }
+    if (
+      !records.some(
+        (record) => active?.anchor.contains(record.target) || record.target === active?.link,
+      )
+    ) {
       return;
     }
     if (
@@ -121,6 +150,7 @@ export function installTitleTooltips(ownerDocument: Document) {
       return;
     }
     const elements = event.composedPath().filter(isTooltipTriggerElement);
+    const link = githubLinkAnchorFromEvent(event);
     // Iframe titles name browsing contexts, not hints. Explicit wrappers already
     // own their trigger; adapting those again would create competing popups.
     const explicit = elements.some((element) => element.localName === "openclaw-tooltip");
@@ -137,9 +167,14 @@ export function installTitleTooltips(ownerDocument: Document) {
       }
     }
     const input = event.type === "focusin" ? "focus" : "pointer";
-    if (anchor === active?.anchor) {
+    const previewOwned = ownsPreview(link);
+    if (anchor === active?.anchor && previewOwned === active?.previewOwned) {
       if (active) {
+        active.link = link;
         active[input] = true;
+        if (link && !active.anchor.contains(link)) {
+          observer.observe(link, { attributes: true, attributeFilter: ["href"] });
+        }
       }
       return;
     }
@@ -152,7 +187,15 @@ export function installTitleTooltips(ownerDocument: Document) {
     }
     const title = anchor.getAttribute("title");
     const label = title && titleNamesElement(anchor) ? title : null;
-    active = { anchor, title, label, pointer: input === "pointer", focus: input === "focus" };
+    active = {
+      anchor,
+      link,
+      previewOwned,
+      title,
+      label,
+      pointer: input === "pointer",
+      focus: input === "focus",
+    };
     if (title !== null) {
       // An empty title blocks browser inheritance without exposing the next ancestor.
       anchor.setAttribute("title", "");
@@ -164,22 +207,33 @@ export function installTitleTooltips(ownerDocument: Document) {
     anchor.addEventListener("focusout", handleFocusOut);
     observer.observe(anchor, {
       attributes: true,
-      attributeFilter: ["title", "data-tooltip", "aria-hidden"],
+      attributeFilter: [
+        "title",
+        "data-tooltip",
+        "aria-hidden",
+        "aria-haspopup",
+        "aria-expanded",
+        "href",
+      ],
       characterData: true,
       subtree: true,
     });
+    if (link && !anchor.contains(link)) {
+      observer.observe(link, { attributes: true, attributeFilter: ["href"] });
+    }
     observer.observe(ownerDocument, { childList: true, subtree: true });
     const root = anchor.getRootNode();
     if (root instanceof ShadowRoot) {
       observer.observe(root, { childList: true, subtree: true });
     }
-    if (!explicit) {
+    const tooltipContent = content();
+    if (!explicit && tooltipContent) {
       tooltip ??= ownerDocument.createElement("openclaw-tooltip");
       const mount =
         elements.find((element) => element.localName === "openclaw-modal-dialog") ??
         ownerDocument.body;
       mount.append(tooltip);
-      tooltip.previewForAnchor(anchor, content(), input);
+      tooltip.previewForAnchor(anchor, tooltipContent, input);
     }
   };
   ownerDocument.addEventListener("pointerover", discover, true);

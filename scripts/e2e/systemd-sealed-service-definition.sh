@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -38,7 +42,7 @@ install -o root -g root -m 0644 scripts/e2e/lib/doctor-install-switch/shims/syst
 install_sealed_unit() {
   install -o root -g "$1" -m "$2" /dev/stdin "$unit_path" <<'UNIT'
 [Unit]
-Description=OpenClaw Gateway (umbreon-latest sealed ownership proof)
+Description=OpenClaw Gateway (sealed ownership proof)
 [Service]
 ExecStart=/usr/local/bin/node /app/openclaw.mjs gateway --port 18789
 WorkingDirectory=/app

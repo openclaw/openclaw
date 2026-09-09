@@ -39,10 +39,10 @@ function contributionLedger({
     new Set(sourcePullRequests),
     sourceReferences,
     [],
-    [],
     new Set(),
     [],
     Date.parse("2026-08-05T00:00:00Z"),
+    new Set([targetSha]),
   ) as ReturnType<typeof ledgerFor> & {
     provenance: {
       inRangePullRequests: number;
@@ -53,6 +53,58 @@ function contributionLedger({
 }
 
 describe("renderContributionRecordEntry", () => {
+  it.each([
+    ["refactor(plugins)!: remove a bundled workflow plugin", "refactor", true],
+    ["refactor!: remove the legacy setup command", "refactor", true],
+    ["REFACTOR(cli)!: rename the setup command", "refactor", true],
+    ["build!: require a supported runtime", "build", true],
+    ["refactor(plugins): simplify loader internals", "refactor", false],
+    ["test: cover breaking plugin changes!", "test", false],
+    ["fix: preserve message delivery", "fix", true],
+    ["feat(fleet): add resource controls and operator docs", "feat", true],
+    ["feat(sessions): add creator attribution and multi-user docs", "feat", true],
+    ["fix(feishu): stop repeated doc child pagination", "fix", true],
+    ["fix: Git update reports success while Web UI serves an old build", "fix", true],
+    ["fix(provider): keep connection test errors readable", "fix", true],
+    ["fix(qa-matrix): preserve shared reply previews", "fix", false],
+    ["feat(ci): add artifact reuse", "feat", false],
+    ["fix(docs): repair setup links", "fix", false],
+    ["fix(build): preserve generated outputs", "fix", false],
+    ["Add operator docs", "other", false],
+    ["Improve provider discovery", "other", true],
+  ])("classifies release prose from declared type and scope: %s", (title, type, eligible) => {
+    const nodes = new Map([
+      [
+        123,
+        {
+          __typename: "PullRequest",
+          author: { __typename: "User", login: "alice" },
+          closingIssuesReferences: { nodes: [] },
+          mergedAt: "2026-08-04T00:00:00Z",
+          title,
+        },
+      ],
+    ]);
+    const result = contributionLedger({ nodes, sourcePullRequests: [123] });
+    expect(result.pullRequests).toMatchObject([
+      { number: 123, type, editorialEligible: eligible, thanks: ["alice"] },
+    ]);
+    const source = [
+      "## 2026.8.1",
+      "### Highlights",
+      ...[1, 2, 3, 4, 5].map((value) => `- Highlight ${value}.`),
+      "### Changes",
+      "- Explain the user impact. (#123) Thanks @alice.",
+      "### Fixes",
+      result.ledger,
+    ].join("\n");
+    expect(ledgerChecks({ source }, result.pullRequests, nodes, [])).toEqual(
+      eligible
+        ? []
+        : [`editorial release prose references non-editorial ${type} PR #123 (${type})`],
+    );
+  });
+
   it("keeps external and linked issue references without repeating PR title references", () => {
     expect(
       renderContributionRecordEntry({
@@ -158,15 +210,15 @@ describe("renderContributionRecordEntry", () => {
       new Set(),
       new Set(),
       new Set(),
-      new Set(),
       [],
       Date.parse("2026-07-09T00:00:00Z"),
+      new Set([targetSha]),
     );
 
     expect(result.ledger).toContain("- **PR #125** Thanks @carol and @alice and @bob.");
   });
 
-  it("counts associated and PR-typed source refs before retained seed-only rows", () => {
+  it("counts associated and reachable source PRs before retained seed-only rows", () => {
     const nodes = new Map(
       [1, 2, 3].map((number) => [
         number,
@@ -175,6 +227,7 @@ describe("renderContributionRecordEntry", () => {
           closingIssuesReferences: { nodes: [] },
           mergedAt: "2026-08-04T00:00:00Z",
           title: `fix: contribution ${number}`,
+          mergeCommit: { oid: targetSha },
         },
       ]),
     );

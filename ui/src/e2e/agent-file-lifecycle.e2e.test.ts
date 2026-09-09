@@ -1,60 +1,22 @@
 // Control UI E2E tests cover visible agent-file save outcomes and agent ownership.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import net from "node:net";
-import path from "node:path";
-import type { Page } from "playwright";
+import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { expect, it } from "vitest";
-import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  agentFileProofDir,
+  captureAgentFileScreenshot,
+  selectAgentFileWorkspace,
+} from "./agent-file-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent file lifecycle",
+  browserLaunchOptions: { headless: true },
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
 });
-
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "agent-file-lifecycle");
-
-async function capture(page: Page, name: string) {
-  if (!captureUiProof) {
-    return;
-  }
-  await mkdir(proofDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
-}
-
-async function selectAgent(page: Page, name: string) {
-  const select = page.locator(".agents-control-select openclaw-agent-select");
-  await select.locator(".agent-select__trigger").click();
-  await select.locator("wa-dropdown-item[data-agent-option]").filter({ hasText: name }).click();
-  await expect
-    .poll(async () => (await select.locator(".agent-select__label").textContent())?.trim())
-    .toBe(name);
-}
-
-async function getFreePort() {
-  const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    server.close();
-    throw new Error("failed to allocate a Gateway port");
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return address.port;
-}
 
 function fileList(agentId: string) {
   return {
@@ -106,14 +68,155 @@ function fileGetResponses(mainContent: string) {
 }
 
 suite.define(() => {
+  it("keeps preview tooltip aligned with its expand state", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+        ...(agentFileProofDir
+          ? { recordVideo: { dir: agentFileProofDir, size: { height: 900, width: 1440 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const content = "# Preview tooltip fixture\n\nSynthetic preview instructions.\n";
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            "agents.files.get",
+            "agents.files.list",
+            "agents.files.set",
+            "agents.list",
+          ],
+          methodResponses: {
+            "agents.list": {
+              defaultId: "main",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: [{ id: "main", name: "Main" }],
+            },
+            "agents.files.get": fileGetResponses(content),
+            "agents.files.list": fileListResponses,
+          },
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        });
+        await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
+        const editor = page.locator(".agent-file-textarea");
+        await expect.poll(() => editor.inputValue()).toBe(content);
+        const read = await gateway.waitForRequest("agents.files.get");
+        expect(read.params).toMatchObject({ agentId: "main", name: "AGENTS.md" });
+        const preview = page
+          .locator(".agent-file-actions")
+          .getByRole("button", { name: "Preview", exact: true });
+        const modal = page.locator("openclaw-modal-dialog:has(.md-preview-expand-btn)");
+        const dialog = modal.locator("dialog");
+        const panel = modal.locator(".md-preview-dialog__panel");
+        const reader = modal.locator(".md-preview-dialog__reader");
+        const expand = modal.locator(".md-preview-expand-btn");
+        const tooltip = modal.locator("openclaw-tooltip:has(.md-preview-expand-btn) wa-tooltip");
+        const body = tooltip.locator('[part="body"]');
+        const popup = tooltip.locator('wa-popup [part="popup"]');
+        const hint = tooltip.locator(".tooltip-content");
+        const settlePreview = async () => {
+          await waitForControlUiProofSurface(dialog, [reader]);
+          await waitForControlUiProofSurface(panel, [reader]);
+        };
+        const assertHint = async (label: string, screenshot: string) => {
+          await reader.hover();
+          await expand.hover();
+          await waitForControlUiProofSurface(popup, [body, hint, expand]);
+          const trigger = await expand.elementHandle();
+          expect(trigger).not.toBeNull();
+          try {
+            expect(
+              await tooltip.evaluate(
+                (element, anchor) => (element as WaTooltip).anchor === anchor,
+                trigger,
+              ),
+            ).toBe(true);
+          } finally {
+            await trigger?.dispose();
+          }
+          // Capture the real baseline mismatch before its expected-correct assertion fails.
+          await captureAgentFileScreenshot(page, screenshot);
+          expect((await hint.textContent())?.trim()).toBe(label);
+          expect(await expand.getAttribute("aria-label")).toBe(label);
+          expect(await hint.isVisible()).toBe(true);
+        };
+        const toggle = async () => {
+          await expand.click();
+          await hint.waitFor({ state: "hidden" });
+          await settlePreview();
+        };
+        await preview.click();
+        await settlePreview();
+        const normalBox = await dialog.boundingBox();
+        expect(normalBox).not.toBeNull();
+        expect(await expand.getAttribute("aria-pressed")).toBe("false");
+        expect(await panel.evaluate((element) => element.classList.contains("fullscreen"))).toBe(
+          false,
+        );
+        await assertHint("Expand preview", "tooltip-01-collapsed.png");
+        for (const action of ["collapse", "Close preview", "Edit file", "Escape"]) {
+          await toggle();
+          expect(await expand.getAttribute("aria-pressed")).toBe("true");
+          expect(await panel.evaluate((element) => element.classList.contains("fullscreen"))).toBe(
+            true,
+          );
+          const expandedBox = await dialog.boundingBox();
+          expect(Boolean(normalBox && expandedBox && expandedBox.width > normalBox.width)).toBe(
+            true,
+          );
+          const stage = action.toLowerCase().replaceAll(" ", "-");
+          await assertHint("Collapse preview", `tooltip-${stage}-expanded.png`);
+          if (action === "collapse") {
+            await toggle();
+          } else {
+            if (action === "Escape") {
+              await page.keyboard.press("Escape");
+              await hint.waitFor({ state: "hidden" });
+              expect(await dialog.isVisible()).toBe(true);
+              await page.keyboard.press("Escape");
+            } else {
+              await modal.getByRole("button", { name: action, exact: true }).click();
+            }
+            await dialog.waitFor({ state: "hidden" });
+            expect(await editor.inputValue()).toBe(content);
+            await preview.click();
+            await settlePreview();
+          }
+          expect(await expand.getAttribute("aria-pressed")).toBe("false");
+          expect(await panel.evaluate((element) => element.classList.contains("fullscreen"))).toBe(
+            false,
+          );
+          const resetBox = await dialog.boundingBox();
+          expect(Boolean(resetBox && expandedBox && resetBox.width < expandedBox.width)).toBe(true);
+          await assertHint("Expand preview", `tooltip-${stage}-reset.png`);
+        }
+        await modal.getByRole("button", { name: "Close preview", exact: true }).click();
+        await dialog.waitFor({ state: "hidden" });
+        expect(await editor.inputValue()).toBe(content);
+        expect((await page.locator(".agent-file-sub").textContent())?.trim()).toBe(
+          "/tmp/openclaw-e2e/workspace-main/AGENTS.md",
+        );
+        expect(
+          (await gateway.getRequests()).filter((request) =>
+            ["agents.files.set", "config.set", "config.patch", "config.apply"].includes(
+              request.method,
+            ),
+          ),
+        ).toEqual([]);
+      },
+    );
+  });
+
   it("keeps save errors visible, retries, and rejects stale cross-agent reads", async () => {
     await suite.withPage(
       {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
-        ...(captureUiProof
-          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+        ...(agentFileProofDir
+          ? { recordVideo: { dir: agentFileProofDir, size: { height: 900, width: 1440 } } }
           : {}),
       },
       async ({ page }) => {
@@ -169,7 +272,7 @@ suite.define(() => {
           .poll(() => page.getByText(/workspace write failed; retry Save/).isVisible())
           .toBe(true);
         expect(await gateway.getRequests("agents.files.list")).toHaveLength(1);
-        await capture(page, "01-save-error-visible.png");
+        await captureAgentFileScreenshot(page, "01-save-error-visible.png");
 
         await gateway.setMethodResponse("agents.files.set", {
           ok: true,
@@ -183,14 +286,14 @@ suite.define(() => {
           .poll(() => page.getByText(/workspace write failed; retry Save/).count())
           .toBe(0);
         await expect.poll(() => save.isDisabled()).toBe(true);
-        await capture(page, "02-save-retry-succeeded.png");
+        await captureAgentFileScreenshot(page, "02-save-retry-succeeded.png");
 
         await gateway.setMethodResponse(
           "agents.files.get",
           fileGetResponses("Updated main instructions"),
         );
         await gateway.deferNext("agents.files.get", { agentId: "writer", name: "AGENTS.md" });
-        await selectAgent(page, "Writer");
+        await selectAgentFileWorkspace(page, "Writer");
         await expect
           .poll(async () =>
             (await gateway.getRequests("agents.files.get")).some(
@@ -198,16 +301,16 @@ suite.define(() => {
             ),
           )
           .toBe(true);
-        await selectAgent(page, "Main");
+        await selectAgentFileWorkspace(page, "Main");
         await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
         await gateway.resolveDeferred("agents.files.get", fileGet("writer", "stale writer"));
         await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
 
-        await selectAgent(page, "Writer");
+        await selectAgentFileWorkspace(page, "Writer");
         await expect.poll(() => editor.inputValue()).toBe("# Writer instructions\n");
         const writes = await gateway.getRequests("agents.files.set");
         expect(writes.every((request) => requestAgentId(request) === "main")).toBe(true);
-        await capture(page, "03-writer-owned-file.png");
+        await captureAgentFileScreenshot(page, "03-writer-owned-file.png");
       },
     );
   });
@@ -218,8 +321,8 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
-        ...(captureUiProof
-          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+        ...(agentFileProofDir
+          ? { recordVideo: { dir: agentFileProofDir, size: { height: 900, width: 1440 } } }
           : {}),
       },
       async ({ page }) => {
@@ -262,7 +365,7 @@ suite.define(() => {
           .toBe(2);
         await expect.poll(() => editor.inputValue()).toBe("server revision 2");
         await expect.poll(() => editor.isEnabled()).toBe(true);
-        await capture(page, "04-refresh-adopts-authoritative-content.png");
+        await captureAgentFileScreenshot(page, "04-refresh-adopts-authoritative-content.png");
 
         await editor.fill("local dirty draft");
         await gateway.setMethodResponse("agents.files.get", fileGetResponses("server revision 3"));
@@ -273,13 +376,13 @@ suite.define(() => {
         await expect.poll(() => editor.inputValue()).toBe("local dirty draft");
         await expect.poll(() => editor.isEnabled()).toBe(true);
         await expect.poll(() => reset.isEnabled()).toBe(true);
-        await capture(page, "05-refresh-preserves-dirty-draft.png");
+        await captureAgentFileScreenshot(page, "05-refresh-preserves-dirty-draft.png");
         await reset.click();
         await expect.poll(() => editor.inputValue()).toBe("server revision 3");
         await expect.poll(() => reset.isDisabled()).toBe(true);
 
         await expect.poll(() => save.isDisabled()).toBe(true);
-        await capture(page, "06-reset-uses-refreshed-authoritative-content.png");
+        await captureAgentFileScreenshot(page, "06-reset-uses-refreshed-authoritative-content.png");
 
         await gateway.deferNext("agents.files.get", { agentId: "main", name: "AGENTS.md" });
         await refresh.click();
@@ -299,7 +402,7 @@ suite.define(() => {
         await expect.poll(() => save.isDisabled()).toBe(true);
         await gateway.resolveDeferred("agents.files.get", fileGet("main", "server revision 3"));
         await expect.poll(() => refresh.isEnabled()).toBe(true);
-        await capture(page, "08-save-survives-older-refresh.png");
+        await captureAgentFileScreenshot(page, "08-save-survives-older-refresh.png");
         await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
         await expect.poll(() => reset.isDisabled()).toBe(true);
 
@@ -330,98 +433,8 @@ suite.define(() => {
         await expect.poll(() => page.locator(".agents-refresh-btn").isEnabled()).toBe(true);
         await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
         expect(await missingHint.count()).toBe(0);
-        await capture(page, "09-created-file-survives-stale-list.png");
+        await captureAgentFileScreenshot(page, "09-created-file-survives-stale-list.png");
       },
     );
-  });
-
-  it("reads and saves the selected agent workspace through an isolated Gateway", async () => {
-    const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "control-ui-agent-files",
-      layout: "home",
-      env: {
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
-    });
-    const mainWorkspace = state.path("workspace-main");
-    const writerWorkspace = state.path("workspace-writer");
-    await Promise.all([
-      mkdir(mainWorkspace, { recursive: true }),
-      mkdir(writerWorkspace, { recursive: true }),
-    ]);
-    await Promise.all([
-      writeFile(path.join(mainWorkspace, "AGENTS.md"), "# Real main instructions\n", "utf8"),
-      writeFile(path.join(writerWorkspace, "AGENTS.md"), "# Real writer instructions\n", "utf8"),
-    ]);
-    await state.writeConfig({
-      agents: {
-        defaults: { workspace: mainWorkspace },
-        entries: {
-          main: { default: true, workspace: mainWorkspace },
-          writer: { workspace: writerWorkspace },
-        },
-      },
-      gateway: {
-        auth: { mode: "none" },
-        controlUi: {
-          allowedOrigins: [new URL(suite.server.baseUrl).origin],
-          enabled: false,
-        },
-        port,
-      },
-    });
-    state.applyEnv();
-    const { startGatewayServer } = await import("../../../src/gateway/server.js");
-    const gateway = await startGatewayServer(port, {
-      auth: { mode: "none" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
-
-    try {
-      await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 900, width: 1440 },
-        },
-        async ({ page }) => {
-          const url = new URL("settings/agents/main/files", suite.server.baseUrl);
-          url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
-          await page.goto(url.toString());
-          const confirmation = page.locator("openclaw-gateway-url-confirmation");
-          await confirmation.waitFor();
-          await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
-          const editor = page.locator(".agent-file-textarea");
-          await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
-
-          await selectAgent(page, "writer");
-          await expect.poll(() => editor.inputValue()).toBe("# Real writer instructions\n");
-
-          await selectAgent(page, "main");
-          await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
-          await editor.fill("# Saved through real Gateway\n");
-          const save = page.locator(".agent-file-actions").getByRole("button", { name: "Save" });
-          await save.click();
-          await expect.poll(() => save.isDisabled()).toBe(true);
-          await expect
-            .poll(() => readFile(path.join(mainWorkspace, "AGENTS.md"), "utf8"))
-            .toBe("# Saved through real Gateway\n");
-          await capture(page, "07-real-gateway-main-save.png");
-        },
-      );
-    } finally {
-      await gateway.close({ reason: "agent file lifecycle e2e cleanup" });
-      await state.cleanup();
-    }
   });
 });

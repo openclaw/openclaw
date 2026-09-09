@@ -1,4 +1,7 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import {
+  readAssistantStreamSegmentIdentity,
+  readSessionMessageIdentity,
+} from "@openclaw/gateway-client/browser";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -30,7 +33,7 @@ import {
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-import { resetToolStream, resetToolStreamRun } from "./tool-stream.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 type StreamReconciliationState = StreamCausalBoundaryState & {
   chatStream: string | null;
@@ -164,7 +167,11 @@ function unkeyedStreamFallbackMetadata(message: unknown): Record<string, unknown
   return metadata && !normalizeOptionalString(metadata.itemId) ? metadata : null;
 }
 
-export function appendTerminalAssistantMessage(messages: unknown[], message: unknown): unknown[] {
+export function appendTerminalAssistantMessage(
+  messages: unknown[],
+  message: unknown,
+  opts?: { preserveKeyedCommentary?: boolean },
+): unknown[] {
   const identity = readSessionMessageIdentity(message);
   const terminalRunId =
     (identity?.role === "assistant" ? identity.runId : null) ?? readLiveTerminalRunId(message);
@@ -201,7 +208,7 @@ export function appendTerminalAssistantMessage(messages: unknown[], message: unk
       // beside the final answer. When a keyed segment is the exact final
       // answer, though, retaining both renders the streamed and persisted
       // copies as duplicate assistant messages.
-      if (visibleText && visibleText === terminalText) {
+      if (!opts?.preserveKeyedCommentary && visibleText && visibleText === terminalText) {
         removedIndexes.add(index);
       }
       continue;
@@ -255,29 +262,6 @@ function visibleAssistantStreamText(
     return null;
   }
   return stream;
-}
-
-function streamFallbackItemId(message: unknown): string | null {
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-  const fallback = (message as { openclawStreamFallback?: unknown }).openclawStreamFallback;
-  if (!fallback || typeof fallback !== "object") {
-    return null;
-  }
-  const itemId = (fallback as { itemId?: unknown }).itemId;
-  return typeof itemId === "string" && itemId.trim() ? itemId.trim() : null;
-}
-
-function hasKeyedAssistantStreamReplacement(
-  messages: unknown[],
-  itemId: string,
-  startIndex: number,
-  endIndex = messages.length,
-): boolean {
-  return messages
-    .slice(startIndex, endIndex)
-    .some((message) => streamFallbackItemId(message) === itemId);
 }
 
 export function visibleAssistantStreamParts(
@@ -384,7 +368,16 @@ export function hasAssistantStreamPartReplacement(
   endIndex = messages.length,
 ): boolean {
   if (part.itemId) {
-    return hasKeyedAssistantStreamReplacement(messages, part.itemId, startIndex, endIndex);
+    return messages.slice(startIndex, endIndex).some((message) => {
+      const identity = readAssistantStreamSegmentIdentity(message);
+      // Native commentary can lack run metadata; the caller's causal interval
+      // still bounds that item, but known opposing runs must never replace it.
+      return (
+        identity !== undefined &&
+        identity.itemId === part.itemId &&
+        (!identity.runId || !part.runId || identity.runId === part.runId)
+      );
+    });
   }
   const persistedTexts = messages.slice(startIndex, endIndex).map((message) => {
     const identity = readSessionMessageIdentity(message);

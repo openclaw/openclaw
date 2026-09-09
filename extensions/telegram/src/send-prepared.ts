@@ -1,9 +1,10 @@
+import type { InputFile } from "grammy";
 import type { InlineKeyboardMarkup, Message } from "grammy/types";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
-  createTelegramChunkDeliveryTracker,
+  isTelegramSkippableChunkSendError,
   mergeTelegramPartialDeliveryError,
 } from "./chunk-delivery.js";
 import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./network-errors.js";
@@ -18,7 +19,6 @@ import {
 } from "./reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
-  getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
 } from "./rich-message.js";
@@ -64,20 +64,17 @@ export type TelegramPreparedSendPart = {
   result: Message;
   acceptedParams: Record<string, unknown>;
   plainText: string;
-  hasInlineKeyboard: boolean;
 };
 
 type TextFallback = { index: number; count: number };
-type AcceptedPart = TelegramPreparedSendPart & { messageId: number };
+type AcceptedPart = TelegramPreparedSendPart & { messageId: number; hasInlineKeyboard: boolean };
 type ObservePart = (part: AcceptedPart) => Promise<void>;
 type PartialDeliveryResult = Parameters<typeof mergeTelegramPartialDeliveryError>[1];
-type Tracking = Omit<
-  Parameters<typeof createTelegramChunkDeliveryTracker>[0],
-  "partialDeliveryResult" | "isSilentSkip"
-> & {
-  partialDeliveryResult?: Parameters<
-    typeof createTelegramChunkDeliveryTracker
-  >[0]["partialDeliveryResult"];
+type Tracking = {
+  invalidate: () => void;
+  onRejected: (error: unknown) => void;
+  onSilentSkip?: (error: unknown) => void;
+  partialDeliveryResult?: () => PartialDeliveryResult;
 };
 
 export function createTelegramPreparedSender(config: {
@@ -87,6 +84,7 @@ export function createTelegramPreparedSender(config: {
   warn: (message: string) => void;
   beforeTextPage?: () => Promise<void>;
   beforeMedia?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 }) {
   const parts: AcceptedPart[] = [];
   const fail = (error: unknown, start = 0, details?: PartialDeliveryResult): never => {
@@ -100,24 +98,39 @@ export function createTelegramPreparedSender(config: {
     });
   };
   const recordAcceptance = (part: TelegramPreparedSendPart) => {
-    const accepted = { ...part, messageId: resolveTelegramMessageIdOrThrow(part.result, "send") };
+    const accepted = {
+      ...part,
+      messageId: resolveTelegramMessageIdOrThrow(part.result, "send"),
+      hasInlineKeyboard: Boolean(part.acceptedParams.reply_markup),
+    };
     // One ledger owns provider acceptance. Receipt/cache/projection observers are
     // fallible and cannot retroactively turn an accepted part into a rejection.
     parts.push(accepted);
     return accepted;
   };
-  const accept = async (
+  const acceptMany = async (
+    delivered: readonly TelegramPreparedSendPart[],
+    observe: ObservePart,
+    details?: () => PartialDeliveryResult,
+    start = 0,
+  ) => {
+    // One album request accepts every returned message at once. Record all IDs
+    // before any receipt/cache observer can fail, preventing a replay of its tail.
+    const accepted = delivered.map(recordAcceptance);
+    try {
+      for (const part of accepted) {
+        await observe(part);
+      }
+    } catch (error) {
+      fail(error, start, details?.());
+    }
+  };
+  const accept = (
     part: TelegramPreparedSendPart,
     observe: ObservePart,
     details?: () => PartialDeliveryResult,
-  ) => {
-    const accepted = recordAcceptance(part);
-    try {
-      await observe(accepted);
-    } catch (error) {
-      fail(error, 0, details?.());
-    }
-  };
+    start = 0,
+  ) => acceptMany([part], observe, details, start);
   const request = <T>(
     label: string,
     requestParams: Record<string, unknown>,
@@ -132,11 +145,20 @@ export function createTelegramPreparedSender(config: {
       requestParams,
       ...(options?.rich ? { removeNativeQuoteParam: removeTelegramRichNativeQuoteParam } : {}),
       request: (effective, operation) =>
-        config.request(() => send(effective), operation, {
-          shouldLog: (error) =>
-            (options?.shouldLog?.(error) ?? true) &&
-            !(getTelegramNativeQuoteReplyMessageId(effective) && isTelegramQuoteParamError(error)),
-        }),
+        config.request(
+          () => {
+            config.assertPlatformSendAuthorized?.();
+            return send(effective);
+          },
+          operation,
+          {
+            shouldLog: (error) =>
+              (options?.shouldLog?.(error) ?? true) &&
+              !(
+                getTelegramNativeQuoteReplyMessageId(effective) && isTelegramQuoteParamError(error)
+              ),
+          },
+        ),
     });
 
   const sendText = async (params: {
@@ -157,15 +179,21 @@ export function createTelegramPreparedSender(config: {
     drainFallback?: boolean;
   }) => {
     const start = parts.length;
-    const tracker = createTelegramChunkDeliveryTracker({
-      ...params.tracking,
-      isSilentSkip: isTelegramEmptyContentError,
-      partialDeliveryResult: () => ({
-        ...params.tracking.partialDeliveryResult?.(),
-        messageIds: parts.slice(start).map((part) => String(part.messageId)),
-        visibleReplySent: true,
-      }),
-    });
+    let firstRejectedError: unknown;
+    let firstSilentSkipError: unknown;
+    const reject = (error: unknown) => {
+      if (isTelegramEmptyContentError(error)) {
+        firstSilentSkipError ??= error;
+        params.tracking.onSilentSkip?.(error);
+        return;
+      }
+      if (!isTelegramSkippableChunkSendError(error)) {
+        fail(error, start, params.tracking.partialDeliveryResult?.());
+      }
+      firstRejectedError ??= error;
+      params.tracking.invalidate();
+      params.tracking.onRejected(error);
+    };
     let acceptedPages = 0;
     for (const [index, page] of params.pages.entries()) {
       let prepared: ReturnType<typeof params.preparePage>;
@@ -173,7 +201,7 @@ export function createTelegramPreparedSender(config: {
         await config.beforeTextPage?.();
         prepared = params.preparePage(index, acceptedPages);
       } catch (error) {
-        tracker.reject(error);
+        reject(error);
         continue;
       }
       const sendPlainOrHtml = async (
@@ -208,10 +236,10 @@ export function createTelegramPreparedSender(config: {
           }
           // Keep the producer alive for a definite rejected plain part. A
           // rejected next() would close its generator and lose the remaining tail.
-          tracker.reject(error);
+          reject(error);
           return undefined;
         }
-        return { ...sent, hasInlineKeyboard: Boolean(sent.acceptedParams.reply_markup) };
+        return sent;
       };
       const iterator = sendTelegramTextPageParts({
         page,
@@ -227,7 +255,7 @@ export function createTelegramPreparedSender(config: {
               "sendRichMessage",
               toTelegramRichMessageContextParams(rawParams),
               (effective) =>
-                getTelegramRichRawApi(config.api).sendRichMessage({
+                config.api.raw.sendRichMessage({
                   chat_id: config.chatId,
                   rich_message: richMessage,
                   ...effective,
@@ -241,7 +269,6 @@ export function createTelegramPreparedSender(config: {
             return {
               ...sent,
               acceptedParams,
-              hasInlineKeyboard: Boolean(acceptedParams.reply_markup),
             };
           },
         },
@@ -252,7 +279,7 @@ export function createTelegramPreparedSender(config: {
           try {
             next = await iterator.next();
           } catch (error) {
-            tracker.reject(error);
+            reject(error);
             break;
           }
           if (next.done) {
@@ -262,7 +289,7 @@ export function createTelegramPreparedSender(config: {
           }
           if (next.value.result) {
             const part = { ...next.value.result, plainText: next.value.page.plainText };
-            await tracker.recordAccepted(recordAcceptance(part), params.observe);
+            await accept(part, params.observe, params.tracking.partialDeliveryResult, start);
           }
         }
       } finally {
@@ -271,7 +298,12 @@ export function createTelegramPreparedSender(config: {
         await iterator.return(undefined);
       }
     }
-    tracker.finish();
+    if (firstRejectedError !== undefined) {
+      fail(firstRejectedError, start, params.tracking.partialDeliveryResult?.());
+    }
+    if (parts.length === start && firstSilentSkipError !== undefined) {
+      fail(firstSilentSkipError, start);
+    }
     return parts.slice(start);
   };
 
@@ -303,12 +335,59 @@ export function createTelegramPreparedSender(config: {
     return {
       ...delivery.result.result,
       plainText: delivery.result.deliveredCaption ?? "",
-      hasInlineKeyboard: Boolean(delivery.result.result.acceptedParams.reply_markup),
       captionRemoved: delivery.result.captionRemoved,
       sender: delivery.sender,
     };
   };
-  return { parts, accept, fail, sendText, sendMedia };
+  const sendPhotoAlbum = async (params: {
+    files: readonly InputFile[];
+    requestParams: Record<string, unknown>;
+    plainCaption?: string;
+  }) => {
+    await config.beforeMedia?.();
+    const delivery = await sendTelegramCaptionedMediaWithFallback({
+      operation: "sendMediaGroup",
+      requestParams: params.requestParams,
+      plainCaption: params.plainCaption,
+      shouldLog: (error) => !isTelegramPhotoLimitError(error),
+      send: (requestParams, shouldLog) =>
+        request(
+          "sendMediaGroup",
+          requestParams,
+          (effective) => {
+            const { caption, parse_mode, ...groupParams } = effective;
+            return config.api.sendMediaGroup(
+              config.chatId,
+              params.files.map((media, index) => ({
+                type: "photo" as const,
+                media,
+                ...(index === 0 && typeof caption === "string" ? { caption } : {}),
+                ...(index === 0 && parse_mode === "HTML" ? { parse_mode: "HTML" as const } : {}),
+              })),
+              groupParams,
+            );
+          },
+          { shouldLog },
+        ),
+    });
+    const prepared = delivery.result.result.map((result, index): TelegramPreparedSendPart => ({
+      result,
+      acceptedParams: delivery.result.acceptedParams,
+      plainText: index === 0 ? (delivery.deliveredCaption ?? "") : "",
+    }));
+    const [first, ...remaining] = prepared;
+    if (!first) {
+      throw new Error("Telegram sendMediaGroup returned no messages");
+    }
+    return {
+      parts: [first, ...remaining] satisfies [
+        TelegramPreparedSendPart,
+        ...TelegramPreparedSendPart[],
+      ],
+      ...(delivery.captionRemoved ? { captionRemoved: true as const } : {}),
+    };
+  };
+  return { parts, accept, acceptMany, fail, sendText, sendMedia, sendPhotoAlbum };
 }
 
 export type TelegramPreparedSender = ReturnType<typeof createTelegramPreparedSender>;

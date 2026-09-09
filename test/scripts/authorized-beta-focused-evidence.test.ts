@@ -1,9 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   assertAuthorizedEligibilityPlanDigest,
@@ -19,11 +19,14 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const seedDirs = useAutoCleanupTempDirTracker(afterAll);
+let fixtureSeed: ReturnType<typeof buildFixturePolicy> | undefined;
 
 type ParsedWorkflow = {
   jobs?: Record<
     string,
     {
+      environment?: string;
       needs?: string | string[];
       outputs?: Record<string, string>;
       permissions?: Record<string, string>;
@@ -83,7 +86,14 @@ function commit(root: string, message: string): string {
 }
 
 function fixturePolicy(): { policy: AuthorizedBetaFocusedPolicy; root: string } {
+  const seed = (fixtureSeed ??= buildFixturePolicy(seedDirs.make("authorized-beta-focused-seed-")));
   const root = tempDirs.make("authorized-beta-focused-");
+  // Copy the complete Git state so each case owns its refs, hooks, index, and objects.
+  cpSync(seed.root, root, { recursive: true, mode: 0 });
+  return { root, policy: structuredClone(seed.policy) };
+}
+
+function buildFixturePolicy(root: string): { policy: AuthorizedBetaFocusedPolicy; root: string } {
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
@@ -533,7 +543,7 @@ function resolveFocusedProducer(
         "}",
         namedStep(
           workflow,
-          isDockerBoundary ? "resolve_build_provenance" : "resolve_release_target",
+          isDockerBoundary ? "publish" : "resolve_release_target",
           isDockerBoundary
             ? "Revalidate focused evidence producer after Docker approval"
             : "Resolve focused release evidence run",
@@ -626,16 +636,18 @@ describe("authorized beta focused evidence", () => {
     expect(resolveFocusedProducer({ ...options, boundary: "docker" }).result.status).not.toBe(0);
   });
 
-  it("gates every Docker build on post-approval focused evidence revalidation", () => {
+  it("gates Docker registry access on post-approval focused evidence revalidation", () => {
     const docker = parse(
       readFileSync(".github/workflows/docker-release.yml", "utf8"),
     ) as ParsedWorkflow;
-    const gate = docker.jobs?.resolve_build_provenance;
+    const gate = docker.jobs?.publish;
     if (!gate) {
-      throw new Error("Docker build provenance gate is missing");
+      throw new Error("Docker publication gate is missing");
     }
 
-    expect(gate.needs).toContain("approve_docker_publish");
+    expect(docker.jobs?.approve?.environment).toBe("docker-release");
+    expect(gate.environment).toBeUndefined();
+    expect(gate.needs).toContain("approve");
     expect(gate.permissions).toMatchObject({
       actions: "read",
       attestations: "read",
@@ -647,14 +659,14 @@ describe("authorized beta focused evidence", () => {
     );
     const download = names.indexOf("Download focused release evidence after Docker approval");
     const verification = names.indexOf("Verify focused release evidence after Docker approval");
-    const provenance = names.indexOf("Resolve shared build provenance");
+    const credentials = names.indexOf("Log in to GHCR");
     expect(revalidation).toBeGreaterThan(-1);
     expect(revalidation).toBeLessThan(download);
     expect(download).toBeLessThan(verification);
-    expect(verification).toBeLessThan(provenance);
+    expect(verification).toBeLessThan(credentials);
     const verifyStep = namedStep(
       docker,
-      "resolve_build_provenance",
+      "publish",
       "Verify focused release evidence after Docker approval",
     );
     expect(verifyStep.run).toContain("verify-authorized-beta-focused-candidate.mjs");
@@ -662,10 +674,6 @@ describe("authorized beta focused evidence", () => {
     expect(verifyStep.run?.indexOf("gh attestation verify")).toBeLessThan(
       verifyStep.run?.indexOf("verify-authorized-beta-focused-candidate.mjs") ?? -1,
     );
-
-    for (const jobName of ["build-amd64", "build-arm64"]) {
-      expect(docker.jobs?.[jobName]?.needs).toContain("resolve_build_provenance");
-    }
   });
 
   it("pins the exact beta.3 candidate, inventories, trust split, and repaired leaves", () => {
@@ -1231,7 +1239,7 @@ describe("authorized beta focused evidence", () => {
       expect(source).toContain("inputs.release_evidence_mode == 'full-release-validation'");
       expect(source).toContain("validate-full-release-validation-evidence.mjs");
     }
-    const parentSource = readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8");
+    const parentSource = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
     expect(parentSource).toContain('proof_label="authorized beta focused validation"');
     expect(parentSource).toContain('proof_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"');
     expect(parentSource).toContain(
@@ -1242,14 +1250,17 @@ describe("authorized beta focused evidence", () => {
     if (!parentWorkflow || !npmWorkflow) {
       throw new Error("release workflows missing");
     }
-    const downloadedTooling = namedStep(
+    const toolingCheckout = namedStep(
       parentWorkflow,
       "resolve_release_target",
-      "Download trusted release validation tooling",
-    ).run;
-    for (const path of VALIDATOR_CLOSURE) {
-      expect(downloadedTooling).toContain(path);
-    }
+      "Checkout trusted release validation tooling",
+    );
+    expect(toolingCheckout.with).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      path: ".release-validation-tooling",
+      "persist-credentials": false,
+      "sparse-checkout": "scripts",
+    });
     const resolveSteps = parentWorkflow.jobs?.resolve_release_target?.steps ?? [];
     const resolveStepNames = resolveSteps.map((step) => step.name);
     expect(resolveStepNames).not.toContain("Install focused release verifier dependency");

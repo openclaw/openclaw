@@ -1,9 +1,11 @@
 // Parent-side subprocess boundary for synchronous sqlite-vec KNN work.
 import { spawn } from "node:child_process";
+import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
+import { vectorKnnProcessEntrypoint } from "./manager-search-knn-entrypoint.js";
 import type { VectorKnnChildInput, VectorKnnChildResult } from "./manager-search-knn.child.js";
 import {
   isVectorKnnRow,
@@ -25,14 +27,6 @@ class VectorKnnSubprocessError extends Error {
     super(message);
     this.name = "VectorKnnSubprocessError";
   }
-}
-
-function resolveVectorKnnChildUrl(): URL {
-  return resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "manager-search-knn.child",
-    distWorkerPath: "extensions/memory-core/memory-search-knn.child.js",
-  });
 }
 
 function buildChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -167,9 +161,11 @@ export async function runVectorKnnInSubprocess(
   if (params.signal?.aborted) {
     throw toAbortError(params.signal);
   }
+  const sqliteLibrary = ensureSqliteLibrarySelected();
   const input: VectorKnnChildInput = {
     databasePath: params.databasePath,
     extensionPath: params.extensionPath,
+    ...(sqliteLibrary.source !== "runtime" ? { sqliteLibraryPath: sqliteLibrary.path } : {}),
     request: params.request,
   };
   const inputPayload = Buffer.from(JSON.stringify(input), "utf8");
@@ -184,7 +180,7 @@ export async function runVectorKnnInSubprocess(
   }
   let child;
   try {
-    const childUrl = resolveVectorKnnChildUrl();
+    const childUrl = resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint);
     child = spawn(process.execPath, resolveRuntimeWorkerArgv(childUrl), {
       env: buildChildEnv(),
       shell: false,
@@ -200,6 +196,7 @@ export async function runVectorKnnInSubprocess(
   }
   return await new Promise<VectorKnnResponse>((resolve, reject) => {
     const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let closed = false;
@@ -284,7 +281,9 @@ export async function runVectorKnnInSubprocess(
           "protocol",
         );
         requestTermination(failure);
+        return;
       }
+      stderrChunks.push(chunk);
     });
     child.stdin.on("error", (error: NodeJS.ErrnoException) => {
       if (!terminationReason && error.code !== "EPIPE") {
@@ -305,9 +304,10 @@ export async function runVectorKnnInSubprocess(
           return;
         }
         if (code !== 0 || signal) {
+          const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
           reject(
             new VectorKnnSubprocessError(
-              `memory vector KNN child exited before returning a result (code ${code}, signal ${signal ?? "none"})`,
+              `memory vector KNN child exited before returning a result (code ${code}, signal ${signal ?? "none"})${stderr ? `: ${stderr}` : ""}`,
               "failed",
             ),
           );

@@ -90,7 +90,7 @@ Full troubleshooting: [Telegram troubleshooting](/channels/telegram#troubleshoot
 | Agent cannot see room history or attachments from other bots | Check the room's `requireMention` and the account's `allowBots`                                                              | `requireMention: true` drops unmentioned messages before they become room events, so there is no backlog. Bot-authored messages and their attachments need `allowBots` (`"mentions"` is the safer setting). See [Ambient room events](/channels/ambient-room-events). |
 | Agent watches an ambient room but never posts                | Check the agent's tool profile for the `message` tool                                                                        | Room events require `message(action=send)`, which the `minimal` and `coding` profiles omit. Grant `tools.alsoAllow: ["message"]` for that agent.                                                                                                                      |
 
-Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshooting)
+Full troubleshooting: [Discord troubleshooting](/channels/discord/troubleshooting#troubleshooting)
 
 ## Slack
 
@@ -102,7 +102,7 @@ Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshootin
 | DMs blocked                            | `openclaw pairing list slack`             | Approve pairing or relax DM policy.                                                                                                                  |
 | Channel message ignored                | Check `groupPolicy` and channel allowlist | Allow the channel or switch policy to `open`.                                                                                                        |
 
-Full troubleshooting: [Slack troubleshooting](/channels/slack#troubleshooting)
+Full troubleshooting: [Slack troubleshooting](/channels/slack/troubleshooting#troubleshooting)
 
 ## iMessage
 

@@ -1,4 +1,4 @@
-import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Tests provider-compatible tool schema normalization.
@@ -28,20 +28,14 @@ import {
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
 } from "./before-tool-call-metadata.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const beforeToolCallTesting = {
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
 };
 
-const TEST_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const TEST_USAGE = createZeroUsageFixture();
 
 describe("direct exec tool schema", () => {
   it("keeps model-facing descriptions compact without hiding runtime constraints", () => {
@@ -56,9 +50,7 @@ describe("direct exec tool schema", () => {
     expect(describeField("timeoutSeconds")).toContain("seconds");
     expect(describeField("pty")).toContain("PTY");
     expect(describeField("elevated")).toContain("if allowed");
-    expect(describeField("security")).toContain("tools.exec.security");
-    expect(describeField("security")).toContain("host approvals");
-    expect(describeField("ask")).toContain("tools.exec.ask");
+    expect(describeField("ask")).toContain("tools.exec.mode");
     expect(describeField("ask")).toContain("channel-origin");
     expect(describeField("ask")).toContain("ask=off");
   });
@@ -1377,6 +1369,9 @@ describe("normalizeToolParameters", () => {
         properties: Object.fromEntries([
           ["__proto__", { type: "array", items: {} }],
           ["emptyItems", { type: "array" }],
+          ["undefinedItems", { type: "array", items: undefined }],
+          ["unionItems", { type: ["array", "null"], items: {} }],
+          ["unionUndefinedItems", { type: ["array", "null"], items: undefined }],
           ["typedItems", { type: "array", items: { type: "string" } }],
           ["falseItems", { type: "array", items: false }],
           ["nullItems", { type: "array", items: null }],
@@ -1396,6 +1391,9 @@ describe("normalizeToolParameters", () => {
       properties: Object.fromEntries([
         ["__proto__", { type: "array" }],
         ["emptyItems", { type: "array" }],
+        ["undefinedItems", { type: "array" }],
+        ["unionItems", { type: ["array", "null"] }],
+        ["unionUndefinedItems", { type: ["array", "null"], items: undefined }],
         ["typedItems", { type: "array", items: { type: "string" } }],
         ["falseItems", { type: "array", items: false }],
         ["nullItems", { type: "array", items: null }],

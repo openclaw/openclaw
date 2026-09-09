@@ -11,11 +11,11 @@ describe("Telegram QA API boundary", () => {
         sutToken: "placeholder",
         testerUserId: "1",
         sutAccountId: "sut",
-        requireMention: true,
       },
     );
 
     expect(config.plugins?.allow).toEqual(["qa-lab", "telegram"]);
+    expect(config.channels?.telegram?.groups).toBeUndefined();
     expect(config.channels?.telegram).toMatchObject({
       enabled: true,
       defaultAccount: "sut",
@@ -36,26 +36,22 @@ describe("Telegram QA API boundary", () => {
     });
   });
 
-  it("disables mention gating only inside the leased group", () => {
+  it("allows only the leased tester in direct-message mode", () => {
     const config = buildTelegramQaConfig(
       {},
       {
         apiRoot: "http://127.0.0.1:8080",
+        directMessageOnly: true,
         groupId: "-100123",
         sutToken: "placeholder",
         testerUserId: "1",
         sutAccountId: "sut",
-        requireMention: false,
       },
     );
 
-    expect(config.channels?.telegram?.groups).toBeUndefined();
-    expect(config.channels?.telegram?.accounts?.sut?.groups).toEqual({
-      "-100123": {
-        groupPolicy: "allowlist",
-        allowFrom: ["1"],
-        requireMention: false,
-      },
+    expect(config.channels?.telegram?.accounts?.sut).toMatchObject({
+      allowFrom: ["1"],
+      dmPolicy: "allowlist",
     });
   });
 

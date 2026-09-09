@@ -9,16 +9,17 @@ import {
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import {
-  areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
@@ -26,7 +27,7 @@ import {
   retireChatModelSelectionOwnership,
 } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -49,17 +50,20 @@ type ChatMetadataBinding = {
   client: GatewayBrowserClient;
   scope: { agentId?: string; sessionKey: string };
   version: number;
+  catalogRequest?: { version: number; controller: AbortController; promise: Promise<boolean> };
   isCurrent: () => boolean;
   unsubscribe: () => void;
 };
 const metadataBindings = new WeakMap<ChatPageHost, ChatMetadataBinding>();
 
 export function retireChatMetadataRequests(host: ChatPageHost): void {
+  metadataBindings.get(host)?.catalogRequest?.controller.abort();
   metadataBindings.get(host)?.unsubscribe();
   metadataBindings.delete(host);
   host.chatModelCatalog = [];
   host.chatModelCatalogError = null;
   host.chatModelsLoading = false;
+  host.chatAccountSelection = null;
 }
 
 function scheduleChatMetadataRefresh(callback: () => void) {
@@ -93,6 +97,7 @@ export function applySelectedChatAgent(
     return;
   }
   applyChatAgentOwnerTransition(host, selectedAgentId);
+  void refreshCurrentChatSessionList(host);
 }
 
 export function applyChatAgentOwnerTransition(
@@ -122,25 +127,6 @@ export function applyChatAgentOwnerTransition(
   void refreshChatModelAuthStatus(host).finally(() => host.requestUpdate?.());
   void host.loadAssistantIdentity();
   host.requestUpdate?.();
-}
-
-function applyChatMetadataResult(
-  host: ChatPageHost,
-  client: GatewayBrowserClient,
-  agentId: string | null | undefined,
-  result: ChatMetadataResult,
-): void {
-  const models = Array.isArray(result.models) ? result.models : undefined;
-  if (models) {
-    host.chatModelCatalog = models;
-    host.chatModelCatalogError = null;
-  }
-  // Missing commands keep the built-ins: commands.list uses the same server builder and fails too.
-  applyRemoteSlashCommandsResult({
-    client,
-    agentId,
-    result,
-  });
 }
 
 function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
@@ -178,15 +164,8 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
       }
       if (update.type === "loading") {
         binding.version += 1;
-        host.chatModelsLoading = host.chatModelCatalog.length === 0;
-        host.chatModelCatalogError = null;
-      } else {
-        host.chatModelsLoading = false;
-        if (update.type === "result") {
-          applyChatMetadataResult(host, client, scope.agentId, update.result);
-        } else {
-          host.chatModelCatalogError = formatUiError(update.error);
-        }
+      } else if (update.type === "result") {
+        applyRemoteSlashCommandsResult({ client, agentId: scope.agentId, result: update.result });
       }
       host.requestUpdate?.();
     }),
@@ -194,7 +173,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   metadataBindings.set(host, binding);
   const cached = peekChatMetadata(client, scope);
   if (cached) {
-    applyChatMetadataResult(host, client, scope.agentId, cached);
+    applyRemoteSlashCommandsResult({ client, agentId: scope.agentId, result: cached });
   }
   return binding;
 }
@@ -206,7 +185,8 @@ export async function refreshChatMetadata(host: ChatPageHost): Promise<void> {
     return;
   }
   // Only accepted store publications update availability or fetch errors.
-  await loadChatMetadata(binding.client, binding.scope).catch(() => undefined);
+  const metadata = loadChatMetadata(binding.client, binding.scope).catch(() => undefined);
+  await Promise.all([metadata, loadChatModelCatalog(host, binding)]);
 }
 
 export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { refresh?: boolean }) {
@@ -232,7 +212,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
       return;
     }
     host.modelAuthStatusResult = result;
-    host.modelAuthStatusError = null;
+    host.modelAuthStatusError = result.unavailable?.message ?? null;
   } catch (err) {
     if (!ownsRequest()) {
       return;
@@ -242,47 +222,54 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   }
 }
 
-export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promise<void> {
-  if (!host.client || !host.connected) {
-    return;
+async function loadChatModelCatalog(
+  host: ChatPageHost,
+  binding: ChatMetadataBinding,
+): Promise<boolean> {
+  if (binding.catalogRequest?.version === binding.version) {
+    return binding.catalogRequest.promise;
   }
-  const binding = bindChatMetadata(host);
-  if (!binding) {
-    return;
-  }
-  const {
-    client,
-    scope: { agentId },
-  } = binding;
+  binding.catalogRequest?.controller.abort();
+  const controller = new AbortController();
   const version = binding.version;
-  const ownsRequest = () => binding.isCurrent() && binding.version === version;
+  const ownsRequest = () =>
+    binding.isCurrent() && binding.catalogRequest?.controller === controller;
   host.chatModelsLoading = host.chatModelCatalog.length === 0;
-  host.chatModelCatalogError = null;
   host.requestUpdate?.();
-  try {
-    await loadModelCatalog(client, {
-      agentId: agentId ?? "",
-      refreshIfDue: true,
-      rejectOnFailure: true,
+  const promise = loadModelCatalog(binding.client, { ...binding.scope, signal: controller.signal })
+    .then(
+      (result) => {
+        if (!ownsRequest()) {
+          return false;
+        }
+        host.chatModelCatalog = result.models;
+        host.chatAccountSelection = result.accountSelection ?? null;
+        host.chatModelCatalogError = modelCatalogRefreshError(result);
+        return true;
+      },
+      (error: unknown) => {
+        if (ownsRequest()) {
+          host.chatModelCatalogError = formatUiError(error);
+        }
+        return false;
+      },
+    )
+    .finally(() => {
+      if (ownsRequest()) {
+        binding.catalogRequest = undefined;
+        host.chatModelsLoading = false;
+        host.requestUpdate?.();
+      }
     });
-    if (binding.isCurrent()) {
-      await refreshChatMetadata(host);
-      // Full model discovery can complete after the session projection used at mount time.
-      // Refresh through the normal session owner so thinking/context metadata converges without
-      // letting the UI guess which provider- or runtime-specific levels are valid.
-      await refreshCurrentChatSessionList(host).catch(() => undefined);
-    }
-  } catch (error) {
-    if (ownsRequest()) {
-      // Keep the startup/prepared snapshot usable while recording the failed
-      // discovery. Reopening the picker starts another uncached load.
-      host.chatModelCatalogError = formatUiError(error);
-    }
-  } finally {
-    if (ownsRequest()) {
-      host.chatModelsLoading = false;
-      host.requestUpdate?.();
-    }
+  binding.catalogRequest = { version, controller, promise };
+  return promise;
+}
+
+export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promise<void> {
+  const binding = bindChatMetadata(host);
+  if (binding && (await loadChatModelCatalog(host, binding)) && binding.isCurrent()) {
+    // Session-owned thinking/context facts must converge with the published model catalog.
+    await refreshCurrentChatSessionList(host).catch(() => undefined);
   }
 }
 
@@ -292,6 +279,8 @@ async function refreshChat(
     onStartupMetadata?: ChatStartupMetadataHandler;
   },
 ) {
+  const refreshedClient = host.client;
+  const refreshedEpoch = host.connectionEpoch;
   const refreshedSessionKey = host.sessionKey;
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
@@ -312,7 +301,7 @@ async function refreshChat(
     if (!history?.sessionInfo) {
       return;
     }
-    host.sessions.reconcile(history.sessionInfo, history.defaults, {
+    const admitted = host.sessions.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessions.state.agentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
       sourceCanonicalListRevision: history.sourceCanonicalListRevision,
@@ -322,16 +311,40 @@ async function refreshChat(
       // key while the sidebar lineage reload catches up.
       archivedFilter: history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
     });
-    host.sessionsResult = host.sessions.state.result;
-    host.sessionsResultAgentId = host.sessions.state.agentId;
-    const sessionsResult = host.sessions.state.result;
-    const sessionInfo = sessionsResult?.sessions.find(
-      (row) =>
-        areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
-        areUiSessionKeysEquivalent(row.key, refreshedSessionKey),
-    );
+    if (
+      !admitted ||
+      host.client !== refreshedClient ||
+      host.connectionEpoch !== refreshedEpoch ||
+      host.sessionKey !== refreshedSessionKey ||
+      resolveAgentIdForSession(host) !== refreshedAgentId
+    ) {
+      return;
+    }
+    // The shared roster may belong to another agent. Keep this pane's accepted
+    // global history separate rather than relabeling or borrowing that roster.
+    const scopedHistory =
+      isUiSelectedGlobalSessionKey(host, refreshedSessionKey) &&
+      host.sessions.state.agentId !== refreshedAgentId;
+    host.sessionsResult = scopedHistory
+      ? reconcileSessionHistory(
+          host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,
+          history.sessionInfo,
+          history.defaults,
+          {
+            resultAgentId: refreshedAgentId,
+            selectedGlobalAgentId: refreshedAgentId,
+            archivedFilter: "all",
+          },
+          // Only this pane's changed projection proves a newer same-agent row;
+          // a later Main list cannot freeze Work history or block a missing row.
+          host.sessionsResultAgentId === refreshedAgentId &&
+            host.sessionsResult !== previousSessionsResult,
+        )
+      : host.sessions.state.result;
+    host.sessionsResultAgentId = scopedHistory ? refreshedAgentId : host.sessions.state.agentId;
+    const sessionInfo = selectedChatSessionRow(host);
     const rosterRow = sessionInfo ?? history.sessionInfo;
-    if (areUiSessionKeysEquivalent(rosterRow.key, refreshedSessionKey)) {
+    if (sessionInfo) {
       host.selectedChatSessionArchived = rosterRow.archived === true;
       host.selectedChatSessionIncognito = rosterRow.incognito === true;
     }
@@ -390,6 +403,9 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   const publication = binding
     ? beginChatMetadataPublication(binding.client, binding.scope)
     : undefined;
+  if (binding) {
+    void loadChatModelCatalog(host, binding);
+  }
   const refresh = refreshChat(host, {
     ...opts,
     onStartupMetadata: async (metadata) => {

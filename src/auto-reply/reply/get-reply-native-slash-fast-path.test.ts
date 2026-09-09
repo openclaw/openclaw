@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -85,7 +86,8 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         throw new Error("native command attempted synchronous CLI setup discovery");
       },
     });
-    vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalogSnapshot").mockResolvedValue({
+    // Keep scoped thinking reads on the same catalog fixture as model selection.
+    const catalogSnapshot: ModelCatalogSnapshot = {
       entries: [
         {
           id: "gpt-5.5",
@@ -103,7 +105,13 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       ],
       routeVariants: [],
-    });
+    };
+    vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalogSnapshot").mockResolvedValue(
+      catalogSnapshot,
+    );
+    vi.spyOn(preparedModelCatalog, "loadProviderScopedThinkingCatalog").mockResolvedValue(
+      catalogSnapshot.entries,
+    );
     handleCommandsMock.mockReset();
     buildStatusReplyMock.mockReset();
     buildStatusReplyMock.mockResolvedValue({ text: "selected model status" });
@@ -113,6 +121,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     body: string,
     config?: OpenClawConfig,
     response: { shouldContinue: boolean; reply?: { text: string } } = { shouldContinue: true },
+    preparedCatalog?: ModelCatalogSnapshot,
   ) {
     handleCommandsMock.mockResolvedValue(response);
     const commandName = body.slice(1).split(/\s+/, 1)[0] ?? "";
@@ -150,6 +159,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       agentCfg: config?.agents?.defaults,
       commandAuthorized: true,
       typing,
+      preparedModelCatalog: preparedCatalog,
     });
 
     return { result, typing, storePath: resolvedConfig.session?.store };
@@ -260,6 +270,43 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       expect(sessionEntry).toMatchObject({ agentRuntimeOverride: "codex" });
     },
   );
+
+  it("applies native model selections using the admitted catalog without rediscovery", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    const storePath = path.join(tempDirs.make("openclaw-native-prepared-model-"), "sessions.json");
+    vi.mocked(preparedModelCatalog.loadPreparedModelCatalogSnapshot).mockRejectedValue(
+      new Error("native selection must not rediscover the prepared catalog"),
+    );
+    const { result } = await resolveNativeDirectiveCommand(
+      "/model ollama/picker-secondary -s",
+      { session: { store: storePath } },
+      { shouldContinue: true },
+      {
+        entries: [
+          {
+            provider: "ollama",
+            id: "picker-secondary",
+            name: "Picker secondary",
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            reasoning: false,
+            contextWindow: 32768,
+          },
+        ],
+        routeVariants: [],
+      },
+    );
+
+    expect(result).toMatchObject({
+      handled: true,
+      reply: { text: expect.stringContaining("ollama/picker-secondary") },
+    });
+    expect(
+      loadExactSessionEntry({ sessionKey: "agent:main:telegram:123", storePath })?.entry,
+    ).toMatchObject({ providerOverride: "ollama", modelOverride: "picker-secondary" });
+    expect(preparedModelCatalog.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(preparedModelCatalog.loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
+  });
 
   it("marks native /compact terminal replies for delivery under message_tool_only (#90185)", async () => {
     const reply = {
@@ -573,7 +620,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     { selection: "automatic fallback", source: "auto" as const },
     { selection: "channel override", source: undefined },
   ])("preserves canonical native /status $selection", async (testCase) => {
-    vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalog").mockResolvedValueOnce([]);
+    vi.spyOn(preparedModelCatalog, "readPreparedModelCatalog").mockResolvedValueOnce([]);
     const targetSessionKey = "agent:main:main";
     const storePath = path.join(tempDirs.make("openclaw-native-status-"), "sessions.json");
     await replaceSessionEntry(

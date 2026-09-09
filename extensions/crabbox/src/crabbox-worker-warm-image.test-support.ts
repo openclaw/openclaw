@@ -11,23 +11,25 @@ import { afterEach, vi } from "vitest";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
-import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 
 export const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
 export const LEASE_ID = operationLeaseId(OPERATION_ID);
 export const CHECKPOINT_ID = "chk_profile_warm";
 export const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
 export const PROFILE = { ...CLASSLESS_PROFILE, class: "standard", warmImage: true };
+export const NODE_RUNTIME_IDENTITY = {
+  nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
+  executionMode: "worker-turn" as const,
+};
 const WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
 );
 export const tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker> =
   useAutoCleanupTempDirTracker(afterEach);
 const providers = new Set<ReturnType<typeof createCrabboxWorkerProvider>>();
-afterEach(() => {
-  for (const provider of providers) {
-    provider.dispose();
-  }
+afterEach(async () => {
+  await Promise.all([...providers].map((provider) => provider.dispose()));
   providers.clear();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -52,7 +54,7 @@ export function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult
 export function checkpointResult(
   checkpointId: string,
   leaseId: string,
-  nativeState: "pending" | "available",
+  nativeState: "available" | "completed",
 ): SpawnResult {
   return commandResult({
     stdout: JSON.stringify({
@@ -68,6 +70,7 @@ export function checkpointResult(
 export function createWarmProvider(
   command?: (call: CommandCall) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
   stateDir = tempDirs.make("openclaw-crabbox-warm-image-"),
+  dependencies: Pick<Parameters<typeof createCrabboxWorkerProvider>[0], "sleep"> = {},
 ) {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const calls: CommandCall[] = [];
@@ -79,6 +82,7 @@ export function createWarmProvider(
     wallpaperPath: WALLPAPER_PATH,
     warn,
     sleep: async () => {},
+    ...dependencies,
     runCommand: async (argv, options) => {
       const call = { argv, options };
       calls.push(call);
@@ -100,14 +104,14 @@ export function createWarmProvider(
         });
       }
       if (argv[1] === "checkpoint" && argv[2] === "create") {
-        return checkpointResult(CHECKPOINT_ID, argv[argv.indexOf("--id") + 1]!, "pending");
+        return checkpointResult(CHECKPOINT_ID, argv[argv.indexOf("--id") + 1]!, "completed");
       }
       if (argv[1] === "checkpoint" && argv[2] === "inspect") {
         return commandResult({
           stdout: JSON.stringify({
-            localState: "available",
+            localState: "metadata_available",
             providerState: "available",
-            nextAction: "fork",
+            nextAction: "fork_or_delete",
           }),
         });
       }
@@ -130,7 +134,7 @@ export function createWarmProvider(
 }
 
 export function openWarmImageStore() {
-  return createPluginStateSyncKeyedStoreForTests<WarmImageRecord>("crabbox", {
+  return createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
     namespace: "warm-images",
     maxEntries: 128,
     overflowPolicy: "reject-new",
@@ -142,18 +146,23 @@ export async function provisionWarmProfile(
   profile: WorkerProfile = PROFILE,
   operationId = OPERATION_ID,
   machineClass?: string,
+  options?: NonNullable<Parameters<WorkerProvider["provision"]>[2]>,
 ) {
   return provider.provision(profile, operationId, {
+    nodeRuntimeIdentity: NODE_RUNTIME_IDENTITY,
+    ...options,
     ...(machineClass ? { machineClass } : {}),
-    beginNodeEnrollment: async () => ({
-      mode: "connect",
-      setupCode: "setup-code",
-      setupId: "setup-id",
-      openclawVersion: "2026.8.1",
-      nodeBootstrap: createNodeBootstrapFixture(),
-      displayName: "Warm cloud worker",
-      waitForDeviceId: async () => "device-1",
-    }),
+    beginNodeEnrollment:
+      options?.beginNodeEnrollment ??
+      (async () => ({
+        mode: "connect",
+        setupCode: "setup-code",
+        setupId: "setup-id",
+        openclawVersion: "2026.8.1",
+        nodeBootstrap: createNodeBootstrapFixture(),
+        displayName: "Warm cloud worker",
+        waitForDeviceId: async () => "device-1",
+      })),
   });
 }
 

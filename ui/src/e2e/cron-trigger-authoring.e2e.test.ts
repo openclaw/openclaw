@@ -1,9 +1,9 @@
 // Real-Chromium coverage keeps automation condition authoring aligned with Gateway contracts.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,7 +13,13 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const proofDirectory = process.env.OPENCLAW_TRIGGER_UI_PROOF_DIR;
+const proofDirectoryParent = process.env.OPENCLAW_TRIGGER_UI_PROOF_DIR;
+let proofDirectory: string | undefined;
+beforeEach(() => {
+  proofDirectory = proofDirectoryParent
+    ? createControlUiE2eArtifactDir("cron-trigger-authoring", proofDirectoryParent)
+    : undefined;
+});
 const proofStage = process.env.OPENCLAW_TRIGGER_UI_PROOF_STAGE ?? "after";
 type CronTriggerTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
@@ -68,7 +74,6 @@ async function captureProof(page: Page, name: string) {
   if (!proofDirectory) {
     return;
   }
-  await mkdir(proofDirectory, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(proofDirectory, `${proofStage}-${name}.png`),
@@ -84,9 +89,7 @@ async function captureTriggerCapabilityProof(page: Page, name: string) {
 }
 
 async function selectSeconds(page: Page) {
-  const unit = page.locator("wa-select").filter({
-    has: page.locator('[slot="label"]', { hasText: "Unit" }),
-  });
+  const unit = page.getByRole("button", { name: /^Unit: /u });
   await unit.click();
   await page.getByRole("option", { name: "Seconds", exact: true }).click();
 }

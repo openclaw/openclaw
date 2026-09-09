@@ -1,7 +1,20 @@
 // Error payload tests ensure embedded runs convert provider/tool failures into
 // concise user-facing replies without leaking raw provider bodies or secrets.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+// Classification fixtures here exercise message/status tables. Provider-attributed
+// structured signals otherwise cross the plugin-consult gate and cold-materialize
+// the full bundled provider runtime, timing the unit test out under CI load
+// (src/agents/CLAUDE.md: no full-runtime cold loads for table coverage).
+vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderHookPlugin: () => undefined,
+    resolveProviderPluginsForHooks: () => [],
+  };
+});
+
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
@@ -14,6 +27,7 @@ import {
 describe("buildEmbeddedRunPayloads", () => {
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
+  const REDACTED_TEST_MODEL_FAILURE_TEXT = "⚠️ Agent run failed (model: openai/test-model).";
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -77,6 +91,32 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
   });
 
+  it.each(["worker", "main"])("keeps global tool-error replies owned by %s", (agentId) => {
+    const payloads = buildPayloads({
+      agentId,
+      sessionKey: "global",
+      config: {
+        agents: {
+          entries: {
+            main: { sandbox: { mode: "off" } },
+            worker: { sandbox: { mode: "all" } },
+          },
+        },
+        tools: { sandbox: { tools: { deny: ["browser"] } } },
+      },
+      lastAssistant: makeAssistant({ errorMessage: "unknown tool: browser", content: [] }),
+    });
+    expect(payloads).toEqual([
+      {
+        text:
+          agentId === "worker"
+            ? expect.stringContaining('Tool "browser" blocked by sandbox tool policy')
+            : REDACTED_TEST_MODEL_FAILURE_TEXT,
+        isError: true,
+      },
+    ]);
+  });
+
   it("turns returned OpenAI refresh failures into Codex login recovery", () => {
     const payloads = buildPayloads({
       provider: "openai",
@@ -122,20 +162,33 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "missing");
   });
 
-  it("keeps mutating tool warnings when assistant error artifacts are not user-facing", () => {
-    const payloads = buildPayloads({
-      assistantTexts: [errorJson],
-      lastAssistant: makeAssistant({}),
-      lastToolError: { toolName: "edit", error: "file missing" },
-      didSendDeterministicApprovalPrompt: true,
-      sessionKey: "agent:main:telegram:direct:u123",
-    });
+  it.each([false, true])(
+    "keeps approval-time tool warnings private (progress=%s)",
+    (sentProgress) => {
+      const payloads = buildPayloads({
+        assistantTexts: [errorJson],
+        lastAssistant: makeAssistant({}),
+        lastToolError: { toolName: "edit", error: "file missing" },
+        didSendDeterministicApprovalPrompt: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        didDeliverSourceReplyViaMessageTool: sentProgress,
+        messagingToolSentTargets: sentProgress
+          ? [{ tool: "message", provider: "telegram", to: "group:123", sourceReplyFinal: false }]
+          : [],
+        sessionKey: "agent:main:telegram:direct:u123",
+      });
 
-    expectSingleToolErrorPayload(payloads, {
-      title: "Edit",
-      absentDetail: "missing",
-    });
-  });
+      expectSingleToolErrorPayload(payloads, {
+        title: "Edit",
+        absentDetail: "missing",
+      });
+      expect(
+        payloads.some(
+          (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("suppresses pretty-printed error JSON that differs from the errorMessage", () => {
     const payloads = buildPayloads({
@@ -187,7 +240,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
@@ -208,65 +261,67 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "provider error details");
     expectNoPayloadTextContaining(payloads, "partial hidden reasoning");
   });
 
-  it("surfaces a terminal error after only a message-tool progress update", () => {
+  it.each([false, true])("surfaces a terminal error with a progress send: %s", (sentProgress) => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "error",
         errorMessage: "SECRET_PROGRESS_FAILURE",
         content: [],
       }),
-      didSendViaMessagingTool: true,
-      didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSentTargets: [
-        {
-          tool: "message",
-          provider: "discord",
-          to: "channel:C1",
-          sourceReplyFinal: false,
-        },
-      ],
+      didSendViaMessagingTool: sentProgress,
+      didDeliverSourceReplyViaMessageTool: sentProgress,
+      messagingToolSentTargets: sentProgress
+        ? [{ tool: "message", provider: "discord", to: "channel:C1", sourceReplyFinal: false }]
+        : [],
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
-    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+    const payload = payloads[0];
+    if (!payload) {
+      throw new Error("Expected a terminal error reply");
+    }
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
       deliverDespiteSourceReplySuppression: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_PROGRESS_FAILURE");
   });
 
-  it("keeps terminal errors suppressed after an explicit final message-tool reply", () => {
-    const payloads = buildPayloads({
-      lastAssistant: makeAssistant({
-        stopReason: "error",
-        errorMessage: "SECRET_POST_FINAL_FAILURE",
-        content: [],
-      }),
-      didSendViaMessagingTool: true,
-      didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSentTargets: [
-        {
-          tool: "message",
-          provider: "discord",
-          to: "channel:C1",
-          sourceReplyFinal: true,
-        },
-      ],
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+  it.each([true, undefined])(
+    "keeps terminal errors suppressed after a completed message-tool reply (final=%s)",
+    (sourceReplyFinal) => {
+      const payloads = buildPayloads({
+        lastAssistant: makeAssistant({
+          stopReason: "error",
+          errorMessage: "SECRET_POST_FINAL_FAILURE",
+          content: [],
+        }),
+        didSendViaMessagingTool: true,
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            sourceReplyFinal,
+          },
+        ],
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
 
-    expect(payloads).toEqual([]);
-  });
+      expect(payloads).toEqual([]);
+    },
+  );
 
   it("suppresses structured provider error messages in user-facing reply payloads", () => {
     const rawError =
@@ -501,7 +556,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");

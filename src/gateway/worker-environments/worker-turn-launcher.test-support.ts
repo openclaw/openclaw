@@ -5,6 +5,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -18,6 +19,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import {
@@ -110,7 +112,7 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
 type DefaultedWorkerTurnLauncherOption =
   | "reconcileActivePlacement"
   | "redispatchReclaimed"
-  | "resolveWorkspacePath"
+  | "resolveWorkspace"
   | "workspaceOperations";
 
 export function createWorkerSessionTurnPlacementProvider(
@@ -124,7 +126,7 @@ export function createWorkerSessionTurnPlacementProvider(
     redispatchReclaimed: async () => {
       throw new Error("unexpected reclaimed placement redispatch");
     },
-    resolveWorkspacePath: async () => root,
+    resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
   });
@@ -137,6 +139,7 @@ export function openSessionManager(): SessionManager {
 export function seedActivePlacement(
   executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   remoteWorkspaceDir = "/worker/workspace",
+  workspaceBaseManifestRef = MANIFEST_REF,
 ): void {
   let placement = placements.startDispatch({
     sessionId: SESSION_ID,
@@ -165,7 +168,7 @@ export function seedActivePlacement(
     expectedGeneration: placement.generation,
     patch: {
       remoteWorkspaceDir,
-      workspaceBaseManifestRef: MANIFEST_REF,
+      workspaceBaseManifestRef,
     },
   });
   placements.transition({
@@ -267,6 +270,21 @@ export function browserEnvironment(): WorkerTurnEnvironmentRecord {
   };
 }
 
+export function computerDescriptor(nodeId: string): WorkerComputerLaunchDescriptor {
+  return {
+    nodeId,
+    computerUse: {
+      contractVersion: 2,
+      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+      actions: ["screenshot"],
+      targets: ["screen"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    },
+  };
+}
+
 export function credential(deliveryId = "c".repeat(43)): MintedWorkerCredential {
   return {
     credential: ["worker", "turn", "credential"].join("-"),
@@ -348,6 +366,75 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     modelHasVision: true,
     config,
   };
+}
+
+export async function withWorkerCompactionAdoption<T>(
+  runId: string,
+  task: (
+    adopt: (sessionId: string) => Promise<string | undefined>,
+    turn: SessionPlacementTurnParams,
+  ) => Promise<T>,
+): Promise<T> {
+  const { createEmbeddedRunCompactionRuntime } =
+    await import("../../agents/embedded-agent-runner/run/compaction-runtime.js");
+  const { createEmbeddedRunSessionPromptState } =
+    await import("../../agents/embedded-agent-runner/run/session-prompt-state.js");
+  const { claimAgentSessionWriter } =
+    await import("../../agents/embedded-agent-runner/run/session-bootstrap.js");
+  const { getAgentRunLifecycleGeneration } = await import("../../infra/agent-run-registry.js");
+  const { preparedRunAdmission, ...params } = turn(runId);
+  try {
+    const admittedRunContext = await preparedRunAdmission.admit("embedded");
+    const writerFence = await claimAgentSessionWriter(params);
+    const runParams = {
+      ...params,
+      admittedRunContext,
+      sessionTarget: { ...sessionTarget, ...writerFence },
+    };
+    const sessionPromptState = createEmbeddedRunSessionPromptState({
+      runParams,
+      sessionAgentId: sessionTarget.agentId,
+      resolvedSessionKey: sessionTarget.sessionKey,
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+    });
+    const unexpected = async (): Promise<never> => {
+      throw new Error("unexpected context-engine execution during successor acceptance");
+    };
+    const runtime = createEmbeddedRunCompactionRuntime({
+      runParams,
+      contextEngine: {
+        info: { id: "worker-successor-fixture", name: "Worker successor fixture" },
+        ingest: unexpected,
+        assemble: unexpected,
+        compact: unexpected,
+      },
+      hookRunner: null,
+      hookContext: {
+        agentId: sessionTarget.agentId,
+        sessionId: SESSION_ID,
+        sessionKey: sessionTarget.sessionKey,
+        workspaceDir: params.workspaceDir,
+      },
+      sessionPromptState,
+    });
+    return await task(
+      (sessionId) =>
+        runtime.adoptCompactionTranscript({
+          ok: true,
+          compacted: true,
+          result: {
+            summary: "Engine-owned successor context",
+            tokensBefore: 4_096,
+            tokensAfter: 2_048,
+            sessionId,
+            sessionTarget: { ...sessionTarget, sessionId },
+          },
+        }),
+      runParams,
+    );
+  } finally {
+    preparedRunAdmission.close();
+  }
 }
 
 export function hasLoneSurrogate(value: string): boolean {

@@ -13,12 +13,14 @@ import {
   type TransformConfigFileWithRetryParams,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import type { ConfigReplaceInput } from "../config/mutate.js";
 import {
   copyPluginInstallRecordMap,
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
+import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -118,10 +120,10 @@ export function stripPendingPluginInstallRecords(
   };
 }
 
-type ConfigCommit = (
+type ConfigCommit<T = ConfigReplaceResult | void> = (
   config: OpenClawConfig,
   writeOptions?: ConfigWriteOptions,
-) => Promise<ConfigReplaceResult | void>;
+) => Promise<T>;
 const PLUGIN_SOURCE_CHANGED_RESTART_REASON = "plugin source changed";
 
 function mergeAfterWrite(
@@ -131,10 +133,10 @@ function mergeAfterWrite(
   if (afterWrite === undefined) {
     return writeOptions;
   }
-  return {
+  return copyRuntimeConfigWriteApplication(writeOptions, {
     ...writeOptions,
     afterWrite,
-  };
+  });
 }
 
 function isMissingInstallPathError(error: unknown): boolean {
@@ -434,18 +436,20 @@ async function assertPluginConfigActivationConsent(params: {
   }
 }
 
-async function commitPluginInstallRecordsWithWriter(params: {
+async function commitPluginInstallRecordsWithWriter<T extends ConfigReplaceResult | void>(params: {
   prepareInstallRecords: (storeOptions: InstalledPluginIndexRecordStoreOptions) => Promise<{
     previousInstallRecords: Record<string, PluginInstallRecord>;
     nextInstallRecords: Record<string, PluginInstallRecord>;
   }>;
   nextConfig: OpenClawConfig;
   recheckStagedActivation?: boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
   writeOptions?: ConfigWriteOptions;
-  commit: ConfigCommit;
+  commit: ConfigCommit<T>;
 }): Promise<{
-  committed: ConfigReplaceResult | void;
+  committed: T;
   nextInstallRecords: Record<string, PluginInstallRecord>;
+  indexWrite: InstalledPluginIndexWriteReceipt;
 }> {
   return await withPluginLifecycleLease({}, async (lease) => {
     let tentativeWrite: InstalledPluginIndexWriteReceipt | undefined;
@@ -454,6 +458,9 @@ async function commitPluginInstallRecordsWithWriter(params: {
     try {
       const storeOptions = { filePath: lease.databasePath };
       const prepared = await params.prepareInstallRecords(storeOptions);
+      // Preparation and lease acquisition can outlive the approving operation.
+      // The index writer below completes its mutation synchronously.
+      await params.beforePersistentEffect?.();
       tentativeWrite = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
         prepared.nextInstallRecords,
         {
@@ -490,16 +497,34 @@ async function commitPluginInstallRecordsWithWriter(params: {
         prepared.previousInstallRecords,
         prepared.nextInstallRecords,
       );
-      const committed = await params.commit(params.nextConfig, {
+      const writeOptions = copyRuntimeConfigWriteApplication(params.writeOptions, {
         ...params.writeOptions,
+        ...(params.beforePersistentEffect
+          ? {
+              beforeCommit: async () => {
+                await params.writeOptions?.beforeCommit?.();
+                await params.beforePersistentEffect?.();
+              },
+            }
+          : {}),
         ...(installRecordsChanged && params.writeOptions?.afterWrite === undefined
-          ? { afterWrite: { mode: "restart", reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON } }
+          ? {
+              afterWrite: {
+                mode: "restart" as const,
+                reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON,
+              },
+            }
           : {}),
         unsetPaths: mergeUnsetPaths(params.writeOptions?.unsetPaths, [
           Array.from(PLUGIN_INSTALLS_CONFIG_PATH),
         ]),
       });
-      return { committed, nextInstallRecords: prepared.nextInstallRecords };
+      const committed = await params.commit(params.nextConfig, writeOptions);
+      return {
+        committed,
+        nextInstallRecords: prepared.nextInstallRecords,
+        indexWrite: tentativeWrite,
+      };
     } catch (error) {
       const tentative = tentativeWrite;
       if (tentative) {
@@ -537,8 +562,9 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   nextConfig: OpenClawConfig;
   baseHash?: string;
   writeOptions?: ConfigWriteOptions;
-}): Promise<void> {
-  await commitPluginInstallRecordsWithWriter({
+  beforePersistentEffect?: () => void | Promise<void>;
+}): Promise<InstalledPluginIndexWriteReceipt> {
+  const result = await commitPluginInstallRecordsWithWriter({
     prepareInstallRecords: async (storeOptions) => ({
       previousInstallRecords:
         params.previousInstallRecords ??
@@ -546,6 +572,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
       nextInstallRecords: params.nextInstallRecords,
     }),
     nextConfig: params.nextConfig,
+    beforePersistentEffect: params.beforePersistentEffect,
     ...(params.writeOptions ? { writeOptions: params.writeOptions } : {}),
     commit: async (nextConfig, writeOptions) => {
       return await replaceConfigFile({
@@ -555,6 +582,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
       });
     },
   });
+  return result.indexWrite;
 }
 
 /** Persist plugin install records without rewriting the user-authored config file. */
@@ -563,8 +591,8 @@ export async function commitPluginInstallRecordsOnly(params: {
   nextInstallRecords: Record<string, PluginInstallRecord>;
   nextConfig: OpenClawConfig;
   verifyConfigFresh?: () => Promise<void>;
-}): Promise<void> {
-  await commitPluginInstallRecordsWithWriter({
+}): Promise<InstalledPluginIndexWriteReceipt> {
+  const result = await commitPluginInstallRecordsWithWriter({
     prepareInstallRecords: async (storeOptions) => ({
       previousInstallRecords:
         params.previousInstallRecords ??
@@ -577,7 +605,13 @@ export async function commitPluginInstallRecordsOnly(params: {
       return undefined;
     },
   });
+  return result.indexWrite;
 }
+
+type PluginConfigCommit = ConfigReplaceResult & {
+  installRecords: Record<string, PluginInstallRecord>;
+  movedInstallRecords: boolean;
+};
 
 /** Commit config while migrating any pending install records into the install index. */
 export async function commitConfigWriteWithPendingPluginInstalls(params: {
@@ -585,13 +619,8 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   /** Source snapshot whose transient records migrate below the canonical index. */
   sourceConfig?: OpenClawConfig;
   writeOptions?: ConfigWriteOptions;
-  commit: ConfigCommit;
-}): Promise<{
-  config: OpenClawConfig;
-  installRecords: Record<string, PluginInstallRecord>;
-  movedInstallRecords: boolean;
-  persistedHash: string | null;
-}> {
+  commit: ConfigCommit<ConfigReplaceResult>;
+}): Promise<PluginConfigCommit> {
   const sourceInstallRecords = params.sourceConfig?.plugins?.installs ?? {};
   const nextPendingConfig = params.sourceConfig
     ? stripPendingPluginInstallRecords(
@@ -613,10 +642,9 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
         : await params.commit(params.nextConfig);
     });
     return {
-      config: params.nextConfig,
+      ...committed,
       installRecords: {},
       movedInstallRecords: false,
-      persistedHash: committed?.persistedHash ?? null,
     };
   }
 
@@ -642,30 +670,25 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
     commit: params.commit,
   });
   return {
-    config: strippedConfig,
+    ...result.committed,
     installRecords: result.nextInstallRecords,
     movedInstallRecords: true,
-    persistedHash: result.committed?.persistedHash ?? null,
   };
 }
 
 /** Replace the config file after moving pending plugin install records into the install index. */
-export async function commitConfigWithPendingPluginInstalls(params: {
-  nextConfig: OpenClawConfig;
-  baseHash?: string;
-  writeOptions?: ConfigWriteOptions;
-}): Promise<{
-  config: OpenClawConfig;
-  installRecords: Record<string, PluginInstallRecord>;
-  movedInstallRecords: boolean;
-  persistedHash: string | null;
-}> {
+export async function commitConfigWithPendingPluginInstalls(
+  params: ConfigReplaceInput & {
+    baseHash?: string;
+    writeOptions?: ConfigWriteOptions;
+  },
+): Promise<PluginConfigCommit> {
   return await commitConfigWriteWithPendingPluginInstalls({
-    nextConfig: params.nextConfig,
+    nextConfig: params.sourceConfig ?? params.nextConfig,
     ...(params.writeOptions ? { writeOptions: params.writeOptions } : {}),
     commit: async (nextConfig, writeOptions) => {
       return await replaceConfigFile({
-        nextConfig,
+        ...(params.sourceConfig ? { sourceConfig: nextConfig } : { nextConfig }),
         ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
         ...(writeOptions ? { writeOptions } : {}),
       });
@@ -699,7 +722,7 @@ export async function transformConfigWithPendingPluginInstalls<T = void>(
           : undefined),
     );
     return {
-      config: committed.config,
+      config: committed.nextConfig,
       persistedHash: committed.persistedHash,
       afterWrite,
     };

@@ -372,8 +372,12 @@ describe("SQLite active transcript event projection", () => {
     expect(page.events.map((entry) => entry.seq)).toEqual([2, 4, 5]);
     expect(page.totalMessages).toBe(3);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
-    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
-    expect(readSessionTranscriptMessageEventById(scope, "kept-tool")).toBeUndefined();
+    expect(readSessionTranscriptMessageEventById(scope, "old")).toMatchObject({
+      event: { id: "old" },
+    });
+    expect(readSessionTranscriptMessageEventById(scope, "kept-tool")).toMatchObject({
+      event: { id: "kept-tool" },
+    });
 
     const recent = readRecentSessionTranscriptMessageEvents(scope, {
       maxBytes: 1_024,
@@ -405,7 +409,9 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptActivePathEntryRelation(scope, "newer-compaction")).toBe("exact");
     expect(readSessionTranscriptActivePathEntryRelation(scope, "post-reset")).toBe("ancestor");
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
-    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
+    expect(readSessionTranscriptMessageEventById(scope, "old")).toMatchObject({
+      event: { id: "old" },
+    });
   });
 
   it("fails closed when the latest indexed reset payload is malformed", async () => {
@@ -747,8 +753,14 @@ describe("SQLite active transcript event projection", () => {
       expect(
         appendTranscriptEventsInTransaction(writeDatabase, scope, [
           { type: "leaf", id: "batch-leaf", parentId: "root", targetId: "root" },
+          {
+            type: "message",
+            id: "batch-tail",
+            parentId: "root",
+            message: { role: "assistant", content: "after branch selection" },
+          },
         ]),
-      ).toBe(1);
+      ).toBe(2);
     }, databaseOptions);
     database.db
       .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1")
@@ -760,7 +772,7 @@ describe("SQLite active transcript event projection", () => {
         .get(scope.sessionId),
     ).toEqual({ needs_rebuild: 1 });
     await waitForSessionTranscriptIndexReconcile(databaseOptions);
-    expect(readSessionTranscriptMessageEventCount(scope)).toBe(1);
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(2);
   });
 
   it("keeps 100k-message reads bounded while rebuilds yield to live writes", async () => {

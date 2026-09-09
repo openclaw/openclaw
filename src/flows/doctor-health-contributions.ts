@@ -3,6 +3,11 @@
 import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
+import { emitDoctorNotes } from "../commands/doctor/emit-notes.js";
+import {
+  DoctorStateMigrationRefusalError,
+  throwIfDoctorStateMigrationRefused,
+} from "../infra/state-migrations.messages.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
@@ -14,14 +19,15 @@ import type {
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import {
+  isUpdateDoctorRun,
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
-import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
+import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
-import type { DetectableHealthCheckInput } from "./health-check-runner-types.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 export type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -31,6 +37,51 @@ const loadDoctorCoreChecksModule = async () => await import("./doctor-core-check
 const loadNoteModule = async () => await import("../../packages/terminal-core/src/note.js");
 const loadOnboardHelpersModule = async () => await import("../commands/onboard-helpers.js");
 const loadSecretTypesModule = async () => await import("../config/types.secrets.js");
+const MAX_DEFERRED_LEGACY_STATE_DETAILS = 20;
+
+async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.options.repair !== true && ctx.options.yes !== true) {
+    return;
+  }
+  const [{ detectLegacyStateMigrations }, { prepareLegacySessionSurfaces }] = await Promise.all([
+    import("../infra/state-migrations.doctor.js"),
+    import("../plugins/legacy-session-surfaces.js"),
+  ]);
+  const legacyState = await detectLegacyStateMigrations({
+    cfg: ctx.cfg,
+    doctorOnlyStateMigrations: true,
+    ...(ctx.env ? { env: ctx.env } : {}),
+    legacySessionSurfaces: prepareLegacySessionSurfaces({ config: ctx.cfg }),
+  });
+  const pendingDetails = [
+    ...legacyState.warnings.map((warning) => (warning.startsWith("- ") ? warning : `- ${warning}`)),
+    ...legacyState.preview,
+  ];
+  if (pendingDetails.length === 0) {
+    return;
+  }
+  const { note } = await loadNoteModule();
+  const displayedDetails = pendingDetails.slice(0, MAX_DEFERRED_LEGACY_STATE_DETAILS);
+  const omittedDetailCount = pendingDetails.length - displayedDetails.length;
+  const remediation =
+    ctx.configWriteRefusal === "validation"
+      ? "Fix the config errors above."
+      : ctx.configWriteRefusal === "include-ownership"
+        ? "Repair the include boundary named above by hand."
+        : "Resolve the Gateway or cron-store condition above.";
+  note(
+    [
+      "Pending owners and blockers:",
+      ...displayedDetails,
+      ...(omittedDetailCount > 0
+        ? [`${omittedDetailCount} additional pending entries were omitted from this report.`]
+        : []),
+      "No listed legacy source was removed.",
+      remediation,
+    ].join("\n"),
+    "Legacy state deferred",
+  );
+}
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { formatCliCommand } = await loadCommandFormatModule();
@@ -93,6 +144,11 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     openAICodexAuthProfileIdMap,
     ...(ctx.env ? { env: ctx.env } : {}),
   });
+  emitDoctorNotes({
+    note,
+    changeNotes: authProfileMigration.changes,
+    warningNotes: authProfileMigration.warnings,
+  });
   if (authProfileMigration.configOwnerMigrationApplied) {
     // The candidate is safe only after the migration verifies and archives its source.
     ctx.cfg = authConfigCandidate;
@@ -153,89 +209,29 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
 }
 
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { resolveSecretInputRef } = await loadSecretTypesModule();
-  const { buildGatewayTokenSecretRefFixHint, buildGatewayTokenSecretRefUnavailableMessage } =
-    await loadDoctorCoreChecksModule();
-  const { resolveGatewayAuth } = await import("../gateway/auth.js");
-  const { resolveGatewayAuthToken } = await import("../gateway/auth-token-resolution.js");
-  const { note } = await loadNoteModule();
-  const { randomToken } = await loadOnboardHelpersModule();
-  if (resolveDoctorMode(ctx.cfg) !== "local" || !ctx.sourceConfigValid) {
+  if (!ctx.sourceConfigValid) {
     return;
   }
+  const { detectGatewayAuthHealth } = await loadDoctorCoreChecksModule();
+  const [finding] = await detectGatewayAuthHealth({
+    cfg: ctx.cfg,
+    env: ctx.env,
+    allowExecSecretRefs: ctx.options.allowExec,
+  });
+  if (!finding) {
+    return;
+  }
+  const { resolveSecretInputRef } = await loadSecretTypesModule();
+  const { note } = await loadNoteModule();
   const gatewayTokenRef = resolveSecretInputRef({
     value: ctx.cfg.gateway?.auth?.token,
     defaults: ctx.cfg.secrets?.defaults,
   }).ref;
-  const auth = resolveGatewayAuth({
-    authConfig: ctx.cfg.gateway?.auth,
-    tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
-  });
-  // Modes that don't need a token: password, none, trusted-proxy.
-  // This aligns with hasExplicitGatewayInstallAuthMode() in auth-install-policy.ts.
-  // Previously, only "password" and "token" (with a token present) were excluded,
-  // causing doctor --fix to overwrite trusted-proxy/none configs with token mode.
-  const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
-  const needsToken =
-    auth.mode !== "password" &&
-    auth.mode !== "none" &&
-    auth.mode !== "trusted-proxy" &&
-    (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
-  if (!needsToken) {
-    return;
-  }
-  let unresolvedRefReason: string | undefined;
-  if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
-    const { getSkippedExecRefStaticError } = await import("../secrets/exec-resolution-policy.js");
-    const staticError = getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
-    if (staticError) {
-      unresolvedRefReason = undefined;
-    } else if (ctx.options.allowExec !== true) {
-      return;
-    } else {
-      const resolvedToken = await resolveGatewayAuthToken({
-        cfg: ctx.cfg,
-        env: ctx.env ?? process.env,
-        unresolvedReasonStyle: "detailed",
-        envFallback: "never",
-      });
-      if (resolvedToken.source === "secretRef") {
-        return;
-      }
-      unresolvedRefReason = resolvedToken.unresolvedRefReason;
-    }
-  } else {
-    const resolvedToken = await resolveGatewayAuthToken({
-      cfg: ctx.cfg,
-      env: ctx.env ?? process.env,
-      unresolvedReasonStyle: "detailed",
-    });
-    if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
-      return;
-    }
-    unresolvedRefReason = resolvedToken.unresolvedRefReason;
-  }
+  note([finding.message, finding.fixHint].filter(Boolean).join("\n"), "Gateway auth");
   if (gatewayTokenRef) {
-    const reason = buildGatewayTokenSecretRefUnavailableMessage({
-      cfg: ctx.cfg,
-      ref: gatewayTokenRef,
-      unresolvedRefReason,
-    });
-    note(
-      [
-        reason,
-        "Doctor will not overwrite gateway.auth.token with a plaintext value.",
-        buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
-      ].join("\n"),
-      "Gateway auth",
-    );
+    note("Doctor will not overwrite gateway.auth.token with a plaintext value.", "Gateway auth");
     return;
   }
-
-  note(
-    "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
-    "Gateway auth",
-  );
   const shouldSetToken =
     ctx.options.generateGatewayToken === true
       ? true
@@ -248,6 +244,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (!shouldSetToken) {
     return;
   }
+  const { randomToken } = await loadOnboardHelpersModule();
   const nextToken = randomToken();
   ctx.cfg = {
     ...ctx.cfg,
@@ -284,36 +281,57 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (legacyState.notices.length > 0) {
     note(legacyState.notices.join("\n"), "Doctor notices");
   }
-  if (legacyState.preview.length === 0) {
+  if (legacyState.preview.length > 0) {
+    note(legacyState.preview.join("\n"), "Legacy state detected");
+    const migrate =
+      ctx.options.nonInteractive === true
+        ? true
+        : await ctx.prompter.confirm({
+            message: "Migrate detected legacy state now?",
+            initialValue: true,
+          });
+    if (migrate) {
+      const migrated = await runLegacyStateMigrations({
+        detected: legacyState,
+        config: ctx.cfg,
+        ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
+        recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
+        legacySessionSurfaces,
+      });
+      if (migrated.changes.length > 0) {
+        note(migrated.changes.join("\n"), "Doctor changes");
+      }
+      const notices = migrated.notices ?? [];
+      if (notices.length > 0) {
+        note(notices.join("\n"), "Doctor notices");
+      }
+      if (migrated.warnings.length > 0) {
+        note(migrated.warnings.join("\n"), "Doctor warnings");
+      }
+    }
+  }
+  if (!doctorOnlyStateMigrations) {
     return;
   }
-  note(legacyState.preview.join("\n"), "Legacy state detected");
-  const migrate =
-    ctx.options.nonInteractive === true
-      ? true
-      : await ctx.prompter.confirm({
-          message: "Migrate detected legacy state now?",
-          initialValue: true,
-        });
-  if (!migrate) {
-    return;
+  const { repairObsoleteGeneratedExecApprovals } =
+    await import("../infra/exec-approvals-generated-migration.js");
+  const { ExecApprovalsMigrationRequiredError } =
+    await import("../infra/exec-approvals-migration-gate.js");
+  let removedExecApprovals: number;
+  try {
+    // The legacy-state owner must import retired JSON before this gated SQLite update.
+    removedExecApprovals = repairObsoleteGeneratedExecApprovals();
+  } catch (error) {
+    if (error instanceof ExecApprovalsMigrationRequiredError) {
+      return;
+    }
+    throw error;
   }
-  const migrated = await runLegacyStateMigrations({
-    detected: legacyState,
-    config: ctx.cfg,
-    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-    recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
-    legacySessionSurfaces,
-  });
-  if (migrated.changes.length > 0) {
-    note(migrated.changes.join("\n"), "Doctor changes");
-  }
-  const notices = migrated.notices ?? [];
-  if (notices.length > 0) {
-    note(notices.join("\n"), "Doctor notices");
-  }
-  if (migrated.warnings.length > 0) {
-    note(migrated.warnings.join("\n"), "Doctor warnings");
+  if (removedExecApprovals > 0) {
+    note(
+      `Exec approvals updated: removed ${removedExecApprovals} older generated ${removedExecApprovals === 1 ? "approval" : "approvals"} that were not tied to a working directory. Manual allowlist rules were not changed. Rerun affected workflows and choose "Always allow here" when prompted.`,
+      "Doctor changes",
+    );
   }
 }
 
@@ -401,13 +419,19 @@ async function detectSystemdLingerFindings(
 
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
-  await doctorShellCompletion(ctx.runtime, ctx.prompter, {
+  await doctorShellCompletion(ctx.prompter, {
     nonInteractive: ctx.options.nonInteractive,
   });
 }
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { note } = await loadNoteModule();
+  if (ctx.gatewayMaintenanceActive) {
+    note("Gateway health will be checked after Doctor repair.", "Gateway");
+    ctx.gatewayHealthSkipped = true;
+    ctx.gatewayMemoryProbe = { checked: false, ready: false, skipped: true };
+    return;
+  }
   if ((await hasActiveGatewayExecCredential(ctx)) && ctx.options.allowExec !== true) {
     note(
       "Gateway health probes skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
@@ -456,11 +480,11 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
 }
 
 export async function resolveDoctorContributionHealthChecks(): Promise<
-  readonly DetectableHealthCheckInput[]
+  readonly DoctorHealthCheck[]
 > {
   const { createCoreHealthChecks } = await import("./doctor-core-checks.js");
   const checksById = new Map(createCoreHealthChecks().map((check) => [check.id, check]));
-  const checks: DetectableHealthCheckInput[] = [];
+  const checks: DoctorHealthCheck[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {
       checks.push(...contribution.healthChecks.map(normalizeHealthCheck));
@@ -484,15 +508,42 @@ async function runDoctorHealthContributionList(
   contributions: readonly DoctorHealthContribution[],
 ): Promise<void> {
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
+  throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
+  const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
+  const deferred = updateDoctorRun
+    ? contributions.filter((contribution) => contribution.updatePolicy === "standalone")
+    : [];
+  if (deferred.length > 0) {
+    const { note } = await loadNoteModule();
+    note(
+      `Omitted during update: ${deferred.map((contribution) => contribution.option.label).join(", ")}.\nRun \`openclaw doctor\` after the update to inspect these diagnostics.`,
+      "Update Doctor scope",
+    );
+  }
   for (const contribution of contributions) {
+    // Skip before opening a plugin snapshot; these diagnostics cannot establish
+    // required migration readiness and have their own standalone invocation.
+    if (updateDoctorRun && contribution.updatePolicy === "standalone") {
+      continue;
+    }
     try {
+      const run = async () => {
+        try {
+          await contribution.run(ctx);
+        } finally {
+          // Deferred session writers settle here. An optional diagnostic cannot
+          // turn their recorded refusal into permission for later repairs.
+          throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
+        }
+        if (ctx.configWriteRefusal) {
+          await reportDeferredLegacyState(ctx);
+        }
+      };
       if (!runWithPluginMetadataSnapshot) {
-        await contribution.run(ctx);
+        await run();
       } else {
         const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-        await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
-          contribution.run(ctx),
-        );
+        await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
       }
       if (ctx.configWriteRefusal) {
         // Later repairs consume the candidate. Stop before they persist state
@@ -500,9 +551,13 @@ async function runDoctorHealthContributionList(
         return;
       }
     } catch (error) {
-      await (contribution.required ? Promise.reject(error as Error) : Promise.resolve());
+      if (contribution.required || error instanceof DoctorStateMigrationRefusalError) {
+        throw error;
+      }
       const { note } = await loadNoteModule();
-      note(`${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`, "Doctor warnings");
+      const message = `${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`;
+      note(message, "Doctor warnings");
+      recordDoctorHealthWarnings(ctx, [], [message]);
     }
   }
 }
@@ -515,7 +570,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.doctorHealthContributionsTestApi")
   ] = {
-    createDoctorHealthContribution,
     resolveDoctorHealthContributions,
     runDoctorHealthContributionList,
   };

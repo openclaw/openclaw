@@ -1,4 +1,3 @@
-// Searxng plugin module implements searxng client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -328,10 +327,5 @@ export async function runSearxngSearch(params: {
 }
 
 export const testing = {
-  buildSearxngSearchUrl,
-  normalizeSearxngResult,
-  parseSearxngResponseText,
-  shouldRetryEmptyCategorySearchWithGeneral,
-  validateSearxngBaseUrl,
   SEARXNG_SEARCH_CACHE,
 };

@@ -279,7 +279,7 @@ ssh-copy-id -i ~/.ssh/id_rsa <REMOTE_USER>@<REMOTE_IP>
 openclaw config set gateway.remote.token "<your-token>"
 ```
 
-Use `gateway.remote.password` instead if the remote Gateway uses password auth. `OPENCLAW_GATEWAY_TOKEN` is still valid as a shell-level override, but the durable remote-client setup is `gateway.remote.token` / `gateway.remote.password`.
+The Gateway accepts its configured secret in either field: `gateway.remote.token` or `gateway.remote.password` both work, including for password-mode Gateways. The server's `gateway.auth.mode` selects which configured secret to use. `OPENCLAW_GATEWAY_TOKEN` is still valid as a shell-level override, but the durable remote-client setup is `gateway.remote.token` / `gateway.remote.password`.
 
 #### Step 4: create the LaunchAgent
 
@@ -314,6 +314,9 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist
 
 The tunnel starts automatically at login, restarts on crash, and keeps the forwarded port live.
 
+Open or reopen OpenClaw.app after setup, then verify the connection using the
+[macOS remote access](/platforms/mac/remote) checks.
+
 <Note>
 If you have a leftover `com.openclaw.ssh-tunnel` LaunchAgent from an older setup, unload and delete it.
 </Note>
@@ -343,4 +346,3 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 
 - [Tailscale](/gateway/tailscale)
 - [Authentication](/gateway/authentication)
-- [Remote gateway setup](/gateway/remote-gateway-readme)

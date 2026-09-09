@@ -13,7 +13,7 @@ import type {
   ExecSecurity,
   ExecTarget,
 } from "../infra/exec-approvals.js";
-import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
@@ -46,8 +46,11 @@ export type ExecToolDefaults = {
   /** Host-prepared non-secret environment and store projection exclusions. */
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
   autoReviewer?: ExecAutoReviewer;
+  /** Reads current attempt context only when a command needs review. */
+  reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
   agentId?: string;
   backgroundMs?: number;
+  cleanupMs?: number;
   timeoutSec?: number;
   approvalWarningText?: string;
   approvalFollowupText?: string;
@@ -77,13 +80,9 @@ export type ExecToolDefaults = {
    *  exec approval followup path resolve the session key's current sessionId and
    *  drop the followup when the key was rebound by `/new` or `/reset`. */
   sessionStore?: string;
-  /** `session.mainKey` from the runtime config; passed through into
-   *  runExecProcess so background-exit notifications can remap cron-run
-   *  session keys to the agent's main queue without an ambient config load. */
+  /** @deprecated SDK declaration compatibility; coding-tool routing comes from config. */
   mainKey?: string;
-  /** `session.scope` from the runtime config; passed alongside `mainKey`
-   *  so the cron-run remap can route global-scope agents to the "global"
-   *  queue instead of agent-main. */
+  /** @deprecated SDK declaration compatibility; coding-tool routing comes from config. */
   sessionScope?: "per-sender" | "global";
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
@@ -153,6 +152,7 @@ export type ExecToolDetails = {
       startedAt: number;
       cwd?: string;
       tail?: string;
+      followUp?: string;
     }
   | {
       status: "completed" | "failed";
@@ -172,6 +172,7 @@ export type ExecToolDetails = {
       timedOut?: boolean;
       noOutputTimedOut?: boolean;
       cwd?: string;
+      nodeId?: string;
     }
   | {
       status: "approval-pending";

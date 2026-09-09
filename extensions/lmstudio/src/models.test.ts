@@ -5,6 +5,7 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   discoverLmstudioModels,
@@ -60,27 +61,6 @@ describe("lmstudio-models", () => {
     }
     return JSON.parse(init.body) as unknown;
   };
-  const cancelTrackedResponse = (
-    text: string,
-    init: ResponseInit,
-  ): {
-    response: Response;
-    wasCanceled: () => boolean;
-  } => {
-    let canceled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(text));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    return {
-      response: new Response(stream, init),
-      wasCanceled: () => canceled,
-    };
-  };
   const createModelLoadFetchMock = (params?: {
     key?: string;
     variants?: unknown;
@@ -107,7 +87,7 @@ describe("lmstudio-models", () => {
         });
       }
       if (String(url).endsWith("/api/v1/models/load")) {
-        return jsonResponse({ status: "loaded" });
+        return jsonResponse({ status: "loaded", instance_id: "inst-loaded" });
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });
@@ -370,6 +350,25 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("keeps a loaded context above the default load length", () => {
+    const model = mapLmstudioWireEntry({
+      type: "llm",
+      key: "large-loaded-context",
+      max_context_length: 262_144,
+      loaded_instances: [{ id: "loaded", config: { context_length: 98_304 } }],
+    });
+
+    // The default load length only governs the JIT load request for unloaded
+    // models; a running instance decides its own serving context.
+    expect(model).toMatchObject({
+      id: "large-loaded-context",
+      contextWindow: 262_144,
+      contextTokens: 98_304,
+      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      loaded: true,
+    });
+  });
+
   it("resolves reasoning capability for supported and unsupported options", () => {
     expect(resolveLmstudioReasoningCapability({ capabilities: undefined })).toBe(false);
     expect(
@@ -577,7 +576,7 @@ describe("lmstudio-models", () => {
   });
 
   it("cancels the response body after a non-ok model discovery response", async () => {
-    const tracked = cancelTrackedResponse("unavailable", { status: 503 });
+    const tracked = cancelTrackedTextResponse("unavailable", { status: 503 });
     const fetchMock = vi.fn(async () => tracked.response);
 
     const result = await fetchLmstudioModels({
@@ -841,6 +840,7 @@ describe("lmstudio-models", () => {
     // path must stop reading at the byte cap instead of buffering it all.
     let canceled = false;
     let bytesEmitted = 0;
+    const chunk = new Uint8Array(64 * 1024).fill(0x61);
     const oversizedStream = new ReadableStream<Uint8Array>({
       pull(controller) {
         // Far exceeds the 16 MiB provider JSON cap if read to completion.
@@ -848,8 +848,8 @@ describe("lmstudio-models", () => {
           controller.close();
           return;
         }
-        bytesEmitted += 64 * 1024;
-        controller.enqueue(new Uint8Array(64 * 1024).fill(0x61));
+        bytesEmitted += chunk.byteLength;
+        controller.enqueue(chunk);
       },
       cancel() {
         canceled = true;
@@ -885,7 +885,7 @@ describe("lmstudio-models", () => {
   it("suppresses truncated model load error bodies", async () => {
     const credential = "split-credential-xyz";
     const body = `${"x".repeat(8 * 1024 - 2)}${credential}${"y".repeat(1000)}`;
-    const tracked = cancelTrackedResponse(body, { status: 503 });
+    const tracked = cancelTrackedTextResponse(body, { status: 503 });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (String(url).endsWith("/api/v1/models")) {

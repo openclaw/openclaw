@@ -25,7 +25,7 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
@@ -123,6 +123,7 @@ import { redactSecrets } from "../logging/redact.js";
 import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { extractErrorHttpStatus } from "../shared/assistant-error-format.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
 import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
@@ -1035,7 +1036,114 @@ describe("isGatewayLiveModelTimeout", () => {
   });
 });
 
+describe("formatGatewayLiveFailureDiagnostic", () => {
+  it.each([
+    ["google", "gemini-3.1-pro-preview", "503 Service unavailable", "provider-unavailable", 503],
+    ["anthropic", "claude-sonnet-4-6", "429 rate limit", "rate-limit", 429],
+    ["google", "gemini-3.1-pro-preview", "request timed out", "timeout", undefined],
+    [
+      "google",
+      "gemini-3.1-pro-preview",
+      "upstream error from google",
+      "provider-unavailable",
+      undefined,
+    ],
+    ["google", "gemini-3.1-pro-preview", "unexpected reply", "unclassified", undefined],
+  ])(
+    "preserves %s failure facts through the agent.wait envelope: %s / %s",
+    (provider, model, message, classification, explicitHttpStatus) => {
+      const error = formatGatewayLiveAgentWaitFailure({
+        context: "probe",
+        runId: "private-run-id",
+        result: { status: "error", error: message, providerStarted: true },
+      });
+      expect(
+        JSON.parse(
+          formatGatewayLiveFailureDiagnostic({ provider, model, phase: "tool-read", error }),
+        ),
+      ).toEqual({
+        provider,
+        model,
+        phase: "tool-read",
+        classification,
+        ...(explicitHttpStatus ? { explicitHttpStatus } : {}),
+        providerStarted: true,
+      });
+    },
+  );
+
+  it("omits bodies, URLs, credentials and arbitrary exception metadata without losing explicit status", () => {
+    const body =
+      "private-customer-body https://private.invalid/customer?note=private-value Bearer synthetic-private-token";
+    const error = Object.assign(new Error(`503 Service unavailable ${body}`), {
+      code: "OPAQUE_PRIVATE_CREDENTIAL",
+      provider: body,
+      model: body,
+      cause: { classification: body, providerStarted: body },
+    });
+    for (const failure of [
+      error,
+      formatGatewayLiveAgentWaitFailure({
+        context: body,
+        runId: body,
+        result: { status: body, error: error.message, providerStarted: body, stopReason: body },
+      }),
+    ]) {
+      const diagnostic = formatGatewayLiveFailureDiagnostic({
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        phase: "tool-read",
+        error: failure,
+      });
+      expect(JSON.parse(diagnostic)).toEqual({
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        phase: "tool-read",
+        classification: "provider-unavailable",
+        explicitHttpStatus: 503,
+      });
+      expect(diagnostic).not.toMatch(/private|https|Bearer|OPAQUE/);
+    }
+  });
+
+  it.each([
+    ["p".repeat(128), "m".repeat(256)],
+    ["p".repeat(129), "m".repeat(257)],
+    ["https://private.invalid", "model\nprivate"],
+  ])("keeps identifiers bounded and emits valid JSON", (provider, model) => {
+    const diagnostic = formatGatewayLiveFailureDiagnostic({
+      provider,
+      model,
+      phase: "tool-only-followup",
+      error: new Error("x".repeat(10_000)),
+    });
+    expect(`[live] failure ${diagnostic}\n`.length).toBeLessThanOrEqual(1024);
+    expect(JSON.parse(diagnostic)).toMatchObject({
+      phase: "tool-only-followup",
+      classification: "unclassified",
+    });
+    expect(diagnostic).not.toMatch(/private|https|xxxxx/);
+  });
+});
+
 describe("formatGatewayLiveAgentWaitFailure", () => {
+  it("retains body-free failure evidence before agent.wait flattens the provider error", () => {
+    const failure = formatGatewayLiveAgentWaitFailure({
+      context: "google tool-read",
+      runId: "private-run-id",
+      result: {
+        status: "error",
+        error: "503 Service unavailable: private response body https://private.invalid/customer",
+        providerStarted: true,
+      },
+    });
+    expect(failure.cause).toEqual({
+      classification: "provider-unavailable",
+      explicitHttpStatus: 503,
+      providerStarted: true,
+    });
+  });
+
   it("includes terminal attribution fields without requiring transcript text", () => {
     expect(
       formatGatewayLiveAgentWaitFailure({
@@ -3960,6 +4068,72 @@ async function waitForSessionAssistantText(params: {
   throw new Error(`${timeoutLabel} timeout after ${timeoutMs}ms (${params.context})`);
 }
 
+type GatewayLiveProbePhase =
+  | "session"
+  | "prompt"
+  | "ultra-handoff"
+  | "tool-read"
+  | "tool-exec"
+  | "image"
+  | "tool-only"
+  | "tool-only-followup"
+  | "refusal";
+
+function summarizeGatewayLiveFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return {
+    classification:
+      shouldSkipLiveProviderDrift({
+        error: message,
+        allowAuth: true,
+        allowBilling: true,
+        allowModelNotFound: true,
+        allowProviderUnavailable: true,
+        allowRateLimit: true,
+        allowTimeout: true,
+      })?.reason ?? "unclassified",
+    // An explicit status in the received text is evidence, not an inferred HTTP outcome.
+    explicitHttpStatus: extractErrorHttpStatus(message)?.code,
+  };
+}
+
+class GatewayLiveAgentWaitError extends Error {
+  constructor(
+    message: string,
+    override readonly cause: ReturnType<typeof summarizeGatewayLiveFailure> & {
+      providerStarted?: boolean;
+    },
+  ) {
+    super(message, { cause });
+  }
+}
+
+function formatGatewayLiveFailureDiagnostic(params: {
+  provider: string;
+  model: string;
+  phase: GatewayLiveProbePhase;
+  error: unknown;
+}): string {
+  const identifier = (value: string, limit: number) => {
+    const redacted = redactSecrets(value);
+    return redacted.length <= limit &&
+      /^[a-z0-9][a-z0-9._/-]*$/i.test(redacted) &&
+      !redacted.includes("//")
+      ? redacted
+      : "omitted";
+  };
+  // Secret redaction alone retains arbitrary response bodies and private URLs.
+  // Serialize only closed diagnostic facts; never add error prose or stack traces.
+  return JSON.stringify({
+    provider: identifier(params.provider, 128),
+    model: identifier(params.model, 256),
+    phase: params.phase,
+    ...(params.error instanceof GatewayLiveAgentWaitError
+      ? params.error.cause
+      : summarizeGatewayLiveFailure(params.error)),
+  });
+}
+
 function formatGatewayLiveAgentWaitFailure(params: {
   context: string;
   runId: string;
@@ -3984,10 +4158,16 @@ function formatGatewayLiveAgentWaitFailure(params: {
     typeof result?.stopReason === "string" ? `stopReason=${result.stopReason}` : undefined,
     typeof result?.error === "string" ? `error=${result.error}` : undefined,
   ].filter((value): value is string => Boolean(value));
-  return new Error(
+  return new GatewayLiveAgentWaitError(
     `${params.context}: agent.wait ${status} for runId=${params.runId}${
       details.length > 0 ? ` (${details.join(", ")})` : ""
     }`,
+    {
+      ...summarizeGatewayLiveFailure(result?.error),
+      ...(typeof result?.providerStarted === "boolean"
+        ? { providerStarted: result.providerStarted }
+        : {}),
+    },
   );
 }
 
@@ -5524,13 +5704,15 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
     const workspaceDir = path.join(tempStateDir, "workspace-dev");
     await prepareLiveGatewayWorkspace(workspaceDir);
-    const nonceA = randomUUID();
-    const nonceB = randomUUID();
+    // Prefix the random values so provider safety heuristics do not mistake the
+    // harmless readback proof for secret material.
+    const nonceA = `tool-read-alpha-${randomUUID()}`;
+    const nonceB = `tool-read-beta-${randomUUID()}`;
     // Keep probe values out of the path: weak tool callers may echo the filename
     // instead of reading the file, turning nonceA into a false duplicate answer.
     const toolProbePath = path.join(workspaceDir, ".openclaw-live-tool-probe.txt");
     cleanupToolProbePath = toolProbePath;
-    await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
+    await fs.writeFile(toolProbePath, `testMarkerA=${nonceA}\ntestMarkerB=${nonceB}\n`);
 
     const sanitizedCfg: OpenClawConfig = {
       ...params.cfg,
@@ -5663,6 +5845,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         if (model.provider === "anthropic" && anthropicKeys.length > 0) {
           process.env.ANTHROPIC_API_KEY = anthropicKeys[attempt];
         }
+        let phase: GatewayLiveProbePhase = "session";
         try {
           const modelResult = await withGatewayLiveModelTimeout<"done" | "skip">(
             (async () => {
@@ -5680,6 +5863,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 });
               }
 
+              phase = "prompt";
               logProgress(`${progressLabel}: prompt`);
               let text = await requestGatewayAgentText({
                 client,
@@ -5786,6 +5970,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                   expectedProvider: normalizeProviderId(model.provider),
                   expectedModelId: model.id,
                 });
+                phase = "ultra-handoff";
                 logProgress(`${progressLabel}: ultra sessions_spawn handoff`);
                 await verifyGatewayUltraSubagentHandoff({
                   client,
@@ -5797,7 +5982,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 });
               }
 
-              // Real tool invocation: force the agent to Read a local file and echo a nonce.
+              // Real tool invocation: force the agent to read a local file and
+              // return two harmless, uniquely generated test markers.
+              phase = "tool-read";
               logProgress(`${progressLabel}: tool-read`);
               const runIdTool = randomUUID();
               const maxToolReadAttempts = 3;
@@ -5820,10 +6007,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     message: strictReply
                       ? "OpenClaw live tool probe (local, safe): " +
                         `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                        "Then reply with exactly the two nonce values from that file, separated by one space. No extra text."
+                        "Then reply with exactly the two test marker values from that file, separated by one space. No extra text."
                       : "OpenClaw live tool probe (local, safe): " +
                         `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                        "Then reply with the two nonce values you read (include both).",
+                        "Then reply with the two test marker values you read (include both).",
                     thinkingLevel,
                     context: `${progressLabel}: tool-read`,
                   });
@@ -5889,6 +6076,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               }
 
               if (params.extraToolProbes) {
+                phase = "tool-exec";
                 logProgress(`${progressLabel}: tool-exec`);
                 const nonceC = randomUUID();
                 // Timeout wrappers do not cancel late tool runs, so keep provider-key attempts
@@ -5970,6 +6158,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               }
 
               if (params.extraImageProbes && model.input?.includes("image")) {
+                phase = "image";
                 logProgress(`${progressLabel}: image`);
                 // Shorter code => less OCR flake across providers, still tests image attachments end-to-end.
                 const imageCode = randomImageProbeCode();
@@ -6031,6 +6220,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 (model.provider === "openai" && model.api === "openai-responses") ||
                 (model.provider === "openai" && model.api === "openai-chatgpt-responses")
               ) {
+                phase = "tool-only";
                 logProgress(`${progressLabel}: tool-only regression`);
                 const runId2 = randomUUID();
                 const firstText = await requestGatewayAgentText({
@@ -6050,12 +6240,13 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                   label: params.label,
                 });
 
+                phase = "tool-only-followup";
                 const reply = await requestGatewayAgentText({
                   client,
                   sessionKey,
                   idempotencyKey: `idem-${runId2}-2`,
                   modelKey,
-                  message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
+                  message: `Now answer: what are the values of testMarkerA and testMarkerB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
                   thinkingLevel,
                   context: `${progressLabel}: tool-only-regression-second`,
                 });
@@ -6071,6 +6262,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               }
 
               if (model.provider === "anthropic") {
+                phase = "refusal";
                 await runAnthropicRefusalProbe({
                   client,
                   sessionKey,
@@ -6091,6 +6283,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           logProgress(`${progressLabel}: done`);
           break;
         } catch (err) {
+          logProgress(
+            `failure ${formatGatewayLiveFailureDiagnostic({ provider: model.provider, model: model.id, phase, error: err })}`,
+          );
           const message = String(err);
           if (
             model.provider === "anthropic" &&

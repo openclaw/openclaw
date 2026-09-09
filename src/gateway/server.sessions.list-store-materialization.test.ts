@@ -1,11 +1,12 @@
 /**
- * Sharing resolution runs per row, and each call materialized a whole session
- * lookup store. That made `sessions.list` quadratic in entries even after
- * connection reuse removed the per-row SQLite opens.
+ * Session listing keeps whole-store materialization, sharing refreshes, and
+ * transcript projection work bounded at their owning storage boundaries.
  */
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import * as sessionsConfig from "../config/sessions.js";
+import { canPrewarmCombinedSessionStoresForGateway } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -35,51 +36,31 @@ const LIST_PARAMS = {
   limit: 100,
 };
 
-async function countMaterializedEntriesForRows(rows: number): Promise<number> {
-  await createSessionStoreDir();
-  const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
-    main: sessionStoreEntry("sess-main"),
-  };
-  for (let index = 0; index < rows; index++) {
-    entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
-      updatedAt: 1_781_000_000_000 - index * 1_000,
-    });
-  }
-  await writeSessionStore({ entries });
-  // Warm lazily-initialized module state so only steady-state reads are counted.
-  await directSessionReq("sessions.list", LIST_PARAMS);
-
-  let materialized = 0;
-  // Only the lookup-store path used by sharing resolution goes through
-  // `listSessionEntriesCore`; the listing itself and ACP metadata use the read-only
-  // variant, so this isolates the per-row store loads under test.
-  const original = sessionAccessor.listSessionEntriesCore;
-  const spies = [
-    vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(((...args: never[]) => {
-      const result = (original as (...inner: never[]) => unknown[])(...args);
-      materialized += Array.isArray(result) ? result.length : 0;
-      return result;
-    }) as never),
-  ];
-  try {
-    const result = await directSessionReq("sessions.list", LIST_PARAMS);
-    expect(result.ok).toBe(true);
-    return materialized;
-  } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
+test.each([5, 40])(
+  "sessions.list refreshes sharing without rematerializing a %i-row lookup store",
+  async (rows) => {
+    await createSessionStoreDir();
+    const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
+      main: sessionStoreEntry("sess-main"),
+    };
+    for (let index = 0; index < rows; index++) {
+      entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
+        updatedAt: 1_781_000_000_000 - index * 1_000,
+      });
     }
-  }
-}
-
-test("sessions.list does not materialize the lookup store once per row", async () => {
-  const small = await countMaterializedEntriesForRows(5);
-  const large = await countMaterializedEntriesForRows(40);
-
-  // The post-await sharing refresh intentionally rereads current ACL state,
-  // but one request-scoped load per store keeps that refresh linear.
-  expect(large).toBeLessThan(small * 12);
-});
+    await writeSessionStore({ entries });
+    // The initial listing uses read-only access; sharing must not reload the full lookup store.
+    const lookupStoreRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+    try {
+      const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS);
+      expect(result.ok).toBe(true);
+      expect(result.payload?.sessions).toHaveLength(rows + 1);
+      expect(lookupStoreRead).not.toHaveBeenCalled();
+    } finally {
+      lookupStoreRead.mockRestore();
+    }
+  },
+);
 
 test("sessions.list reuses prepared store targets for sharing", async () => {
   await createSessionStoreDir();
@@ -186,7 +167,7 @@ test("startup prewarm reuses requested durable targets when no incognito store i
   const matcher = vi.spyOn(agentDatabaseRegistry, "createOpenClawAgentDatabasePathMatcher");
   try {
     expect(
-      sessionsConfig.canPrewarmCombinedSessionStoresForGateway(
+      canPrewarmCombinedSessionStoresForGateway(
         {
           agents: { list: [{ id: "main", default: true }] },
           session: { store: storeTemplate },
@@ -228,10 +209,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
       agents: { list: [{ id: "main", default: true }] },
       session: { store: storePath },
     } as never;
-    let resolveSessionPrewarm!: () => void;
-    const sessionPrewarm = new Promise<void>((resolve) => {
-      resolveSessionPrewarm = resolve;
-    });
+    const { promise: sessionPrewarm, resolve: resolveSessionPrewarm } = createDeferred();
     sidecar = scheduleGatewayHandlerPrewarm({
       cfgAtStart: cfg,
       log: { warn: vi.fn() },
@@ -249,7 +227,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     });
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
-    sidecar.stop();
+    await sidecar.stop();
     expect(titleBatchSpy).toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
     titleBatchSpy.mockClear();
@@ -281,7 +259,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     });
     expect(afterListEntries[0]?.entry).toBe(cachedEntries[0]?.entry);
   } finally {
-    sidecar?.stop();
+    await sidecar?.stop();
     vi.useRealTimers();
     titleBatchSpy.mockRestore();
     titlePageSpy.mockRestore();
@@ -303,10 +281,7 @@ test("startup skips a large session prewarm while request-time listing remains a
   let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
   vi.useFakeTimers();
   try {
-    let resolveSessionPrewarm!: () => void;
-    const sessionPrewarm = new Promise<void>((resolve) => {
-      resolveSessionPrewarm = resolve;
-    });
+    const { promise: sessionPrewarm, resolve: resolveSessionPrewarm } = createDeferred();
     sidecar = scheduleGatewayHandlerPrewarm({
       cfgAtStart: {
         agents: { list: [{ id: "main", default: true }] },
@@ -328,7 +303,7 @@ test("startup skips a large session prewarm while request-time listing remains a
 
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
-    sidecar.stop();
+    await sidecar.stop();
     expect(info).toHaveBeenCalledWith(
       "skipping optional dashboard session prewarm: combined stores exceed 2000 rows",
     );
@@ -338,7 +313,7 @@ test("startup skips a large session prewarm while request-time listing remains a
     const result = await directSessionReq("sessions.list", LIST_PARAMS);
     expect(result.ok).toBe(true);
   } finally {
-    sidecar?.stop();
+    await sidecar?.stop();
     vi.useRealTimers();
     listSpy.mockRestore();
   }

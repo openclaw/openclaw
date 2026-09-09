@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { isExplicitPluginDisableMarker } from "../../../../scripts/e2e/lib/plugin-uninstall-assertions.mjs";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 
 // The Docker entrypoint runs without Vitest installed, so keep cleanup local to this runtime probe.
@@ -205,8 +206,8 @@ export function assertUninstalled(pluginId: string, env: ProbeEnv = process.env)
   const record = recordFor(pluginId, env);
   assertProbe(!record, `install record still present for ${pluginId}`);
   assertProbe(
-    !cfg.plugins?.entries?.[pluginId],
-    `plugin config entry still present for ${pluginId}`,
+    isExplicitPluginDisableMarker(cfg, pluginId),
+    `exact disabled uninstall marker missing for ${pluginId}`,
   );
   assertProbe(
     !(cfg.plugins?.allow ?? []).includes(pluginId),
@@ -767,24 +768,14 @@ async function runPluginLifecycleMatrix() {
       `failed to remove plugin code before missing-code uninstall: ${installedPath}`,
     );
 
-    let missingCodeUninstallFailed = false;
-    try {
-      await runMeasured(
-        summaryTsv,
-        "missing-code-uninstall",
-        "node",
-        [entry, "plugins", "uninstall", pluginId, "--force"],
-        runEnv,
-      );
-    } catch {
-      missingCodeUninstallFailed = true;
-    }
-    assertProbe(
-      missingCodeUninstallFailed,
-      "missing-code uninstall must fail closed without authoritative child metadata",
+    await runMeasured(
+      summaryTsv,
+      "missing-code-uninstall",
+      "node",
+      [entry, "plugins", "uninstall", pluginId, "--force"],
+      runEnv,
     );
-    assertProbe(recordFor(pluginId, runEnv), "missing-code uninstall removed the install record");
-    assertEnabled(pluginId, true, runEnv);
+    assertUninstalled(pluginId, runEnv);
 
     await runMeasured(
       summaryTsv,

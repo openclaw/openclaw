@@ -220,6 +220,60 @@ describe("worker command lifetime gate", () => {
     expect(diagnostics).toContain("worker state diagnostic");
   });
 
+  it("rejects an internal worker IPC start type inherited from the prototype", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const originalConsole = globalThis.console;
+    const previousLogging = { ...loggingState };
+    const originalProperties = new Map(
+      ["connected", "channel", "send", "disconnect", "stdin", "stdout", "stderr"].map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(process, key),
+      ]),
+    );
+    Object.defineProperties(process, {
+      connected: { configurable: true, value: true },
+      channel: { configurable: true, value: {} },
+      send: { configurable: true, value: vi.fn() },
+      disconnect: { configurable: true, value: vi.fn() },
+      stdin: { configurable: true, value: commandInput() },
+      stdout: { configurable: true, value: stdout },
+      stderr: { configurable: true, value: stderr },
+    });
+    globalThis.console = new Console({ stdout, stderr });
+    loggingState.consolePatched = false;
+    loggingState.forceConsoleToStderr = false;
+    loggingState.rawConsole = null;
+    loggingState.streamErrorHandlersInstalled = false;
+    const invalidStart = Object.assign(
+      Object.create({ type: "openclaw-worker-start-v1" }) as Record<string, unknown>,
+      { unexpected: true },
+    );
+
+    try {
+      const running = runWorkerProcess({ internalWorkerIpc: true });
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      process.emit("message", invalidStart);
+
+      await expect(running).rejects.toThrow("invalid internal worker IPC start message");
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+    } finally {
+      for (const [key, propertyDescriptor] of originalProperties) {
+        if (propertyDescriptor) {
+          Object.defineProperty(process, key, propertyDescriptor);
+        } else {
+          Reflect.deleteProperty(process, key);
+        }
+      }
+      globalThis.console = originalConsole;
+      Object.assign(loggingState, previousLogging);
+      stdout.destroy();
+      stderr.destroy();
+    }
+  });
+
   it("passes the build-composed Browser runtime into the worker boundary", async () => {
     const output = new PassThrough();
     const browserRuntime = {
@@ -475,6 +529,73 @@ describe("worker command lifetime gate", () => {
     expect(createWorkerRuntimeEnvironment).not.toHaveBeenCalled();
   });
 
+  it("handles a turn and its cancellation in the same input chunk", async () => {
+    const harness = managedHarness();
+    const running = runWorkerCommand({ ...harness, managed: true });
+    harness.input.write(
+      serializeWorkerProcessInput(buildWorkerProcessTurn(harness.launch)) +
+        serializeWorkerProcessInput({ type: "cancel", turnId: harness.launch.assignment.turnId }),
+    );
+
+    await running;
+
+    expect(runWorkerDescriptor).toHaveBeenCalledOnce();
+    expect(vi.mocked(runWorkerDescriptor).mock.calls[0]?.[1]?.signal?.reason).toMatchObject({
+      message: "worker turn cancelled",
+    });
+  });
+
+  it("delivers cancellation before rejecting a later oversized frame in the same chunk", async () => {
+    const harness = managedHarness();
+    const started = createDeferred<AbortSignal>();
+    vi.mocked(runWorkerDescriptor).mockImplementationOnce(async (_launch, options) => {
+      const signal = options?.signal;
+      if (!signal) {
+        throw new Error("expected managed worker abort signal");
+      }
+      started.resolve(signal);
+      await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { status: "completed", transcriptLeafId: null, transcriptNextSeq: 1 };
+    });
+    const running = runWorkerCommand({ ...harness, managed: true });
+    harness.turn();
+    const signal = await started.promise;
+    const rejected = expect(running).rejects.toThrow("exceeds the protocol payload limit");
+    harness.input.write(
+      Buffer.concat([
+        Buffer.from(
+          serializeWorkerProcessInput({ type: "cancel", turnId: harness.launch.assignment.turnId }),
+        ),
+        Buffer.alloc(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + 1, 120),
+      ]),
+    );
+
+    await rejected;
+
+    expect(signal.reason).toMatchObject({ message: "worker turn cancelled" });
+    expect(harness.results).toEqual([]);
+    expect(managedRuntime.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(["empty", "unterminated"])(
+    "closes %s managed input at EOF without admitting a turn",
+    async (input) => {
+      const harness = managedHarness();
+      const running = runWorkerCommand({ ...harness, managed: true });
+      harness.input.end(
+        input === "empty" ? undefined : JSON.stringify(buildWorkerProcessTurn(harness.launch)),
+      );
+
+      await running;
+
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+      expect(createWorkerRuntimeEnvironment).not.toHaveBeenCalled();
+      expect(harness.results).toEqual([]);
+    },
+  );
+
   it.each(["standalone", "managed"] as const)(
     "preserves ordinary two-image input through the %s parser",
     async (mode) => {
@@ -538,12 +659,20 @@ describe("worker command lifetime gate", () => {
       delta > 0 ? expect(running).rejects.toThrow("exceeds the protocol payload limit") : running;
     if (mode === "managed") {
       // Raw input independently verifies the receiver, including serializer-rejected bytes.
-      harness.input.write(encoded);
+      const bytes = Buffer.from(encoded);
+      const split = bytes.indexOf(Buffer.from("漢")) + 1;
+      harness.input.write(bytes.subarray(0, split));
+      harness.input.write(bytes.subarray(split));
     } else {
       harness.input.end(encoded);
     }
     await outcome;
     expect(runWorkerDescriptor).toHaveBeenCalledTimes(delta > 0 ? 0 : 1);
+    if (delta <= 0) {
+      expect(vi.mocked(runWorkerDescriptor).mock.calls[0]?.[0].assignment.systemPrompt).toBe(
+        harness.launch.assignment.systemPrompt,
+      );
+    }
     console.info(
       "worker-input-boundary",
       JSON.stringify({ mode, bytes: targetBytes, accepted: delta <= 0 }),

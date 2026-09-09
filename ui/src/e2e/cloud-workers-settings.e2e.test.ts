@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   installMockGateway,
   type MockGatewayRequest,
@@ -143,6 +144,7 @@ suite.define(() => {
               install: "bundle",
               settings: {
                 provider: "hetzner",
+                target: null,
                 class: "standard",
                 ttl: "8h",
                 idleTimeout: "45m",
@@ -158,7 +160,7 @@ suite.define(() => {
       const buildFleet = {
         provider: "crabbox",
         install: "bundle",
-        label: "Build fleet",
+        suspendAfter: "30m",
         settings: {
           provider: "hetzner",
           class: "standard",
@@ -214,11 +216,18 @@ suite.define(() => {
       );
       expect(await machineClass.getAttribute("list")).toBeNull();
       const saveButton = page.getByRole("button", { name: "Save" });
-      // The patch schedules an applied-revision poll. Let it settle before
-      // deferring config.get so the background read cannot consume the gate.
+      // Saved temporarily hides Apply changes; wait for the applied revision so
+      // its background config.get cannot consume the foreground refresh gate.
       await expect
-        .poll(() => page.getByRole("button", { name: "Apply changes", exact: true }).count())
-        .toBe(0);
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as
+              | (HTMLElement & { runtime?: { context: ApplicationContext } })
+              | null;
+            return app?.runtime?.context.runtimeConfig.state.configSnapshot?.appliedConfigHash;
+          }),
+        )
+        .toBe("cloud-workers-2");
       const configGetCount = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.get");
       await gateway.emitGatewayEvent("config.changed", {
@@ -244,10 +253,11 @@ suite.define(() => {
         cloudWorkers: {
           profiles: {
             "build-fleet": {
-              ...buildFleet,
+              provider: "crabbox",
+              install: "bundle",
               settings: {
-                ...buildFleet.settings,
                 provider: "daytona",
+                target: null,
                 class: "batch/ARM64.v2",
                 ttl: "12h",
                 idleTimeout: "45m",
@@ -309,14 +319,22 @@ suite.define(() => {
       const pendingRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
       const pendingPatch = await waitForConfigPatch(gateway, pendingRequestCount);
-      expect(pendingPatch).toMatchObject({
+      expect(pendingPatch).toEqual({
         cloudWorkers: {
           profiles: {
-            "build-fleet": editedFleet,
             pending: {
               provider: "crabbox",
               install: "bundle",
-              settings: { provider: "aws", class: "custom" },
+              settings: {
+                provider: "aws",
+                target: null,
+                class: "custom",
+                ttl: "8h",
+                idleTimeout: "45m",
+                setup: null,
+                desktop: null,
+                binary: null,
+              },
             },
           },
         },
@@ -482,6 +500,7 @@ suite.define(() => {
         },
       },
       description: "Provider: static-ssh",
+      replacePaths: undefined,
     },
     {
       name: "class removal",
@@ -498,10 +517,11 @@ suite.define(() => {
         },
       },
       description: "Class: Unknown",
+      replacePaths: ["cloudWorkers.profiles.pending.settings.setupEnv"],
     },
   ])(
     "preserves Advanced edits after $name and deletes project defaults",
-    async ({ replacement, description }) => {
+    async ({ replacement, description, replacePaths }) => {
       const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
       const pending = configuredCloudWorkerProfile();
@@ -602,7 +622,7 @@ suite.define(() => {
         const savedConfig = {
           cloudWorkers: {
             ...replacedConfig.cloudWorkers,
-            profiles: { pending: { ...replacement, label: "Advanced saved" }, retained },
+            profiles: { pending: { ...replacement, suspendAfter: "1h" }, retained },
           },
         };
         await rawEditor.fill(JSON.stringify(savedConfig, null, 2));
@@ -639,10 +659,13 @@ suite.define(() => {
         }
         expect(requestRaw(deleteRequest)).toEqual({
           cloudWorkers: {
-            profiles: { pending: null, retained },
+            profiles: { pending: null },
             projectProfiles: { "github.com/acme/app": null, "github.com/acme/docs": null },
           },
         });
+        expect(isRecord(deleteRequest.params) && deleteRequest.params.replacePaths).toEqual(
+          replacePaths,
+        );
         await expect.poll(() => pendingRow.count()).toBe(0);
         await page.locator(".settings-row code", { hasText: /^retained$/ }).waitFor();
       } finally {

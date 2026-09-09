@@ -70,6 +70,10 @@ function copySessionFields(
 }
 
 function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry): void {
+  if (entry.modelOverrideSource === "default") {
+    target.modelOverrideSource = "default";
+    return;
+  }
   const recoveredAutoFallbackOverride =
     entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
   if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
@@ -115,6 +119,11 @@ function sanitizeFreshCronSessionEntry(
   const next = {} as SessionEntry;
 
   copySessionFields(next, entry, FRESH_CRON_CARRIED_PREFERENCE_FIELDS);
+  if (entry.skillLibrarySelections) {
+    next.skillLibrarySelections = entry.skillLibrarySelections.map((selection) => ({
+      ...selection,
+    }));
+  }
   if (options.preserveAmbientContext) {
     copySessionFields(next, entry, AMBIENT_SESSION_CONTEXT_FIELDS);
   }
@@ -143,6 +152,7 @@ export function resolveCronSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   sourceSessionKey?: string;
+  skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
@@ -240,6 +250,11 @@ export function resolveCronSession(params: {
     // Fresh cron sessions keep user preference/auth overrides but drop resume
     // handles and auto-fallback model overrides that belong to the old run.
     ...baseEntry,
+    skillLibrarySelections: structuredClone(
+      targetEntry?.skillLibrarySelections ??
+        params.skillLibrarySelections ??
+        baseEntry?.skillLibrarySelections,
+    ),
     sessionId,
     lifecycleRevision,
     updatedAt: params.nowMs,

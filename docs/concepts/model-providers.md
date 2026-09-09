@@ -16,7 +16,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
     - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
     - `agents.defaults.models` stores aliases and per-model settings; `agents.defaults.modelPolicy.allow` is the optional explicit override allowlist.
     - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
-    - `models.providers.*.maxTokens` sets the provider-level output-token default. On each `models.providers.*.models[]` entry, `contextWindow` declares the native window, `contextTokens` caps active input, and `maxTokens` overrides output capacity for that model.
+    - `models.providers.*.maxTokens` sets the provider-level output-token default. On each `models.providers.*.models[]` entry, `contextWindow` declares the native window, `contextTokens` caps active input, and `maxTokens` overrides output capacity for that model. Configured output limits are clamped to the final native context window when known: the per-model `contextWindow`, otherwise the discovered window.
     - Fallback rules, cooldown probes, and session-override persistence: [Model failover](/concepts/model-failover).
 
   </Accordion>
@@ -35,7 +35,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
     - legacy Codex model refs are legacy config that doctor rewrites to `openai/<model>`.
     - Provider/model `agentRuntime.id: "openclaw"` explicitly keeps an otherwise eligible route on OpenClaw. `agentRuntime.id: "codex"` requires Codex and fails closed when the effective route is not Codex-compatible.
 
-    See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime) and [Codex harness](/plugins/codex-harness). If the provider/runtime split is confusing, read [Agent runtimes](/concepts/agent-runtimes) first.
+    See [OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime) and [Codex harness](/plugins/codex-harness). If the provider/runtime split is confusing, read [Agent runtimes](/concepts/agent-runtimes) first.
 
     Plugin auto-enable follows the same boundary: an implicitly Codex-compatible effective route can enable the Codex plugin, while explicit provider/model `agentRuntime.id: "codex"` or legacy `codex/<model>` refs require it. An `openai/*` prefix by itself does not.
 
@@ -57,11 +57,17 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
 
 ## Configure providers in the Control UI
 
-Open **Settings → Model Providers** in the Control UI to add, replace, or remove provider API keys stored in `models.providers.<id>.apiKey`. The page identifies whether each API key comes from OpenClaw config or an environment variable without displaying the credential. Environment-provided keys remain managed by the gateway process environment.
+Open **Settings → Models** in the Control UI to add, replace, or remove provider API keys stored in `models.providers.<id>.apiKey`. The page identifies whether each API key comes from OpenClaw config or an environment variable without displaying the credential. Environment-provided keys remain managed by the gateway process environment.
+
+Provider controls appear as soon as credentials, the model catalog, and configuration are ready. Usage and local costs load independently afterward, so a slow usage response does not block provider settings.
+
+Open **Model Setup** from the page header to inspect detected AI access. When available, it shows the authentication method (API key or account sign-in) and the actual email address reported by the provider or local runtime. API keys and tokens stay hidden.
 
 Use **Test connection** to run a live provider probe and see latency or a categorized authentication, rate-limit, billing, timeout, or response error. A probe makes a real provider request and may consume a small number of tokens. OAuth and token profiles can also be logged out from the provider card.
 
-The **Default models** card manages the primary model, ordered fallbacks, and utility model from the configured model catalog. Choose the models, then save them together to the existing `agents.defaults.model` and `agents.defaults.utilityModel` settings. For the utility model, **Automatic** leaves the setting unset and **Disabled** stores an empty string to turn utility routing off.
+The **Defaults** card manages the primary model, utility model, first fallback, thinking level, and Fast mode from the configured model catalog. Changes save automatically to the existing `agents.defaults` settings. For the utility model, **Auto** leaves the setting unset and **Disabled** stores an empty string to turn utility routing off.
+
+The fallback selector edits the first model in the ordered fallback chain. Replacing it preserves any later fallbacks already configured; selecting **No fallback model** clears the chain. Use `openclaw models fallbacks` to manage the full ordered list.
 
 ## Plugin-owned provider behavior
 
@@ -157,6 +163,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Auth: OAuth (ChatGPT)
 - Fresh native Codex app-server harness ref: `openai/gpt-5.6-sol`
 - Native Codex app-server harness docs: [Codex harness](/plugins/codex-harness)
+- Astra (`openai/gpt-6-astra`) defaults to `low` reasoning effort to limit routine budget use. The [OpenAI provider default](/providers/openai/models#gpt-6-astra) is shared by model controls and both runtimes; explicit thinking settings take precedence.
 - Legacy model refs: `codex/gpt-*`, `openai-codex/gpt-*`
 - Plugin boundary: `openai/*` loads the OpenAI plugin; explicit runtime policy or the provider-owned effective route decides whether the native Codex app-server plugin is selected.
 - CLI: `openclaw onboard --auth-choice openai` or `openclaw models auth login --provider openai`
@@ -298,7 +305,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | Venice                                  | `venice`                         | `VENICE_API_KEY`                                     | -                                                      |
 | Vercel AI Gateway                       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                 | `vercel-ai-gateway/anthropic/claude-opus-4.6`          |
 | Volcano Engine (Doubao)                 | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                             | `volcengine-plan/ark-code-latest`                      |
-| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`           | OAuth: `xai/auto`; API key: `xai/grok-4.3`             |
+| xAI                                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`           | `xai/grok-4.6`                                         |
 | Xiaomi                                  | `xiaomi` / `xiaomi-token-plan`   | `XIAOMI_API_KEY` / `XIAOMI_TOKEN_PLAN_API_KEY`       | `xiaomi/mimo-v2.5` / `xiaomi-token-plan/mimo-v2.5-pro` |
 
 #### Quirks worth knowing
@@ -317,7 +324,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
     Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
   </Accordion>
   <Accordion title="xAI">
-    Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; fresh setup selects `xai/auto`, which follows xAI's authenticated default model without an OpenClaw update. Existing concrete model ids stay pinned. API keys still work via `XAI_API_KEY` or plugin config and keep `grok-4.3` as the regional-safe setup default. Grok `web_search` reuses the same auth profile before API-key fallback. Older `/fast` and `params.fastMode: true` configurations still resolve through xAI's Grok 4.3 compatibility redirects, but new configurations should select a current model directly. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
+    Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; OAuth and API-key setup use the curated `xai/grok-4.6` default. Existing primary models stay pinned. Run `openclaw doctor --fix` to repair retired `xai/auto` selections on the subscription route. API keys still work via `XAI_API_KEY` or plugin config. Grok `web_search` reuses the same auth profile before API-key fallback. Older `/fast` and `params.fastMode: true` configurations still resolve through xAI's Grok 4.3 compatibility redirects, but new configurations should select a current model directly. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
   </Accordion>
 </AccordionGroup>
 
@@ -689,7 +696,7 @@ Example (OpenAI-compatible):
     - `reasoning: false`
     - `input: ["text"]`
     - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
-    - `maxTokens: 8192`
+    - `maxTokens`: no fixed default. For OpenAI-compatible Completions, an unknown output limit omits both `max_tokens` and `max_completion_tokens`, letting the provider apply its default.
 
     An omitted `contextWindow` remains unset so authored native-window metadata is unambiguous. When neither discovery nor per-model context metadata is available, context-budget callers use the standard `200000`-token fallback.
 

@@ -2,6 +2,7 @@
 import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -94,8 +95,8 @@ export async function writeWizardConfigFile(
     /** Runtime follow-up intent for the Gateway config watcher. */
     afterWrite?: ConfigWriteAfterWrite;
   } = {},
-): Promise<OpenClawConfig> {
-  const committed = await transformConfigWithPendingPluginInstalls({
+) {
+  return await transformConfigWithPendingPluginInstalls({
     ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {}),
     // Caller-owned snapshots are one-shot CAS preconditions, not retry baselines.
     ...(opts.baseHash !== undefined || opts.baseSnapshot ? { maxAttempts: 1 } : {}),
@@ -113,7 +114,6 @@ export async function writeWizardConfigFile(
         : config,
     }),
   });
-  return committed.nextConfig;
 }
 
 export async function readSetupConfigFileSnapshot() {
@@ -158,13 +158,13 @@ function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
   if (config.wizard?.securityAcknowledgedAt) {
     return config;
   }
-  return {
+  return inheritLegacyDefaultAgentId(config, {
     ...config,
     wizard: {
       ...config.wizard,
       securityAcknowledgedAt: new Date().toISOString(),
     },
-  };
+  });
 }
 
 /** Ask once during interactive setup; automation never creates telemetry consent. */
@@ -187,14 +187,14 @@ export async function requestTelemetryConsent(params: {
     initialValue: false,
   });
 
-  return {
+  return inheritLegacyDefaultAgentId(params.config, {
     ...params.config,
     telemetry: {
       ...params.config.telemetry,
       enabled,
       consentedAt: new Date().toISOString(),
     },
-  };
+  });
 }
 
 /** Derive quickstart gateway defaults, preserving any existing gateway settings. */

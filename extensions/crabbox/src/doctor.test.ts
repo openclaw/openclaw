@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
 import {
   openCrabboxWarmImageStore,
-  type WarmImageRecord,
+  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
@@ -87,7 +87,59 @@ describe("Crabbox worker doctor", () => {
     }
   });
 
-  it("reports an indeterminate version probe without asserting failure", async () => {
+  it.each([
+    { version: "0.52.0", rejected: true },
+    { version: "0.53.1-dev", rejected: false },
+    { version: "0.53.1", rejected: false },
+    { version: "0.53.0", rejected: true },
+    { version: "0.54.0", rejected: false },
+    { version: "1.0.0", rejected: false },
+  ])("checks WSL2 profiles against Crabbox $version", async ({ version, rejected }) => {
+    const probe = vi
+      .spyOn(doctorRuntime, "probeCrabboxVersion")
+      .mockResolvedValue({ status: "supported", version });
+    try {
+      const findings = await captureCrabboxDoctorCheck().detect({
+        cfg: {
+          cloudWorkers: {
+            profiles: {
+              linux: { provider: "crabbox", settings: { binary: process.execPath } },
+              windows: {
+                provider: "crabbox",
+                settings: {
+                  binary: process.execPath,
+                  target: "windows/wsl2",
+                },
+              },
+            },
+          },
+        },
+      } as never);
+      expect(findings).toEqual(
+        rejected
+          ? [
+              expect.objectContaining({
+                target: "windows",
+                severity: "warning",
+                message: expect.stringContaining(
+                  "Windows (WSL2) cloud workers require Crabbox 0.53.1 or newer",
+                ),
+                requirement: expect.stringContaining("0.53.1"),
+                fixHint: expect.stringContaining("0.53.1"),
+              }),
+            ]
+          : [],
+      );
+      expect(probe).toHaveBeenCalledOnce();
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it.each([
+    { target: "linux", severity: "info", minimum: "0.41.1" },
+    { target: "windows/wsl2", severity: "warning", minimum: "0.53.1" },
+  ])("reports an indeterminate version for $target", async ({ target, severity, minimum }) => {
     const probe = vi.spyOn(doctorRuntime, "probeCrabboxVersion").mockResolvedValue({
       status: "indeterminate",
       reason: "version command timed out after 2000 ms",
@@ -98,16 +150,19 @@ describe("Crabbox worker doctor", () => {
           cfg: {
             cloudWorkers: {
               profiles: {
-                aws: { provider: "crabbox", settings: { binary: process.execPath } },
+                aws: {
+                  provider: "crabbox",
+                  settings: { binary: process.execPath, target },
+                },
               },
             },
           },
         } as never),
       ).resolves.toEqual([
         expect.objectContaining({
-          severity: "info",
+          severity,
           message: expect.stringContaining("could not determine its version"),
-          fixHint: expect.stringContaining(`${process.execPath} --version`),
+          fixHint: expect.stringContaining(`Crabbox ${minimum} or newer`),
         }),
       ]);
     } finally {
@@ -179,12 +234,16 @@ describe("Crabbox warm-image doctor", () => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-crabbox-warm-doctor-") };
       const store = openCrabboxWarmImageStore(env);
       const now = Date.now();
-      const record: WarmImageRecord = {
-        checkpointId: "chk_last_good",
-        kind: "native",
-        state: "available",
-        createdAtMs: now,
-        lastUsedAtMs: now,
+      const record: WarmProfileRecord = {
+        version: 2,
+        allocations: {},
+        image: {
+          checkpointId: "chk_last_good",
+          kind: "native",
+          state: "available",
+          createdAtMs: now,
+          lastUsedAtMs: now,
+        },
         ...(operation
           ? {
               operation:

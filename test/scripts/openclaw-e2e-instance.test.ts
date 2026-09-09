@@ -341,23 +341,62 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
-  it("allows explicit legacy ready-log mode without /readyz", () => {
+  it.each([
+    ["accepts the March listening marker", "listening on", true, "legacy-ready-log-ok", 0],
+    ["rejects a closed March listener", "listening on", false, "legacy-ready-log-ok", 1],
+    ["accepts a live legacy ready marker", "ready", true, "legacy-ready-log-ok", 0],
+    ["rejects a closed legacy ready listener", "ready", false, "legacy-ready-log-ok", 1],
+    ["rejects the March marker in strict mode", "listening on", true, "strict", 1],
+  ] as const)("%s", (_label, marker, listening, mode, expectedStatus) => {
     withTempDir("openclaw-e2e-readyz-legacy-", (tempDir) => {
       const logPath = path.join(tempDir, "gateway.log");
+      const portPath = path.join(tempDir, "port.txt");
+      const resultPath = path.join(tempDir, "readiness-status.txt");
+      const serverPath = path.join(tempDir, "gateway.cjs");
+      fs.writeFileSync(
+        serverPath,
+        [
+          "const fs = require('node:fs');",
+          "const http = require('node:http');",
+          "const [logPath, portPath, marker, listening, mode] = process.argv.slice(2);",
+          "const server = http.createServer((_request, response) => {",
+          // A working endpoint must not let strict mode accept the historical marker.
+          "  response.writeHead(mode === 'strict' ? 200 : 503);",
+          "  response.end('{}');",
+          "});",
+          "server.listen(0, '127.0.0.1', () => {",
+          "  const port = server.address().port;",
+          "  const publish = () => {",
+          "    fs.writeFileSync(logPath, `[gateway] ${marker} ws://127.0.0.1:${port} (PID ${process.pid})\\n`);",
+          "    fs.writeFileSync(portPath, String(port));",
+          "  };",
+          "  if (listening === 'true') publish(); else server.close(publish);",
+          "});",
+          "setInterval(() => {}, 1000);",
+          "process.on('SIGTERM', () => process.exit(0));",
+          "",
+        ].join("\n"),
+      );
       const result = runBashWithHelper(
         [
-          "openclaw_e2e_probe_http() { return 1; }",
-          "sleep 30 &",
+          `${shellQuote(process.execPath)} ${shellQuote(serverPath)} ${shellQuote(logPath)} ${shellQuote(portPath)} ${shellQuote(marker)} ${listening} ${shellQuote(mode)} &`,
           'gateway_pid="$!"',
-          "trap 'kill \"$gateway_pid\" >/dev/null 2>&1 || true' EXIT",
-          `printf '[gateway] ready\\n' >${shellQuote(logPath)}`,
-          `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 23456 legacy-ready-log-ok`,
+          'trap \'kill "$gateway_pid" >/dev/null 2>&1 || true; wait "$gateway_pid" >/dev/null 2>&1 || true\' EXIT',
+          `for _ in $(seq 1 100); do [ -s ${shellQuote(portPath)} ] && break; sleep 0.02; done`,
+          `[ -s ${shellQuote(portPath)} ]`,
+          `port="$(cat ${shellQuote(portPath)})"`,
+          `if openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 "$port" ${shellQuote(mode)}; then`,
+          `  printf '0' >${shellQuote(resultPath)}`,
+          "else",
+          `  printf '%s' "$?" >${shellQuote(resultPath)}`,
+          "fi",
         ],
         {},
         5_000,
       );
 
       expectShellSuccess(result);
+      expect(fs.readFileSync(resultPath, "utf8")).toBe(String(expectedStatus));
     });
   });
 
@@ -378,6 +417,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
 
       expectShellSuccess(result);
       expect(result.stdout).toContain("Installing fixture package...");
+      expect(result.stdout).toContain("Installed fixture package.");
       expect(fs.readFileSync(fixture.timeoutArgsPath, "utf8").trim()).toBe(
         `--kill-after=30s 42s npm install -g --prefix ${fixture.prefixPath} ${fixture.packagePath} --no-fund --no-audit`,
       );
@@ -485,11 +525,37 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
       });
 
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(42);
+      expect(result.stdout).not.toContain("Installed fixture package.");
       expect(result.stderr).toContain("npm install failed for fixture package");
       expect(result.stderr).toContain("recent npm tail");
       expect(result.stderr).not.toContain("DO_NOT_PRINT_OLD_NPM_LOG");
       expect(fs.readFileSync(fixture.logPath, "utf8")).toContain("DO_NOT_PRINT_OLD_NPM_LOG");
+    });
+  });
+
+  it("returns install failures through the caller-owned ERR diagnostics", () => {
+    withTempDir("openclaw-e2e-instance-install-trap-", (tempDir) => {
+      const fixture = createPackageInstallFixture(tempDir);
+      const diagnosticPath = path.join(tempDir, "diagnostic.txt");
+      writeFakeTimeout(path.join(tempDir, "timeout"), true);
+      writeBashExecutable(path.join(tempDir, "npm"), ["exit 42"]);
+
+      const result = runBashWithHelper(
+        [
+          `trap 'status=$?; printf "%s" "$status" >${shellQuote(diagnosticPath)}; exit "$status"' ERR`,
+          `openclaw_e2e_install_package ${shellQuote(fixture.logPath)} ${shellQuote("fixture package")} ${shellQuote(fixture.prefixPath)}`,
+        ],
+        {
+          PATH: `${tempDir}${path.delimiter}${hostPath}`,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packagePath,
+          OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+          OPENCLAW_TEST_TIMEOUT_ARGS: fixture.timeoutArgsPath,
+        },
+      );
+
+      expect(result.status).toBe(42);
+      expect(fs.readFileSync(diagnosticPath, "utf8")).toBe("42");
     });
   });
 
@@ -969,37 +1035,41 @@ exit 1
     });
   });
 
-  it("redacts logged command failures before replay", () => {
-    withTempDir("openclaw-e2e-instance-run-log-redact-", (tempDir) => {
-      const redactorPath = path.join(tempDir, "redactor.mjs");
-      fs.writeFileSync(
-        redactorPath,
-        'export const redactSensitiveText = (value) => value.replaceAll("fixture-secret", "***");\n',
-        "utf8",
-      );
-      writeFakeTimeout(path.join(tempDir, "timeout"), true);
-      writeBashExecutable(path.join(tempDir, "fixture-command"), [
-        'printf "actionable failure fixture-secret\\n"',
-        "exit 23",
-      ]);
+  it.each([false, true])(
+    "redacts logged command failures before replay (stdin initialized: %s)",
+    (initializeStdin) => {
+      withTempDir("openclaw-e2e-instance-run-log-redact-", (tempDir) => {
+        const redactorPath = path.join(tempDir, "redactor.mjs");
+        fs.writeFileSync(
+          redactorPath,
+          `${initializeStdin ? "void process.stdin;\n" : ""}export const redactSensitiveText = (value) => value.replaceAll("fixture-secret", "***");\n`,
+          "utf8",
+        );
+        writeFakeTimeout(path.join(tempDir, "timeout"), true);
+        writeBashExecutable(path.join(tempDir, "fixture-command"), [
+          'for ((i = 0; i < 120; i += 1)); do printf "%02000d\\n" 0; done',
+          'printf "actionable failure fixture-secret\\n"',
+          "exit 23",
+        ]);
 
-      const result = runBashWithHelper(
-        ["openclaw_e2e_run_logged redacted-failure fixture-command"],
-        {
-          PATH: `${tempDir}${path.delimiter}${hostPath}`,
-          OPENCLAW_E2E_LOG_DIR: path.join(tempDir, "logs"),
-          OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
-          OPENCLAW_TEST_TIMEOUT_ARGS: path.join(tempDir, "timeout-args.txt"),
-        },
-        undefined,
-        "; ",
-      );
+        const result = runBashWithHelper(
+          ["openclaw_e2e_run_logged redacted-failure fixture-command"],
+          {
+            PATH: `${tempDir}${path.delimiter}${hostPath}`,
+            OPENCLAW_E2E_LOG_DIR: path.join(tempDir, "logs"),
+            OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
+            OPENCLAW_TEST_TIMEOUT_ARGS: path.join(tempDir, "timeout-args.txt"),
+          },
+          undefined,
+          "; ",
+        );
 
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain("actionable failure ***");
-      expect(result.stdout).not.toContain("fixture-secret");
-    });
-  });
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain("actionable failure ***");
+        expect(result.stdout).not.toContain("fixture-secret");
+      });
+    },
+  );
 
   it("installs the trash shim under isolated test state", () => {
     withTempDir("openclaw-e2e-trash-shim-", (tempDir) => {

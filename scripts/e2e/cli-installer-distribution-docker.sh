@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Proves hosted npm installation plus dedicated-prefix source installation.
 set -euo pipefail
 
@@ -10,6 +14,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-cli-installer-distribution:loca
 PACKAGE_TGZ="$(
   docker_e2e_prepare_package_tgz cli-installer-distribution "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 )"
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
 HOSTED_PROOF_CONTAINER="openclaw-hosted-installer-proof-$$"
 SOURCE_PROOF_CONTAINER="openclaw-source-installer-proof-$$"
 SOURCE_BUNDLE="$(mktemp "${TMPDIR:-/tmp}/openclaw-source.XXXXXX.bundle")"
@@ -86,7 +91,7 @@ docker_e2e_docker_run_cmd run -d \
   -e HOME=/tmp/openclaw-hosted-home \
   -e OPENCLAW_NO_ONBOARD=1 \
   -e OPENCLAW_NO_PROMPT=1 \
-  -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$SOURCE_ROOT/scripts/install.sh:/tmp/install.sh:ro" \
   "$IMAGE_NAME" \
   bash -lc '

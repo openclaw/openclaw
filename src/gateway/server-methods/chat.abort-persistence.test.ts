@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessageSync,
@@ -18,7 +19,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import { persistAbortedPartials } from "./chat-abort-runtime.js";
+import { captureAbortedPartial, persistAbortedPartials } from "./chat-transcript-persistence.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -45,6 +46,7 @@ const sessionEntryState = vi.hoisted(() => ({
   storePath: "",
   sessionId: "",
   hasEntry: true,
+  lifecycleRevision: undefined as string | undefined,
   canonicalKey: "main",
   cfg: {} as Record<string, unknown>,
   loadCalls: [] as Array<{ sessionKey: string; opts?: { agentId?: string } }>,
@@ -59,10 +61,12 @@ vi.mock("../session-utils.js", async () => {
       sessionEntryState.loadCalls.push({ sessionKey, opts });
       return {
         cfg: sessionEntryState.cfg,
+        agentId: opts?.agentId ?? "main",
         storePath: sessionEntryState.storePath,
         entry: sessionEntryState.hasEntry
           ? {
               sessionId: sessionEntryState.sessionId,
+              lifecycleRevision: sessionEntryState.lifecycleRevision,
               sessionFile: sessionEntryState.transcriptPath,
             }
           : undefined,
@@ -74,7 +78,10 @@ vi.mock("../session-utils.js", async () => {
 
 const { chatHandlers } = await import("./chat.js");
 
-const transcriptFixtures = new Map<string, { sessionId: string; storePath: string }>();
+const transcriptFixtures = new Map<
+  string,
+  { sessionId: string; storePath: string; agentId: string; sessionKey: string }
+>();
 const fixtureDirs = new Set<string>();
 
 async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLine[]> {
@@ -83,9 +90,9 @@ async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLi
     throw new Error(`unknown transcript fixture: ${transcriptPath}`);
   }
   return (await loadTranscriptEvents({
-    agentId: "main",
+    agentId: fixture.agentId,
     sessionId: fixture.sessionId,
-    sessionKey: "main",
+    sessionKey: fixture.sessionKey,
     storePath: fixture.storePath,
   })) as TranscriptLine[];
 }
@@ -198,28 +205,32 @@ function setMockSessionEntry(params: {
   sessionEntryState.storePath = params.storePath;
   sessionEntryState.sessionId = params.sessionId;
   sessionEntryState.hasEntry = params.hasEntry ?? true;
-  sessionEntryState.canonicalKey = "main";
+  sessionEntryState.lifecycleRevision = undefined;
+  sessionEntryState.canonicalKey = "agent:main:main";
   sessionEntryState.cfg = {};
   sessionEntryState.loadCalls = [];
 }
 
-async function createTranscriptFixture(prefix: string) {
+async function createTranscriptFixture(
+  prefix: string,
+  owner = { agentId: "main", sessionKey: "main" },
+) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   fixtureDirs.add(dir);
   const sessionId = "sess-main";
   const storePath = path.join(dir, "sessions.json");
   const transcriptPath = formatSqliteSessionFileMarker({
-    agentId: "main",
+    agentId: owner.agentId,
     sessionId,
     storePath,
   });
   // The accessor resolves transcript targets from the persisted store, so the
   // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
   await replaceSessionEntry(
-    { agentId: "main", sessionKey: "main", storePath },
+    { ...owner, storePath },
     { sessionId, sessionFile: transcriptPath, updatedAt: Date.now() },
   );
-  transcriptFixtures.set(transcriptPath, { sessionId, storePath });
+  transcriptFixtures.set(transcriptPath, { sessionId, storePath, ...owner });
   setMockSessionEntry({ transcriptPath, storePath, sessionId });
   return { transcriptPath, sessionId, storePath };
 }
@@ -230,7 +241,7 @@ function appendTranscriptMessage(params: {
   sessionId: string;
   storePath: string;
 }) {
-  appendTranscriptMessageSync(
+  const seeded = appendTranscriptMessageSync(
     {
       agentId: "main",
       sessionId: params.sessionId,
@@ -246,6 +257,7 @@ function appendTranscriptMessage(params: {
       now: 1,
     },
   );
+  expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
 }
 
 async function createMissingEntryFixture(prefix: string) {
@@ -258,7 +270,12 @@ async function createMissingEntryFixture(prefix: string) {
     sessionId,
     storePath,
   });
-  transcriptFixtures.set(transcriptPath, { sessionId, storePath });
+  transcriptFixtures.set(transcriptPath, {
+    sessionId,
+    storePath,
+    agentId: "main",
+    sessionKey: "main",
+  });
   setMockSessionEntry({ transcriptPath, storePath, sessionId, hasEntry: false });
   return { sessionId };
 }
@@ -286,23 +303,22 @@ describe("chat abort transcript persistence", () => {
     const runId = "placement-abandon-run";
     const updates: unknown[] = [];
     const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
-    const snapshot = {
+    const snapshot = captureAbortedPartial({
+      sessionKey: "main",
       runId,
       sessionId,
       agentId: "main",
       text: "Gateway-synced remote partial",
       abortOrigin: "placement-abandon" as const,
-    };
+    });
 
     try {
       await persistAbortedPartials({
         context: { logGateway: { warn: vi.fn() } },
-        sessionKey: "main",
         snapshots: [snapshot],
       });
       await persistAbortedPartials({
         context: { logGateway: { warn: vi.fn() } },
-        sessionKey: "main",
         snapshots: [snapshot],
       });
     } finally {
@@ -332,15 +348,15 @@ describe("chat abort transcript persistence", () => {
     const warn = vi.fn();
     const persistence = persistAbortedPartials({
       context: { logGateway: { warn } },
-      sessionKey: "main",
       snapshots: [
-        {
+        captureAbortedPartial({
+          sessionKey: "main",
           sessionId,
           agentId: "main",
           runId: "failed-abort-run",
           text: "partial that cannot be persisted",
           abortOrigin: origin,
-        },
+        }),
       ],
     });
 
@@ -358,19 +374,61 @@ describe("chat abort transcript persistence", () => {
     await expect(
       persistAbortedPartials({
         context: { logGateway: { warn: vi.fn() } },
-        sessionKey: "main",
         snapshots: [
-          {
+          captureAbortedPartial({
+            sessionKey: "main",
             sessionId: `${sessionId}-stale`,
             agentId: "main",
             runId: "stale-placement-run",
             text: "partial from the former session",
             abortOrigin: "placement-abandon",
-          },
+          }),
         ],
       }),
     ).rejects.toThrow("transcript session changed");
   });
+
+  it.each([undefined, "original-revision"])(
+    "rejects placement partials when captured revision %s changes without SID rotation",
+    async (lifecycleRevision) => {
+      const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
+        "openclaw-chat-placement-revision-",
+      );
+      await replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey: "main" },
+        {
+          sessionId,
+          updatedAt: Date.now(),
+          lifecycleRevision,
+        },
+      );
+      sessionEntryState.lifecycleRevision = lifecycleRevision;
+      const snapshot = captureAbortedPartial({
+        sessionKey: "main",
+        sessionId,
+        agentId: "main",
+        runId: "placement-revision",
+        text: "obsolete placement partial",
+        abortOrigin: "placement-abandon",
+      });
+      await replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey: "main" },
+        {
+          sessionId,
+          updatedAt: Date.now(),
+          lifecycleRevision: "next-revision",
+        },
+      );
+      const before = await readTranscriptLines(transcriptPath);
+      await expect(
+        persistAbortedPartials({
+          context: { logGateway: { warn: vi.fn() } },
+          snapshots: [snapshot],
+        }),
+      ).rejects.toThrow("session-rebound");
+      expect(await readTranscriptLines(transcriptPath)).toEqual(before);
+    },
+  );
 
   it("persists run-scoped abort partial with rpc metadata and idempotency", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture("openclaw-chat-abort-run-");
@@ -435,7 +493,7 @@ describe("chat abort transcript persistence", () => {
     // The embedded agent loop persists its final assistant row without a
     // run-scoped idempotency key, so the store-level key dedupe cannot see
     // it; only the attached run identity can scope the skip to this run.
-    appendTranscriptMessageSync(
+    const seeded = appendTranscriptMessageSync(
       { agentId: "main", sessionId, sessionKey: "main", storePath },
       {
         idempotencyLookup: "caller-checked",
@@ -449,6 +507,7 @@ describe("chat abort transcript persistence", () => {
         now: 1,
       },
     );
+    expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
 
     // Settlement stall: the run committed its row but never emitted its
     // terminal lifecycle event, so the gateway still projects it active with
@@ -490,7 +549,7 @@ describe("chat abort transcript persistence", () => {
     );
     // An earlier run committed the identical reply. Text equality alone would
     // drop this run's abort partial, so the skip must be run-scoped.
-    appendTranscriptMessageSync(
+    const seeded = appendTranscriptMessageSync(
       { agentId: "main", sessionId, sessionKey: "main", storePath },
       {
         idempotencyLookup: "caller-checked",
@@ -504,18 +563,19 @@ describe("chat abort transcript persistence", () => {
         now: 1,
       },
     );
+    expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
 
     await persistAbortedPartials({
       context: { logGateway: { warn: vi.fn() } },
-      sessionKey: "main",
       snapshots: [
-        {
+        captureAbortedPartial({
+          sessionKey: "main",
           runId: "aborted-later-run",
           sessionId,
           agentId: "main",
           text: "Completed reply",
           abortOrigin: "rpc",
-        },
+        }),
       ],
     });
 
@@ -533,7 +593,7 @@ describe("chat abort transcript persistence", () => {
     const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
       "openclaw-chat-abort-legacy-row-",
     );
-    appendTranscriptMessageSync(
+    const seeded = appendTranscriptMessageSync(
       { agentId: "main", sessionId, sessionKey: "main", storePath },
       {
         idempotencyLookup: "caller-checked",
@@ -546,20 +606,21 @@ describe("chat abort transcript persistence", () => {
         now: 1,
       },
     );
+    expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
 
     // A row without a stored run identity cannot prove this run's reply is
     // committed; losing the abort record is worse than a duplicate reply.
     await persistAbortedPartials({
       context: { logGateway: { warn: vi.fn() } },
-      sessionKey: "main",
       snapshots: [
-        {
+        captureAbortedPartial({
+          sessionKey: "main",
           runId: "aborted-unproven-run",
           sessionId,
           agentId: "main",
           text: "Completed reply",
           abortOrigin: "rpc",
-        },
+        }),
       ],
     });
 
@@ -577,7 +638,7 @@ describe("chat abort transcript persistence", () => {
     const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
       "openclaw-chat-abort-skip-decision-",
     );
-    appendTranscriptMessageSync(
+    const seeded = appendTranscriptMessageSync(
       { agentId: "main", sessionId, sessionKey: "main", storePath },
       {
         idempotencyLookup: "caller-checked",
@@ -591,20 +652,21 @@ describe("chat abort transcript persistence", () => {
         now: 1,
       },
     );
+    expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
 
     // The skip happens inside the writer queue after the append decision was
     // handed off, so it must not surface as a failed placement abandonment.
     await persistAbortedPartials({
       context: { logGateway: { warn: vi.fn() } },
-      sessionKey: "main",
       snapshots: [
-        {
+        captureAbortedPartial({
+          sessionKey: "main",
           runId: "stalled-placement-run",
           sessionId,
           agentId: "main",
           text: "Completed reply",
           abortOrigin: "placement-abandon",
-        },
+        }),
       ],
     });
 
@@ -624,11 +686,7 @@ describe("chat abort transcript persistence", () => {
       idempotencyKey,
       sessionId,
       storePath,
-      message: {
-        role: "user",
-        content: "colliding user key",
-        timestamp: 1,
-      },
+      message: makeUserMessage("colliding user key", 1),
     });
 
     const respond = vi.fn();
@@ -830,7 +888,13 @@ describe("chat abort transcript persistence", () => {
     ["scopes global stop commands to the selected agent", "work", "agent"],
     ["scopes bare global stop commands to the default agent", "main", "default"],
   ])("%s", async (_name, selectedAgentId, fixtureId) => {
-    const { sessionId } = await createTranscriptFixture(`openclaw-chat-stop-global-${fixtureId}-`);
+    const { sessionId, transcriptPath } = await createTranscriptFixture(
+      `openclaw-chat-stop-global-${fixtureId}-`,
+      {
+        agentId: selectedAgentId,
+        sessionKey: "global",
+      },
+    );
     const cfg = {
       agents: { list: [{ id: "main", default: true }, { id: "work" }] },
       session: { scope: "global" as const },
@@ -885,6 +949,13 @@ describe("chat abort transcript persistence", () => {
     expectAbortPayload(payload, { runIds: [runId] });
     expect(mainActive.controller.signal.aborted).toBe(selectedAgentId === "main");
     expect(workActive.controller.signal.aborted).toBe(selectedAgentId === "work");
+    expect(
+      findMessageWithIdempotencyKey(
+        await readTranscriptLines(transcriptPath),
+        `${runId}:assistant`,
+      ),
+    ).toBeDefined();
+    expect(context.logGateway.warn).not.toHaveBeenCalled();
     if (selectedAgentId === "work") {
       expect(sessionEntryState.loadCalls).toContainEqual({
         sessionKey: "global",

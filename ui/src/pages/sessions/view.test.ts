@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
@@ -70,6 +71,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onGroupByChange: () => undefined,
     onAssignCategory: () => undefined,
     onRequestNewCategory: () => undefined,
+    onLoadMore: () => undefined,
     onPageChange: () => undefined,
     onPageSizeChange: () => undefined,
     onRefresh: () => undefined,
@@ -531,7 +533,10 @@ describe("sessions view", () => {
     expect(container.querySelectorAll(".session-data-row")).toHaveLength(1);
   });
 
-  it("offers person grouping and labels owner sections from their durable profile", async () => {
+  it.each([
+    ["profile-ada", "Ada Lovelace", "Ada Lovelace"],
+    ["gateway-owner", "Saved owner name", "Shared owner"],
+  ])("offers person grouping and labels the durable profile %s", async (id, name, expected) => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -544,9 +549,9 @@ describe("sessions view", () => {
               owner: {
                 actor: {
                   type: "human",
-                  id: "profile-ada",
-                  label: "Ada Lovelace",
-                  identity: { type: "profile", id: "profile-ada" },
+                  id,
+                  label: name,
+                  identity: { type: "profile", id },
                 },
               },
             },
@@ -568,7 +573,7 @@ describe("sessions view", () => {
       [...container.querySelectorAll(".session-group-row__label")].map((label) =>
         label.textContent?.trim(),
       ),
-    ).toEqual(["Ada Lovelace", "Ungrouped"]);
+    ).toEqual([expected, "Ungrouped"]);
   });
 
   it("hides the person grouping option without the identity capability", async () => {
@@ -615,9 +620,7 @@ describe("sessions view", () => {
     const container = document.createElement("div");
     render(
       renderSessions({
-        ...buildProps(
-          buildMultiResult([{ key: "agent:main:discord:channel:1", kind: "group", updatedAt: 1 }]),
-        ),
+        ...buildProps(buildMultiResult([])),
         groupBy: "category",
         knownCategories: ["Research"],
         searchQuery: "no-such-session",
@@ -893,6 +896,32 @@ describe("sessions view", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
     popover?.dispatchEvent(new Event("wa-hide"));
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("does not invent thinking choices for an empty session profile", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            modelProvider: "thinking-fixture",
+            model: "no-effort",
+            thinkingLevels: [],
+          }),
+        ),
+        expandedSessionKey: "agent:main:main",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector<HTMLSelectElement>("tbody select");
+    expect(thinking).not.toBeNull();
+    expect(Array.from(thinking?.options ?? []).map((option) => option.value)).toEqual([""]);
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Unknown");
   });
 
   it("renders and patches provider-owned thinking ids", async () => {
@@ -1187,7 +1216,7 @@ describe("sessions view", () => {
     ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
   });
 
-  it("renders session goals in the status cell and search index", async () => {
+  it("renders session goals in the status cell", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -1232,7 +1261,7 @@ describe("sessions view", () => {
     expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
-  it("filters by agent runtime and surfaces it in the details drawer", async () => {
+  it("renders the effective runtime including fallback in the details drawer", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -1243,12 +1272,6 @@ describe("sessions view", () => {
               kind: "direct",
               updatedAt: 20,
               agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
-            },
-            {
-              key: "agent:main:pi",
-              kind: "direct",
-              updatedAt: 10,
-              agentRuntime: { id: "pi", source: "implicit" },
             },
           ]),
         ),
@@ -1269,41 +1292,6 @@ describe("sessions view", () => {
     );
     const stats = readSessionDetailStats(container);
     expect(stats.get("Runtime")).toBe("claude-cli (fallback none)");
-  });
-
-  it("does not filter terminal sessions as live when active-run flags are stale", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:done",
-              kind: "direct",
-              updatedAt: 20,
-              hasActiveRun: true,
-              status: "done",
-            },
-            {
-              key: "agent:main:running",
-              kind: "direct",
-              updatedAt: 10,
-              hasActiveRun: true,
-              status: "running",
-            },
-          ]),
-        ),
-        searchQuery: "live",
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const rows = container.querySelectorAll("tbody tr.session-data-row");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
-      "agent:main:running",
-    );
   });
 
   it("keeps raw keys for inherited identity object properties", async () => {
@@ -1491,7 +1479,7 @@ describe("sessions view", () => {
     expect(stats.get("Status")).toBe("running");
     expect(stats.get("Model")).toBe("gpt-5.5");
     expect(stats.get("Provider")).toBe("openai");
-    expect(stats.get("Runtime")).toBe("pi");
+    expect(stats.get("Runtime")).toBe("-");
     expect(stats.get("Run duration")).toBe("2m 5s");
     expect(stats.get("Tokens")).toBe("123456 / 200000");
     expect(stats.get("Compaction")).toBe("1 Checkpoint");
@@ -1575,44 +1563,6 @@ describe("sessions view", () => {
     // Sessions without checkpoints still open the drawer for overrides and stats.
     rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onToggleDetails).toHaveBeenCalledWith("agent:main:no-checkpoint");
-  });
-
-  it("filters rows by agent identity name", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
-              kind: "direct",
-              updatedAt: 20,
-            },
-            {
-              key: "agent:code-agent:telegram:abc123",
-              kind: "direct",
-              updatedAt: 10,
-            },
-          ]),
-        ),
-        searchQuery: "data expert",
-        agentIdentityById: {
-          "data-expert": {
-            agentId: "data-expert",
-            name: "Data Expert",
-            avatar: "",
-          },
-        },
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const rows = container.querySelectorAll("tbody tr.session-data-row");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
-      "Data Expert (dingtalk)",
-    );
   });
 
   it("keeps session selects stable and deselects only the current page", async () => {
@@ -1700,15 +1650,7 @@ describe("sessions view", () => {
     const onClearFilters = vi.fn();
     render(
       renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            {
-              key: "agent:main:main",
-              kind: "direct",
-              updatedAt: Date.now(),
-            },
-          ]),
-        ),
+        ...buildProps(buildMultiResult([])),
         searchQuery: "missing",
         onClearFilters,
       }),
@@ -1957,3 +1899,31 @@ describe("sessions view", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("renders the sessions meter against its last-run prompt budget", async () => {
+  const container = document.createElement("div");
+  render(
+    renderSessions(
+      buildProps(
+        buildResult({
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          totalTokens: 160_000,
+          contextTokens: 200_000,
+          contextBudgetStatus: contextBudgetStatusFixture(),
+        }),
+      ),
+    ),
+    container,
+  );
+  await Promise.resolve();
+  expect(container.querySelector(".session-context-meter")?.getAttribute("aria-label")).toBe(
+    "89% of last-run prompt budget used (160,000 / 180,000 tokens)",
+  );
+  expect(
+    container
+      .querySelector(".session-context-meter")
+      ?.classList.contains("session-context-meter--danger"),
+  ).toBe(true);
+});

@@ -17,6 +17,7 @@ import {
   isUiSelectedGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
+import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
@@ -40,7 +41,7 @@ import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,
   cancelQueuedMessageEdit,
-  isQueuedMessageRemovalBlocked,
+  isQueuedMessageBeingEdited,
   QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
   QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR,
   updateQueuedMessageEdit,
@@ -61,9 +62,11 @@ import {
   normalizeSidebarLayout,
   openSlot,
 } from "./sidebar-layout.ts";
-import { resetToolStream } from "./tool-stream.ts";
+import type { RunOutputUsage } from "./tool-stream-contract.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
 
 type ChatPageElement = {
+  dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
   querySelector: (selectors: string) => Element | null;
 };
@@ -80,16 +83,12 @@ export function invalidateImageLightbox(state: ChatPageHost) {
   return state.imageLightboxRequestVersion;
 }
 
-async function loadPageAssistantIdentity(
-  state: ChatPageHost,
-  opts?: { sessionKey?: string; expectedSessionKey?: string },
-) {
+async function loadPageAssistantIdentity(state: ChatPageHost) {
   if (!state.client || !state.connected) {
     return;
   }
   const client = state.client;
-  const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
-  const expectedSessionKey = opts?.expectedSessionKey?.trim() || sessionKey;
+  const sessionKey = state.sessionKey.trim();
   const agentId = resolveAgentIdForSession({
     sessionKey,
     assistantAgentId: state.assistantAgentId,
@@ -106,7 +105,7 @@ async function loadPageAssistantIdentity(
       state.client !== client ||
       !state.connected ||
       state.assistantIdentityRequestVersion !== requestVersion ||
-      state.sessionKey.trim() !== expectedSessionKey ||
+      state.sessionKey.trim() !== sessionKey ||
       resolveAgentIdForSession(state) !== agentId ||
       !identity
     ) {
@@ -147,7 +146,7 @@ export function createPageState(
     sessions: context.sessions,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
-    initialUserMessage: context.initialUserMessage,
+    chatSubmissions: context.chatSubmissions,
     settings,
     password: "",
     onboarding: false,
@@ -159,13 +158,13 @@ export function createPageState(
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,
-    localMediaPreviewRoots: appConfig.localMediaPreviewRoots,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
     automaticallyFetchFavicons: appConfig.automaticallyFetchFavicons,
     client: null,
     connected: false,
     connectionEpoch: 0,
+    mediaPolicyEpoch: 0,
     hello: null,
     selfUser: null,
     canvasPluginSurfaceUrl: null,
@@ -190,7 +189,7 @@ export function createPageState(
     chatEffectiveQueueMode: undefined,
     chatAttachments: [],
     chatRunId: null,
-    chatRunUsageById: new Map<string, number>(),
+    chatRunUsageById: new Map<string, RunOutputUsage>(),
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunStartup: null,
@@ -215,6 +214,7 @@ export function createPageState(
     chatModelsLoading: false,
     chatModelCatalog: [],
     chatModelCatalogError: null,
+    chatAccountSelection: null,
     modelAuthStatusRequestVersion: 0,
     modelAuthStatusResult: null,
     modelAuthStatusError: null,
@@ -248,10 +248,7 @@ export function createPageState(
     chatInputHistoryItems: null,
     chatInputHistoryIndex: -1,
     chatDraftBeforeHistory: null,
-    chatScrollCommitCleanup: null,
     chatStreamRenderFrame: null,
-    chatScrollFrame: null,
-    chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
@@ -271,6 +268,12 @@ export function createPageState(
     ...createInitialChatRealtimeState(),
     renderLifecycle,
     requestUpdate: () => renderLifecycle.invalidate(),
+    // Background warming gates on these edges. Session-event reloads never
+    // re-render the page, so no update can carry the fact to it.
+    transcriptLoadingChanged: () =>
+      page.dispatchEvent(
+        new CustomEvent(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true, composed: true }),
+      ),
     sessionWorkspaceState: undefined,
     backgroundTasksState: undefined,
     querySelector: page.querySelector.bind(page),
@@ -284,7 +287,7 @@ export function createPageState(
     scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });
   };
   state.handleChatScroll = (event) => handleChatScroll(state, event);
-  state.handleChatDraftChange = (next) => handleChatDraftChange(state, next);
+  state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
   state.applySettings = (patch) => {
     const next = { ...state.settings, ...patch };
@@ -324,7 +327,7 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {
-    if (isQueuedMessageRemovalBlocked(state, id)) {
+    if (isQueuedMessageBeingEdited(state, id)) {
       setChatError(state, QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR);
       renderLifecycle.invalidate();
       return;
@@ -356,8 +359,8 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
-  state.updateQueuedChatMessageEdit = (draftText) => {
-    updateQueuedMessageEdit(state, draftText);
+  state.updateQueuedChatMessageEdit = (draftText, mentions) => {
+    updateQueuedMessageEdit(state, draftText, mentions);
     renderLifecycle.invalidate();
   };
   state.submitQueuedChatMessageEdit = () => {
@@ -368,6 +371,7 @@ export function createPageState(
     void state
       .handleSendChat(edit.draftText, {
         attachmentsOverride: [...edit.attachments],
+        mentionsOverride: edit.mentions,
         resumeQueuedMessageEditId: edit.id,
       })
       .then(
@@ -376,11 +380,21 @@ export function createPageState(
       );
   };
   state.cancelQueuedChatMessageEdit = () => {
-    cancelQueuedMessageEdit(state);
+    if (cancelQueuedMessageEdit(state)) {
+      // Reconnect may have parked the drain on this local hold; Cancel does not write storage.
+      void resumeStoredChatOutboxes(state);
+    }
     renderLifecycle.invalidate();
   };
   state.updateSidebarLayout = (layout) => {
     const normalized = normalizeSidebarLayout(layout);
+    // Every close route commits here; tab switches retain the pending selection.
+    if (
+      state.sidebarContent?.kind === "loading" &&
+      !normalized.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"))
+    ) {
+      state.sidebarContent = null;
+    }
     state.sidebarLayout = normalized;
     state.settings = patchSettings({
       sidebarSessionLayouts: updateSidebarSessionLayout(

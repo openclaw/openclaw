@@ -1,29 +1,31 @@
 // Real-browser proof + regression for #93041: provider usage from models.authStatus remains
 // available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   controlUiSessionUrl,
   installMockGateway,
+  type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI #93041 desktop chat quota popover (mocked Gateway E2E)",
 });
 
 const baseTime = 1_700_000_000_000;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-quota-pill-93041");
+let artifactDir: string;
 const captureOwnershipProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const ownershipProofPhase = process.env.OPENCLAW_UI_PROOF_PHASE?.trim() || "candidate";
-const ownershipProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/ui-visual-proof/agent-quota-ownership",
-  ownershipProofPhase,
-);
+let ownershipProofDir: string;
 
 const authStatusWithUsage = {
   ts: baseTime,
@@ -123,10 +125,19 @@ const selectedGlobalSessions = {
       ...gatewayInjectedSessions.sessions[0],
       displayName: "Selected global",
       key: "global",
+      kind: "global",
       label: "Selected global",
       modelProvider: "openai",
     },
   ],
+};
+
+const workGlobalSession = {
+  ...selectedGlobalSessions.sessions[0],
+  agentId: "work",
+  sessionId: "session:work:global",
+  contextTokens: 300_000,
+  totalTokens: 90_000,
 };
 
 const claudeSubscriptionAuthStatus = {
@@ -194,11 +205,7 @@ async function openChat(
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
-    context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    context = await suite.browser.newContext(createControlUiE2eContextOptions());
     page = await context.newPage();
     page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     const gateway = await installMockGateway(page, {
@@ -220,13 +227,36 @@ async function closeChat(fixture: { context: BrowserContext; page: Page }): Prom
   await fixture.context.close().catch(() => {});
 }
 
-async function setSelectedAgent(page: Page, agentId: string): Promise<void> {
-  await page.evaluate((nextAgentId) => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { agentSelection: { set: (value: string) => void } } };
-    };
-    app.runtime?.context.agentSelection.set(nextAgentId);
-  }, agentId);
+async function setSelectedAgent(page: Page, name: string): Promise<void> {
+  const sidebar = page.locator("openclaw-app-sidebar");
+  await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+  await sidebar.getByRole("menuitemradio", { name, exact: true }).click();
+}
+
+async function replyToAgentMetadata(gateway: MockGatewayControls, agentId: "main" | "work") {
+  for (const method of ["models.authStatus", "agent.identity.get"]) {
+    const requests = (await gateway.getRequests(method)).filter((request) => {
+      const params = request.params;
+      return (
+        typeof params === "object" &&
+        params !== null &&
+        "agentId" in params &&
+        params.agentId === agentId
+      );
+    });
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      await gateway.deliverLatest({
+        type: "res",
+        id: request.id,
+        ok: true,
+        payload:
+          method === "models.authStatus"
+            ? agentAuthStatus(agentId)
+            : { agentId, name: `${agentId === "main" ? "Stale Main" : "Work"} Agent` },
+      });
+    }
+  }
 }
 
 async function visibleAuthState(page: Page) {
@@ -300,6 +330,12 @@ async function openVisibleQuotaPopover(page: Page) {
 }
 
 suite.define(() => {
+  beforeEach(() => {
+    artifactDir = createControlUiE2eArtifactDir("chat-quota-pill-93041");
+    if (captureOwnershipProof) {
+      ownershipProofDir = path.join(artifactDir, "agent-quota-ownership", ownershipProofPhase);
+    }
+  });
   it("shows high context pressure without a compact action", async () => {
     const fixture = await openChat(authStatusWithUsage, {
       "sessions.list": highPressureSessions,
@@ -429,9 +465,6 @@ suite.define(() => {
   });
 
   it("binds delayed auth and quota presentation to the selected global agent", async () => {
-    if (captureOwnershipProof) {
-      await mkdir(ownershipProofDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -447,7 +480,16 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         assistantAgentId: "main",
         defaultAgentId: "main",
-        deferredMethods: ["models.authStatus", "models.authStatus", "agent.identity.get"],
+        heldMethods: ["models.authStatus", "agent.identity.get"],
+        // The selected agent's session metrics may not have arrived; its transcript
+        // still identifies which provider's quota belongs in the popover.
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Ready." }],
+            provider: "openai",
+          },
+        ],
         methodResponses: {
           "agent.identity.get": {
             cases: [
@@ -462,19 +504,46 @@ suite.define(() => {
               { match: { agentId: "work" }, response: agentAuthStatus("work") },
             ],
           },
-          "sessions.list": selectedGlobalSessions,
+          "sessions.list": {
+            // Static rows seed Main; response cases never seed canonical fixture state.
+            ...selectedGlobalSessions,
+            cases: [
+              {
+                match: { agentId: "work" },
+                response: { ...selectedGlobalSessions, sessions: [workGlobalSession] },
+              },
+              { response: selectedGlobalSessions },
+            ],
+          },
+          // A Work main alias resolves to Work's canonical global history on
+          // the Gateway; it must not borrow the Main-owned list projection.
+          "chat.startup": {
+            cases: [
+              {
+                match: { sessionKey: "agent:work:main", agentId: "work" },
+                response: {
+                  messages: [],
+                  sessionId: workGlobalSession.sessionId,
+                  sessionInfo: workGlobalSession,
+                },
+              },
+            ],
+          },
         },
         sessionKey: "global",
+        sessionScope: "global",
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "global"));
       const connectRequest = await gateway.waitForRequest("connect");
       const { client: connectedClient } = connectRequest.params as {
         client: { instanceId: string };
       };
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBe(2);
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "main" } });
 
+      expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
+        sessionKey: "global",
+        agentId: "main",
+      });
       let popover = await openVisibleQuotaPopover(page);
       expect(
         await page
@@ -503,14 +572,9 @@ suite.define(() => {
           pane.state.requestUpdate?.();
         }
       });
-      await gateway.deferNext("models.authStatus", { agentId: "work" });
-      await gateway.deferNext("models.authStatus", { agentId: "work" });
-      await gateway.deferNext("agent.identity.get", { agentId: "work" });
-      await setSelectedAgent(page, "work");
+      await setSelectedAgent(page, "Work");
       await expect.poll(async () => (await visibleAuthState(page)).agentId).toBe("work");
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThanOrEqual(3);
+      await gateway.waitForRequest("models.authStatus", { match: { agentId: "work" } });
       await expect
         .poll(() => visibleAuthState(page))
         .toEqual({
@@ -542,8 +606,7 @@ suite.define(() => {
             };
           }),
         )
-        .toEqual({ name: "", avatar: null, renderedAvatar: null });
-      await gateway.deferNext("models.authStatus", { agentId: "work" });
+        .toEqual({ name: "OpenClaw", avatar: null, renderedAvatar: null });
       await gateway.emitGatewayEvent("presence", {
         presence: [
           {
@@ -566,19 +629,15 @@ suite.define(() => {
       await setOwnershipProofCue(page, "Selected agent: Work | Work auth loading");
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "01-work-loading.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "01-work-loading.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring"),
+          ]),
+        );
       }
 
-      await gateway.resolveDeferred("models.authStatus");
-      await gateway.resolveDeferred("models.authStatus");
-      await gateway.resolveDeferred("agent.identity.get", {
-        agentId: "main",
-        name: "Stale Main Agent",
-      });
+      await replyToAgentMetadata(gateway, "main");
       await page.waitForTimeout(100);
       const delayedMainState = await visibleAuthState(page);
       expect(delayedMainState).toEqual({
@@ -599,11 +658,12 @@ suite.define(() => {
       );
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "02-after-delayed-main.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "02-after-delayed-main.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring"),
+          ]),
+        );
       }
 
       expect(delayedMainState.agentId).toBe("work");
@@ -611,15 +671,6 @@ suite.define(() => {
       expect(delayedMainState.account).not.toBe("main@example.test");
       expect(delayedMainState.displayName).not.toBe("Main OpenAI");
       expect(delayedMainState.plan).not.toBe("Main Pro");
-      const authRequests = await gateway.getRequests("models.authStatus");
-      const workAuthRequests = authRequests.filter(
-        (request) =>
-          typeof request.params === "object" &&
-          request.params !== null &&
-          "agentId" in request.params &&
-          request.params.agentId === "work",
-      );
-      expect(workAuthRequests.length).toBeGreaterThanOrEqual(2);
       const identityRequests = await gateway.getRequests("agent.identity.get");
       expect(
         identityRequests.filter(
@@ -631,13 +682,7 @@ suite.define(() => {
         ),
       ).not.toHaveLength(0);
 
-      for (let pending = workAuthRequests.length; pending > 0; pending -= 1) {
-        await gateway.resolveDeferred("models.authStatus");
-      }
-      await gateway.resolveDeferred("agent.identity.get", {
-        agentId: "work",
-        name: "Work Agent",
-      });
+      await replyToAgentMetadata(gateway, "work");
       await expect
         .poll(() => visibleAuthState(page))
         .toEqual({
@@ -648,7 +693,25 @@ suite.define(() => {
           plan: "Work Team",
           ts: baseTime + 2,
         });
+      await setOwnershipProofCue(page, "Selected agent: Work | Work account and plan loaded");
+      if (captureOwnershipProof) {
+        await writeFile(
+          path.join(ownershipProofDir, "03-work-settled.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring"),
+          ]),
+        );
+      }
       popover = await openVisibleQuotaPopover(page);
+      expect(
+        await page
+          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible .context-ring")
+          .getAttribute("aria-label"),
+      ).toBe("Session context usage: 90k of 300k (30%)");
+      expect((await gateway.getRequests("chat.startup")).at(-1)?.params).toMatchObject({
+        sessionKey: "agent:work:main",
+        agentId: "work",
+      });
       await expect.poll(async () => popover.textContent()).toContain("Work Team");
       const settledText = (await popover.textContent()) ?? "";
       expect(settledText).toContain("work@example.test");
@@ -661,11 +724,12 @@ suite.define(() => {
       );
       await pauseForOwnershipProof(page);
       if (captureOwnershipProof) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(ownershipProofDir, "03-work-settled.png"),
-        });
+        await writeFile(
+          path.join(ownershipProofDir, "04-work-quota-popover.png"),
+          await takeControlUiViewportScreenshot(page, popover, [
+            popover.locator(".context-usage__limit").first(),
+          ]),
+        );
       }
     } finally {
       await page.close().catch(() => {});

@@ -9,7 +9,10 @@ import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagno
 import type { AuthProfileStore } from "./auth-profiles.js";
 import type { FailoverReason } from "./failover/signal.js";
 import type { SessionSuspensionParams } from "./session-suspension.js";
-import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
+import {
+  makeModelFallbackCfg,
+  createModelFallbackConfig,
+} from "./test-helpers/model-fallback-config-fixture.js";
 
 function routingProvenance(
   requestedProvider: string,
@@ -22,7 +25,7 @@ function routingProvenance(
 
 // Mock auth-profile submodules before importing model-fallback so the module
 // captures probe-specific auth behavior instead of real profile stores.
-vi.mock("./auth-profiles/store.js", () => ({
+vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(),
 }));
@@ -97,6 +100,7 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
     registrySnapshotMs: 0,
@@ -117,7 +121,7 @@ vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
 }));
 
-type AuthProfilesStoreModule = typeof import("./auth-profiles/store.js");
+type AuthProfilesStoreModule = typeof import("./auth-profiles/store-runtime.js");
 type AuthProfilesSourceCheckModule = typeof import("./auth-profiles/source-check.js");
 type AuthProfilesUsageModule = typeof import("./auth-profiles/usage.js");
 type AuthProfilesOrderModule = typeof import("./auth-profiles/order.js");
@@ -154,7 +158,7 @@ let cleanupLogCapture: (() => void) | undefined;
 const OPENAI_PROBE_CANDIDATE = { provider: "openai", model: "gpt-4.1-mini" } as const;
 
 async function loadModelFallbackProbeModules() {
-  const authProfilesStoreModule = await import("./auth-profiles/store.js");
+  const authProfilesStoreModule = await import("./auth-profiles/store-runtime.js");
   const authProfilesSourceCheckModule = await import("./auth-profiles/source-check.js");
   const authProfilesUsageModule = await import("./auth-profiles/usage.js");
   const authProfilesOrderModule = await import("./auth-profiles/order.js");
@@ -238,16 +242,10 @@ async function expectProbeFailureFallsBack({
 }) {
   // Shared expectation for transient primary probe failures: probe the primary
   // once, then move to the first fallback with transient probing still allowed.
-  const cfg = makeCfg({
-    agents: {
-      defaults: {
-        model: {
-          primary: "openai/gpt-4.1-mini",
-          fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2-flash"],
-        },
-      },
-    },
-  } as Partial<OpenClawConfig>);
+  const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", [
+    "anthropic/claude-haiku-3-5",
+    "google/gemini-2-flash",
+  ]);
 
   mockedIsProfileInCooldown.mockReturnValue(true);
   mockedGetSoonestCooldownExpiry.mockReturnValue(1_700_000_000_000 + 30 * 1000);
@@ -408,6 +406,21 @@ describe("runWithModelFallback – probe logic", () => {
     await expectPrimarySkippedAfterLongCooldown("billing");
   });
 
+  it.each(["timeout", "overloaded", "format", "empty_response"] as const)(
+    "distinguishes a local skip from its retained %s failure",
+    async (reason) => {
+      mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
+      mockedResolveProfilesUnavailableReason.mockReturnValue(reason);
+      probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
+      const run = vi.fn().mockResolvedValue("ok");
+
+      const result = await runPrimaryCandidate(makeCfg(), run);
+
+      expectPrimarySkippedForReason(result, run, reason);
+      expect(result.attempts[0]?.code).toBe("MODEL_FALLBACK_SKIPPED");
+    },
+  );
+
   it("re-probes a single-provider primary blocked by a far-future subscription_limit (#90702)", () => {
     // fallbacks:[] + a multi-day subscription_limit reset must still re-probe on
     // the throttle instead of suspending until blockedUntil literally arrives,
@@ -517,16 +530,10 @@ describe("runWithModelFallback – probe logic", () => {
 
     probeThrottleInternals.lastProbeAttempt.clear();
 
-    const fallbackCfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2-flash"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
+    const fallbackCfg = createModelFallbackConfig("openai/gpt-4.1-mini", [
+      "anthropic/claude-haiku-3-5",
+      "google/gemini-2-flash",
+    ]);
     mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 60 * 1000);
     const fallbackRun = vi
       .fn()
@@ -647,16 +654,10 @@ describe("runWithModelFallback – probe logic", () => {
   );
 
   it("keeps walking remaining fallbacks after an abort-wrapped RESOURCE_EXHAUSTED probe failure", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "google/gemini-3-flash-preview",
-            fallbacks: ["anthropic/claude-haiku-3-5", "deepseek/deepseek-chat"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
+    const cfg = createModelFallbackConfig("google/gemini-3-flash-preview", [
+      "anthropic/claude-haiku-3-5",
+      "deepseek/deepseek-chat",
+    ]);
 
     mockedResolveAuthProfileOrder.mockImplementation(({ provider }: { provider: string }) => {
       if (provider === "google") {
@@ -873,16 +874,7 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("does not suspend the session when fallback candidates remain", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]);
 
     // Put only OpenAI into cooldown; Anthropic is available
     mockedIsProfileInCooldown.mockImplementation((_store: AuthProfileStore, profileId: string) =>
@@ -906,16 +898,7 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("defers embedded session suspension only while another candidate remains", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]);
     mockedIsProfileInCooldown.mockReturnValue(false);
     const run = vi
       .fn()
@@ -936,54 +919,66 @@ describe("runWithModelFallback – probe logic", () => {
     expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
   });
 
-  it("discards deferred suspension when the outer run is aborted", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
-    mockedIsProfileInCooldown.mockReturnValue(false);
-    const controller = new AbortController();
-    const disconnect = new Error("client disconnected");
-    disconnect.name = "ClientDisconnectError";
-    const run = vi.fn().mockImplementation(async () => {
-      controller.abort(disconnect);
-      throw disconnect;
-    });
-
-    await expect(
-      runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        run,
-        sessionId: "test-session",
-        lane: "main",
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toBe(disconnect);
-
-    expect(run).toHaveBeenCalledOnce();
-    expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
-    expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
-  });
+  it.each(["caller abort", "terminal throw", "terminal classified result"])(
+    "settles deferred suspension for %s",
+    async (mode) => {
+      const { FailoverError } = await import("./failover-error.js");
+      const cfg = makeCfg();
+      mockedIsProfileInCooldown.mockReturnValue(false);
+      const controller = new AbortController();
+      const disconnect = new Error("client disconnected");
+      disconnect.name = "ClientDisconnectError";
+      const error =
+        mode === "caller abort"
+          ? disconnect
+          : new AggregateError(
+              [
+                new FailoverError("recorded terminal stop", {
+                  reason: "unknown",
+                  code: "cli_max_turns",
+                }),
+              ],
+              "wrapper",
+            );
+      const run = vi.fn(async () => {
+        if (mode === "caller abort") {
+          controller.abort(disconnect);
+        }
+        if (mode === "terminal classified result") {
+          return "partial result";
+        }
+        throw error;
+      });
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          run,
+          classifyResult: () => ({ error }),
+          sessionId: "test-session",
+          lane: "main",
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(error);
+      expect(run).toHaveBeenCalledOnce();
+      expect(sessionSuspensionMocks.runWithDeferredSessionSuspension).toHaveBeenCalledOnce();
+      if (mode === "caller abort") {
+        expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
+      } else {
+        expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledExactlyOnceWith({
+          cfg: {},
+          sessionId: "test-session",
+          reason: "quota_exhausted",
+          failedProvider: "openai",
+          failedModel: "gpt-4.1-mini",
+        });
+      }
+    },
+  );
 
   it("keeps generic no-lane terminal suspension unbound", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]);
 
     // Both providers in cooldown
     mockedIsProfileInCooldown.mockReturnValue(true);
@@ -1026,16 +1021,7 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("records the final candidate when later candidates cannot run", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]);
     mockedIsProfileInCooldown.mockImplementation((_store: AuthProfileStore, profileId: string) =>
       profileId.startsWith("anthropic"),
     );
@@ -1068,16 +1054,7 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("restores deferred suspension when a later harness precheck fails", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
-          },
-        },
-      },
-    } as Partial<OpenClawConfig>);
+    const cfg = createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]);
     mockedIsProfileInCooldown.mockReturnValue(false);
     const run = vi.fn().mockRejectedValueOnce(new Error("primary failed"));
 

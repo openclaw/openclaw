@@ -1,154 +1,100 @@
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
-import type { TranslationMap, TranslationMemoryEntry } from "./control-ui-i18n-sync-plan.ts";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildBaseHints } from "../../src/config/schema.hints.js";
+import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
+import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
+import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
+import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
+import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
+import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
+import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
+import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
+import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
+import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
+import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
+import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
+import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
+import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-library.ts";
+import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
+import { registerUpdateActionsEnglish } from "../../ui/src/i18n/locales/en-update-actions.ts";
+import { en } from "../../ui/src/i18n/locales/en.ts";
+import {
+  mergeControlUiTranslationMaps,
+  setControlUiCatalogValue,
+} from "./control-ui-i18n-catalog-values.ts";
+import type { TranslationMap } from "./control-ui-i18n-sync-plan.ts";
 
-async function importControlUiLocaleModule<T>(filePath: string): Promise<T> {
-  const stats = await stat(filePath);
-  return (await import(`${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`)) as T;
-}
+// Host-only source composition for generation, verification, and Vite. The locale
+// loader tracks these imports and reloads them in an isolated namespace.
+const localesDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../ui/src/i18n/locales",
+);
+const sourceFiles = [
+  "en.ts",
+  "en-agents.ts",
+  "en-activity.ts",
+  "en-debug.ts",
+  "en-desktop.ts",
+  "en-devices.ts",
+  "en-login.ts",
+  "en-meetings.ts",
+  "en-memory-import.ts",
+  "en-model-accounts.ts",
+  "en-session-placement.ts",
+  "en-new-session-setup.ts",
+  "en-plugin-consent.ts",
+  "en-settings.ts",
+  "en-skill-library.ts",
+  "en-update-actions.ts",
+  "en-transcripts.ts",
+];
 
-export async function loadControlUiLocaleCatalog(
-  filePath: string,
-  exportName: string,
-): Promise<TranslationMap | null> {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  const module = await importControlUiLocaleModule<Record<string, TranslationMap>>(filePath);
-  return module[exportName] ?? null;
-}
-
-export async function loadControlUiSourceCatalog(
-  sourceLocalePath: string,
-  activitySourceLocalePath: string,
-  sessionPlacementSourceLocalePath: string,
-  pluginConsentSourceLocalePath: string,
-): Promise<TranslationMap> {
-  const source = await loadControlUiLocaleCatalog(sourceLocalePath, "en");
-  const activitySource = (
-    await importControlUiLocaleModule<{
-      registerActivityEnglish: { catalog: TranslationMap };
-    }>(activitySourceLocalePath)
-  ).registerActivityEnglish.catalog;
-  const sessionPlacementSource = (
-    await importControlUiLocaleModule<{
-      registerSessionPlacementEnglish: { catalog: TranslationMap };
-    }>(sessionPlacementSourceLocalePath)
-  ).registerSessionPlacementEnglish.catalog;
-  const pluginConsentSource = (
-    await importControlUiLocaleModule<{
-      registerPluginConsentEnglish: { catalog: TranslationMap };
-    }>(pluginConsentSourceLocalePath)
-  ).registerPluginConsentEnglish.catalog;
-  if (!source || !activitySource || !sessionPlacementSource || !pluginConsentSource) {
-    throw new Error("Control UI English source catalogs are incomplete");
-  }
+export function loadControlUiSourceCatalog(): TranslationMap {
+  // Read fragment data without registering it into the shared runtime catalog.
+  // en.ts's empty anchors retain source order for extracted whole subtrees.
   return mergeControlUiTranslationMaps(
-    source,
-    activitySource,
-    sessionPlacementSource,
-    pluginConsentSource,
+    registerSkillLibraryEnglish.catalog,
+    // Preserve partial-fragment key order while keeping shared labels eager.
+    {
+      ...en,
+      debug: registerDebugEnglish.catalog.debug,
+      desktop: registerDesktopEnglish.catalog.desktop,
+    },
+    registerActivityEnglish.catalog,
+    registerDevicesEnglish.catalog,
+    registerLoginEnglish.catalog,
+    registerMeetingsEnglish.catalog,
+    registerMemoryImportEnglish.catalog,
+    registerModelAccountsEnglish.catalog,
+    registerSessionPlacementEnglish.catalog,
+    registerNewSessionSetupEnglish.catalog,
+    registerPluginConsentEnglish.catalog,
+    registerSettingsEnglish.catalog,
+    registerUpdateActionsEnglish.catalog,
+    registerTranscriptsEnglish.catalog,
+    loadControlUiCoreHintCatalog(),
   );
 }
 
-export async function readControlUiSourceCatalog(
-  sourceLocalePath: string,
-  activitySourceLocalePath: string,
-  sessionPlacementSourceLocalePath: string,
-  pluginConsentSourceLocalePath: string,
-): Promise<string> {
+export async function readControlUiSourceCatalog(): Promise<string> {
   const sources = await Promise.all(
-    [
-      sourceLocalePath,
-      activitySourceLocalePath,
-      sessionPlacementSourceLocalePath,
-      pluginConsentSourceLocalePath,
-    ].map((filePath) => readFile(filePath, "utf8")),
+    sourceFiles.map((fileName) => readFile(path.join(localesDir, fileName), "utf8")),
   );
-  return sources.join("\n");
+  return [...sources, JSON.stringify(loadControlUiCoreHintCatalog())].join("\n");
 }
 
-export function hashControlUiTranslationText(text: string): string {
-  return createHash("sha256").update(text.trim().split(/\s+/).join(" ")).digest("hex");
-}
-
-export function mergeControlUiTranslationMaps(
-  ...maps: ReadonlyArray<TranslationMap>
-): TranslationMap {
-  const merged: TranslationMap = {};
-  const mergeInto = (target: TranslationMap, source: TranslationMap): void => {
-    for (const [key, value] of Object.entries(source)) {
-      if (typeof value === "string") {
-        target[key] = value;
-        continue;
-      }
-      const existing = target[key];
-      const nested = typeof existing === "object" ? existing : {};
-      target[key] = nested;
-      mergeInto(nested, value);
-    }
-  };
-  for (const map of maps) {
-    mergeInto(merged, map);
-  }
-  return merged;
-}
-
-export function loadControlUiTranslationMemory(
-  filePath: string,
-): Map<string, TranslationMemoryEntry> {
-  const entries = new Map<string, TranslationMemoryEntry>();
-  if (!existsSync(filePath)) {
-    return entries;
-  }
-  for (const line of readFileSync(filePath, "utf8").split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    const entry = JSON.parse(line) as TranslationMemoryEntry;
-    if (entry.cache_key && entry.translated.trim()) {
-      entries.set(entry.cache_key, entry);
-    }
-  }
-  return entries;
-}
-
-function setControlUiCatalogValue(catalog: TranslationMap, key: string, value: string): void {
-  const parts = key.split(".");
-  let current = catalog;
-  for (const part of parts.slice(0, -1)) {
-    const existing = current[part];
-    if (!existing || typeof existing === "string") {
-      current[part] = {};
-    }
-    current = current[part] as TranslationMap;
-  }
-  current[parts[parts.length - 1]!] = value;
-}
-
-export function materializeControlUiLocaleCatalog(
-  sourceFlat: ReadonlyMap<string, string>,
-  memory: ReadonlyMap<string, TranslationMemoryEntry>,
-): TranslationMap {
-  const translations = new Map<string, string>();
-
-  for (const entry of memory.values()) {
-    for (const key of [entry.segment_id, ...(entry.segment_ids ?? [])]) {
-      const source = sourceFlat.get(key);
-      if (source === undefined || entry.text_hash !== hashControlUiTranslationText(source)) {
-        continue;
-      }
-      translations.set(key, entry.translated);
-    }
-  }
-
+function loadControlUiCoreHintCatalog(): TranslationMap {
   const catalog: TranslationMap = {};
-  for (const key of sourceFlat.keys()) {
-    const translated = translations.get(key);
-    if (translated !== undefined) {
-      setControlUiCatalogValue(catalog, key, translated);
+  for (const [hintPath, hint] of Object.entries(buildBaseHints()).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    for (const field of ["label", "help"] as const) {
+      const text = hint[field];
+      if (text) {
+        setControlUiCatalogValue(catalog, configHintTranslationKey(hintPath, field, text), text);
+      }
     }
   }
   return catalog;

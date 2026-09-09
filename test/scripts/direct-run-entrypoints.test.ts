@@ -24,6 +24,7 @@ import {
   formatShimResult,
   TSX_SHIM_WRAPPERS,
   withShimFixture,
+  writeEsmPluginFixture,
 } from "./direct-run-entrypoints.test-support.js";
 
 const DIRECT_RUN_SCRIPTS = [
@@ -47,18 +48,6 @@ const EXECUTABLE_ENTRYPOINTS = [
   {
     args: ["2026.4.25"],
     output: "1",
-    script: "scripts/e2e/lib/package-compat.mjs",
-    status: 0,
-  },
-  {
-    args: ["--clawhub-release-security-mode", "2026.6.35"],
-    output: "absent",
-    script: "scripts/e2e/lib/package-compat.mjs",
-    status: 0,
-  },
-  {
-    args: ["--clawhub-release-security-mode", "2026.8.1"],
-    output: "required",
     script: "scripts/e2e/lib/package-compat.mjs",
     status: 0,
   },
@@ -111,7 +100,7 @@ function writeTsxFixture(modulesDir: string, marker: string) {
   mkdirSync(packageDir, { recursive: true });
   writeFileSync(
     path.join(packageDir, "package.json"),
-    JSON.stringify({ name: "tsx", type: "module", exports: "./loader.mjs" }),
+    JSON.stringify({ name: "tsx", type: "module", exports: { "./esm": "./loader.mjs" } }),
   );
   writeFileSync(
     path.join(packageDir, "loader.mjs"),
@@ -165,6 +154,36 @@ function expectShimLoader(result: Awaited<ReturnType<typeof runShimFixture>>, lo
 }
 
 describe("script direct-run entrypoints", () => {
+  it.each(["wrapper", "preload"])(
+    "loads compiled ESM through require from the %s with import-only dependencies",
+    async (entrypoint) => {
+      await withShimFixture(TSX_SHIM_WRAPPERS[0], async (fixture) => {
+        const { fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
+        writeFileSync(implementationPath, writeEsmPluginFixture(fixtureRoot));
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          PNPM_CONFIG_MODULES_DIR: path.dirname(
+            path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+          ),
+        };
+        delete env.NODE_OPTIONS;
+        const args =
+          entrypoint === "wrapper"
+            ? [wrapperPath]
+            : ["--import", "./scripts/tsx.mjs", implementationPath];
+        const result = await runNode(args, env, process.cwd());
+        expect(result.error, formatShimResult(result)).toBeUndefined();
+        expect(result.status, formatShimResult(result)).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({
+          value: "import-only",
+          evaluations: 1,
+          transformed: "transformed",
+          sourceAlias: true,
+        });
+      });
+    },
+  );
+
   it.each([false, true])(
     "preserves preloads when forking into another cwd (equals=%s)",
     async (equals) => {
@@ -412,7 +431,7 @@ process.exitCode = child.status ?? 1;
   });
 
   it.each(["hydrated", "primary"] as const)(
-    "resolves implementation dependencies from the %s toolchain without local modules",
+    "requires explicit hydration to bootstrap from %s without local modules",
     async (source) => {
       const result = await runShimFixture(TSX_SHIM_WRAPPERS[0], ({ checkoutRoot, fixtureRoot }) => {
         rmSync(path.join(checkoutRoot, "node_modules"), { recursive: true });
@@ -430,7 +449,16 @@ process.exitCode = child.status ?? 1;
         expect(initialized.status, initialized.stderr).toBe(0);
         return {};
       });
-      expectShimLoader(result, source);
+      if (source === "hydrated") {
+        expectShimLoader(result, source);
+      } else {
+        expect(result.error, formatShimResult(result)).toBeUndefined();
+        expect(result.status, formatShimResult(result)).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(
+          "Run pnpm install --frozen-lockfile in an independently owned checkout.",
+        );
+      }
     },
   );
 

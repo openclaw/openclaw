@@ -6,6 +6,12 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
+import {
+  assertCompatibleCliStartupMemoryMetrics,
+  cliStartupMemoryMetric,
+} from "./lib/cli-startup-memory-contract.mts";
+import { isStartupTraceDuration } from "./lib/gateway-startup-trace-ranking.js";
 import { collectSqliteQueryPlanEvidence } from "./lib/sqlite-query-plan-evidence.js";
 
 type JsonObject = { [key: string]: JsonValue };
@@ -62,14 +68,6 @@ function hasControlCharacters(value: string): boolean {
   return false;
 }
 
-function readOptionValue(argv: string[], index: number, optionName: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]) {
   const options: Record<"baselineSourceDir" | "sourceDir" | "output", string | null> = {
     baselineSourceDir: null,
@@ -79,7 +77,7 @@ export function parseArgs(argv: string[]) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     const readValue = () => {
-      const value = readOptionValue(argv, index, arg);
+      const value = requireOptionArgument(argv, index, arg);
       index += 1;
       return value;
     };
@@ -135,8 +133,8 @@ function formatMs(value: unknown) {
   return finiteNumber(value) ? `${value.toFixed(1)}ms` : "n/a";
 }
 
-function formatMb(value: unknown) {
-  return finiteNumber(value) ? `${value.toFixed(1)}MB` : "n/a";
+function formatMb(value: unknown, unit: "MB" | "MiB" = "MB") {
+  return finiteNumber(value) ? `${value.toFixed(1)}${unit}` : "n/a";
 }
 
 function formatBytesAsMb(value: unknown) {
@@ -162,7 +160,7 @@ function percentDelta(before: unknown, after: unknown) {
   return ((after - before) / before) * 100;
 }
 
-function formatDeltaMb(before: unknown, after: unknown) {
+function formatDeltaMb(before: unknown, after: unknown, unit: "MB" | "MiB" = "MB") {
   if (typeof before !== "number" || typeof after !== "number") {
     return "n/a";
   }
@@ -170,7 +168,7 @@ function formatDeltaMb(before: unknown, after: unknown) {
   const percent = percentDelta(before, after);
   const sign = delta > 0 ? "+" : "";
   const percentText = percent == null ? "new" : `${percent > 0 ? "+" : ""}${percent.toFixed(1)}%`;
-  return `${sign}${formatMb(delta)} (${percentText})`;
+  return `${sign}${formatMb(delta, unit)} (${percentText})`;
 }
 
 function memoryRisk(before: unknown, after: unknown) {
@@ -305,6 +303,7 @@ function validateStartupArtifact(startup: JsonValue, filePath: string) {
 }
 
 function validateCliArtifact(cli: JsonValue, filePath: string) {
+  cliStartupMemoryMetric(valueAt(cli, "primary"));
   const cases = objectArray(valueAt(cli, "primary", "cases"));
   if (cases.length === 0) {
     throw new Error(`[source-performance] missing CLI startup cases: ${filePath}`);
@@ -569,14 +568,6 @@ function buildTraceRows(startup: JsonValue) {
   return rows;
 }
 
-function isStartupTraceDuration(name: string) {
-  if (name.endsWith(".total") || name.startsWith("memory.")) {
-    return false;
-  }
-  const metricName = name.slice(name.lastIndexOf(".") + 1);
-  return !metricName.endsWith("Count") && !metricName.endsWith("Mb");
-}
-
 function buildMockHelloRows(summaries: MockHelloEntry[]) {
   return summaries.map(({ id, summary }) => {
     const failed = valueAt(summary, "counts", "failed");
@@ -606,7 +597,7 @@ function buildCliRows(cli: JsonValue) {
     commandCase.name ?? commandCase.id ?? "unknown",
     formatMs(valueAt(commandCase, "summary", "durationMs", "p50")),
     formatMs(valueAt(commandCase, "summary", "durationMs", "p95")),
-    formatMb(valueAt(commandCase, "summary", "maxRssMb", "p95")),
+    formatMb(valueAt(commandCase, "summary", "maxRssMb", "p95"), "MiB"),
     formatExitSummary(valueAt(commandCase, "summary", "exitSummary")),
   ]);
 }
@@ -645,6 +636,13 @@ function buildStartupMemoryDeltaRows(current: JsonValue, baseline: JsonValue) {
 }
 
 function buildCliMemoryDeltaRows(current: JsonValue, baseline: JsonValue) {
+  if (!current || !baseline) {
+    return [];
+  }
+  assertCompatibleCliStartupMemoryMetrics(
+    valueAt(baseline, "primary"),
+    valueAt(current, "primary"),
+  );
   const baselineById = new Map(
     objectArray(valueAt(baseline, "primary", "cases")).map((entry) => [entry.id, entry]),
   );
@@ -659,9 +657,9 @@ function buildCliMemoryDeltaRows(current: JsonValue, baseline: JsonValue) {
       return [
         "cli",
         entry.id ?? "unknown",
-        formatMb(beforeRss),
-        formatMb(afterRss),
-        formatDeltaMb(beforeRss, afterRss),
+        formatMb(beforeRss, "MiB"),
+        formatMb(afterRss, "MiB"),
+        formatDeltaMb(beforeRss, afterRss, "MiB"),
         "n/a",
         memoryRisk(beforeRss, afterRss),
       ];
@@ -939,6 +937,8 @@ export function buildMarkdown(sourceDir: string, baselineSourceDir: string | nul
       buildMockHelloRows(current.mockHelloSummaries),
     ),
     "## CLI Against Booted Gateway",
+    "",
+    `RSS metric: ${cliStartupMemoryMetric(valueAt(current.cli, "primary"))}; values are MiB.`,
     "",
     ...table(
       ["case", "command", "duration p50", "duration p95", "RSS p95", "exits"],

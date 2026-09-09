@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import type { CodexAppServerLiveThreadOwnership } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexDynamicToolSpec, CodexTurnEnvironmentParams, JsonObject } from "./protocol.js";
@@ -28,6 +29,8 @@ type CodexAppServerThreadLifecycle = {
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
   liveThreadConfigFingerprint?: string;
+  /** Creation-time policy for a live ephemeral thread; never persisted in the binding. */
+  liveThreadEphemeralPolicy?: string;
   /** Process-local claim proof; never write this callback into durable binding state. */
   liveThreadOwnership?: CodexAppServerLiveThreadOwnership;
   clearInheritedServiceTier?: true;
@@ -37,7 +40,7 @@ type CodexThreadFinalConfigPatchDecision =
   | { action: "resume"; binding: CodexAppServerThreadBinding }
   | { action: "start" };
 
-type CodexThreadFinalConfigPatchResult = {
+export type CodexThreadFinalConfigPatchResult = {
   configPatch?: JsonObject;
   nativeHookRelayGeneration?: string;
 };
@@ -54,11 +57,14 @@ export type CodexPluginThreadConfigProvider = {
 };
 
 export type CodexStartOrResumeThreadParams = {
+  inferenceRoute?: CodexInferenceProxy;
   client: CodexAppServerClient;
   abandonClient?: () => Promise<void>;
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
   params: EmbeddedRunAttemptParams;
+  /** Retained host-generation proof; the opaque host capability remains unchanged. */
+  assertCurrent?: () => void;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;
   agentId?: string;
@@ -123,4 +129,29 @@ export type CodexThreadRequestContext = {
     modelProvider: string | undefined,
   ) => string | undefined;
   throwIfAborted: () => void;
+};
+
+export type CodexThreadResumePreparation = {
+  assertConfigured: () => void;
+  assertCurrent: () => void;
+  dispose: () => void;
+};
+
+export type CodexResumeThreadContext = CodexThreadRequestContext & {
+  binding: CodexAppServerThreadBinding;
+  clearCurrentBinding: (operation: string) => Promise<void>;
+  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
+  buildLoadedPluginThreadConfig?: (
+    binding: CodexAppServerThreadBinding,
+  ) => Promise<CodexPluginThreadConfig | undefined>;
+  prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
+  prepareResume: () => Promise<CodexThreadResumePreparation>;
+  releaseRetainedThread: (assertCurrent: () => void) => Promise<void>;
+};
+
+export type CodexStartThreadContext = CodexThreadRequestContext & {
+  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
+  preserveExistingBinding: boolean;
+  rotatedContextEngineBinding: boolean;
+  replacementPredecessor?: CodexAppServerThreadBinding;
 };

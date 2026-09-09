@@ -13,7 +13,6 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
-  findCliMaxTurnsError,
   hasProviderRequestSizeCeiling,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
@@ -72,10 +71,11 @@ import {
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
-import type {
-  FallbackAttempt,
-  ModelFallbackCandidate,
-  ModelFallbackRouteResolution,
+import {
+  MODEL_FALLBACK_SKIPPED_CODE,
+  type FallbackAttempt,
+  type ModelFallbackCandidate,
+  type ModelFallbackRouteResolution,
 } from "./model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
@@ -88,10 +88,6 @@ const log = createSubsystemLogger("model-fallback");
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
   () => import("./auth-profiles.runtime.js"),
 );
-
-async function loadModelFallbackAuthRuntime() {
-  return await modelFallbackAuthRuntimeLoader.load();
-}
 
 type RunWithModelFallbackParams<T> = {
   cfg: OpenClawConfig | undefined;
@@ -178,11 +174,14 @@ async function runWithModelFallbackInternal<T>(
   await params.prepareCandidateChain?.(candidates);
   const userLockedAuthProfileId = params.userLockedAuthProfileId?.trim() || undefined;
   const authRuntime =
-    !params.skipAuthProfileRuntime && params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
-      ? await loadModelFallbackAuthRuntime()
+    !params.skipAuthProfileRuntime &&
+    params.cfg &&
+    (userLockedAuthProfileId || hasAnyAuthProfileStoreSource(params.agentDir))
+      ? await modelFallbackAuthRuntimeLoader.load()
       : null;
   const authStore = authRuntime
     ? authRuntime.ensureAuthProfileStore(params.agentDir, {
+        profileId: userLockedAuthProfileId,
         externalCli: externalCliDiscoveryScoped({
           config: params.cfg,
           allowKeychainPrompt: false,
@@ -192,18 +191,28 @@ async function runWithModelFallbackInternal<T>(
       })
     : null;
   const attempts: FallbackAttempt[] = [];
+  const profileIdsByCandidate = new Map<ModelFallbackCandidate, string[]>();
   let lastError: unknown;
   let latestClassifiedResult: ModelFallbackClassifiedResult<T> | undefined;
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
   const tlsFailedProviders = new Set<string>();
+  const notifyFallbackStep: ModelFallbackStepHandler = async (step) => {
+    // Observations cannot replace candidate outcomes or stop a usable fallback.
+    // Policy-bearing callbacks such as onError retain their own failure semantics.
+    try {
+      await params.onFallbackStep?.(step);
+    } catch {
+      log.warn("Model fallback observer failed; preserving execution outcome.");
+    }
+  };
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
       return;
     }
     const fallbackStep = logModelFallbackDecision(decision);
     if (fallbackStep) {
-      await params.onFallbackStep?.(fallbackStep);
+      await notifyFallbackStep(fallbackStep);
     }
   };
   const observeFailedCandidate = async (
@@ -214,7 +223,7 @@ async function runWithModelFallbackInternal<T>(
     } else {
       const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
       if (fallbackStep) {
-        await params.onFallbackStep?.(fallbackStep);
+        await notifyFallbackStep(fallbackStep);
       }
     }
     // Emit only real candidate-to-candidate transitions. Terminal candidates
@@ -272,9 +281,8 @@ async function runWithModelFallbackInternal<T>(
       ...candidate,
     });
     const isPrimary = candidate.routeOrigin === "requested";
-    const requestedModel = requestedCandidate
-      ? sameModelCandidate(candidate, requestedCandidate)
-      : false;
+    const requestedModel =
+      requestedCandidate !== undefined && sameModelCandidate(candidate, requestedCandidate);
     const attemptContext = { attempt: i + 1, total: candidates.length };
     const candObs = {
       ...runObs,
@@ -288,16 +296,13 @@ async function runWithModelFallbackInternal<T>(
       decision: ModelFallbackDecisionParams["decision"],
       extra: Partial<ModelFallbackDecisionParams> = {},
     ) => observeDecision({ decision, ...candObs, ...extra });
-    const pushAttempt = (
-      error: string,
-      reason: FailoverReason,
-      auth?: Pick<FallbackAttempt, "authMode">,
-    ) =>
+    const pushSkippedAttempt = (error: string, reason: FailoverReason, authMode?: string) =>
       attempts.push({
         ...candidateRef,
         error,
         reason,
-        ...auth,
+        code: MODEL_FALLBACK_SKIPPED_CODE,
+        authMode,
       });
 
     let candidateAuthProfileIds: string[] | undefined;
@@ -310,21 +315,21 @@ async function runWithModelFallbackInternal<T>(
           store: authStore,
           provider: candidate.provider,
           profileId: userLockedAuthProfileId,
+          includePendingOAuthRefresh: true,
         }).eligible;
       if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
-        const orderedProfileIds = authRuntime.resolveAuthProfileOrder({
+        candidateAuthProfileIds = authRuntime.resolveAuthProfileOrder({
           cfg: params.cfg,
           store: authStore,
           provider: candidate.provider,
           forModel: candidate.model,
+          includePendingOAuthRefresh: true,
         });
-        candidateAuthProfileIds =
-          userLockedAuthProfileEligible && userLockedAuthProfileId
-            ? [
-                userLockedAuthProfileId,
-                ...orderedProfileIds.filter((profileId) => profileId !== userLockedAuthProfileId),
-              ]
-            : orderedProfileIds;
+        if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
+          candidateAuthProfileIds.unshift(userLockedAuthProfileId);
+          candidateAuthProfileIds = [...new Set(candidateAuthProfileIds)];
+        }
+        profileIdsByCandidate.set(candidate, candidateAuthProfileIds);
         authRuntime.maybeReprobeWhamBlockedProfiles({
           store: authStore,
           profileIds: candidateAuthProfileIds,
@@ -362,7 +367,7 @@ async function runWithModelFallbackInternal<T>(
           ? `run \`${reauthCommand}\` to re-authenticate`
           : "re-authenticate that provider";
         const error = `Skipping ${candidate.provider}/${candidate.model}: recent ${skipReason} failure in this session (${reauthHint})`;
-        pushAttempt(error, skipReason as FailoverReason);
+        pushSkippedAttempt(error, skipReason as FailoverReason);
         await observeCandidateDecision("skip_candidate", {
           reason: skipReason as FailoverReason,
           error,
@@ -410,11 +415,10 @@ async function runWithModelFallbackInternal<T>(
 
         if (decision.type === "suspend_session") {
           const error = `Provider ${candidate.provider} is in cooldown`;
-          pushAttempt(error, decision.reason, { authMode });
+          pushSkippedAttempt(error, decision.reason, authMode);
 
           // Only record terminal session suspension when no remaining candidate
           // can serve the turn. Provider cooldown state prevents repeat probes.
-          const hasRemainingCandidates = hasRemainingCandidate;
           if (params.sessionId) {
             emitFailoverEvent({
               sessionId: params.sessionId,
@@ -422,9 +426,9 @@ async function runWithModelFallbackInternal<T>(
               fromProvider: candidate.provider,
               fromModel: candidate.model,
               reason: decision.reason,
-              suspended: !hasRemainingCandidates,
+              suspended: !hasRemainingCandidate,
             });
-            if (!hasRemainingCandidates) {
+            if (!hasRemainingCandidate) {
               deferredSuspension.pending = undefined;
               void suspendSession({
                 cfg: params.cfg,
@@ -447,7 +451,7 @@ async function runWithModelFallbackInternal<T>(
         }
 
         if (decision.type === "skip") {
-          pushAttempt(decision.error, decision.reason, { authMode });
+          pushSkippedAttempt(decision.error, decision.reason, authMode);
           await observeCandidateDecision("skip_candidate", {
             reason: decision.reason,
             error: decision.error,
@@ -466,7 +470,7 @@ async function runWithModelFallbackInternal<T>(
           const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
             const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
-            pushAttempt(error, decision.reason, { authMode });
+            pushSkippedAttempt(error, decision.reason, authMode);
             await observeCandidateDecision("skip_candidate", {
               reason: decision.reason,
               error,
@@ -516,26 +520,21 @@ async function runWithModelFallbackInternal<T>(
       abortSignal: params.abortSignal,
     });
     if ("success" in attemptRun) {
-      if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
+      if (!attemptRun.stopped && (i > 0 || attempts.length > 0 || attemptedDuringCooldown)) {
         await observeCandidateDecision("candidate_succeeded", {
           previousAttempts: attempts,
         });
-      }
-      const notFoundAttempt =
-        i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
-      if (notFoundAttempt) {
-        log.warn(
-          `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
-        );
+        const notFoundAttempt =
+          i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
+        if (notFoundAttempt) {
+          log.warn(
+            `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
+          );
+        }
       }
       return attemptRun.success;
     }
     const err = attemptRun.error;
-    // Max-turn termination can follow successful tool actions. Stop before
-    // candidate fallback so the user can verify effects before any replay.
-    if (findCliMaxTurnsError(err)) {
-      throw err;
-    }
     if (isAgentHarnessPreflightError(err)) {
       const failedHarnessId = resolveAgentHarnessPreflightOwner(err);
       if (!failedHarnessId) {
@@ -609,10 +608,7 @@ async function runWithModelFallbackInternal<T>(
     // here prevents the fallback chain from consuming candidates retrying
     // the same local condition and surfacing a misleading "All models
     // failed" summary. See #83510.
-    if (isNonProviderRuntimeCoordinationError(err)) {
-      throw err;
-    }
-    if (isTranscriptNotContinuableError(err)) {
+    if (isNonProviderRuntimeCoordinationError(err) || isTranscriptNotContinuableError(err)) {
       throw err;
     }
     if (transientProbeProviderForAttempt) {
@@ -768,10 +764,10 @@ async function runWithModelFallbackInternal<T>(
       }`,
     soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
       authRuntime,
-      authStore,
+      userLockedAuthProfileId,
       agentDir: params.agentDir,
       cfg: params.cfg,
-      candidates,
+      profileIdsByCandidate,
     }),
     attribution: { sessionId: params.sessionId, lane: params.lane },
     cfg: params.cfg,

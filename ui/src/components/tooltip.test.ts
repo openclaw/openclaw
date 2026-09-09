@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 type TooltipElement = HTMLElement & {
@@ -209,7 +210,7 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
   });
 
-  it("suppresses a tooltip that repeats fully visible trigger text", async () => {
+  it("suppresses repeated trigger text before opening and after content updates", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "Claude Opus 4.7 Anthropic");
     provider.append(tooltip);
@@ -220,6 +221,15 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(0);
     hoverTrigger(trigger);
     vi.runAllTimers();
+    expectOpenCount(0);
+
+    tooltip.content = "Additional model details";
+    await tooltip.updateComplete;
+    focusTrigger(trigger);
+    expectOpenCount(1);
+
+    tooltip.content = "Claude Opus 4.7";
+    await tooltip.updateComplete;
     expectOpenCount(0);
   });
 
@@ -367,6 +377,47 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(150);
     expect(webAwesomeTooltip(portaled.tooltip)?.open).toBe(false);
     expect(webAwesomeTooltip(scoped.tooltip)?.open).toBe(true);
+  });
+
+  it("consumes only an unclaimed Escape while a tooltip is active", async () => {
+    const { tooltip, trigger } = createTooltip("Keyboard hint");
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+    focusTrigger(trigger);
+    const downstream = vi.fn();
+    trigger.addEventListener("keydown", downstream);
+    const descriptionId = trigger.getAttribute("aria-describedby");
+
+    for (const key of ["Tab", "Escape"]) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      if (key === "Escape") {
+        event.preventDefault();
+      }
+      trigger.dispatchEvent(event);
+      expectOpenCount(1);
+    }
+    expect(downstream).toHaveBeenCalledTimes(2);
+
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    trigger.dispatchEvent(escape);
+    expectOpenCount(0);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(downstream).toHaveBeenCalledTimes(2);
+    expect(trigger.getAttribute("aria-describedby")).toBe(descriptionId);
+    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Keyboard hint");
+
+    const nextEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    trigger.dispatchEvent(nextEscape);
+    expect(nextEscape.defaultPrevented).toBe(false);
+    expect(downstream).toHaveBeenCalledTimes(3);
   });
 
   it("honors per-tooltip hover intent while keyboard focus stays immediate", async () => {
@@ -553,6 +604,16 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
     first.tooltip.remove();
     expectOpenCount(0);
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    const downstream = vi.fn();
+    provider.addEventListener("keydown", downstream);
+    provider.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+    expect(downstream).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(20);
 
     const second = createTooltip("Second tooltip");
@@ -670,6 +731,174 @@ describe("title tooltips", () => {
     vi.advanceTimersByTime(0);
     expect(webAwesomeTooltip(delegated!)?.open).toBe(false);
     expect(webAwesomeTooltip(explicit.tooltip)?.open).toBe(true);
+  });
+
+  it.each(["pointer", "focus"] as const)(
+    "yields a %s title tooltip to a rich card without restoring the native title",
+    async (input) => {
+      const trigger = document.createElement("a");
+      trigger.href = "https://example.com/item";
+      trigger.title = trigger.href;
+      trigger.textContent = "Item";
+      document.body.append(trigger);
+      const activate = () =>
+        input === "pointer" ? dispatchMousePointer(trigger, "pointerover") : focusTrigger(trigger);
+      activate();
+      const tooltip = document.querySelector<TooltipElement>("openclaw-tooltip")!;
+      await tooltip.updateComplete;
+      vi.advanceTimersByTime(150);
+      expectOpenCount(1);
+
+      const hovercard = new PortaledHovercardController(() => hovercard.reset());
+      hovercard.markTrigger(trigger);
+      await Promise.resolve();
+      await tooltip.updateComplete;
+      expectOpenCount(1);
+
+      hovercard.mount(trigger, createPortaledHovercard("item-preview", "preview"), "vertical");
+      await Promise.resolve();
+      await tooltip.updateComplete;
+      expectOpenCount(0);
+      expect(trigger.title).toBe("");
+      activate();
+      await tooltip.updateComplete;
+      vi.advanceTimersByTime(150);
+      expectOpenCount(0);
+
+      hovercard.reset();
+      await Promise.resolve();
+      await tooltip.updateComplete;
+      expectOpenCount(0);
+      dispatchMousePointer(trigger, "pointerleave");
+      trigger.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      expect(trigger.title).toBe(trigger.href);
+      activate();
+      await tooltip.updateComplete;
+      vi.advanceTimersByTime(150);
+      expectOpenCount(1);
+    },
+  );
+
+  it.each(["link", "subtree"])(
+    "claims preview ownership when an active %s moves into a provider",
+    async (moved) => {
+      const provider = document.createElement("openclaw-github-link-hovercard-provider");
+      const wrapper = document.createElement("div");
+      const link = document.createElement("a");
+      link.href = "https://github.com/openclaw/openclaw/pull/99816";
+      link.title = "Pull request details";
+      link.textContent = "#99816";
+      wrapper.append(link);
+      document.body.append(provider, wrapper);
+      dispatchMousePointer(link, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      expectOpenCount(1);
+      provider.append(moved === "link" ? link : wrapper);
+      await vi.advanceTimersByTimeAsync(0);
+      expectOpenCount(0);
+      expect(link.title).toBe("");
+      expect(link.hasAttribute("aria-expanded")).toBe(false);
+      document.body.append(moved === "link" ? link : wrapper);
+      await vi.advanceTimersByTimeAsync(200);
+      expectOpenCount(0);
+      dispatchMousePointer(link, "pointerleave");
+      expect(link.title).toBe("Pull request details");
+      dispatchMousePointer(link, "pointerover");
+      await vi.advanceTimersByTimeAsync(200);
+      expectOpenCount(1);
+      expect(link.href).toBe("https://github.com/openclaw/openclaw/pull/99816");
+    },
+  );
+
+  it("keeps an inherited ordinary hint open while moving between ordinary links", async () => {
+    const parent = document.createElement("div");
+    parent.title = "Ordinary shared hint";
+    const first = document.createElement("a");
+    first.href = "https://example.com/first";
+    first.textContent = "First";
+    const second = document.createElement("a");
+    second.href = "https://example.com/second";
+    second.textContent = "Second";
+    parent.append(first, second);
+    document.body.append(parent);
+    dispatchMousePointer(first, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(1);
+    const mounts: Node[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        mounts.push(
+          ...[...record.addedNodes].filter(
+            (node) => node instanceof Element && node.matches("openclaw-tooltip"),
+          ),
+        );
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      dispatchMousePointer(second, "pointerover");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mounts).toEqual([]);
+      expectOpenCount(1);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
+  it("keeps inherited titles scoped when moving between a GitHub link and an ordinary control", async () => {
+    const parent = document.createElement("div");
+    parent.title = "Shared context hint";
+    const provider = document.createElement("openclaw-github-link-hovercard-provider");
+    const link = document.createElement("a");
+    link.href = "https://github.com/openclaw/openclaw/pull/99816";
+    link.textContent = "#99816";
+    const control = document.createElement("button");
+    control.textContent = "Ordinary control";
+    provider.append(link);
+    parent.append(provider, control);
+    document.body.append(parent);
+    dispatchMousePointer(link, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(0);
+    expect(parent.title).toBe("");
+    expect(link.hasAttribute("aria-expanded")).toBe(false);
+    dispatchMousePointer(control, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(1);
+    expect(document.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(
+      "Shared context hint",
+    );
+    dispatchMousePointer(parent, "pointerleave");
+    expect(parent.title).toBe("Shared context hint");
+  });
+
+  it("yields a nested title when its link becomes preview eligible and restores ordinary hints on reentry", async () => {
+    const provider = document.createElement("openclaw-github-link-hovercard-provider");
+    const link = document.createElement("a");
+    link.href = "https://example.com/item";
+    const label = document.createElement("span");
+    label.textContent = "Details";
+    label.title = "Detailed hint";
+    link.append(label);
+    provider.append(link);
+    document.body.append(provider);
+    dispatchMousePointer(label, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(1);
+    link.href = "https://github.com/openclaw/openclaw/pull/99816?plain=1#issuecomment-7";
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(0);
+    expect(label.title).toBe("");
+    expect(link.hasAttribute("aria-expanded")).toBe(false);
+    expect(link.href).toBe(
+      "https://github.com/openclaw/openclaw/pull/99816?plain=1#issuecomment-7",
+    );
+    link.href = "https://example.com/item";
+    dispatchMousePointer(label, "pointerleave");
+    expect(label.title).toBe("Detailed hint");
+    dispatchMousePointer(label, "pointerover");
+    await vi.advanceTimersByTimeAsync(200);
+    expectOpenCount(1);
   });
 
   it("tracks dynamic titles and restores the latest title and accessible name", async () => {

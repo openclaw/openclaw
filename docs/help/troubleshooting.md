@@ -179,7 +179,7 @@ sudo chown -R root:root /path/to/openclaw-config/npm
 openclaw doctor --fix
 ```
 
-Deeper docs: [Blocked plugin path ownership](/tools/plugin#blocked-plugin-path-ownership), [Docker: Permissions and EACCES](/install/docker#shell-helpers-optional)
+Deeper docs: [Blocked plugin path ownership](/tools/plugin#blocked-plugin-path-ownership), [Docker: Permissions and EACCES](/install/docker#permissions-and-eacces)
 
 ## Decision tree
 
@@ -316,16 +316,16 @@ flowchart TD
     ```bash
     openclaw status
     openclaw gateway status
-    openclaw cron status
-    openclaw cron list
-    openclaw cron runs --id <jobId> --limit 20
+    openclaw automations status
+    openclaw automations list
+    openclaw automations runs <jobId> --limit 20
     openclaw logs --follow
     ```
 
     Good output:
 
-    - `cron status` shows the scheduler enabled with a next wake.
-    - `cron runs` shows recent `ok` entries.
+    - `automations status` shows the scheduler enabled with a next wake.
+    - `automations runs` shows recent `ok` entries.
     - Heartbeat is enabled and inside active hours.
 
     Log signatures:
@@ -408,7 +408,7 @@ flowchart TD
     - `SYSTEM_RUN_DENIED: approval required` → node-host exec approval is pending.
     - `exec host=sandbox requires a sandbox runtime for this session` → implicit/explicit sandbox selection but sandbox mode is off.
 
-    Deep pages: [Exec](/tools/exec), [Exec approvals](/tools/exec-approvals), [Security: What the audit checks](/gateway/security#what-the-audit-checks-high-level)
+    Deep pages: [Exec](/tools/exec), [Exec approvals](/tools/exec-approvals), [Security: What the audit checks](/gateway/security/running-the-audit#what-the-audit-checks-high-level)
 
   </Accordion>
 
@@ -438,7 +438,7 @@ flowchart TD
     - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no live CDP target.
     - Stale viewport/dark-mode/locale/offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the control session and release emulation state without restarting the gateway.
 
-    Deep pages: [Browser tool fails](/gateway/troubleshooting#browser-tool-fails), [Missing browser command or tool](/tools/browser#missing-browser-command-or-tool), [Browser: Linux troubleshooting](/tools/browser-linux-troubleshooting), [Browser: WSL2/Windows remote CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
+    Deep pages: [Browser tool fails](/gateway/troubleshooting#browser-tool-fails), [Missing browser command or tool](/tools/browser/setup#missing-browser-command-or-tool), [Browser: Linux troubleshooting](/tools/browser-linux-troubleshooting), [Browser: WSL2/Windows remote CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 
   </Accordion>
 

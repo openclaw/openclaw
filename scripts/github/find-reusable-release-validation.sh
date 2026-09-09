@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 # Finds a prior green Full Release Validation run for the exact target SHA or
@@ -237,6 +241,13 @@ if [[ "$run_count" == "0" ]]; then
   no_reuse "no prior successful validation runs"
 fi
 
+reuse_request="$(jq -nc \
+  --arg targetSha "$TARGET_SHA" \
+  --arg releaseProfile "$RELEASE_PROFILE" \
+  --arg runReleaseSoak "$RUN_RELEASE_SOAK" \
+  --argjson validationInputs "$expected_inputs" \
+  '{targetSha: $targetSha, releaseProfile: $releaseProfile, runReleaseSoak: $runReleaseSoak, validationInputs: $validationInputs}')"
+
 for ((index = 0; index < run_count; index += 1)); do
   run_id="$(jq -r ".[${index}].id" <<< "$runs_json")"
   validation_record=""
@@ -244,6 +255,7 @@ for ((index = 0; index < run_count; index += 1)); do
     node "$VALIDATOR" \
       --validate-run "$run_id" \
       --repo "$REPO" \
+      --reuse-request-json "$reuse_request" \
       --trusted-workflow-ref "$TRUSTED_WORKFLOW_REF" \
       --trusted-workflow-full-ref "$TRUSTED_WORKFLOW_FULL_REF" \
       --trusted-workflow-sha "$TRUSTED_WORKFLOW_SHA" \
@@ -335,8 +347,11 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.verifier.schemaVersion == 3)
       and (.verifier.sourceSha == $verifier_sha)
       and ([.children[].role] | sort) ==
-        (if (
+        (if .validationInputs.coveragePolicy == "npm-beta-v1" then
+          ["normalCi", "pluginPrereleaseCandidate", "pluginPrereleaseIndependent", "releaseChecksCandidate", "releaseChecksIndependent"]
+        elif (
           .rerunGroup == "all"
+          and ((.validationInputs.telegramWaiver // "") == "")
           and (
             ((.validationInputs.npmTelegramPackageSpec // "") | length) > 0
             or ((.validationInputs.releasePackageSpec // "") | length) > 0
@@ -349,10 +364,11 @@ for ((index = 0; index < run_count; index += 1)); do
       and ([.children[].runId] | length == (unique | length))
       and ([.children[]
         | select(.role == "productPerformance")
-        | .reportPublication] == ["artifact-only"])
+        | .reportPublication] ==
+          (if .validationInputs.coveragePolicy == "npm-beta-v1" then [] else ["artifact-only"] end))
       and all(.children[];
         .status == "completed"
-        and .conclusion == "success"
+        and .policyPassed == true
         and .workflowSha == $record.root.workflowSha
         and (.sourceParentRunId | tostring) == $run_id
       )

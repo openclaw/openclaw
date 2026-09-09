@@ -25,6 +25,7 @@ import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
+  createConfiguredProviderCatalogModelIdNormalizer,
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelId,
   type ModelManifestNormalizationContext,
@@ -34,6 +35,7 @@ import {
   normalizeProviderId,
 } from "./model-ref-shared.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 
 export { resolvePrimaryStringValue as normalizeModelSelection } from "@openclaw/normalization-core/string-coerce";
 
@@ -113,7 +115,7 @@ function resolveManifestPluginsForModelIdNormalization(params: {
     const currentManifestPlugins = getCurrentPluginMetadataSnapshot({
       config: params.cfg,
       env: process.env,
-    })?.plugins;
+    });
     if (currentManifestPlugins) {
       return currentManifestPlugins;
     }
@@ -122,7 +124,7 @@ function resolveManifestPluginsForModelIdNormalization(params: {
     config: params.cfg,
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
-  }).plugins;
+  });
 }
 
 function createModelManifestPluginContext(params: {
@@ -323,6 +325,10 @@ export function inferUniqueProviderFromConfiguredModels(
   };
   const configuredProviders = params.cfg.models?.providers;
   if (configuredProviders) {
+    const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({
+      allowManifestNormalization: params.allowManifestNormalization,
+      manifestPlugins: params.manifestPlugins,
+    });
     for (const [providerId, providerConfig] of Object.entries(configuredProviders)) {
       const models = providerConfig?.models;
       if (!Array.isArray(models)) {
@@ -333,10 +339,7 @@ export function inferUniqueProviderFromConfiguredModels(
         if (!modelId) {
           continue;
         }
-        const normalizedModelId = normalizeConfiguredProviderCatalogModelId(providerId, modelId, {
-          allowManifestNormalization: params.allowManifestNormalization,
-          manifestPlugins: params.manifestPlugins,
-        });
+        const normalizedModelId = normalizeModelId(providerId, modelId);
         if (
           modelId === model ||
           normalizeLowercaseStringOrEmpty(modelId) === normalized ||
@@ -1284,7 +1287,7 @@ export function resolveAllowedModelRefFromAliasIndex(
 }
 
 /** True when config contains provider model rows that should seed catalogs. */
-export function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean {
+function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean {
   const providers = cfg.models?.providers;
   if (!providers || typeof providers !== "object") {
     return false;
@@ -1352,13 +1355,13 @@ function resolveConfiguredModelManifestPlugins(params: {
     return getCurrentPluginMetadataSnapshot({
       config: params.cfg,
       env: process.env,
-    })?.plugins;
+    });
   }
   return loadManifestMetadataSnapshot({
     config: params.cfg,
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
-  }).plugins;
+  });
 }
 
 /** Build catalog entries from configured provider model rows. */
@@ -1373,6 +1376,7 @@ export function buildConfiguredModelCatalog(params: {
   }
 
   const manifestPlugins = resolveConfiguredModelManifestPlugins(params);
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({ manifestPlugins });
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
@@ -1381,9 +1385,7 @@ export function buildConfiguredModelCatalog(params: {
     }
     for (const model of provider.models) {
       const rawId = normalizeOptionalString(model?.id) ?? "";
-      const id = rawId
-        ? normalizeConfiguredProviderCatalogModelId(providerId, rawId, { manifestPlugins })
-        : "";
+      const id = rawId ? normalizeModelId(providerId, rawId) : "";
       if (!id) {
         continue;
       }
@@ -1620,6 +1622,7 @@ function resolveAllowedModelSelection(
 
 export type ModelVisibilityPolicy = {
   allowAny: boolean;
+  configuredCatalog: readonly ModelCatalogEntry[];
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
   policyAliasIndex: ModelAliasIndex;
@@ -1642,13 +1645,6 @@ export type ModelVisibilityPolicy = {
     view?: "default" | "configured" | "all";
   }) => ModelCatalogEntry[];
 };
-
-/** Canonical logical identity shared by visibility and physical route rows. */
-export function modelCatalogLogicalKey(entry: Pick<ModelCatalogEntry, "provider" | "id">): string {
-  const provider = normalizeProviderId(entry.provider);
-  const model = splitTrailingAuthProfile(entry.id).model;
-  return normalizeLowercaseStringOrEmpty(modelKey(provider, model));
-}
 
 export function dedupeModelCatalogEntries(
   entries: readonly ModelCatalogEntry[],
@@ -1685,7 +1681,7 @@ export function createModelVisibilityPolicyWithFallbacks(
   const { visibility, policyAliasIndex, selectionAliasIndex, configuredCatalog } = prepared;
   const wildcardModelKeys = visibility.wildcardModelKeys;
   const allowed = buildAllowedModelSetFromPrepared(params, prepared);
-  const configuredKeys = new Set(configuredCatalog.map(modelCatalogLogicalKey));
+  const configuredKeys = new Set(configuredCatalog.map(resolveModelCatalogIdentityKey));
   const retainedKeys = new Set<string>();
   const addConfiguredRef = (
     raw: string | undefined,
@@ -1708,7 +1704,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     if (!resolved) {
       return undefined;
     }
-    const key = modelCatalogLogicalKey({
+    const key = resolveModelCatalogIdentityKey({
       provider: resolved.ref.provider,
       id: resolved.ref.model,
     });
@@ -1738,6 +1734,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);
   const policy: ModelVisibilityPolicy = {
     allowAny: allowed.allowAny,
+    configuredCatalog,
     allowedCatalog: allowed.allowedCatalog,
     allowedKeys: allowed.allowedKeys,
     policyAliasIndex,

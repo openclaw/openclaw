@@ -1,9 +1,7 @@
-import { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
@@ -11,8 +9,9 @@ import {
   createCodexAppServerProcessReaperService,
   prepareCodexAppServerProcessRegistration,
 } from "./transport-process-registration.js";
+import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import {
-  readCodexAppServerProcess,
+  ProcessInspectionError,
   readCodexAppServerProcessCommand,
   readCodexAppServerProcessSnapshot,
   type PosixProcess,
@@ -21,7 +20,6 @@ import {
 vi.mock("./transport-process-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./transport-process-snapshot.js")>()),
   readCodexAppServerProcessSnapshot: vi.fn(),
-  readCodexAppServerProcess: vi.fn(),
   readCodexAppServerProcessCommand: vi.fn(),
 }));
 
@@ -107,10 +105,15 @@ describe("Codex process registration", () => {
     "lets containment settle a %s child after command inspection fails",
     async (mode) => {
       store.register("orphan", { parent, child: { ...child, commandFingerprint } });
-      vi.mocked(readCodexAppServerProcessCommand).mockResolvedValue(undefined);
-      vi.mocked(readCodexAppServerProcess).mockResolvedValue(
-        mode === "gone" ? undefined : { ...liveChild, startedAt: "a later start" },
+      vi.mocked(readCodexAppServerProcessCommand).mockRejectedValue(
+        new ProcessInspectionError("permission"),
       );
+      vi.mocked(readCodexAppServerProcessSnapshot)
+        .mockResolvedValueOnce([observer, liveChild])
+        .mockResolvedValue([
+          observer,
+          ...(mode === "gone" ? [] : [{ ...liveChild, startedAt: "a later start" }]),
+        ]);
 
       await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
 
@@ -122,19 +125,33 @@ describe("Codex process registration", () => {
     },
   );
 
-  it("refuses a spawn and retains the row when the matching child's command is unreadable", async () => {
-    const registration = { parent, child: { ...child, commandFingerprint } };
-    store.register("orphan", registration);
-    vi.mocked(readCodexAppServerProcessCommand).mockResolvedValue(undefined);
-    vi.mocked(readCodexAppServerProcess).mockResolvedValue(liveChild);
+  it.for(["live", "unknown", "threaded zombie"])(
+    "retains an unreadable-command registration when the child is %s",
+    async (mode) => {
+      const registration = { parent, child: { ...child, commandFingerprint } };
+      store.register("orphan", registration);
+      vi.mocked(readCodexAppServerProcessCommand).mockRejectedValue(
+        new ProcessInspectionError("permission"),
+      );
+      if (mode === "unknown") {
+        vi.mocked(readCodexAppServerProcessSnapshot)
+          .mockResolvedValueOnce([observer, liveChild])
+          .mockRejectedValue(new ProcessInspectionError("unavailable"));
+      } else if (mode === "threaded zombie") {
+        vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
+          observer,
+          { ...liveChild, state: "Zl" },
+        ]);
+      }
 
-    await expect(prepareCodexAppServerProcessRegistration()).rejects.toThrow(
-      `Cannot inspect registered Codex process ${child.pid} command. Check process command inspection permissions (/proc on Linux, ps on macOS), then retry.`,
-    );
+      await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({
+        reason: mode === "unknown" ? "unavailable" : "permission",
+      });
 
-    expect(store.lookup("orphan")).toEqual(registration);
-    expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
-  });
+      expect(store.lookup("orphan")).toEqual(registration);
+      expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
+    },
+  );
 
   it.for(["gone", "zombie", "replaced"])(
     "skips command inspection when the snapshot child is %s",
@@ -177,24 +194,7 @@ describe("Codex process registration", () => {
       if (mode === "windows") {
         vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       }
-      const stdin = new PassThrough();
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      // The typed stdio tuple makes this fixture structurally a
-      // ChildProcessWithoutNullStreams without widening casts.
-      const spawned = Object.assign(new ChildProcess(), {
-        pid: child.pid,
-        stdin,
-        stdout,
-        stderr,
-        stdio: [stdin, stdout, stderr, null, null] as [
-          PassThrough,
-          PassThrough,
-          PassThrough,
-          null,
-          null,
-        ],
-      });
+      const spawned = new RegistrationTestChildProcess(child.pid);
       ctx.onTestFinished(() => {
         spawned.stdin.destroy();
         spawned.stdout.destroy();
@@ -211,7 +211,10 @@ describe("Codex process registration", () => {
           Object.defineProperty(spawned, "exitCode", { value: 0, configurable: true });
           spawned.emit("exit", 0, null);
         }
-        return mode === "unreadable command" ? undefined : command;
+        if (mode === "unreadable command") {
+          throw new ProcessInspectionError("permission");
+        }
+        return command;
       });
       const register = await prepareCodexAppServerProcessRegistration();
       const registered = register(spawned);
@@ -237,7 +240,11 @@ describe("Codex process registration", () => {
         spawned.emit("exit", 0, null);
         expect(store.entries()).toEqual([]);
       } else {
-        await expect(registered).rejects.toThrow("Cannot register the Codex child process command");
+        await expect(registered).rejects.toThrow(
+          mode === "unreadable command"
+            ? "Cannot inspect Codex processes"
+            : "Cannot register the Codex child process command",
+        );
         expect(store.entries()).toEqual([]);
       }
     },

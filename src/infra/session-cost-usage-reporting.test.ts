@@ -10,6 +10,7 @@ import {
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "./session-cost-usage.js";
+import type { CostBreakdown } from "./session-cost-usage.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const flatPricing = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
@@ -24,9 +25,10 @@ const tieredPricing: ModelDefinitionConfig["cost"] = {
 type PricingCase = {
   name: string;
   pricing?: ModelDefinitionConfig["cost"];
-  recordedCost?: { total: number; totalOrigin?: "provider-billed" };
+  recordedCost?: CostBreakdown;
   topLevelUsage?: boolean;
   expectedCost: number | undefined;
+  expectedBreakdown?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 };
 
 describe("session usage reporting pricing", () => {
@@ -36,6 +38,7 @@ describe("session usage reporting pricing", () => {
       pricing: flatPricing,
       topLevelUsage: true,
       expectedCost: 0.0021,
+      expectedBreakdown: { input: 0.001, output: 0.001, cacheRead: 0.0001, cacheWrite: 0 },
     },
     {
       name: "unknown recorded zero cost",
@@ -49,16 +52,55 @@ describe("session usage reporting pricing", () => {
       expectedCost: undefined,
     },
     {
-      name: "tiered pricing replacing a recorded flat estimate",
+      // The recorded call owns its estimate; a later catalog cannot recover its service tier.
+      name: "recorded flat estimate preserved after catalog gains tiers",
       pricing: tieredPricing,
       recordedCost: { total: 0.001 },
+      expectedCost: 0.001,
+    },
+    {
+      name: "priority-adjusted recorded cost preserved with tiered pricing",
+      pricing: tieredPricing,
+      recordedCost: {
+        total: 0.0084,
+        input: 0.004,
+        output: 0.004,
+        cacheRead: 0.0004,
+        cacheWrite: 0,
+      },
+      expectedCost: 0.0084,
+      expectedBreakdown: { input: 0.004, output: 0.004, cacheRead: 0.0004, cacheWrite: 0 },
+    },
+    {
+      name: "flex-adjusted recorded cost preserved with tiered pricing",
+      pricing: tieredPricing,
+      recordedCost: {
+        total: 0.0021,
+        input: 0.001,
+        output: 0.001,
+        cacheRead: 0.0001,
+        cacheWrite: 0,
+      },
+      expectedCost: 0.0021,
+      expectedBreakdown: { input: 0.001, output: 0.001, cacheRead: 0.0001, cacheWrite: 0 },
+    },
+    {
+      name: "missing recorded cost estimated from tiered pricing",
+      pricing: tieredPricing,
       expectedCost: 0.0042,
+      expectedBreakdown: { input: 0.002, output: 0.002, cacheRead: 0.0002, cacheWrite: 0 },
     },
     {
       name: "provider-billed zero preserved with tiered pricing",
       pricing: tieredPricing,
       recordedCost: { total: 0, totalOrigin: "provider-billed" },
       expectedCost: 0,
+    },
+    {
+      name: "provider-billed positive cost preserved with tiered pricing",
+      pricing: tieredPricing,
+      recordedCost: { total: 0.125, totalOrigin: "provider-billed" },
+      expectedCost: 0.125,
     },
     {
       name: "recorded positive cost preserved with flat pricing",
@@ -147,6 +189,10 @@ describe("session usage reporting pricing", () => {
       const summary = await loadSessionCostSummary(params);
       expect(summary?.totalTokens).toBe(1_700);
       expect(summary?.totalCost).toBeCloseTo(testCase.expectedCost ?? 0, 8);
+      expect(summary?.inputCost).toBeCloseTo(testCase.expectedBreakdown?.input ?? 0, 8);
+      expect(summary?.outputCost).toBeCloseTo(testCase.expectedBreakdown?.output ?? 0, 8);
+      expect(summary?.cacheReadCost).toBeCloseTo(testCase.expectedBreakdown?.cacheRead ?? 0, 8);
+      expect(summary?.cacheWriteCost).toBeCloseTo(testCase.expectedBreakdown?.cacheWrite ?? 0, 8);
       expect(summary?.missingCostEntries).toBe(testCase.expectedCost === undefined ? 1 : 0);
 
       const series = await loadSessionUsageTimeSeries(params);

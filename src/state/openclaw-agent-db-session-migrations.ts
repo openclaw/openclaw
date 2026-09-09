@@ -9,9 +9,24 @@ import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
+import { ensurePendingInputConsumptionColumn } from "./openclaw-agent-pending-inputs-schema.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
+
+export function dropLegacySessionTranscriptSearchSchema(db: DatabaseSync): void {
+  // The pre-landing sessions_search branch tracked JSONL file watermarks and
+  // stored session_key inside the FTS table. Both are derived caches; drop
+  // them so reconcile rebuilds the row-native index shape.
+  db.exec("DROP TABLE IF EXISTS session_transcript_files;");
+  const columns = db.prepare("PRAGMA table_info(session_transcript_fts)").all();
+  if (columns.some((row) => row.name === "session_key")) {
+    db.exec(`
+      DROP TABLE IF EXISTS session_transcript_fts;
+      DROP TABLE IF EXISTS session_transcript_index_state;
+    `);
+  }
+}
 
 function parseConversationEntry(value: unknown): MigratedConversationEntry | undefined {
   return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
@@ -275,6 +290,7 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
 
 /** Installs same-version session projections on first updated-binary open. */
 export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
+  ensurePendingInputConsumptionColumn(db);
   if (hasPendingSessionTranscriptContextEligibilityColumn(db)) {
     // NULL records an older writer's unclassified projection; the transcript
     // reconcile owner fills it without parsing payloads during schema open.

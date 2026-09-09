@@ -23,7 +23,6 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
   type WorkerSessionTurnClaim,
-  type WorkerWorkspaceResultConflict,
 } from "./placement-record.js";
 import {
   ensureLocal,
@@ -50,12 +49,20 @@ import {
 } from "./placement-turn-claims.js";
 import { createPlacementWorkspaceJournalOps } from "./placement-workspace-journal.js";
 import {
+  assertSessionWorkspaceUnreserved,
+  createPlacementWorkspaceReservationOps,
+} from "./placement-workspace-reservation.js";
+import {
   createPlacementWorkspaceResultOps,
   hasCurrentWorkspaceResultClaim,
   hasWorkerWorkspacePendingResult,
+  readWorkerWorkspaceReconcilingSessionIds,
 } from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
-import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
+import {
+  projectWorkspaceResultConflict,
+  type WorkerWorkspaceResultConflict,
+} from "./workspace-conflicts.js";
 
 const RETIRABLE_PLACEMENT_STATES = ["local", "requested", "reclaimed", "failed"] as const;
 
@@ -134,6 +141,7 @@ export function createWorkerSessionPlacementStore(
   };
 
   const store = {
+    ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
@@ -168,6 +176,13 @@ export function createWorkerSessionPlacementStore(
         }
       }
       return records;
+    },
+
+    getWorkspaceResultReconcilingSessionIds(sessionIds: readonly string[]): ReadonlySet<string> {
+      const normalizedIds = [
+        ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
+      ];
+      return readWorkerWorkspaceReconcilingSessionIds(read(), normalizedIds);
     },
 
     retireSessionPlacement(input: WorkerSessionPlacementRetirement): void {
@@ -224,6 +239,7 @@ export function createWorkerSessionPlacementStore(
       const executionMode = normalizeWorkerPlacementExecutionMode(input.executionMode);
       return write((db) => {
         const current = ensureLocal(db, identity, now());
+        assertSessionWorkspaceUnreserved(db, identity.sessionId);
         if (
           current.state !== "local" &&
           current.state !== "reclaimed" &&

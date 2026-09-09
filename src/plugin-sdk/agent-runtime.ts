@@ -1,6 +1,7 @@
+import { resolveThinkingDefaultWithRuntimeCatalogCore } from "../agents/model-thinking-default.js";
 import {
   getPreparedModelCatalogSnapshot,
-  loadPreparedModelCatalog,
+  readPreparedModelCatalog,
   type LoadPreparedModelCatalogParams,
 } from "../agents/prepared-model-catalog.js";
 /**
@@ -33,7 +34,12 @@ export {
 export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
 export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
-export { getPreparedModelCatalogSnapshot, loadPreparedModelCatalog };
+export { getPreparedModelCatalogSnapshot };
+
+/** Preserves the public SDK's writable default while internal catalog reads stay passive. */
+export async function loadPreparedModelCatalog(params: LoadPreparedModelCatalogParams = {}) {
+  return await readPreparedModelCatalog({ ...params, readOnly: params.readOnly ?? false });
+}
 
 type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
   /** @deprecated Lifecycle publication owns refreshes; retained for source compatibility. */
@@ -41,18 +47,25 @@ type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
   /** @deprecated Use getPreparedModelCatalogSnapshot for new nonblocking readers. */
   cacheOnly?: boolean;
   /** @deprecated Plugin metadata belongs to the published lifecycle generation. */
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: Omit<PluginMetadataSnapshot, "owners" | "declaredProviderOwners"> & {
+    // Shipped snapshots may predate prepared provider ownership and normalization policies.
+    declaredProviderOwners?: PluginMetadataSnapshot["declaredProviderOwners"];
+    owners: Omit<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> &
+      Partial<Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies">>;
+  };
 };
 
 /** @deprecated Use loadPreparedModelCatalog or getPreparedModelCatalogSnapshot. */
 export async function loadModelCatalog(params: LoadModelCatalogCompatibilityParams = {}) {
-  const { agentId, agentDir, cacheOnly, config, env, readOnly, workspaceDir } = params;
+  const { agentId, agentDir, cacheOnly, config, env, readOnly, refreshFullCatalog, workspaceDir } =
+    params;
   const preparedParams: LoadPreparedModelCatalogParams = {
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(config ? { config } : {}),
     ...(env ? { env } : {}),
     ...(readOnly !== undefined ? { readOnly } : {}),
+    ...(refreshFullCatalog !== undefined ? { refreshFullCatalog } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };
   if (cacheOnly) {
@@ -67,8 +80,26 @@ export {
   parseModelRef,
   resolveAllowedModelRef,
   resolveModelRefFromString,
-  resolveThinkingDefaultWithRuntimeCatalog,
 } from "../agents/model-selection.js";
+
+// Preserve the v2026.7.1-2 callback contract at the SDK boundary; internal
+// owners use loadRuntimeCatalog. Remove only at an approved SDK-breaking boundary.
+export function resolveThinkingDefaultWithRuntimeCatalog(
+  params: Omit<
+    Parameters<typeof resolveThinkingDefaultWithRuntimeCatalogCore>[0],
+    "loadRuntimeCatalog"
+  > & {
+    loadModelCatalog: Parameters<
+      typeof resolveThinkingDefaultWithRuntimeCatalogCore
+    >[0]["loadRuntimeCatalog"];
+  },
+) {
+  const { loadModelCatalog: loadRuntimeCatalog, ...rest } = params;
+  return resolveThinkingDefaultWithRuntimeCatalogCore({
+    ...rest,
+    loadRuntimeCatalog,
+  });
+}
 
 export { EmbeddedBlockChunker } from "../agents/embedded-agent-block-chunker.js";
 export { formatReasoningMessage } from "../agents/embedded-agent-utils.js";

@@ -51,7 +51,8 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     if (!user) {
       return nothing;
     }
-    const label = presenceViewerLabel(user);
+    const label =
+      this.variant === "profile" ? (user.name ?? user.email ?? user.id) : presenceViewerLabel(user);
     const view = resolveIdentityAvatarView({
       identity: this.identity ?? user.identity,
       id: user.id,
@@ -74,7 +75,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) selfUser?: AuthenticatedUser | null;
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
-  @property({ attribute: false }) excludeIdentity?: SessionParticipantIdentity;
+  @property({ attribute: false }) excludeIdentities: readonly SessionParticipantIdentity[] = [];
   @property({ attribute: false }) staticParticipants?: readonly SessionParticipant[];
   /** Prepared live presence for the collapsed Online section. */
   @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];
@@ -88,13 +89,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) personActivity?: PersonActivityRouting;
 
   override render() {
-    const viewers = projectPresenceViewers(
-      this.presencePayload,
-      this.selfUser,
-      this.selfInstanceId,
-      this.sessionKey,
-      this.excludeIdentity,
-    );
+    // Prepared faces must not evict the cached live projection used by sibling rows.
     const users = this.staticParticipants
       ? this.staticParticipants.map(({ identity, label, avatarUrl }) => ({
           identity,
@@ -103,7 +98,14 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
           avatarUrl,
           watchedSessions: [],
         }))
-      : (this.staticUsers ?? viewers);
+      : (this.staticUsers ??
+        projectPresenceViewers(
+          this.presencePayload,
+          this.selfUser,
+          this.selfInstanceId,
+          this.sessionKey,
+          this.excludeIdentities,
+        ));
     if (users.length === 0) {
       return nothing;
     }
@@ -130,19 +132,25 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
                 variant="session"
               ></openclaw-viewer-avatar>`,
               user.identity?.type === "profile"
-                ? personActivityLink(user.identity.id, this.personActivity)
+                ? personActivityLink(
+                    user.identity.id,
+                    this.personActivity,
+                    presenceViewerLabel(user),
+                  )
                 : null,
             )}
           </span>
         </openclaw-tooltip>`,
       )}
-      ${overflowCount > 0
-        ? html`<openclaw-tooltip .content=${overflowLabel}>
-            <span class="viewer-avatar viewer-avatar--overflow" aria-label=${overflowLabel}
-              >+${overflowCount}</span
-            >
-          </openclaw-tooltip>`
-        : nothing}
+      ${
+        overflowCount > 0
+          ? html`<openclaw-tooltip .content=${overflowLabel}>
+              <span class="viewer-avatar viewer-avatar--overflow" aria-label=${overflowLabel}
+                >+${overflowCount}</span
+              >
+            </openclaw-tooltip>`
+          : nothing
+      }
     </span>`;
   }
 }

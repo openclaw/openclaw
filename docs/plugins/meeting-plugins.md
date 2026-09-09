@@ -36,6 +36,8 @@ Use `transcribe` when the agent only needs meeting text. Use `agent` for normal 
 
 In `bidi` mode, recoverable provider diagnostics are logged without stopping the audio bridge. Providers that support reconnecting own that recovery. Terminal provider closure, exhausted recovery, failed initial setup, and local audio-transport failures still stop the bridge; leaving the meeting also stops it.
 
+Stopping a meeting requests cancellation of any active agent consult. In `agent` mode, OpenClaw finishes active output and turn events before closing the session, then ignores late speech synthesis and audio delivery results.
+
 The bounded live transcript remains available only in `transcribe` mode. In all
 three modes, browser joins also persist completed caption rows and a derived
 summary to the shared state database. Leaving the meeting finalizes visible
@@ -167,7 +169,7 @@ Only join meetings where the operator is authorized to add an agent. Tell partic
 
 ## Discord voice chat
 
-[Discord voice channels](/channels/discord#voice-channels) provide native, audio-only realtime conversation without browser meeting automation. OpenClaw can join a voice channel, listen, route turns through an OpenClaw agent or realtime voice model, and speak replies. It does not send or receive camera video or screen sharing, even when people use video in the same Discord channel, so Discord voice is a related live-conversation surface rather than a fourth browser meeting plugin.
+[Discord voice channels](/channels/discord/voice-channels#voice-channels) provide native, audio-only realtime conversation without browser meeting automation. OpenClaw can join a voice channel, listen, route turns through an OpenClaw agent or realtime voice model, and speak replies. It does not send or receive camera video or screen sharing, even when people use video in the same Discord channel, so Discord voice is a related live-conversation surface rather than a fourth browser meeting plugin.
 
 ## Platform guides
 

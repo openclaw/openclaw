@@ -1,5 +1,7 @@
 import { vi } from "vitest";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
@@ -8,19 +10,24 @@ import type { NewSessionRouteData } from "./location.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 type FixtureOptions = {
+  takePreparedTitle?: () => string | undefined;
   phase?: "connected" | "connecting";
   agents?: unknown[];
   methods?: string[];
   scopes?: string[];
   selfUser?: { id: string };
   data?: NewSessionRouteData;
-  request?: (method: string) => Promise<unknown>;
+  request?: (method: string, params?: unknown) => Promise<unknown>;
+  modelCatalog?: (params?: unknown) => Promise<unknown>;
 };
 
 export function createDraftFixture(options: FixtureOptions = {}) {
-  const request = vi.fn((method: string) => {
+  const request = vi.fn((method: string, params?: unknown) => {
+    if (method === "models.list") {
+      return options.modelCatalog ? options.modelCatalog(params) : Promise.resolve({ models: [] });
+    }
     if (options.request) {
-      return options.request(method);
+      return options.request(method, params);
     }
     return Promise.resolve({});
   });
@@ -28,6 +35,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   const phase = options.phase ?? "connected";
   const context = {
     gateway: {
+      subscribeEvents: () => () => undefined,
       connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: {
         phase,
@@ -39,6 +47,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
             ? {
                 server: { bootId: "gateway-boot-a" },
                 auth: {
+                  recoveryScope: client.recoveryScope,
                   role: "operator",
                   scopes: options.scopes ?? ["operator.read", "operator.write"],
                 },
@@ -64,6 +73,11 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       },
     },
     sessions: { state: { result: null }, createResult: vi.fn() },
+    placementStartup: {
+      get: vi.fn(() => undefined),
+      hasPendingTurn: vi.fn(() => false),
+    },
+    chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
     config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
     navigateAndWait: vi.fn(async () => undefined),
@@ -89,6 +103,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         recoveryScope: "",
       },
       agentsHydrated: place?.agentsHydrated ?? false,
+      runtimeId: place?.devicePlacementRuntime()?.id ?? "",
     }),
     {
       requestUpdate: vi.fn(),
@@ -140,10 +155,26 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     gateway,
     place,
     () => ({ context, data: options.data, isConnected: phase === "connected" }),
-    { requestUpdate, closeTransientUi: vi.fn() },
+    { requestUpdate, closeTransientUi: vi.fn(), takePreparedTitle: options.takePreparedTitle },
   );
   gateway.synchronize(context.gateway);
   place.setAgentsHydrated(true);
   place.adoptAgentDefaults();
   return { capabilities: flow.capabilities, context, flow, gateway, place, request, requestUpdate };
+}
+
+export function registerTextPayload(id: string) {
+  return registerChatAttachmentPayload({
+    attachment: { id, mimeType: "text/plain", fileName: `${id}.txt` },
+    dataUrl: `data:text/plain;base64,${btoa(id)}`,
+    file: new File([id], `${id}.txt`, { type: "text/plain" }),
+  });
+}
+
+export function stubObjectUrls(...urls: string[]) {
+  const createObjectURL = vi.fn();
+  urls.forEach((url) => createObjectURL.mockReturnValueOnce(url));
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+  return revokeObjectURL;
 }

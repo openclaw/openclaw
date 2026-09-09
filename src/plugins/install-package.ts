@@ -47,7 +47,6 @@ function pickPackageInstallCommonParams(
 ): InternalPackageInstallCommonParams {
   return copyPluginInstallTransactionRequest(params, {
     config: params.config,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     extensionsDir: params.extensionsDir,
@@ -61,6 +60,7 @@ function pickPackageInstallCommonParams(
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     installPolicyRequest: params.installPolicyRequest,
     onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+    beforePersistentApply: params.beforePersistentApply,
     onEffectiveMode: params.onEffectiveMode,
   });
 }
@@ -163,7 +163,6 @@ async function installBundleFromSourceDir(
     sourceFamily: sourceFamilyForInstallPolicyKind(params.installPolicyRequest?.kind, "archive"),
     scan: async () =>
       await runtime.scanBundleInstallSource({
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         config: params.config,
         sourceDir: params.sourceDir,
@@ -197,6 +196,7 @@ async function installBundleFromSourceDir(
       hasDeps: false,
       depsLogMessage: "",
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      beforePersistentApply: params.beforePersistentApply,
     }),
   );
   return installed.ok
@@ -294,7 +294,6 @@ async function installPluginFromPackageDir(
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
@@ -312,11 +311,8 @@ async function installPluginFromPackageDir(
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
   const effectiveMode = preparedTarget.effectiveMode;
   params.onEffectiveMode?.(effectiveMode);
-  const hasBundleManifest = Boolean(runtime.detectBundleManifestFormat(params.packageDir));
   const shouldInstallRuntimeDeps =
-    plugin.hasRuntimeDependencies &&
-    !hasBundleManifest &&
-    params.installPolicyRequest?.kind === "plugin-archive";
+    plugin.hasRuntimeDependencies && params.installPolicyRequest?.kind === "plugin-archive";
 
   return await installPluginDirectoryIntoExtensions(
     copyPluginInstallTransactionRequest(params, {
@@ -338,6 +334,7 @@ async function installPluginFromPackageDir(
       depsLogMessage: "Installing plugin dependencies…",
       nameEncoder: encodePluginInstallDirName,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      beforePersistentApply: params.beforePersistentApply,
       afterInstall: async (installedDir) => {
         return await scanAndLinkInstalledPackage({
           runtime,
@@ -392,7 +389,6 @@ export async function installPluginFromArchive(
         sourceDir,
         ...pickPackageInstallCommonParams(
           copyPluginInstallTransactionRequest(params, {
-            dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
             onInstallPolicyWarning: params.onInstallPolicyWarning,
             extensionsDir: params.extensionsDir,
             timeoutMs,
@@ -405,6 +401,7 @@ export async function installPluginFromArchive(
             requirePluginManifest: true,
             installPolicyRequest,
             onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+            beforePersistentApply: params.beforePersistentApply,
             onEffectiveMode: (resolvedMode) => {
               effectiveMode = resolvedMode;
             },

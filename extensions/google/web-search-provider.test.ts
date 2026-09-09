@@ -54,6 +54,25 @@ function getFetchHeaders(mockFetch: ReturnType<typeof installGeminiFetch>): Reco
   return Object.fromEntries(new Headers(init?.headers).entries());
 }
 
+function createGeminiToolOptions() {
+  return {
+    config: {
+      plugins: {
+        entries: {
+          google: {
+            config: {
+              webSearch: {
+                apiKey: "AIza-plugin-test",
+              },
+            },
+          },
+        },
+      },
+    },
+    searchConfig: { provider: "gemini" },
+  };
+}
+
 function createGeminiToolWithHeaders(headers: Record<string, unknown>) {
   return createGeminiWebSearchProvider().createTool({
     config: {
@@ -370,22 +389,7 @@ describe("google web search provider", () => {
       ),
     );
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     const result = await tool?.execute({ query: "current date today" });
 
@@ -403,22 +407,7 @@ describe("google web search provider", () => {
       withFetchPreconnect(vi.fn(() => Promise.resolve(new Response("{ nope")))),
     );
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     await expect(tool?.execute({ query: "OpenClaw docs" })).rejects.toThrow(
       "Gemini API error: malformed JSON response",
@@ -431,61 +420,132 @@ describe("google web search provider", () => {
       withFetchPreconnect(vi.fn(() => Promise.resolve(new Response(JSON.stringify([]))))),
     );
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     await expect(tool?.execute({ query: "OpenClaw docs" })).rejects.toThrow(
       "Gemini API error: malformed JSON response",
     );
   });
 
-  it("rejects Gemini success JSON without candidate text", async () => {
+  it.each([
+    ["empty parts", { candidates: [{ content: { parts: [] }, finishReason: "STOP" }] }, " (STOP)"],
+    [
+      "missing parts",
+      { candidates: [{ content: { role: "model" }, finishReason: "STOP" }] },
+      " (STOP)",
+    ],
+    ["missing content", { candidates: [{ finishReason: "STOP" }] }, " (STOP)"],
+    [
+      "nontext part",
+      {
+        candidates: [
+          {
+            content: { parts: [{ functionCall: { name: "lookup", args: {} } }] },
+            finishReason: "STOP",
+          },
+        ],
+      },
+      " (STOP)",
+    ],
+    ["empty candidates", { candidates: [] }, ""],
+    ["missing candidates", {}, ""],
+    ["empty prompt feedback", { promptFeedback: {} }, ""],
+    ["blocked prompt", { promptFeedback: { blockReason: "SAFETY" } }, " (SAFETY)"],
+    ["blocked candidate", { candidates: [{ finishReason: "SAFETY" }] }, " (SAFETY)"],
+    ["absent reason", { candidates: [{ content: { parts: [] } }] }, ""],
+    ["blank reason", { candidates: [{ finishReason: "  " }] }, ""],
+  ])(
+    "reports no final answer for %s without inventing search results",
+    async (_name, body, reason) => {
+      vi.stubGlobal(
+        "fetch",
+        withFetchPreconnect(vi.fn(() => Promise.resolve(new Response(JSON.stringify(body))))),
+      );
+      const tool = createGeminiToolWithHeaders({});
+
+      await expect(tool?.execute({ query: "OpenClaw empty answer" })).rejects.toThrow(
+        `Gemini search returned no final answer${reason}.`,
+      );
+    },
+  );
+
+  it.each([
+    ["null candidates", { candidates: null }],
+    ["non-array candidates", { candidates: {} }],
+    ["null candidate", { candidates: [null] }],
+    ["null content", { candidates: [{ content: null }] }],
+    ["non-record content", { candidates: [{ content: "invalid" }] }],
+    ["null part", { candidates: [{ content: { parts: [null] } }] }],
+    ["non-string part text", { candidates: [{ content: { parts: [{ text: 7 }] } }] }],
+    ["null parts", { candidates: [{ content: { parts: null } }] }],
+    ["non-array parts", { candidates: [{ content: { parts: {} } }] }],
+    ["null prompt feedback", { promptFeedback: null }],
+    ["non-record prompt feedback", { promptFeedback: [] }],
+    ["null block reason", { promptFeedback: { blockReason: null } }],
+    ["non-string block reason", { promptFeedback: { blockReason: {} } }],
+    ["null finish reason", { candidates: [{ finishReason: null }] }],
+    ["non-string finish reason", { candidates: [{ finishReason: 1 }] }],
+    ["non-record grounding metadata", { candidates: [{ groundingMetadata: [] }] }],
+    [
+      "non-array grounding chunks",
+      { candidates: [{ groundingMetadata: { groundingChunks: {} } }] },
+    ],
+    ["non-record error", { error: "invalid" }],
+  ])("keeps malformed %s distinct from an absent answer", async (_name, body) => {
+    vi.stubGlobal(
+      "fetch",
+      withFetchPreconnect(vi.fn(() => Promise.resolve(new Response(JSON.stringify(body))))),
+    );
+    const tool = createGeminiToolWithHeaders({});
+
+    await expect(tool?.execute({ query: "OpenClaw malformed answer" })).rejects.toThrow(
+      "Gemini API error: malformed JSON response",
+    );
+  });
+
+  it("bounds the provider reason in an empty-answer diagnostic", async () => {
     vi.stubGlobal(
       "fetch",
       withFetchPreconnect(
         vi.fn(() =>
           Promise.resolve(
-            new Response(JSON.stringify({ candidates: [{ content: { parts: [] } }] })),
+            new Response(
+              JSON.stringify({
+                candidates: [{ finishReason: "X".repeat(1_000) }],
+              }),
+            ),
           ),
         ),
       ),
     );
-    const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = createGeminiToolWithHeaders({});
 
-    await expect(tool?.execute({ query: "OpenClaw docs" })).rejects.toThrow(
-      "Gemini API error: malformed JSON response",
+    await expect(tool?.execute({ query: "OpenClaw bounded reason" })).rejects.toThrow(
+      `Gemini search returned no final answer (${"X".repeat(119)}…).`,
     );
   });
+
+  it.each([[[{ text: "Partial answer" }]], [[null, { text: 7 }, { text: "Partial answer" }]]])(
+    "preserves text-bearing partial answers with parts %j",
+    async (parts) => {
+      const mockFetch = installGeminiFetch();
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            candidates: [{ content: { parts }, finishReason: "MAX_TOKENS" }],
+          }),
+        ),
+      );
+      const tool = createGeminiToolWithHeaders({});
+
+      await expect(
+        tool?.execute({ query: `OpenClaw partial answer with ${parts.length} parts` }),
+      ).resolves.toMatchObject({
+        content: expect.stringContaining("Partial answer"),
+      });
+      expect(mockFetch).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not contact Gemini for an already-cancelled search", async () => {
     const mockFetch = installGeminiFetch();
@@ -493,22 +553,7 @@ describe("google web search provider", () => {
     const reason = new Error("Gemini search cancelled before billing");
     controller.abort(reason);
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     await expect(
       tool?.execute({ query: "OpenClaw cancelled docs" }, { signal: controller.signal }),
@@ -673,22 +718,7 @@ describe("google web search provider", () => {
   it("uses a soft recency hint for Gemini day freshness shortcuts instead of a 24-hour range", async () => {
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     await tool?.execute({ query: "latest ai news timestamp precision", freshness: "pd" });
 
@@ -704,22 +734,7 @@ describe("google web search provider", () => {
     vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     await tool?.execute({ query: "latest ai news timestamp precision", freshness: "week" });
 
@@ -736,22 +751,7 @@ describe("google web search provider", () => {
     vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     await tool?.execute({ query: "same query cache partition", freshness: "day" });
     await tool?.execute({ query: "same query cache partition", freshness: "week" });
@@ -838,22 +838,7 @@ describe("google web search provider", () => {
     vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     await tool?.execute({ query: "latest ai news", date_after: "2026-04-01" });
 
@@ -872,22 +857,7 @@ describe("google web search provider", () => {
   it("passes date ranges to Gemini Google Search grounding", async () => {
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     await tool?.execute({
       query: "OpenClaw release notes",
@@ -905,22 +875,7 @@ describe("google web search provider", () => {
   it("returns validation errors for invalid Gemini time filters before fetch", async () => {
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: {
-          entries: {
-            google: {
-              config: {
-                webSearch: {
-                  apiKey: "AIza-plugin-test",
-                },
-              },
-            },
-          },
-        },
-      },
-      searchConfig: { provider: "gemini" },
-    });
+    const tool = provider.createTool(createGeminiToolOptions());
 
     await expect(
       tool?.execute({

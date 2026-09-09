@@ -55,6 +55,7 @@ export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => Chan
  */
 export type ChannelMessageActionDiscoveryContext = {
   cfg: OpenClawConfig;
+  chatType?: ChatType | null;
   currentChannelId?: string | null;
   currentChannelProvider?: string | null;
   currentThreadTs?: string | null;
@@ -212,6 +213,7 @@ export type ChannelAccountSnapshot = {
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  apiCredentialStatus?: "available" | "configured_unavailable" | "missing";
   identity?: string;
   credentialSource?: string;
   secretSource?: string;
@@ -436,10 +438,14 @@ export type ChannelThreadingAdapter = {
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
+    /** Originating inbound message in this routed channel; not an explicit reply target. */
+    currentMessageId?: string;
     threadId?: string | number | null;
     replyToId?: string | null;
     /** True when replyToId came from an explicit payload target or reply tag. */
     replyToIsExplicit?: boolean;
+    /** Existing payload intent to reply to the current conversation, not an arbitrary target. */
+    replyToCurrent?: boolean;
     replyDelivery?: ReplyDeliveryContext;
   }) => ChannelReplyTransport | null;
   resolveFocusedBinding?: (params: {
@@ -665,6 +671,8 @@ export type ChannelMessagingAdapter = {
     agentId: string;
     accountId?: string | null;
     target: string;
+    /** Identifies implicit operator delivery; other callers must supply their own destination. */
+    deliveryPurpose?: "heartbeat-owner";
     currentSessionKey?: string;
     resolvedTarget?: {
       to: string;
@@ -754,6 +762,12 @@ export type ChannelMessageActionContext = {
    * them. Plugins forward it into durable sends so recovery does not replay too.
    */
   deliveryRetryOwner?: "caller";
+  /** Host-owned live authority check; never read from model-controlled params. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */
+  assertDirectAdapterHandoff?: () => void;
+  /** Ephemeral-authority sends must not enter replayable recovery. */
+  skipQueue?: boolean;
 };
 
 export type ChannelToolSend = {
@@ -865,6 +879,7 @@ export type ChannelPollContext = Pick<
   | "isAnonymous"
   | "gatewayClientScopes"
   | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
 > & {
   content?: string;
   /** Trusted originating turn context for channel-owned delivery correlation. */

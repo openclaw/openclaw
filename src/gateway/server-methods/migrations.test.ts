@@ -15,12 +15,20 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/migration-provider-runtime.js", () => ({
-  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
-  resolvePluginMigrationProviders: vi.fn(() => mocks.providers),
+  withPluginMigrationProviders: async (
+    _params: unknown,
+    run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
+  ) => await run(mocks.providers),
 }));
 
 vi.mock("../../commands/migrate/apply.js", () => ({
-  runMigrationApply: mocks.runMigrationApply,
+  runMigrationApply: async (
+    params: Parameters<typeof import("../../commands/migrate/apply.js").runMigrationApply>[0],
+  ) => {
+    const result = await mocks.runMigrationApply(params);
+    params.onApplyCompleted?.();
+    return result;
+  },
 }));
 
 import { migrationsHandlers } from "./migrations.js";

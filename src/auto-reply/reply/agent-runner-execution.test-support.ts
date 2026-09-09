@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
@@ -20,6 +21,7 @@ import {
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -189,7 +191,6 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
     isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
     isLikelyContextOverflowError: (message?: string) =>
       state.isLikelyContextOverflowErrorMock(message),
-    isTransientHttpError: () => false,
     sanitizeUserFacingText: (text?: string) => text ?? "",
   };
 });
@@ -265,7 +266,10 @@ vi.mock("./current-turn-images.js", () => ({
   resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
 }));
 
-vi.mock("./agent-runner-utils.js", () => ({
+vi.mock("./agent-runner-utils.js", async () => ({
+  resolveRunThinkingLevelForFallbackCandidate: (
+    await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js")
+  ).resolveRunThinkingLevelForFallbackCandidate,
   buildEmbeddedRunExecutionParams: (
     params: Parameters<typeof buildEmbeddedRunExecutionParams>[0],
   ) =>
@@ -398,8 +402,10 @@ export type EmbeddedAgentParams = {
   sessionKey?: string;
   prompt?: string;
   transcriptPrompt?: string;
+  currentInboundContext?: RunEmbeddedAgentInternalParams["currentInboundContext"];
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
+  onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
     phase:
@@ -601,6 +607,43 @@ export function expectBlockReplyCall(
   expectMockCallArgFields(onBlockReply, index, "block reply payload", fields);
 }
 
+/**
+ * Session-store paths reach production resolution, which derives a real agent
+ * SQLite file from the store's directory. A shared /tmp path would therefore
+ * open the machine-wide agent database and make unrelated suites depend on it.
+ */
+export function makeTestSessionStorePath(): string {
+  return path.join(
+    useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-store-"),
+    "sessions.json",
+  );
+}
+
+export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnParams {
+  return {
+    commandBody: "hello",
+    followupRun,
+    sessionCtx: {
+      Provider: "whatsapp",
+      MessageSid: "msg",
+    },
+    opts: {},
+    typingSignals: createMockTypingSignaler(),
+    blockReplyPipeline: null,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    applyReplyToMode: (payload) => payload,
+    shouldEmitToolResult: () => true,
+    shouldEmitToolOutput: () => false,
+    pendingToolTasks: new Set(),
+    resetSessionAfterRoleOrderingConflict: async () => false,
+    isHeartbeat: false,
+    sessionKey: "main",
+    getActiveSessionEntry: () => undefined,
+    resolvedVerboseLevel: "off",
+  };
+}
+
 export function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
   opts?: GetReplyOptions;
@@ -657,7 +700,11 @@ export function createNonDirectFailureSessionCtx(
   } as unknown as TemplateContext;
 }
 
-export function setupAgentRunnerExecutionTestState() {
+export async function setupAgentRunnerExecutionTestState() {
+  // Each suite awaits collection readiness after its imported mock harnesses register.
+  // Hook timeouts cannot cancel imports; cleanup must not overtake module readiness.
+  await getExecuteAgentTurnForTest();
+
   beforeEach(() => {
     vi.useRealTimers();
     state.runEmbeddedAgentMock.mockReset();

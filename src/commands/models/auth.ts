@@ -20,7 +20,6 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import {
   promoteAuthProfileInOrder,
-  upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -42,7 +41,7 @@ import {
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
-import { prepareProviderAuthProfilesForPersistence } from "../../plugins/provider-auth-persistence.js";
+import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
@@ -270,17 +269,13 @@ async function resolveModelsAuthContext(params?: {
   const providerRef = requestedProvider
     ? normalizeManualAuthProvider(requestedProvider)
     : undefined;
+  // Auth setup also runs inside the Gateway; discovery must not replace its live registry.
   const providers = resolvePluginProvidersCore({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    ...(providerRef
-      ? {
-          providerRefs: [providerRef],
-          activate: true,
-        }
-      : {}),
+    ...(providerRef ? { providerRefs: [providerRef] } : {}),
   });
   const authProviders = preferSetupAuthProviders({
     providers,
@@ -423,42 +418,31 @@ async function persistProviderAuthResult(params: {
   );
 
   for (const candidate of profiles) {
-    const prepared = prepareProviderAuthProfilesForPersistence({
+    const persisted = await persistProviderAuthProfilesAfterLogin({
       profiles: [candidate],
       config: params.config,
       env: params.env,
+      agentDir: params.agentDir,
+      ...(params.env?.OPENCLAW_STATE_DIR ? { stateDir: params.env.OPENCLAW_STATE_DIR } : {}),
     });
-    const profile = expectDefined(prepared.profiles[0], "prepared auth profile");
+    const profile = expectDefined(persisted[0], "persisted auth profile");
     const configuredSelection = resolveConfiguredAuthSelectionForProvider(
       params.config,
       profile.credential.provider,
     );
-    try {
-      await upsertAuthProfileAfterLoginWithLockOrThrow({
-        profileId: profile.profileId,
-        credential: profile.credential,
-        agentDir: params.agentDir,
-      });
-    } catch (error) {
-      try {
-        prepared.rollback();
-      } catch (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          "Provider auth persistence failed and protected-store rollback could not be confirmed.",
-          { cause: rollbackError },
-        );
-      }
-      throw error;
-    }
     persistedProfiles.push(profile);
-    await promoteAuthProfileInOrder({
+    const promotion = await promoteAuthProfileInOrder({
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
       createIfMissing: configuredSelection.createIfMissing,
       ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
     });
+    if (!promotion.ok) {
+      throw new Error(
+        "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then retry the login.",
+      );
+    }
   }
 
   // Auth login owns the credential store. Keep openclaw.json untouched unless
@@ -499,7 +483,7 @@ async function persistProviderAuthResult(params: {
     logConfigUpdated(params.runtime);
   }
 
-  await refreshRunningGatewayAuthState(params.agentId);
+  await refreshRunningGatewayAuthState(params.agentId, params.runtime);
 
   for (const profile of persistedProfiles) {
     params.runtime.log(
@@ -718,7 +702,7 @@ export async function modelsAuthPasteTokenCommand(
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
 
-  await refreshRunningGatewayAuthState(agentId);
+  await refreshRunningGatewayAuthState(agentId, runtime);
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
@@ -778,7 +762,7 @@ export async function modelsAuthPasteApiKeyCommand(
     applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
   );
 
-  await refreshRunningGatewayAuthState(agentId);
+  await refreshRunningGatewayAuthState(agentId, runtime);
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
@@ -1013,6 +997,15 @@ export async function runModelsAuthLoginFlowCore(
   } else if (requestedProviderId && !requestedProvider) {
     requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
   }
+  await prompter.note(
+    [
+      "Scope: System / agent",
+      `Agent: ${context.agentId}`,
+      "Location: the machine running OpenClaw",
+      `For personal model accounts on a Gateway, run ${formatCliCommand("openclaw models accounts login --help")}.`,
+    ].join("\n"),
+    "Provider sign-in",
+  );
   const selectedProvider =
     requestedProvider ??
     (await prompter
@@ -1055,11 +1048,14 @@ export async function runModelsAuthLoginFlowCore(
     // profile.
     try {
       const clearedStore = await removeProviderAuthProfilesWithLock({
+        cfg: context.config,
         provider: selectedProvider.id,
         agentDir: context.agentDir,
       });
       if (!clearedStore) {
-        throw new Error("profile store update failed");
+        throw new Error(
+          "auth store is busy; close other OpenClaw commands using this state directory and retry",
+        );
       }
       opts.runtime.log(
         `Removed cached auth profiles for provider "${selectedProvider.id}" (--force). Running fresh auth flow.`,
@@ -1071,6 +1067,7 @@ export async function runModelsAuthLoginFlowCore(
         { cause: err },
       );
     }
+    await refreshRunningGatewayAuthState(context.agentId, opts.runtime);
   }
 
   const { result, profiles } = await runProviderAuthMethod({

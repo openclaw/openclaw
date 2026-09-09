@@ -51,8 +51,13 @@ describe("session placement startup", () => {
   it.each([
     {
       name: "profile",
-      target: { kind: "profile", profileId: "aws", machineClass: "fast" } as const,
-      expectedTarget: { profileId: "aws", machineClass: "fast" },
+      target: {
+        kind: "profile",
+        profileId: "aws",
+        os: "windows/wsl2",
+        machineClass: "fast",
+      } as const,
+      expectedTarget: { profileId: "aws", os: "windows/wsl2", machineClass: "fast" },
     },
     {
       name: "device",
@@ -155,7 +160,6 @@ describe("session placement startup", () => {
       startSessionPlacementInitialTurn(clientWith(request), { ...params, attachments }, () => true),
     ).resolves.toMatchObject({
       status: "started",
-      messageSeq: 3,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
     expect(request).toHaveBeenNthCalledWith(
@@ -436,7 +440,7 @@ describe("session placement startup", () => {
     });
   });
 
-  it("aborts and reclaims when cancellation lands while the first turn is in flight", async () => {
+  it("reclaims when cancellation lands while the first turn is in flight", async () => {
     let current = true;
     const request = vi
       .fn()
@@ -447,7 +451,6 @@ describe("session placement startup", () => {
         current = false;
         return { runId: "run-1" };
       })
-      .mockResolvedValueOnce({ ok: true, status: "aborted" })
       .mockResolvedValueOnce({ ok: true });
 
     await expect(
@@ -455,11 +458,8 @@ describe("session placement startup", () => {
     ).resolves.toEqual({
       status: "cancelled",
     });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.abort", {
-      key: params.key,
-      agentId: params.agentId,
-    });
-    expect(request).toHaveBeenNthCalledWith(4, "sessions.reclaim", {
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.reclaim", {
       key: params.key,
       agentId: params.agentId,
     });
@@ -476,7 +476,6 @@ describe("session placement startup", () => {
         current = false;
         return { runId: "run-1", requestParams };
       })
-      .mockResolvedValueOnce({ ok: true, status: "aborted" })
       .mockRejectedValueOnce(new Error("cleanup unavailable"));
 
     const outcome = await startSessionPlacementInitialTurn(

@@ -76,6 +76,49 @@ let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTempl
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 let sendStructuredCardFeishu: typeof import("./send.js").sendStructuredCardFeishu;
 
+beforeAll(async () => {
+  ({
+    editMessageFeishu,
+    getMessageFeishu,
+    listFeishuThreadMessages,
+    resolveFeishuCardTemplate,
+    sendMessageFeishu,
+    sendStructuredCardFeishu,
+  } = await import("./send.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+  vi.doUnmock("openclaw/plugin-sdk/text-chunking");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./accounts.js");
+  vi.doUnmock("./runtime.js");
+  vi.resetModules();
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockResolveMarkdownTableMode.mockReturnValue("preserve");
+  mockConvertMarkdownTables.mockImplementation((text: string) => text);
+  mockRuntimeResolveMarkdownTableMode.mockReturnValue("preserve");
+  mockRuntimeConvertMarkdownTables.mockImplementation((text: string) => text);
+  mockResolveFeishuAccount.mockReturnValue({
+    accountId: "default",
+    configured: true,
+  });
+  mockCreateFeishuClient.mockReturnValue({
+    im: {
+      message: {
+        create: vi.fn(),
+        get: mockClientGet,
+        list: mockClientList,
+        patch: mockClientPatch,
+      },
+    },
+  });
+});
+
 describe("getMessageFeishu", () => {
   function expectTextReceipt(
     result: Awaited<ReturnType<typeof sendMessageFeishu>>,
@@ -108,49 +151,6 @@ describe("getMessageFeishu", () => {
       ...expected,
     });
   }
-
-  beforeAll(async () => {
-    ({
-      editMessageFeishu,
-      getMessageFeishu,
-      listFeishuThreadMessages,
-      resolveFeishuCardTemplate,
-      sendMessageFeishu,
-      sendStructuredCardFeishu,
-    } = await import("./send.js"));
-  });
-
-  afterAll(() => {
-    vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
-    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openclaw/plugin-sdk/text-chunking");
-    vi.doUnmock("./client.js");
-    vi.doUnmock("./accounts.js");
-    vi.doUnmock("./runtime.js");
-    vi.resetModules();
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockResolveMarkdownTableMode.mockReturnValue("preserve");
-    mockConvertMarkdownTables.mockImplementation((text: string) => text);
-    mockRuntimeResolveMarkdownTableMode.mockReturnValue("preserve");
-    mockRuntimeConvertMarkdownTables.mockImplementation((text: string) => text);
-    mockResolveFeishuAccount.mockReturnValue({
-      accountId: "default",
-      configured: true,
-    });
-    mockCreateFeishuClient.mockReturnValue({
-      im: {
-        message: {
-          create: vi.fn(),
-          get: mockClientGet,
-          list: mockClientList,
-          patch: mockClientPatch,
-        },
-      },
-    });
-  });
 
   it("sends text without requiring Feishu runtime text helpers", async () => {
     mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {
@@ -490,7 +490,13 @@ describe("getMessageFeishu", () => {
               content: JSON.stringify({
                 zh_cn: {
                   title: "Summary",
-                  content: [[{ tag: "text", text: "post body" }]],
+                  content: [
+                    [
+                      { tag: "text", text: "post body", style: ["bold"] },
+                      { tag: "text", text: " " },
+                      { tag: "a", text: "Docs", href: "https://example.com", style: ["italic"] },
+                    ],
+                  ],
                 },
               }),
             },
@@ -507,7 +513,7 @@ describe("getMessageFeishu", () => {
     expectParsedMessage(result, {
       messageId: "om_post",
       chatId: "oc_post",
-      content: "Summary\n\npost body",
+      content: "Summary\n\n**post body** *[Docs](https://example.com)*",
       contentType: "post",
     });
   });
@@ -846,13 +852,8 @@ describe("getMessageFeishu", () => {
 
 describe("editMessageFeishu", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     mockClientPatch.mockReset();
     mockClientUpdate.mockReset();
-    mockResolveFeishuAccount.mockReturnValue({
-      accountId: "default",
-      configured: true,
-    });
     mockCreateFeishuClient.mockReturnValue({
       im: {
         message: {

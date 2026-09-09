@@ -5,10 +5,14 @@ import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
-  readCodexAppServerProcess,
+  isDeadProcessState,
+  ProcessInspectionError,
   readCodexAppServerProcessCommand,
   readCodexAppServerProcessSnapshot,
 } from "./transport-process-snapshot.js";
+
+// Startup tolerates transient host load; signal containment retains its shorter budget.
+const PROCESS_REGISTRATION_INSPECTION_MS = 10_000;
 
 const processIdentity = z.object({
   pid: z.number().int().positive().safe(),
@@ -43,39 +47,44 @@ async function openProcessRegistrationStore() {
   });
 }
 
-async function reapRegisteredCodexAppServerOrphans(requestedDeadline?: number): Promise<void> {
+async function reapRegisteredCodexAppServerOrphans(): Promise<void> {
   const store = await openProcessRegistrationStore();
-  const deadline = requestedDeadline ?? Date.now() + 10_000;
+  const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
   for (const entry of store.entries()) {
     if (Date.now() >= deadline) {
       throw new Error("Codex orphan cleanup exceeded its startup budget. Retry to finish cleanup.");
     }
     const registration = registrationSchema.parse(entry.value);
-    const snapshot = await readCodexAppServerProcessSnapshot();
-    if (!snapshot?.some((row) => row.pid === process.pid)) {
-      throw new Error(
-        "Cannot inspect registered Codex processes. Check process inspection permissions (/proc on Linux, ps on macOS), then retry.",
-      );
-    }
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline, [
+      registration.parent.pid,
+      registration.child.pid,
+    ]);
     const parent = snapshot.find((row) => row.pid === registration.parent.pid);
-    if (parent?.startedAt === registration.parent.startedAt && !parent.state.startsWith("Z")) {
+    if (parent?.startedAt === registration.parent.startedAt && !isDeadProcessState(parent.state)) {
       continue;
     }
     const child = snapshot.find((row) => row.pid === registration.child.pid);
     if (
       registration.child.commandFingerprint !== undefined &&
       child?.startedAt === registration.child.startedAt &&
-      !child.state.startsWith("Z")
+      !isDeadProcessState(child.state)
     ) {
-      const command = await readCodexAppServerProcessCommand(registration.child.pid, deadline);
-      if (command === undefined) {
-        const current = await readCodexAppServerProcess(registration.child.pid, deadline);
+      let command: string | undefined;
+      try {
+        command = await readCodexAppServerProcessCommand(child, deadline);
+      } catch (error) {
+        // Only a successful inspection may revoke the fingerprint obligation.
+        const current = (
+          await readCodexAppServerProcessSnapshot(deadline, [registration.child.pid])
+        ).find((row) => row.pid === registration.child.pid);
         if (current?.startedAt === registration.child.startedAt) {
-          throw new Error(
-            `Cannot inspect registered Codex process ${registration.child.pid} command. Check process command inspection permissions (/proc on Linux, ps on macOS), then retry.`,
-          );
+          throw error;
         }
-      } else if (fingerprintProcessCommand(command) !== registration.child.commandFingerprint) {
+      }
+      if (
+        command !== undefined &&
+        fingerprintProcessCommand(command) !== registration.child.commandFingerprint
+      ) {
         // macOS lstart has second granularity: a replacement can inherit pid +
         // startedAt. A different command revokes kill authority; Linux already
         // uses tick-granular start identities.
@@ -125,18 +134,22 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
   const store = await openProcessRegistrationStore();
   return async (child) => {
     await once(child, "spawn");
-    const snapshot = await readCodexAppServerProcessSnapshot();
-    const parent = snapshot?.find((row) => row.pid === process.pid);
-    const spawned = snapshot?.find((row) => row.pid === child.pid);
+    if (!child.pid) {
+      throw new ProcessInspectionError("unavailable");
+    }
+    const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline, [child.pid]);
+    const parent = snapshot.find((row) => row.pid === process.pid);
+    const spawned = snapshot.find((row) => row.pid === child.pid);
     if (!parent || !spawned || spawned.ppid !== process.pid) {
       throw new Error(
-        "Cannot register the Codex child process. Check process inspection permissions (/proc on Linux, ps on macOS), then retry.",
+        "Cannot register the Codex child process: its direct-parent identity is unavailable. Retry.",
       );
     }
-    const command = await readCodexAppServerProcessCommand(spawned.pid, Date.now() + 2_000);
-    if (command === undefined || child.exitCode !== null || child.signalCode !== null) {
+    const command = await readCodexAppServerProcessCommand(spawned, deadline);
+    if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
-        "Cannot register the Codex child process command. Check process command inspection permissions (/proc on Linux, ps on macOS), then retry.",
+        "Cannot register the Codex child process command: the child exited during inspection. Retry.",
       );
     }
     const key = randomUUID();

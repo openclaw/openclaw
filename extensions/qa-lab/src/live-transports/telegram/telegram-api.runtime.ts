@@ -24,8 +24,8 @@ export function buildTelegramQaConfig(
   baseCfg: OpenClawConfig,
   params: {
     apiRoot: string;
+    directMessageOnly?: boolean;
     groupId: string;
-    requireMention: boolean;
     sutAccountId: string;
     sutToken: string;
     testerUserId: string;
@@ -72,12 +72,16 @@ export function buildTelegramQaConfig(
             enabled: true,
             botToken: params.sutToken,
             apiRoot: params.apiRoot,
-            dmPolicy: "disabled",
+            ...(params.directMessageOnly
+              ? { dmPolicy: "allowlist", allowFrom: [params.testerUserId] }
+              : { dmPolicy: "disabled" }),
             groups: {
               [params.groupId]: {
                 groupPolicy: "allowlist",
                 allowFrom: [params.testerUserId],
-                requireMention: params.requireMention,
+                // Concurrent leases share this group and QA sender. Only this
+                // bot's mentions or reply chain may trigger an agent turn.
+                requireMention: true,
               },
             },
           },

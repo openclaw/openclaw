@@ -1,9 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/session-accessor.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isHeartbeatHistoryTurnBoundaryMessage,
   projectChatDisplayMessages,
+  projectChatDisplayMessagesWithState,
   augmentChatHistoryWithCanvasBlocks,
 } from "../chat-display-projection.js";
 import {
@@ -15,6 +17,8 @@ import { resolveCurrentUserProfileDisplay } from "../current-user-profile-displa
 import {
   capOffsetChatHistoryProjectedMessages,
   dropChatHistoryOverreadContextMessage,
+  readChatHistoryMessageId,
+  readChatHistoryRecoveryContext,
   readChatHistoryMessageSeq,
   readIncrementalChatHistoryTail,
   type IncrementalChatHistoryTail,
@@ -25,11 +29,6 @@ import {
   type ReadRecentSessionMessagesResult,
 } from "../session-transcript-readers.js";
 import type { loadSessionEntry } from "../session-utils.js";
-
-export function readChatHistoryMessageId(message: unknown): string | undefined {
-  const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-  return typeof metadata?.id === "string" ? metadata.id : undefined;
-}
 
 type ChatHistoryPage = {
   activeLeafEntryId?: string | null;
@@ -47,6 +46,52 @@ type ChatHistoryPage = {
     exhausted?: true;
   };
 };
+
+function readCliIdentityProjectionKey(message: unknown): string | undefined {
+  const id = readChatHistoryMessageId(message);
+  if (id) {
+    return `id:${id}`;
+  }
+  const record = asOptionalRecord(message);
+  const meta = asOptionalRecord(record?.["__openclaw"]);
+  const position = readTranscriptDisplayPosition(meta?.transcriptPosition);
+  if (!record || !position) {
+    return undefined;
+  }
+  return JSON.stringify([position, record.role, record.text, record.content]);
+}
+
+function projectCliIdentityOntoPagedMessages(params: {
+  pagedMessages: unknown[];
+  completeMessages: unknown[];
+}): unknown[] {
+  const importedMetaByKey = new Map<string, Record<string, unknown>>();
+  for (const message of params.completeMessages) {
+    const key = readCliIdentityProjectionKey(message);
+    const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+    if (key && meta) {
+      importedMetaByKey.set(key, meta);
+    }
+  }
+  return params.pagedMessages.map((message) => {
+    const record = asOptionalRecord(message);
+    const key = readCliIdentityProjectionKey(message);
+    const importedMeta = key ? importedMetaByKey.get(key) : undefined;
+    if (!record || !importedMeta) {
+      return message;
+    }
+    const localMeta = asOptionalRecord(record["__openclaw"]);
+    return {
+      ...record,
+      __openclaw: {
+        ...localMeta,
+        importedFrom: importedMeta.importedFrom,
+        externalId: importedMeta.externalId,
+        cliSessionId: importedMeta.cliSessionId,
+      },
+    };
+  });
+}
 
 export function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
@@ -148,46 +193,53 @@ export function enrichChatHistoryCompactionMarkers(
 function resolveChatHistoryMessageGroup(
   messages: unknown[],
   index: number,
-): { start: number; end: number } {
+  messageCost: (message: unknown) => number,
+): { start: number; end: number; cost: number } {
   const seq = readChatHistoryMessageSeq(messages[index]);
-  if (seq === undefined) {
-    return { start: index, end: index + 1 };
-  }
   let start = index;
   let end = index + 1;
+  let cost = messageCost(messages[index]);
+  if (seq === undefined) {
+    return { start, end, cost };
+  }
   while (start > 0 && readChatHistoryMessageSeq(messages[start - 1]) === seq) {
     start -= 1;
+    cost += messageCost(messages[start]);
   }
   while (end < messages.length && readChatHistoryMessageSeq(messages[end]) === seq) {
+    cost += messageCost(messages[end]);
     end += 1;
   }
-  return { start, end };
+  return { start, end, cost };
 }
 
 export function capChatHistoryAroundMessage(params: {
   messages: unknown[];
   messageId: string;
-  fits: (messages: unknown[]) => boolean;
-}): unknown[] | undefined {
+  maxCost: number;
+  messageCost?: (message: unknown) => number;
+}): unknown[] {
   const anchorIndex = params.messages.findIndex(
     (message) => readChatHistoryMessageId(message) === params.messageId,
   );
   if (anchorIndex === -1) {
-    return undefined;
+    return [];
   }
-  const anchorGroup = resolveChatHistoryMessageGroup(params.messages, anchorIndex);
-  if (!params.fits(params.messages.slice(anchorGroup.start, anchorGroup.end))) {
+  const messageCost = params.messageCost ?? (() => 1);
+  const anchorGroup = resolveChatHistoryMessageGroup(params.messages, anchorIndex, messageCost);
+  if (!(anchorGroup.cost <= params.maxCost)) {
     return [params.messages[anchorIndex]];
   }
 
-  let { start, end } = anchorGroup;
+  let { start, end, cost } = anchorGroup;
   let canGrowOlder = start > 0;
   let canGrowNewer = end < params.messages.length;
   while (canGrowOlder || canGrowNewer) {
     if (canGrowOlder) {
-      const olderGroup = resolveChatHistoryMessageGroup(params.messages, start - 1);
-      if (params.fits(params.messages.slice(olderGroup.start, end))) {
+      const olderGroup = resolveChatHistoryMessageGroup(params.messages, start - 1, messageCost);
+      if (cost + olderGroup.cost <= params.maxCost) {
         start = olderGroup.start;
+        cost += olderGroup.cost;
       } else {
         canGrowOlder = false;
       }
@@ -195,9 +247,10 @@ export function capChatHistoryAroundMessage(params: {
     canGrowOlder &&= start > 0;
 
     if (canGrowNewer) {
-      const newerGroup = resolveChatHistoryMessageGroup(params.messages, end);
-      if (params.fits(params.messages.slice(start, newerGroup.end))) {
+      const newerGroup = resolveChatHistoryMessageGroup(params.messages, end, messageCost);
+      if (cost + newerGroup.cost <= params.maxCost) {
         end = newerGroup.end;
+        cost += newerGroup.cost;
       } else {
         canGrowNewer = false;
       }
@@ -309,20 +362,41 @@ export async function readChatHistoryPage(params: {
           max,
           Math.max(readPage.messages.length, readPage.totalMessages > pageOffset ? 1 : 0),
         );
-    const projected = incrementalTail
-      ? incrementalTail.projected
-      : projectChatDisplayMessages(localMessages, {
-          includeCommentaryFallbacks: true,
-          maxChars: effectiveMaxChars,
-          resolveCurrentUserProfileDisplay,
-          turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
-        });
+    const project = (messages: unknown[]) =>
+      projectChatDisplayMessagesWithState(messages, {
+        includeCommentaryFallbacks: true,
+        maxChars: effectiveMaxChars,
+        resolveCurrentUserProfileDisplay,
+        turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
+      });
+    const projection = incrementalTail?.projection ?? project(localMessages);
+    let projected = incrementalTail?.projected ?? projection.messages;
+    const newestPageSeq = readChatHistoryMessageSeq(localMessages.at(-1));
+    if (
+      !incrementalTail &&
+      pageOffset > 0 &&
+      newestPageSeq !== undefined &&
+      projection.assistantErrorPending
+    ) {
+      const recoveryContext = await readChatHistoryRecoveryContext({
+        messages: localMessages,
+        project,
+        readScope,
+        displaySource: readPage.displaySource,
+        maxBytes: maxHistoryBytes,
+      });
+      if (recoveryContext.length > 0) {
+        projected = project([...localMessages, ...recoveryContext]).messages.filter(
+          (message) => (readChatHistoryMessageSeq(message) ?? Infinity) <= newestPageSeq,
+        );
+      }
+    }
     const windowed = messageId
-      ? (capChatHistoryAroundMessage({
+      ? capChatHistoryAroundMessage({
           messages: projected,
           messageId,
-          fits: (messages) => messages.length <= max,
-        }) ?? capOffsetChatHistoryProjectedMessages(projected, max))
+          maxCost: max,
+        })
       : projected;
     if (messageId) {
       // Numeric offsets do not encode the selected historical transcript source.
@@ -332,7 +406,9 @@ export async function readChatHistoryPage(params: {
       ...(isTailPage
         ? {
             activeLeafEntryId: resolveChatHistoryActiveLeafEntryId(readPage),
-            ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+            ...(readPage.transcriptSource === "active" &&
+            readPage.deltaCursor &&
+            !incrementalTail?.projection.assistantErrorPending
               ? { deltaCursor: readPage.deltaCursor }
               : {}),
           }
@@ -353,6 +429,7 @@ export async function readChatHistoryPage(params: {
     effectiveMaxChars,
     max,
     maxBytes: maxHistoryBytes,
+    offset,
   });
   const { readPage } = incrementalTail;
   const activeLeafEntryId = resolveChatHistoryActiveLeafEntryId(readPage);
@@ -368,7 +445,7 @@ export async function readChatHistoryPage(params: {
         localMessages: localMessagesWithBoundaryFilter,
       });
   const cliHistory = params.ignoreCliSessionImports
-    ? { messages: localMessagesWithBoundaryFilter, imported: false }
+    ? { messages: localMessagesWithBoundaryFilter, imported: false, expanded: false }
     : resolveChatHistoryWithCliSessionImports({
         entry,
         provider,
@@ -378,7 +455,7 @@ export async function readChatHistoryPage(params: {
   if ((offset !== undefined || messageId) && !cliHistory.imported) {
     return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
   }
-  if (cliHistory.imported) {
+  if (cliHistory.expanded || messageId) {
     // Reuse this request's redacted external snapshot after the full local read;
     // re-reading here would duplicate a large import and defeat cross-client singleflight.
     const completeLocalMessages = dropPreSessionStartAnnouncePairs(
@@ -407,6 +484,26 @@ export async function readChatHistoryPage(params: {
       maxChars: effectiveMaxChars,
       resolveCurrentUserProfileDisplay,
     });
+    if (!completeCliHistory.expanded && !messageId) {
+      // A tail-only merge can look expanded because older imported rows are absent
+      // from that local window. Preserve normal local pagination after the full merge
+      // proves that the import only contributes identity metadata.
+      const localPage = await readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
+      return {
+        ...localPage,
+        messages: projectCliIdentityOntoPagedMessages({
+          pagedMessages: localPage.messages,
+          completeMessages: displayMessages,
+        }),
+      };
+    }
+    // Import snapshots are terminal, but a missing display anchor is not a tail request.
+    if (
+      messageId &&
+      !displayMessages.some((message) => readChatHistoryMessageId(message) === messageId)
+    ) {
+      return { messages: [] };
+    }
     return {
       activeLeafEntryId,
       messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
@@ -419,14 +516,28 @@ export async function readChatHistoryPage(params: {
       },
     };
   }
+  const projectedTailMessages = cliHistory.imported
+    ? projectCliIdentityOntoPagedMessages({
+        pagedMessages: incrementalTail.projected,
+        completeMessages: cliHistory.messages,
+      })
+    : incrementalTail.projected;
+  const windowedTailMessages =
+    offset === undefined
+      ? projectedTailMessages.length > max
+        ? projectedTailMessages.slice(-max)
+        : projectedTailMessages
+      : capOffsetChatHistoryProjectedMessages(projectedTailMessages, max);
   return {
     activeLeafEntryId,
-    ...(readPage.transcriptSource === "active" && readPage.deltaCursor
+    ...(readPage.transcriptSource === "active" &&
+    readPage.deltaCursor &&
+    !incrementalTail.projection.assistantErrorPending
       ? { deltaCursor: readPage.deltaCursor }
       : {}),
-    messages: augmentChatHistoryWithCanvasBlocks(incrementalTail.projected),
+    messages: augmentChatHistoryWithCanvasBlocks(windowedTailMessages),
     pagination: {
-      offset: 0,
+      offset: offset ?? 0,
       totalMessages: readPage.totalMessages,
       rawPageMessages: incrementalTail.rawPageMessages,
     },

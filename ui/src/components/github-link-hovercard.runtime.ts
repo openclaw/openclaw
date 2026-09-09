@@ -1,16 +1,16 @@
-import { initialState, Task } from "@lit/task";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { ReactiveElement } from "lit";
+import { html, nothing, ReactiveElement, render, type TemplateResult } from "lit";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import "../styles/github-link-hovercard.css";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
-  gitHubFilesChangedUrl,
   githubLinkAnchorFromEvent,
   gitHubProfileUrl,
   parseGitHubLinkTarget,
@@ -30,9 +30,46 @@ type PreviewState = {
 };
 
 type CacheEntry = {
+  failed?: boolean;
   expiresAt: number;
-  promise: Promise<GitHubPreview>;
+  promise: Promise<ControlUiGitHubPreview>;
+  signal: AbortSignal;
 };
+
+type PreviewContext = {
+  generation: number;
+  recoveryScope: string;
+  succeeded: boolean;
+};
+
+// Page-memory only. Providers share success, never credentials or persisted state.
+const previewContexts = new WeakMap<GatewayBrowserClient, Map<string, PreviewContext>>();
+
+function previewContextFor(
+  client: GatewayBrowserClient,
+  agentId: string | undefined,
+): PreviewContext {
+  let contexts = previewContexts.get(client);
+  if (!contexts) {
+    contexts = new Map();
+    previewContexts.set(client, contexts);
+  }
+  const key = agentId ?? "";
+  let context = contexts.get(key);
+  if (
+    !context ||
+    context.generation !== client.connectionGeneration ||
+    context.recoveryScope !== client.recoveryScope
+  ) {
+    context = {
+      generation: client.connectionGeneration,
+      recoveryScope: client.recoveryScope,
+      succeeded: false,
+    };
+    contexts.set(key, context);
+  }
+  return context;
+}
 
 let nextHovercardId = 0;
 
@@ -69,7 +106,7 @@ function parseCoAuthors(value: unknown): { login: string; avatarDataUrl?: string
   return parsed.length > 0 ? parsed : undefined;
 }
 
-function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubPreview {
+function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): ControlUiGitHubPreview {
   if (!isRecord(value)) {
     throw new Error("GitHub response was not an object");
   }
@@ -84,10 +121,8 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
     throw new Error("GitHub response did not match the requested link");
   }
   return {
-    ...target,
     additions: asFiniteNumber(value.additions),
     avatarDataUrl: safeAvatarDataUrl(value.avatarDataUrl),
-    changedFiles: asFiniteNumber(value.changedFiles),
     closedAt: readNonBlankString(value.closedAt),
     coAuthorCount: asFiniteNumber(value.coAuthorCount),
     coAuthors: parseCoAuthors(value.coAuthors),
@@ -128,185 +163,128 @@ function previewState(preview: GitHubPreview): PreviewState {
     : { label: t("githubPreview.states.closed"), tone: "purple" };
 }
 
-function appendTextElement(
-  parent: HTMLElement,
-  tagName: keyof HTMLElementTagNameMap,
-  className: string,
-  text: string,
-): HTMLElement {
-  const element = document.createElement(tagName);
-  element.className = className;
-  element.textContent = text;
-  parent.append(element);
-  return element;
+function renderAvatar(dataUrl: string | undefined) {
+  return dataUrl
+    ? html`<img
+        class="github-link-hovercard__avatar"
+        alt=""
+        decoding="async"
+        referrerpolicy="no-referrer"
+        src=${dataUrl}
+      />`
+    : nothing;
 }
 
-function coAuthorAvatarElement(dataUrl: string): HTMLImageElement {
-  const avatar = document.createElement("img");
-  avatar.className = "github-link-hovercard__avatar";
-  avatar.alt = "";
-  avatar.decoding = "async";
-  avatar.referrerPolicy = "no-referrer";
-  avatar.src = dataUrl;
-  return avatar;
-}
-
-/**
- * Overlapping faces after the author, plus "+N" for anyone past the fetched
- * three. The group is one labelled image: names reach assistive tech through
- * its accessible name instead of competing with the metrics for row width.
- */
-function appendCoAuthors(author: HTMLElement, preview: GitHubPreview): void {
+function renderCoAuthors(preview: GitHubPreview) {
   const coAuthors = preview.coAuthors ?? [];
   const total = preview.coAuthorCount ?? coAuthors.length;
   if (coAuthors.length === 0) {
-    return;
-  }
-  const stack = document.createElement("span");
-  stack.className = "github-link-hovercard__coauthors";
-  let faces = 0;
-  for (const coAuthor of coAuthors) {
-    if (coAuthor.avatarDataUrl) {
-      stack.append(coAuthorAvatarElement(coAuthor.avatarDataUrl));
-      faces += 1;
-    }
+    return nothing;
   }
   // Counted from rendered faces, not fetched people: avatar inlining is optional,
   // and a co-author with no face must fall into "+N" rather than disappear.
+  const faces = coAuthors.filter((coAuthor) => coAuthor.avatarDataUrl).length;
   const hidden = Math.max(0, total - faces);
-  if (hidden > 0) {
-    const more = document.createElement("span");
-    more.className = "github-link-hovercard__coauthors-more";
-    more.textContent = `+${hidden}`;
-    stack.append(more);
+  if (faces === 0 && hidden === 0) {
+    return nothing;
   }
-  if (stack.childElementCount === 0) {
-    return;
-  }
-  // The faces are decorative images, so the group carries the only accessible
-  // name; a title alone is never announced.
   const label = t("githubPreview.coAuthors", {
     logins: coAuthors.map((coAuthor) => coAuthor.login).join(", "),
   });
-  stack.title = label;
-  stack.role = "img";
-  stack.ariaLabel = label;
-  author.after(stack);
+  return html`<span
+    class="github-link-hovercard__coauthors"
+    title=${label}
+    role="img"
+    aria-label=${label}
+    >${coAuthors.map((coAuthor) => renderAvatar(coAuthor.avatarDataUrl))}${
+      hidden > 0
+        ? html`<span class="github-link-hovercard__coauthors-more">+${hidden}</span>`
+        : nothing
+    }</span
+  >`;
 }
 
-function appendMetric(parent: HTMLElement, className: string, text: string): void {
-  appendTextElement(parent, "span", `github-link-hovercard__metric ${className}`, text);
-}
-
-function appendCardLink(
-  parent: HTMLElement,
-  className: string,
-  href: string,
-  text: string,
-): HTMLAnchorElement {
-  const link = document.createElement("a");
-  link.className = className;
-  link.href = href;
-  link.target = EXTERNAL_LINK_TARGET;
-  link.rel = buildExternalLinkRel();
-  link.textContent = text;
-  parent.append(link);
-  return link;
+function renderCardLink(className: string, href: string, content: string | TemplateResult) {
+  return html`<a
+    class=${className}
+    href=${href}
+    target=${EXTERNAL_LINK_TARGET}
+    rel=${buildExternalLinkRel()}
+    >${content}</a
+  >`;
 }
 
 function renderLoading(card: HTMLDivElement): void {
-  card.replaceChildren();
   card.dataset.loading = "true";
   card.removeAttribute("data-state");
-  const label = t("githubPreview.loading");
-  // The card is a dialog, so every render state has to leave it with a name.
-  card.setAttribute("aria-label", label);
-  appendTextElement(card, "div", "github-link-hovercard__loading", label);
-}
-
-function renderUnavailable(card: HTMLDivElement): void {
-  card.replaceChildren();
-  card.dataset.loading = "false";
-  card.dataset.state = "unavailable";
-  const label = t("githubPreview.unavailable");
-  card.setAttribute("aria-label", label);
-  appendTextElement(card, "div", "github-link-hovercard__unavailable", label);
+  card.setAttribute("aria-label", t("githubPreview.loading"));
+  const rows = [
+    ["header", ["badge", "repo", "time"]],
+    ["title", ["title"]],
+    ["footer", ["author", "metrics"]],
+  ] as const;
+  render(
+    html`<div class="github-link-hovercard__skeleton" aria-hidden="true">
+      ${rows.map(
+        ([rowClass, parts]) => html`<div class=${`github-link-hovercard__${rowClass}`}>
+          ${parts.map((part) => html`<span class=${`skeleton github-link-hovercard__placeholder--${part}`}></span>`)}
+        </div>`,
+      )}
+    </div>`,
+    card,
+  );
 }
 
 function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
-  card.replaceChildren();
   card.dataset.loading = "false";
   const state = previewState(preview);
   card.dataset.state = state.tone;
-
-  const header = document.createElement("div");
-  header.className = "github-link-hovercard__header";
-  const badge = document.createElement("span");
-  badge.className = "github-link-hovercard__state";
-  badge.dataset.tone = state.tone;
-  const stateDot = document.createElement("span");
-  stateDot.className = "github-link-hovercard__state-dot";
-  stateDot.setAttribute("aria-hidden", "true");
-  badge.append(stateDot, document.createTextNode(state.label));
-  header.append(badge);
-  // Every link on the card reuses the href it was activated with; that target is
-  // already resolved and validated by parseGitHubLinkTarget, so no reparsing here.
-  appendCardLink(
-    header,
-    "github-link-hovercard__repo",
-    preview.href,
-    `${preview.owner}/${preview.repo} #${preview.number}`,
+  const comments = preview.comments ?? 0;
+  render(
+    html`<div class="github-link-hovercard__header">
+        <span class="github-link-hovercard__state" data-tone=${state.tone}
+          ><span class="github-link-hovercard__state-dot" aria-hidden="true"></span
+          >${state.label}</span
+        >
+        ${renderCardLink(
+          "github-link-hovercard__repo",
+          preview.href,
+          `${preview.owner}/${preview.repo} #${preview.number}`,
+        )}
+        <time class="github-link-hovercard__time"
+          >${formatRelativeTimestamp(Date.parse(preview.updatedAt))}</time
+        >
+      </div>
+      ${renderCardLink("github-link-hovercard__title", preview.href, preview.title)}
+      <div class="github-link-hovercard__footer">
+        ${renderCardLink(
+          "github-link-hovercard__author",
+          gitHubProfileUrl(preview.login),
+          html`${renderAvatar(preview.avatarDataUrl)}${preview.login}`,
+        )}${renderCoAuthors(preview)}
+        ${
+          preview.kind === "pull"
+            ? html`<span
+                class="github-link-hovercard__metrics github-link-hovercard__metrics--diff"
+              >
+                <span class="github-link-hovercard__metric github-link-hovercard__metric--additions"
+                  >+${preview.additions ?? 0}</span
+                >
+                <span class="github-link-hovercard__metric github-link-hovercard__metric--deletions"
+                  >−${preview.deletions ?? 0}</span
+                >
+              </span>`
+            : html`<span class="github-link-hovercard__metrics">
+                <span class="github-link-hovercard__metric"
+                  >${t(comments === 1 ? "githubPreview.comment" : "githubPreview.comments", {
+                    count: String(comments),
+                  })}</span
+                >
+              </span>`
+        }
+      </div>`,
+    card,
   );
-  appendTextElement(
-    header,
-    "time",
-    "github-link-hovercard__time",
-    formatRelativeTimestamp(Date.parse(preview.updatedAt)),
-  );
-
-  const footer = document.createElement("div");
-  footer.className = "github-link-hovercard__footer";
-  const author = appendCardLink(
-    footer,
-    "github-link-hovercard__author",
-    gitHubProfileUrl(preview.login),
-    preview.login,
-  );
-  if (preview.avatarDataUrl) {
-    author.prepend(coAuthorAvatarElement(preview.avatarDataUrl));
-  }
-  appendCoAuthors(author, preview);
-
-  const metrics = document.createElement("span");
-  metrics.className = "github-link-hovercard__metrics";
-  if (preview.kind === "pull") {
-    appendMetric(metrics, "github-link-hovercard__metric--additions", `+${preview.additions ?? 0}`);
-    appendMetric(metrics, "github-link-hovercard__metric--deletions", `−${preview.deletions ?? 0}`);
-    const files = preview.changedFiles ?? 0;
-    // The diff-size chip's natural next step is the files-changed view; issues
-    // have no such view, so their comment count stays plain text.
-    appendCardLink(
-      metrics,
-      "github-link-hovercard__metric github-link-hovercard__metric--files",
-      gitHubFilesChangedUrl(preview),
-      t(files === 1 ? "githubPreview.file" : "githubPreview.files", {
-        count: String(files),
-      }),
-    );
-  } else {
-    const comments = preview.comments ?? 0;
-    appendMetric(
-      metrics,
-      "",
-      t(comments === 1 ? "githubPreview.comment" : "githubPreview.comments", {
-        count: String(comments),
-      }),
-    );
-  }
-  footer.append(metrics);
-  card.append(header);
-  appendCardLink(card, "github-link-hovercard__title", preview.href, preview.title);
-  card.append(footer);
   card.setAttribute(
     "aria-label",
     t("githubPreview.ariaLabel", {
@@ -321,9 +299,65 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
 }
 
 export class GitHubLinkHovercardProvider extends ReactiveElement {
-  client: GatewayBrowserClient | null = null;
+  // Lit must replay values assigned before the lazy custom element upgrades,
+  // otherwise own properties shadow the identity-resetting accessors below.
+  static override properties = {
+    client: { attribute: false, noAccessor: true },
+    agentId: { attribute: false, noAccessor: true },
+  };
+
+  private gatewayClient: GatewayBrowserClient | null = null;
+  private selectedAgentId: string | undefined;
+
+  get client(): GatewayBrowserClient | null {
+    return this.gatewayClient;
+  }
+
+  set client(value: GatewayBrowserClient | null) {
+    if (value === this.gatewayClient) {
+      return;
+    }
+    this.invalidatePreviewContext();
+    this.close();
+    this.cache.clear();
+    this.gatewayClient = value;
+  }
+
+  get agentId(): string | undefined {
+    return this.selectedAgentId;
+  }
+
+  set agentId(value: string | undefined) {
+    if (value === this.selectedAgentId) {
+      return;
+    }
+    this.invalidatePreviewContext();
+    this.close();
+    this.cache.clear();
+    this.selectedAgentId = value;
+  }
 
   private readonly cache = new Map<string, CacheEntry>();
+  private previewContext: PreviewContext | null = null;
+  private allowLoading = false;
+  private requestStarted = false;
+
+  private invalidatePreviewContext(): void {
+    if (this.client && this.previewContext) {
+      previewContexts.get(this.client)?.delete(this.agentId ?? "");
+    }
+    this.previewContext = null;
+  }
+
+  private syncPreviewContext(): PreviewContext | null {
+    const context = this.client ? previewContextFor(this.client, this.agentId) : null;
+    if (context !== this.previewContext) {
+      this.close();
+      this.cache.clear();
+      this.previewContext = context;
+    }
+    return context;
+  }
   private activeAnchor: HTMLAnchorElement | null = null;
   private activeTarget: GitHubLinkTarget | null = null;
   // Which surface opened the current card: gates whether focus landing inside
@@ -331,8 +365,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   // pointer-driven open still fully releases on mouse-out (see handleCardPointerLeave).
   private activeTrigger: "focus" | "pointer" | null = null;
   private readonly hovercard = new PortaledHovercardController(() => this.close());
-  private renderedPreview: GitHubPreview | null = null;
-  private renderedUnavailable = false;
   private stopI18n: (() => void) | null = null;
   // Spans the synchronous focus() that hands focus back to the trigger, so the
   // card the user just dismissed cannot reopen under them (handleCardKeyDown).
@@ -340,31 +372,15 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   private readonly previewTask = new Task(this, {
     autoRun: false,
     args: () => [this.activeTarget] as const,
-    task: ([target], { signal }) => (target ? this.loadPreview(target, signal) : initialState),
-    onComplete: (preview) => {
-      const card = this.hovercard.card;
-      if (!card) {
-        return;
-      }
-      this.renderedPreview = preview;
-      renderPreview(card, preview);
-      this.hovercard.position();
-    },
-    onError: () => {
-      const card = this.hovercard.card;
-      if (!card) {
-        return;
-      }
-      this.renderedUnavailable = true;
-      renderUnavailable(card);
-      this.hovercard.position();
-    },
+    // Share metadata, not navigation: each activation owns its full validated URL.
+    task: async ([target], { signal }) =>
+      target ? { ...(await this.loadPreview(target, signal)), ...target } : initialState,
   });
   private readonly activeAnchorObserver = new MutationObserver(() => {
     const anchor = this.activeAnchor;
     // The card is portaled outside the routed tree, whose replacement can remove
     // a hovered link without a pointer event reaching this delegated handler.
-    if (anchor && !this.contains(anchor)) {
+    if (anchor && (!this.contains(anchor) || anchor.href !== this.activeTarget?.href)) {
       this.close();
     }
   });
@@ -382,7 +398,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.addEventListener("focusout", this.handleFocusOut);
     this.addEventListener("keydown", this.handleKeyDown);
     this.addEventListener("click", this.handleClick);
-    this.stopI18n ??= i18n.subscribe(this.handleLocaleChange);
+    this.stopI18n ??= i18n.subscribe(() => this.requestUpdate());
   }
 
   override disconnectedCallback(): void {
@@ -398,20 +414,34 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     super.disconnectedCallback();
   }
 
-  private readonly handleLocaleChange = () => {
-    const card = this.hovercard.card;
-    if (!card) {
+  protected override updated(): void {
+    if (!this.activeAnchor) {
       return;
     }
-    if (this.renderedPreview) {
-      renderPreview(card, this.renderedPreview);
-    } else if (this.renderedUnavailable) {
-      renderUnavailable(card);
-    } else {
-      renderLoading(card);
+    const context = this.syncPreviewContext();
+    const anchor = this.activeAnchor;
+    const target = this.activeTarget;
+    if (!anchor || !target || !this.requestStarted) {
+      return;
     }
-    this.hovercard.position();
-  };
+    if (!this.isConnected || !this.contains(anchor) || anchor.href !== target.href) {
+      this.close();
+      return;
+    }
+    this.previewTask.render({
+      pending: () => {
+        if (this.allowLoading && context?.succeeded && this.hovercard.held) {
+          this.show(anchor);
+        }
+      },
+      complete: (preview) => {
+        if (preview.href === target.href && (this.hovercard.card || this.hovercard.held)) {
+          this.show(anchor, preview);
+        }
+      },
+      error: () => this.close(),
+    });
+  }
 
   private readonly handlePointerOver = (event: Event) => {
     const pointer = event as PointerEvent;
@@ -435,13 +465,16 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       return;
     }
     this.hovercard.pointerInside = false;
-    this.hovercard.scheduleClose();
+    this.scheduleIntentClose();
   };
 
-  private readonly handleCardPointerEnter = () => {
-    this.hovercard.pointerOverCard = true;
-    this.hovercard.clearClose();
-  };
+  private scheduleIntentClose(): void {
+    if (this.previewTask.status === TaskStatus.PENDING && !this.hovercard.held) {
+      this.close();
+    } else {
+      this.hovercard.scheduleClose();
+    }
+  }
 
   private readonly handleCardPointerLeave = () => {
     this.hovercard.pointerOverCard = false;
@@ -451,22 +484,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     if (this.activeTrigger === "pointer") {
       this.hovercard.cardFocusInside = false;
     }
-    this.hovercard.scheduleClose();
-  };
-
-  // The card is portaled to document.body, so focus landing on its title link
-  // never reaches the provider's delegated focusin/focusout listeners; track it
-  // directly so keyboard users can tab into the link without losing the card.
-  private readonly handleCardFocusIn = () => {
-    this.hovercard.cardFocusInside = true;
-    this.hovercard.clearClose();
-  };
-
-  private readonly handleCardFocusOut = (event: FocusEvent) => {
-    if (event.relatedTarget instanceof Node && this.hovercard.card?.contains(event.relatedTarget)) {
-      return;
-    }
-    this.hovercard.cardFocusInside = false;
     this.hovercard.scheduleClose();
   };
 
@@ -490,7 +507,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
       return;
     }
     this.hovercard.focusInside = false;
-    this.hovercard.scheduleClose();
+    this.scheduleIntentClose();
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
@@ -504,7 +521,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     if (event.key !== "Tab" || event.shiftKey || event.target !== this.activeAnchor) {
       return;
     }
-    const [first] = this.cardFocusables();
+    const [first] = this.hovercard.focusables();
     if (!first) {
       return;
     }
@@ -519,7 +536,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     // Tab moves between the card's own links normally and only exits at the edge
     // of that run: the card has no tab-sequence neighbour, so leaving it lands on
     // the trigger like Escape does instead of dropping focus to the document.
-    const focusables = this.cardFocusables();
+    const focusables = this.hovercard.focusables();
     const edge = event.shiftKey ? focusables[0] : focusables.at(-1);
     if (event.key === "Tab" && document.activeElement !== edge) {
       return;
@@ -531,10 +548,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     anchor?.focus({ preventScroll: true });
     this.suppressFocusOpen = false;
   };
-
-  private cardFocusables(): HTMLElement[] {
-    return [...(this.hovercard.card?.querySelectorAll<HTMLElement>("a[href]") ?? [])];
-  }
 
   private readonly handleClick = () => {
     this.close();
@@ -556,65 +569,92 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   }
 
   private activate(anchor: HTMLAnchorElement, target: GitHubLinkTarget, delay: number): void {
+    const context = this.syncPreviewContext();
     if (anchor === this.activeAnchor && this.activeTarget?.href === target.href) {
       return;
     }
     this.close();
-    this.activeAnchor = anchor;
-    this.activeTarget = target;
-    // Announce the popup affordance as soon as the link is recognized; show()
-    // flips the state once the card exists, close() takes the whole set away.
-    this.hovercard.markTrigger(anchor);
-    this.activeAnchorObserver.observe(this, { childList: true, subtree: true });
-    this.hovercard.scheduleOpen(delay, () => this.show(anchor, target));
-  }
-
-  private show(anchor: HTMLAnchorElement, target: GitHubLinkTarget): void {
-    if (this.activeAnchor !== anchor || this.activeTarget?.href !== target.href) {
+    // A known failure has no popup affordance or loading skeleton until its backoff expires.
+    if (this.cachedPreview(target)?.failed) {
       return;
     }
-    nextHovercardId += 1;
-    const card = createPortaledHovercard(
-      `openclaw-github-hovercard-${nextHovercardId}`,
-      "github-link-hovercard",
-    );
-    // A tooltip may not own controls: its content is flattened and unreachable.
-    // The card is a non-modal dialog instead, named by the render functions.
-    this.renderedPreview = null;
-    this.renderedUnavailable = false;
-    renderLoading(card);
-    // The card is portaled to document.body, so the provider's delegated pointer
-    // listeners never see it; it reports its own hover to keep intent shared.
-    card.addEventListener("pointerenter", this.handleCardPointerEnter);
-    card.addEventListener("pointerleave", this.handleCardPointerLeave);
-    card.addEventListener("focusin", this.handleCardFocusIn);
-    card.addEventListener("focusout", this.handleCardFocusOut);
-    card.addEventListener("keydown", this.handleCardKeyDown);
-    this.hovercard.mount(anchor, card, "vertical");
-
-    void this.previewTask.run([target]);
+    this.allowLoading = Boolean(context?.succeeded && !this.cachedPreview(target));
+    this.activeAnchor = anchor;
+    this.activeTarget = target;
+    this.activeAnchorObserver.observe(this, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["href"],
+    });
+    // Until this identity has shown useful details, pending requests remain invisible.
+    this.hovercard.scheduleOpen(delay, () => {
+      if (this.syncPreviewContext() !== context) {
+        return;
+      }
+      this.requestStarted = true;
+      void this.previewTask.run([target]);
+    });
   }
 
-  private loadPreview(target: GitHubLinkTarget, signal: AbortSignal): Promise<GitHubPreview> {
-    const key = `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+  private show(anchor: HTMLAnchorElement, preview?: GitHubPreview): void {
+    const existing = this.hovercard.card;
+    const card =
+      existing ??
+      createPortaledHovercard(
+        "openclaw-github-hovercard-" + ++nextHovercardId,
+        "github-link-hovercard",
+      );
+    if (preview) {
+      renderPreview(card, preview);
+    } else {
+      renderLoading(card);
+    }
+    if (existing) {
+      this.hovercard.position();
+    } else {
+      // The provider's delegated listeners do not see the portaled card.
+      card.addEventListener("pointerleave", this.handleCardPointerLeave);
+      card.addEventListener("keydown", this.handleCardKeyDown);
+      this.hovercard.markTrigger(anchor);
+      this.hovercard.mount(anchor, card, "vertical", true, () => render(nothing, card));
+    }
+    if (preview && this.previewContext) {
+      this.previewContext.succeeded = true;
+    }
+  }
+
+  private cacheKey(target: GitHubLinkTarget): string {
+    return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+  }
+
+  private cachedPreview(target: GitHubLinkTarget): CacheEntry | undefined {
+    const cached = this.cache.get(this.cacheKey(target));
+    return cached && !cached.signal.aborted && cached.expiresAt > Date.now() ? cached : undefined;
+  }
+
+  private loadPreview(
+    target: GitHubLinkTarget,
+    signal: AbortSignal,
+  ): Promise<ControlUiGitHubPreview> {
+    const key = this.cacheKey(target);
     const now = Date.now();
-    const cached = this.cache.get(key);
-    if (cached && cached.expiresAt > now) {
-      this.cache.delete(key);
+    const cached = this.cachedPreview(target);
+    this.cache.delete(key);
+    // Dismissal invalidates only that request, even before its rejection settles.
+    if (cached) {
       this.cache.set(key, cached);
       return cached.promise;
     }
-    if (cached) {
-      this.cache.delete(key);
-    }
 
-    const load = async (): Promise<GitHubPreview> => {
+    const load = async (): Promise<ControlUiGitHubPreview> => {
       if (!this.client) {
         throw new Error("GitHub preview requires a connected Gateway");
       }
       const response = await this.client.request<ControlUiGitHubPreview>(
         "controlUi.githubPreview",
         {
+          ...(this.agentId ? { agentId: this.agentId } : {}),
           kind: target.kind,
           number: target.number,
           owner: target.owner,
@@ -627,9 +667,11 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
 
     const entry: CacheEntry = {
       expiresAt: now + SUCCESS_CACHE_MS,
+      signal,
       promise: load().catch((error: unknown) => {
         // Keep short-lived failures cached so repeatedly crossing a broken or
         // private link does not burn GitHub's anonymous rate limit.
+        entry.failed = true;
         entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
         throw error;
       }),
@@ -646,11 +688,11 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   }
 
   private close(): void {
+    this.requestStarted = false;
+    this.allowLoading = false;
     this.hovercard.reset();
     this.activeAnchorObserver.disconnect();
     void this.previewTask.run([null]);
-    this.renderedPreview = null;
-    this.renderedUnavailable = false;
     this.activeAnchor = null;
     this.activeTarget = null;
     this.activeTrigger = null;

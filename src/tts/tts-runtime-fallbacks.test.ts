@@ -1,7 +1,10 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  markCommandReplyForDelivery,
+  setReplyPayloadMetadata,
+} from "../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { routeReply } from "../auto-reply/reply/route-reply.js";
 import * as bundledChannelPlugins from "../channels/plugins/bundled.js";
@@ -99,6 +102,49 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
     transcodeAudioBufferMock.mockClear();
     routedPayloads.length = 0;
     installSpeechProviders([createMockSpeechProvider()]);
+  });
+
+  it.each(["always", "inbound", "tagged"])(
+    "keeps terminal command replies text-only with %s auto-TTS",
+    async (ttsAuto) => {
+      const payload = { text: "The requested command is complete." };
+      markCommandReplyForDelivery(payload);
+      const result = await maybeApplyTtsToPayloadCore(
+        {
+          payload,
+          cfg: createTtsConfig("openclaw-command-auto-tts"),
+          channel: "slack",
+          kind: "final",
+          inboundAudio: true,
+          ttsAuto,
+        },
+        async () => "/unused.ogg",
+      );
+
+      expect(result).toBe(payload);
+      expect(synthesizeMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves explicit speech requests on command-owned replies", async () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "Requested spoken response." },
+      { ttsExplicit: true },
+    );
+    markCommandReplyForDelivery(payload);
+    const result = await maybeApplyTtsToPayloadCore(
+      {
+        payload,
+        cfg: createTtsConfig("openclaw-command-explicit-tts"),
+        channel: "slack",
+        kind: "final",
+        ttsAuto: "off",
+      },
+      async () => "/requested.ogg",
+    );
+
+    expect(result).toMatchObject({ text: payload.text, mediaUrl: "/requested.ogg" });
+    expect(requireFirstSynthesisRequest("explicit command speech").text).toBe(payload.text);
   });
 
   it("synthesizes persisted TTS facts after the visible text has been stripped", async () => {
@@ -609,6 +655,24 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
         rmSync(mediaDir, { recursive: true, force: true });
       }
     }
+  });
+
+  it.each(["```printf```", "> ```\n> x"])("keeps auto-TTS prose after %s", async (prefix) => {
+    const prose = "This explanation is ordinary prose and should be spoken in full.";
+    const text = `${prefix}\n\n${prose}`;
+    const result = await maybeApplyTtsToPayloadCore(
+      {
+        payload: { text },
+        cfg: createTtsConfig("fenced-prose"),
+        channel: "telegram",
+        kind: "final",
+      },
+      async () => "/synthetic-speech.mp3",
+    );
+
+    expect(synthesizeMock).toHaveBeenCalledOnce();
+    expect(requireFirstSynthesisRequest("prose speech").text).toContain(prose);
+    expect(result).toEqual(expect.objectContaining({ text, mediaUrl: "/synthetic-speech.mp3" }));
   });
 
   it("skips channel auto-TTS audio for code-heavy replies", async () => {

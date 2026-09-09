@@ -25,7 +25,6 @@ import {
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 import {
-  clearSharedCodexAppServerClient,
   clearSharedCodexAppServerClientAndWait,
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
@@ -100,7 +99,11 @@ async function createStartupFailureFixture(
       "    }",
       '    const result = message.method === "initialize"',
       '      ? { userAgent: `openclaw/${mode === "unsupported" ? "0.1.0" : "0.149.0"} (macOS; test)` }',
-      `      : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
+      '      : message.method === "config/read"',
+      "        ? { config: {}, origins: {}, layers: [] }",
+      '        : message.method === "configRequirements/read"',
+      "          ? { requirements: null }",
+      `          : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
       "    process.stdout.write(`${JSON.stringify({ id: message.id, result })}\\n`);",
       "  });",
       "}",
@@ -192,7 +195,7 @@ describe("Codex app-server startup retry", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
-    clearSharedCodexAppServerClient();
+    await clearSharedCodexAppServerClientAndWait();
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
   });
@@ -225,23 +228,27 @@ describe("Codex app-server startup retry", () => {
       });
       const commandSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcessCommand")
-        .mockImplementation(async (pid, deadline) => {
-          if (pid !== firstChild?.pid) {
-            return readCommand(pid, deadline);
+        .mockImplementation(async (observed, deadline) => {
+          if (observed.pid !== firstChild?.pid) {
+            return readCommand(observed, deadline);
           }
           await expect
             .poll(() => fs.readFile(`${fixture.spawnCountPath}.ready`, "utf8").catch(() => ""))
             .toBe("ready");
-          expect(await readCommand(pid, deadline)).toBeDefined();
+          expect(await readCommand(observed, deadline)).toBeDefined();
           firstChild.kill("SIGUSR2");
           // Keep Node's event loop occupied until the OS has exited the real child.
           // Inspection then refuses registration before JS can deliver exit or stderr.
           const exitedBy = Date.now() + 5_000;
           let exited = false;
           while (Date.now() < exitedBy) {
-            const inspected = childProcess.spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
-              encoding: "utf8",
-            });
+            const inspected = childProcess.spawnSync(
+              "ps",
+              ["-o", "stat=", "-p", String(observed.pid)],
+              {
+                encoding: "utf8",
+              },
+            );
             if (inspected.status === 1 || inspected.stdout.trim().startsWith("Z")) {
               exited = true;
               break;
@@ -250,7 +257,7 @@ describe("Codex app-server startup retry", () => {
           expect(exited).toBe(true);
           expect(exitDelivered).toBe(false);
           expect(firstChild.exitCode).toBeNull();
-          return undefined;
+          throw new processSnapshot.ProcessInspectionError("unavailable");
         });
       try {
         const result = await startFixtureAttempt(fixture, factory);
@@ -402,7 +409,7 @@ describe("Codex app-server startup retry", () => {
           expect(error).toBeInstanceOf(Error);
           expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
           expect((error as Error).message).toContain(
-            failure === "commit" ? "512-row limit" : "Cannot register the Codex child process",
+            failure === "commit" ? "512-row limit" : "Process inspection exceeded its deadline",
           );
           expect((error as Error).message).toContain("startup diagnostic: inspection probe");
           expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
@@ -567,7 +574,7 @@ describe("Codex app-server startup retry", () => {
     }
   });
 
-  it("preserves the shared client and binding after resume overload exhausts", async () => {
+  it("preserves the shared client and binding on an overloaded resume with a sibling lease", async () => {
     const fixture = await createStartupFailureFixture("overload");
     const sibling = await startFixtureAttempt(fixture);
     sibling.turnRoute.release();
@@ -578,10 +585,11 @@ describe("Codex app-server startup retry", () => {
       sessionKey: "agent:agent-1:session-1",
     };
     try {
-      const binding = await testCodexAppServerBindingStore.read(identity);
+      const binding = testCodexAppServerBindingStore.read(identity);
       expect(binding?.threadId).toBe("thread-recovered");
       const requestsBeforeResume = await fs.readFile(fixture.requestLogPath, "utf8");
 
+      // An unrelated lease must not hide a native refusal or lose its healthy client.
       await expect(startFixtureAttempt(fixture)).rejects.toMatchObject({
         name: "CodexAppServerRpcError",
         code: -32_001,
@@ -589,9 +597,9 @@ describe("Codex app-server startup retry", () => {
       });
       const requests = await fs.readFile(fixture.requestLogPath, "utf8");
       expect(new Set(requests.slice(requestsBeforeResume.length).trim().split("\n"))).toEqual(
-        new Set(["thread/resume"]),
+        new Set(["config/read", "configRequirements/read", "thread/read", "thread/resume"]),
       );
-      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(binding);
+      expect(testCodexAppServerBindingStore.read(identity)).toEqual(binding);
 
       await expect(
         sibling.client.request("thread/read", {

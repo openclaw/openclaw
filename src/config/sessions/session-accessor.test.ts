@@ -2,16 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../../session-cards/progress-card-store.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
@@ -33,6 +35,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applySessionEntryReplacements,
   applySessionPatchProjections,
@@ -76,13 +79,15 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   trimSessionTranscriptForManualCompact,
   updateSessionEntry,
+  updateResolvedSessionEntry,
   updateSessionLastRoute,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   readSessionEntryCount,
-  readSessionEntryKeys,
+  iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
+import * as sessionEntryStore from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
@@ -160,7 +165,7 @@ describe("session accessor seam", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  describe.sequential("session database teardown boundary", () => {
+  describe("session database teardown boundary", { concurrent: false }, () => {
     it("opens cached agent and shared-state handles", async () => {
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },
@@ -271,6 +276,60 @@ describe("session accessor seam", () => {
     });
   });
 
+  it("preserves explicit default intent across reopen and unrelated whole-entry writes", async () => {
+    const parentKey = "agent:main:dashboard:parent";
+    const childKey = "agent:main:dashboard:child";
+    await replaceSessionEntry(
+      { sessionKey: parentKey, storePath },
+      {
+        sessionId: "parent-session",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+      },
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      {
+        sessionId: "child-session",
+        updatedAt: 2,
+        parentSessionKey: parentKey,
+        modelOverrideSource: "default",
+      },
+    );
+
+    closeOpenClawAgentDatabasesForTest();
+    const olderReaderEntry = expectDefined(
+      loadSessionEntry({ sessionKey: childKey, storePath }),
+      "reopened child entry",
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      { ...olderReaderEntry, label: "preserved by older reader" },
+    );
+
+    closeOpenClawAgentDatabasesForTest();
+    const reopenedChild = expectDefined(
+      loadSessionEntry({ sessionKey: childKey, storePath }),
+      "re-upgraded child entry",
+    );
+    expect(reopenedChild).toMatchObject({
+      label: "preserved by older reader",
+      modelOverrideSource: "default",
+    });
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: reopenedChild,
+        sessionKey: childKey,
+        sessionStore: Object.fromEntries(
+          listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+        ),
+      }),
+    ).toBeNull();
+  });
+
   it("derives a scoped key owner before fixed-store read and write target resolution", async () => {
     const fixedStorePath = path.join(tempDir, "fixed-sessions.json");
     const scope = {
@@ -320,7 +379,7 @@ describe("session accessor seam", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
 
     expect(readSessionEntryCount(database)).toBe(1);
-    expect(readSessionEntryKeys(database)).toEqual(["agent:main:logical-entry"]);
+    expect([...iterateSessionEntryKeys(database)]).toEqual(["agent:main:logical-entry"]);
     expect(countSessionEntryRowsReadOnly({ agentId: "main", storePath })).toBe(2);
   });
 
@@ -703,14 +762,16 @@ describe("session accessor seam", () => {
 
   it("opens a borrowed read view with raw exact-key probes and deferred enumeration", async () => {
     const mixedKey = "agent:main:matrix:channel:!RoomAbC:example.org";
+    const skillsSnapshot = { prompt: "saved skill prompt", skills: [] };
     await upsertSessionEntryCore(
       { sessionKey: mixedKey, storePath },
-      { sessionId: "mixed-session", updatedAt: 10 },
+      { sessionId: "mixed-session", updatedAt: 10, skillsSnapshot },
     );
 
     const view = openSessionEntryReadView({ storePath });
 
     expect(view.get(mixedKey)?.sessionId).toBe("mixed-session");
+    expect(view.get(mixedKey)?.skillsSnapshot).toEqual(skillsSnapshot);
     // Raw probe contract: unlike loadSessionEntry, no folded-alias or
     // canonical-key resolution happens on get.
     expect(view.get(mixedKey.toLowerCase())).toBeUndefined();
@@ -720,6 +781,9 @@ describe("session accessor seam", () => {
         entry: expect.objectContaining({ sessionId: "mixed-session" }),
       },
     ]);
+    const metadata = openSessionEntryReadView({ storePath, projection: "list" });
+    expect(metadata.get(mixedKey)?.skillsSnapshot).toBeUndefined();
+    expect(metadata.entries()).toEqual([{ sessionKey: mixedKey, entry: metadata.get(mixedKey) }]);
   });
 
   it("keeps case-distinct Matrix sessions separate under nested agent ownership", async () => {
@@ -1251,6 +1315,117 @@ describe("session accessor seam", () => {
     });
   });
 
+  it.each([
+    { sessionKey: "global", agentId: "research", global: true },
+    { sessionKey: "main", agentId: "research", global: false },
+    { sessionKey: "agent:main:main", agentId: "research", global: false },
+    { sessionKey: "agent:research:main", agentId: undefined, global: true },
+  ])(
+    "keeps logical owner reads and updates isolated for $sessionKey with owner $agentId",
+    async ({ sessionKey, agentId: requestedAgentId, global }) => {
+      const cfg: OpenClawConfig = {
+        session: {
+          store: path.join(tempDir, "{agentId}.json"),
+          scope: global ? "global" : undefined,
+        },
+        agents: { entries: { research: {}, ops: {} } },
+      };
+      const canonicalKey = global ? "global" : "agent:research:main";
+      for (const agentId of ["research", "ops"]) {
+        await upsertSessionEntryCore(
+          {
+            agentId,
+            sessionKey: global ? "global" : `agent:${agentId}:main`,
+            storePath: path.join(tempDir, `${agentId}.json`),
+          },
+          { sessionId: `${agentId}-session`, updatedAt: 1, label: agentId },
+        );
+      }
+      const scope = { cfg, sessionKey, agentId: requestedAgentId };
+
+      expect(resolveSessionEntryAccessTarget(scope)).toMatchObject({
+        agentId: "research",
+        canonicalKey,
+        entry: { sessionId: "research-session", label: "research" },
+      });
+      const updated = await updateResolvedSessionEntry(scope, (entry) => {
+        entry.label = "updated research";
+        return entry.sessionId;
+      });
+
+      expect(updated).toMatchObject({ found: true, result: "research-session", canonicalKey });
+      expect(resolveSessionEntryAccessTarget(scope).entry?.label).toBe("updated research");
+      expect(
+        loadSessionEntry({
+          agentId: "ops",
+          sessionKey: global ? "global" : "agent:ops:main",
+          storePath: path.join(tempDir, "ops.json"),
+        })?.label,
+      ).toBe("ops");
+    },
+  );
+
+  it.each([
+    { sessionKey: "agent:ops:main", storeOwner: undefined, message: 'belongs to "ops"' },
+    { sessionKey: "global", storeOwner: "ops", message: 'belongs to "ops"' },
+    { sessionKey: "main", storeOwner: "retired", message: "retired" },
+  ])(
+    "rejects conflicting logical owner for $sessionKey and $storeOwner",
+    ({ sessionKey, storeOwner, message }) => {
+      const cfg: OpenClawConfig = {
+        session: { store: storePath, scope: "global" },
+        agents: {
+          entries: { research: {}, ops: {} },
+          defaults: storeOwner ? { sessionStore: { agentId: storeOwner } } : undefined,
+        },
+      };
+      const scope = { cfg, sessionKey, agentId: "research" };
+
+      expect(() => resolveSessionEntryAccessTarget(scope)).toThrow(message);
+    },
+  );
+
+  it.each(
+    ["ops", "retired"].flatMap((storeOwner) =>
+      ["agent:research:main", "agent:main:main"].map((sessionKey) => ({ storeOwner, sessionKey })),
+    ),
+  )(
+    "preserves fixed global owner $storeOwner after canonicalizing $sessionKey",
+    async ({ storeOwner, sessionKey }) => {
+      const sharedStorePath = path.join(tempDir, "shared.sqlite");
+      const storedScope = {
+        agentId: storeOwner,
+        defaultAgentId: storeOwner,
+        storePath: sharedStorePath,
+        sessionKey: "global",
+      };
+      await upsertSessionEntryCore(storedScope, {
+        sessionId: `${storeOwner}-session`,
+        updatedAt: 1,
+        label: "original owner label",
+      });
+      const cfg: OpenClawConfig = {
+        session: { store: sharedStorePath, scope: "global" },
+        agents: {
+          entries: { research: {}, ops: {} },
+          defaults: { sessionStore: { agentId: storeOwner } },
+        },
+      };
+      const scope = { cfg, sessionKey, agentId: "research" };
+      const expectedError = storeOwner === "retired" ? "retired" : 'belongs to "ops"';
+
+      expect.soft(() => resolveSessionEntryAccessTarget(scope)).toThrow(expectedError);
+      await expect
+        .soft(
+          updateResolvedSessionEntry(scope, (entry) => {
+            entry.label = "wrong owner mutation";
+          }),
+        )
+        .rejects.toThrow(expectedError);
+      expect(loadSessionEntry(storedScope)?.label).toBe("original owner label");
+    },
+  );
+
   it("creates durable session ids for metadata-only inserts", async () => {
     const scope = {
       sessionKey: "agent:main:main",
@@ -1273,16 +1448,21 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    const created = await createSessionEntryWithTranscript(scope, ({ sessionEntries }) => {
-      expect(sessionEntries).toEqual({});
-      return {
-        ok: true,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: 10,
-        },
-      };
-    });
+    const created = await createSessionEntryWithTranscript(
+      scope,
+      ({ existingEntry, targetEntry, isLabelInUse }) => {
+        expect(existingEntry).toBeUndefined();
+        expect(targetEntry).toBeUndefined();
+        expect(isLabelInUse("unused")).toBe(false);
+        return {
+          ok: true,
+          entry: {
+            sessionId: "session-1",
+            updatedAt: 10,
+          },
+        };
+      },
+    );
 
     expect(created.ok).toBe(true);
     if (!created.ok) {
@@ -1356,10 +1536,10 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "rotate-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
+          shouldAppend: () => {
             // Simulate a concurrent reset rotating the session id between target
-            // resolution and the transcript append.
-            await replaceSessionEntry(
+            // resolution and the transcript append. Sync writers bypass the process queue.
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath },
               { sessionId: "new-rotate-session", updatedAt: Date.now() },
             );
@@ -1403,8 +1583,8 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "default-rotate-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
-            await replaceSessionEntry(
+          shouldAppend: () => {
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath: expectedStorePath },
               { sessionId: "new-default-rotate", updatedAt: Date.now() },
             );
@@ -1528,8 +1708,8 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "durable-fallback-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
-            await replaceSessionEntry(
+          shouldAppend: () => {
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath },
               { sessionId: "new-durable-fallback", updatedAt: Date.now() },
             );
@@ -2055,6 +2235,29 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("keeps a pending reset through bookkeeping until an explicit consumer resolves it", async () => {
+    const scope = {
+      sessionKey: "agent:main:pending-reset",
+      storePath,
+    };
+    await replaceSessionEntry(scope, {
+      sessionId: "pending-reset-session",
+      lifecycleRevision: "pending-reset-revision",
+      updatedAt: 0,
+    });
+
+    await updateSessionEntry(scope, () => ({ model: "gpt-5.5", updatedAt: Date.now() }));
+    expect(loadSessionEntry(scope)).toMatchObject({ model: "gpt-5.5", updatedAt: 0 });
+
+    await markSessionAbortTarget({ scope });
+    expect(loadSessionEntry(scope)).toMatchObject({ abortedLastRun: true, updatedAt: 0 });
+
+    await updateSessionEntry(scope, () => ({ updatedAt: Date.now() }), {
+      consumePendingReset: true,
+    });
+    expect(loadSessionEntry(scope)?.updatedAt).toBeGreaterThan(0);
   });
 
   it("replaces entries so deleted fields stay removed", async () => {
@@ -2656,6 +2859,108 @@ describe("session accessor seam", () => {
     expect(identityListener).not.toHaveBeenCalled();
   });
 
+  it("rejects a label claimed while a replacement is being prepared", async () => {
+    const target = { sessionKey: "agent:main:label-target", storePath };
+    const competing = { sessionKey: "agent:main:label-competitor", storePath };
+    await upsertSessionEntryCore(target, { sessionId: "label-target", updatedAt: 1 });
+    await upsertSessionEntryCore(competing, { sessionId: "label-competitor", updatedAt: 1 });
+
+    await expect(
+      applySessionEntryCanonicalReplacements({
+        sessionKeys: [target.sessionKey],
+        includeLabelOwners: "Claimed",
+        storePath,
+        update: async (entries) => {
+          expect(entries.map(({ sessionKey }) => sessionKey)).toEqual([target.sessionKey]);
+          await Promise.resolve();
+          replaceSessionEntrySync(competing, {
+            sessionId: "label-competitor",
+            label: "Claimed",
+            updatedAt: 2,
+          });
+          return {
+            result: undefined,
+            replacements: [
+              {
+                sessionKey: target.sessionKey,
+                previousSessionKeys: [],
+                entry: { ...entries[0]!.entry, label: "Claimed" },
+              },
+            ],
+          };
+        },
+      }),
+    ).rejects.toThrow("label owners changed before replacement");
+    expect(loadSessionEntry(target)?.label).toBeUndefined();
+    expect(loadSessionEntry(competing)?.label).toBe("Claimed");
+  });
+
+  it("rejects a label owner released during snapshot hydration and reclaimed during planning", async () => {
+    const target = { sessionKey: "agent:main:label-target", storePath };
+    const competing = { sessionKey: "agent:main:label-competitor", storePath };
+    const competingEntry = { sessionId: "label-competitor", label: "Claimed", updatedAt: 1 };
+    await upsertSessionEntryCore(target, { sessionId: "label-target", updatedAt: 1 });
+    await upsertSessionEntryCore(competing, competingEntry);
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "label race database path",
+    );
+    const externalWriter = new DatabaseSync(databasePath);
+    const changeCompetingLabel = (label: string, updatedAt: number) => {
+      externalWriter
+        .prepare(
+          "UPDATE session_nodes SET label = ?, updated_at = ?, entry_json = json_set(entry_json, '$.label', ?, '$.updatedAt', ?) WHERE session_key = ?",
+        )
+        .run(label, updatedAt, label, updatedAt, competing.sessionKey);
+    };
+    const readExact = sessionEntryStore.readExactSessionEntryRow;
+    let released = false;
+    const readSpy = vi
+      .spyOn(sessionEntryStore, "readExactSessionEntryRow")
+      .mockImplementation((database, sessionKey) => {
+        if (!released && sessionKey === competing.sessionKey) {
+          released = true;
+          changeCompetingLabel("Released", 2);
+        }
+        return readExact(database, sessionKey);
+      });
+
+    try {
+      await expect(
+        applySessionEntryCanonicalReplacements({
+          sessionKeys: [target.sessionKey],
+          includeLabelOwners: "Claimed",
+          storePath,
+          update: async (entries) => {
+            expect(
+              entries.find(({ sessionKey }) => sessionKey === competing.sessionKey)?.entry,
+            ).toMatchObject({ label: "Released" });
+            await Promise.resolve();
+            changeCompetingLabel("Claimed", 3);
+            return {
+              result: undefined,
+              replacements: [
+                {
+                  sessionKey: target.sessionKey,
+                  previousSessionKeys: [],
+                  entry: {
+                    ...entries.find(({ sessionKey }) => sessionKey === target.sessionKey)!.entry,
+                    label: "Claimed",
+                  },
+                },
+              ],
+            };
+          },
+        }),
+      ).rejects.toThrow("changed before replacement");
+      expect(loadSessionEntry(target)?.label).toBeUndefined();
+      expect(loadSessionEntry(competing)?.label).toBe("Claimed");
+    } finally {
+      readSpy.mockRestore();
+      externalWriter.close();
+    }
+  });
+
   it("prepares entry replacements without holding a write transaction", async () => {
     const scope = {
       sessionKey: "agent:main:replacement-prepare",
@@ -2876,6 +3181,7 @@ describe("session accessor seam", () => {
 
     expect(result.removedEntries).toBe(1);
     expect(notify).toHaveBeenCalledWith({
+      agentId: "main",
       kind: "delete",
       previous: { sessionId: scope.sessionId, sessionKeys: [scope.sessionKey] },
     });
@@ -3042,6 +3348,9 @@ describe("session accessor seam", () => {
       contextBudgetStatus,
       inputTokens: 10,
       outputTokens: 20,
+      cacheRead: 40,
+      cacheWrite: 10,
+      estimatedCostUsd: 0.02,
       sessionId,
       totalTokens: 30,
       totalTokensFresh: true,
@@ -3091,6 +3400,9 @@ describe("session accessor seam", () => {
     expect(updatedEntry?.contextBudgetStatus).toBeUndefined();
     expect(updatedEntry?.inputTokens).toBeUndefined();
     expect(updatedEntry?.outputTokens).toBeUndefined();
+    expect(updatedEntry?.cacheRead).toBeUndefined();
+    expect(updatedEntry?.cacheWrite).toBeUndefined();
+    expect(updatedEntry?.estimatedCostUsd).toBeUndefined();
     expect(updatedEntry?.totalTokens).toBeUndefined();
     expect(updatedEntry?.totalTokensFresh).toBeUndefined();
     expect(updates).toEqual([]);
@@ -3324,11 +3636,7 @@ describe("session accessor seam", () => {
       cwd: tempDir,
       messages: [
         {
-          message: {
-            role: "user",
-            content: "hello",
-            timestamp: 100,
-          },
+          message: makeUserMessage("hello", 100),
         },
         {
           message: {
@@ -3893,11 +4201,7 @@ describe("session accessor seam", () => {
     }
     const queuedAppendPromise = appendTranscriptMessage(scope, {
       cwd: tempDir,
-      message: {
-        role: "user",
-        content: "queued prompt",
-        timestamp: 200,
-      },
+      message: makeUserMessage("queued prompt", 200),
     });
     resumeShouldAppend();
 

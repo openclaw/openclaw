@@ -2,9 +2,11 @@
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
-import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
+import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
+  worktreeRoot:
+    "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
   "channels.discord.activities":
     "Discord Activities configuration for presenting core show_widget documents inside Discord. Leave unset to keep Activity routes, presentation, and handlers disabled.",
   "channels.discord.activities.clientSecret":
@@ -46,8 +48,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "wizard.lastRunCommit": "Source commit used by the last development wizard run.",
   "wizard.lastRunCommand": "Command that invoked the last wizard run.",
   "wizard.lastRunMode": 'Whether the last wizard run targeted "local" or "remote" setup.',
-  "wizard.localModelLeanAutoModel":
-    "Model reference whose lean-mode setting remains owned by onboarding.",
   "wizard.securityAcknowledgedAt":
     "Timestamp of the setup security acknowledgement, committed with the target config.",
   "logging.audit":
@@ -86,7 +86,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   telemetry:
     "Explicit consent for anonymous feature statistics attached to the daily update check. Feature statistics are disabled by default and never include messages, credentials, or identifiers.",
-  ...projectTelemetryFieldMetadata("help"),
+  ...TELEMETRY_FIELD_HELP,
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
@@ -106,9 +106,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
   "gateway.cliAgents":
-    "Experimental Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Keep disabled unless operators should be able to start those engines from the new-session model picker.",
+    "Experimental Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":
-    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: false). Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
+    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: true). Set false to disable CLI agents and native CLI session creation. Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
   "gateway.terminal":
     "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
   "gateway.terminal.enabled":
@@ -120,7 +120,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
-    'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
+    'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Token/password mode selects the configured secret (gateway.auth.token or gateway.auth.password); clients may send it in either connect auth field. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
   "gateway.auth.allowTailscale":
     "Allows trusted Tailscale identity paths to satisfy gateway auth checks when configured. Use this only when your tailnet identity posture is strong and operator workflows depend on it.",
   "gateway.auth.identityScopes":
@@ -130,11 +130,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
   "gateway.auth.trustedProxy.deviceAutoApprove":
-    "Optional policy for automatically approving new browser operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
+    "Optional policy for automatically approving new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
-    "Automatically approves new browser operator devices and same-key scope upgrades after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
+    "Automatically approves new browser and native UI operator devices and same-key scope upgrades after the reverse proxy authenticates an allowed user. Default: false. Enable only when the proxy identity boundary is strong enough to replace manual device pairing.",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
-    "Maximum scopes granted to auto-approved browser devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older browser clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
+    "Maximum scopes granted to auto-approved operator devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older UI clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
   "gateway.roles":
     "Optional profile-bound operator roles for team Gateways. Each named role controls access to other people's sessions, sandbox isolation, session and run agents, and granted operator scopes; omitting this section preserves existing operator behavior.",
   "gateway.roles.default":
@@ -197,9 +197,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.token":
-    "Bearer token used to authenticate this client to a remote gateway in token-auth deployments. Store via secret/env substitution and rotate alongside remote gateway auth changes.",
+    "Shared secret sent in the token field to authenticate this client to a remote gateway. The server's gateway.auth.mode selects its configured secret; either client token or password field is accepted. Store via secret/env substitution and rotate alongside remote gateway auth changes.",
   "gateway.remote.password":
-    "Password credential used for remote gateway authentication when password mode is enabled. Keep this secret managed externally and avoid plaintext values in committed config.",
+    "Shared secret sent in the password field to authenticate this client to a remote gateway. The server's gateway.auth.mode selects its configured secret; either client token or password field is accepted. Keep this secret managed externally and avoid plaintext values in committed config.",
   "gateway.remote.edgeAuth":
     "Secret-backed HTTP headers presented to an identity-aware proxy in front of the configured remote Gateway. Headers are sent only to the exact gateway.remote.url origin over WSS and never follow redirects.",
   "gateway.remote.tlsFingerprint":
@@ -295,6 +295,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Per-agent override for sub-agent delegation strength. Omit to use "prefer" in this agent\'s main session and "suggest" elsewhere; explicit "prefer" or "suggest" always wins.',
   "agents.entries.*.contextInjection":
     "Per-agent override for when workspace bootstrap files are injected into this agent's system prompt. Omit to inherit agents.defaults.contextInjection.",
+  "agents.entries.*.cwd":
+    "Working directory for this agent's reply runs. Overrides agents.defaults.cwd but not session-spawned cwd; bootstrap and memory files stay in workspace. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
   "agents.entries.*.bootstrapMaxChars":
     "Per-agent override for max characters of each workspace bootstrap file injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapMaxChars.",
   "agents.entries.*.bootstrapTotalMaxChars":

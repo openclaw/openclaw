@@ -33,7 +33,8 @@ describe("secrets tool guidance", () => {
     expect(description).toContain("No secret templates; never override/print that variable");
     expect(description).toContain("Native shell/sandbox/node: no protected injection");
     expect(description).toContain("late saves need next turn");
-    expect(description).toContain("no_answer: report blocker or use best judgment");
+    expect(description).toContain("Operator-set env entries are readable and managed separately");
+    expect(description).toContain("no_answer means no credential was supplied");
   });
 });
 
@@ -51,12 +52,12 @@ const SESSION_DESCRIPTIONS = [
     tool: "sessions_history",
     describe: describeSessionsHistoryTool,
     original:
-      "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
+      "Read sanitized visible-session history. Before reply/debug/resume. Use messageId (optionally sessionId) for anchored history; offset is ignored when messageId is set. Without messageId, use offset for plain pagination. limit bounds either mode. Include tool messages with includeTools. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
   },
   {
     tool: "sessions_search",
     describe: describeSessionsSearchTool,
-    original: "Search your own past sessions for matching user and assistant text.",
+    original: "Search visible past sessions for matching user and assistant text.",
   },
 ] as const;
 
@@ -79,5 +80,7 @@ describe("sessions_send tool description", () => {
     expect(describeSessionsSendTool()).toContain("not an external address");
     expect(describeSessionsSendTool()).not.toContain("conversations_");
     expect(describeSessionsSendTool()).toContain("reply may still announce");
+    expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
+    expect(describeSessionsSendTool()).toContain("neither proves target completion");
   });
 });
