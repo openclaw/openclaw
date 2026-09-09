@@ -94,6 +94,8 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
 
     :host(.palette) wa-dialog {
+      --openclaw-modal-backdrop-filter: none;
+      --wa-color-overlay-modal: color-mix(in oklab, black 12%, transparent);
       --show-duration: 0ms;
       --hide-duration: 0ms;
     }
