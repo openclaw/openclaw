@@ -443,7 +443,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
   });
 
   it.each([3, 4])(
-    "keeps version %s runtime-only events in system context with current facts",
+    "carries version %s runtime-only events in the message tail carrier without rewriting system prompt",
     (sessionVersion) => {
       const fixture = createInput({
         attempt: createAttempt({
@@ -462,7 +462,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       fixture.input.capabilityToolNames.add("process");
       const result = prepareEmbeddedAttemptPromptContext({ ...fixture.input, sessionVersion });
 
-      expect(result.systemPromptForHook).toContain("OpenClaw runtime event.");
+      expect(result.systemPromptForHook).toBe("Base system prompt");
+      expect(result.systemPromptForHook).not.toContain("OpenClaw runtime event.");
+      expect(result.systemPromptForHook).not.toContain("Runtime room event");
       expect(result.promptSubmission.runtimeOnly).toBe(true);
       expect(result.promptForSession).toBe(
         "Room conversation data\n\nContinue the OpenClaw runtime event.",
@@ -472,17 +474,41 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
         "Active exec sessions:\nnone",
       );
-      expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain(
+      expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
         "Runtime room event",
       );
-      expect(result.systemPromptForHook).toContain("Runtime room event");
-      expect(fixture.setActiveSessionSystemPrompt).toHaveBeenCalledWith(
-        expect.stringContaining("Runtime room event"),
-      );
+      expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
       expect(fixture.report.currentTurn?.kind).toBe("room_event");
       expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
     },
   );
+
+  it("preserves identical system prompt bytes across normal turns and runtime-only event turns", () => {
+    const fixture = createInput();
+    const normalTurn = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+    const runtimeEventFixture = createInput({
+      attempt: createAttempt({
+        runtimeContextFragments: [{ kind: "runtime-instruction", text: "Subagent completed task 42" }],
+        currentInboundEventKind: "room_event",
+      }),
+      prompt: createPrompt({
+        effectivePrompt: "",
+        effectiveTranscriptPrompt: "",
+      }),
+    });
+    const runtimeTurn = prepareEmbeddedAttemptPromptContext(runtimeEventFixture.input);
+
+    const normalTurnAfter = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+    expect(normalTurn.systemPromptForHook).toBe("Base system prompt");
+    expect(runtimeTurn.systemPromptForHook).toBe(normalTurn.systemPromptForHook);
+    expect(normalTurnAfter.systemPromptForHook).toBe(normalTurn.systemPromptForHook);
+    expect(runtimeTurn.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "Subagent completed task 42",
+    );
+    expect(runtimeEventFixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
+  });
 
   it("keeps a pure heartbeat task active while persisting only the poll marker", () => {
     const taskPrompt = "Check the deployment and report any failures.";
