@@ -68,19 +68,14 @@ export async function collectLegacyMemoryHostEventSources(
       filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
       const relativePath = path.relative(canonicalWorkspaceDir, filePath);
       const directoryRelativePath = path.dirname(relativePath);
-      if (!(await workspaceRoot.exists(directoryRelativePath))) {
-        continue;
-      }
-      const directoryStat = await workspaceRoot.stat(directoryRelativePath);
-      if (!directoryStat.isDirectory) {
-        continue;
-      }
       const baseName = path.basename(relativePath).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
       const archivePattern = new RegExp(`^${baseName}\\.migrated(?:\\.([2-9]|[1-9][0-9]+))?$`, "u");
       const claimPattern = new RegExp(
         `^\\.${baseName}\\.doctor-importing(?:\\.([2-9]|[1-9][0-9]+))?$`,
         "u",
       );
+      // Discover names before containment checks: shared notes without legacy
+      // events need no repair. Each actual source still goes through guarded stat/read.
       const entries = await fs.readdir(path.join(workspaceRoot.rootReal, directoryRelativePath));
       const candidates: Array<{
         entry: string;
