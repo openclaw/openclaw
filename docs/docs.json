@@ -3213,6 +3213,24 @@
                 "group": "FAQ",
                 "pages": [
                   "help/faq",
+                  {
+                    "group": "FAQ topics",
+                    "pages": [
+                      "help/faq/what-is-openclaw",
+                      "help/faq/skills-and-automation",
+                      "help/faq/sandboxing-and-memory",
+                      "help/faq/where-things-live-on-disk",
+                      "help/faq/config-basics",
+                      "help/faq/remote-gateways-and-nodes",
+                      "help/faq/env-vars",
+                      "help/faq/sessions-and-chats",
+                      "help/faq/gateway-ports-and-remote-mode",
+                      "help/faq/logging-and-debugging",
+                      "help/faq/media-and-attachments",
+                      "help/faq/security-and-access-control",
+                      "help/faq/chat-commands-and-stopping"
+                    ]
+                  },
                   "help/faq-first-run",
                   {
                     "group": "First-run FAQ",
