@@ -92,7 +92,6 @@ function dropLegacyMemoryIndexSchema(db: DatabaseSync): void {
   if (!hasLegacySourceColumns) {
     return;
   }
-  // Memory indexes are derived cache data; v1 used a different key shape.
   db.exec(`
     DROP TABLE IF EXISTS memory_index_chunks_fts;
     DROP TABLE IF EXISTS memory_index_chunks;
@@ -151,7 +150,6 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
     return;
   }
-  // Remove after 2026-10-01: drop the v1-v6 ladder once the minimum supported agent schema is 7.
   if (userVersion < 7) {
     db.exec("DROP INDEX IF EXISTS idx_agent_sessions_status;");
     migrateSessionEntryStatusProjection(db, (entryJson) => {
@@ -285,7 +283,6 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
 
 /** Backfill one generation token without copying or rewriting transcript rows. */
 function migrateSessionTranscriptGenerations(db: DatabaseSync, previousVersion: number): void {
-  // Remove after 2026-10-01: drop the generation backfill once the minimum supported agent schema is 13.
   if (previousVersion >= 13) {
     return;
   }
@@ -312,8 +309,6 @@ function migrateSessionTranscriptActiveProjection(db: DatabaseSync, previousVers
       "ALTER TABLE session_transcript_index_state ADD COLUMN active_message_count INTEGER NOT NULL DEFAULT 0;",
     );
   }
-  // This table is derived state. Gateway startup rebuilds it after all legacy
-  // imports finish, keeping schema-open work cheap and history reads bounded.
   db.exec(`
     DELETE FROM session_transcript_active_events;
     UPDATE session_transcript_index_state
@@ -588,9 +583,6 @@ function ensureAgentSchema(
   if (identityMigration) {
     maintenanceAuthority.assertAgentDatabaseMaintenanceAuthority();
   }
-  // FK enforcement must be off before BEGIN: PRAGMA foreign_keys is a silent
-  // no-op inside a transaction, and legacy owner-table rebuilds would otherwise
-  // cascade-delete their children. Steady-state enforcement is restored below.
   db.exec("PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = OFF;");
   try {
     runSqliteImmediateTransactionSync(db, () => {
