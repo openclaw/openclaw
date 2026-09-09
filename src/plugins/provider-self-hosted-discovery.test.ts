@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -17,6 +18,23 @@ function guarded(response: Response) {
     finalUrl: "http://127.0.0.1:8080",
     release: vi.fn(async () => undefined),
   };
+}
+
+async function discoverModelContexts(
+  data: Record<string, unknown>[],
+  contextWindow?: number,
+): Promise<Record<string, number | undefined>> {
+  fetchWithSsrFGuardMock.mockResolvedValueOnce(
+    guarded(new Response(JSON.stringify({ data }), { status: 200 })),
+  );
+  const models = await discoverOpenAICompatibleLocalModels({
+    baseUrl: "http://127.0.0.1:8080/v1",
+    label: "self-hosted",
+    contextWindow,
+    discoverRuntimeContext: false,
+    env: {},
+  });
+  return Object.fromEntries(models.map((model) => [model.id, model.contextWindow]));
 }
 
 describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
@@ -79,6 +97,7 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
 
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(guarded(new Response(null, { status: 200 })))
+      .mockResolvedValueOnce(guarded(new Response("<html></html>", { status: 200 })))
       .mockResolvedValueOnce(guarded(new Response("{", { status: 200 })));
     await expect(
       discoverOpenAICompatibleLocalModels({
@@ -88,7 +107,21 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
         modelsPathOrder: "server-first",
         rawResult: true,
       }),
-    ).resolves.toMatchObject({ kind: "invalid-response", path: "/models" });
+    ).resolves.toMatchObject({ kind: "invalid-response", path: "/v1/models" });
+  });
+
+  it.each([401, 403, 503])("keeps root model-list HTTP %s failures terminal", async (status) => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded(new Response(null, { status })));
+
+    await expect(
+      discoverOpenAICompatibleLocalModels({
+        baseUrl: "http://127.0.0.1:8080/v1",
+        label: "llama-server",
+        modelsPathOrder: "server-first",
+        rawResult: true,
+      }),
+    ).resolves.toEqual({ kind: "http-error", path: "/models", status });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
   });
 
   it("probes only available router models without autoloading", async () => {
@@ -136,6 +169,10 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       id: `model-${index}`,
       status: { value: "loaded" },
     }));
+    const started = createDeferred();
+    const release = createDeferred();
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
+    let active = 0;
     fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
       if (url.endsWith("/health")) {
         return guarded(new Response(null, { status: 200 }));
@@ -143,13 +180,15 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       if (url.endsWith("/models")) {
         return guarded(new Response(JSON.stringify({ data: models })));
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
+      active += 1;
+      if (active === 8) {
+        started.resolve();
+      }
+      await release.promise;
       return guarded(new Response(JSON.stringify({ n_ctx: 8192 })));
     });
 
-    const result = await discoverOpenAICompatibleLocalModels({
+    const resultPromise = discoverOpenAICompatibleLocalModels({
       baseUrl: "http://127.0.0.1:8080/v1",
       label: "llama-server",
       healthPath: "/health",
@@ -159,10 +198,76 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       rawResult: true,
     });
 
-    expect(result.kind === "success" ? result.rows : []).toHaveLength(17);
-    expect(
-      fetchWithSsrFGuardMock.mock.calls.filter(([call]) => call.url.includes("/props?")).length,
-    ).toBe(8);
+    try {
+      await withTestTimeout(started.promise, 1_000, "initial eight property probes did not start");
+      // Expire the budget only after the first wave starts, independent of runner load.
+      now.mockReturnValue(20);
+      release.resolve();
+      const result = await withTestTimeout(resultPromise, 1_000, "discovery did not finish");
+
+      expect(result.kind === "success" ? result.rows : []).toHaveLength(17);
+      expect(
+        fetchWithSsrFGuardMock.mock.calls.filter(([call]) => call.url.includes("/props?")).length,
+      ).toBe(8);
+    } finally {
+      release.resolve();
+      now.mockRestore();
+      await withTestTimeout(resultPromise, 1_000, "property probes did not settle during cleanup");
+    }
+  });
+
+  it("keeps scheduling router property probes through a forward wall-clock step", async () => {
+    const models = Array.from({ length: 17 }, (_, index) => ({
+      id: `model-${index}`,
+      status: { value: "loaded" },
+    }));
+    const started = createDeferred();
+    const release = createDeferred();
+    const now = Date.now;
+    let offset = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+    let active = 0;
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.endsWith("/health")) {
+        return guarded(new Response(null, { status: 200 }));
+      }
+      if (url.endsWith("/models")) {
+        return guarded(new Response(JSON.stringify({ data: models })));
+      }
+      active += 1;
+      if (active === 8) {
+        started.resolve();
+      }
+      await release.promise;
+      return guarded(new Response(JSON.stringify({ n_ctx: 8192 })));
+    });
+
+    const resultPromise = discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama-server",
+      healthPath: "/health",
+      modelsPathOrder: "server-first",
+      routerModelProps: true,
+      timeoutMs: 1_000,
+      rawResult: true,
+    });
+
+    try {
+      await withTestTimeout(started.promise, 1_000, "initial eight property probes did not start");
+      // The wall clock jumps far past the budget; the remaining probes must still be scheduled.
+      offset = 60_000;
+      release.resolve();
+      const result = await withTestTimeout(resultPromise, 1_000, "discovery did not finish");
+
+      expect(result.kind === "success" ? result.rows : []).toHaveLength(17);
+      expect(
+        fetchWithSsrFGuardMock.mock.calls.filter(([call]) => call.url.includes("/props?")).length,
+      ).toBe(17);
+    } finally {
+      release.resolve();
+      clock.mockRestore();
+      await withTestTimeout(resultPromise, 1_000, "property probes did not settle during cleanup");
+    }
   });
 
   it("bounds concurrent property probes and keeps results associated by model", async () => {
@@ -170,6 +275,8 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       id: `model-${index}`,
       status: { value: "loaded" },
     }));
+    const started = models.map(() => createDeferred());
+    const releases = models.map(() => createDeferred());
     let active = 0;
     let maxActive = 0;
     fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
@@ -183,14 +290,13 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       const index = Number(modelId?.replace("model-", ""));
       active += 1;
       maxActive = Math.max(maxActive, active);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10 - index);
-      });
+      started[index]!.resolve();
+      await releases[index]!.promise;
       active -= 1;
       return guarded(new Response(JSON.stringify({ n_ctx: 8_000 + index })));
     });
 
-    const result = await discoverOpenAICompatibleLocalModels({
+    const resultPromise = discoverOpenAICompatibleLocalModels({
       baseUrl: "http://127.0.0.1:8080/v1",
       label: "llama-server",
       healthPath: "/health",
@@ -199,10 +305,40 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       rawResult: true,
     });
 
-    expect(maxActive).toBe(8);
-    expect(result.kind === "success" ? result.rows.map((row) => row.props?.n_ctx) : []).toEqual(
-      models.map((_, index) => 8_000 + index),
-    );
+    try {
+      await withTestTimeout(
+        started[7]!.promise,
+        1_000,
+        "initial eight property probes did not start",
+      );
+      // Finish later models first so completion order cannot stand in for model identity.
+      releases[7]!.resolve();
+      await withTestTimeout(
+        started[8]!.promise,
+        1_000,
+        "model-8 probe did not start after model-7",
+      );
+      releases[6]!.resolve();
+      await withTestTimeout(
+        started[9]!.promise,
+        1_000,
+        "model-9 probe did not start after model-6",
+      );
+      for (const release of releases.toReversed()) {
+        release.resolve();
+      }
+      const result = await withTestTimeout(resultPromise, 1_000, "discovery did not finish");
+
+      expect(maxActive).toBe(8);
+      expect(result.kind === "success" ? result.rows.map((row) => row.props?.n_ctx) : []).toEqual(
+        models.map((_, index) => 8_000 + index),
+      );
+    } finally {
+      for (const release of releases) {
+        release.resolve();
+      }
+      await withTestTimeout(resultPromise, 1_000, "property probes did not settle during cleanup");
+    }
   });
 
   it("caps property probes at 200 models", async () => {
@@ -256,5 +392,85 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
         Authorization: "Bearer explicit-key",
       });
     }
+  });
+});
+
+describe("discoverOpenAICompatibleLocalModels context metadata", () => {
+  it("uses explicit, metadata, own, parent, then default context precedence", async () => {
+    await expect(
+      discoverModelContexts([
+        { id: "context-length", context_length: 4_096 },
+        { id: "context-window", context_window: 8_192 },
+        { id: "context-size", context_size: 12_288 },
+        { id: " Base/Model ", max_model_len: 32_768 },
+        {
+          id: "metadata",
+          meta: { n_ctx_train: 24_576 },
+          max_model_len: 16_384,
+          parent: "Base/Model",
+        },
+        { id: "own", max_model_len: 16_384, parent: "Base/Model" },
+        { id: "child", parent: " Base/Model " },
+        { id: "default" },
+      ]),
+    ).resolves.toEqual({
+      "context-length": 4_096,
+      "context-window": 8_192,
+      "context-size": 12_288,
+      "Base/Model": 32_768,
+      metadata: 24_576,
+      own: 16_384,
+      child: 32_768,
+      default: 128_000,
+    });
+
+    await expect(
+      discoverModelContexts(
+        [
+          { id: "base", max_model_len: 32_768 },
+          {
+            id: "configured",
+            meta: { n_ctx_train: 24_576 },
+            max_model_len: 16_384,
+            parent: "base",
+          },
+        ],
+        2_048,
+      ),
+    ).resolves.toEqual({ base: 2_048, configured: 2_048 });
+  });
+
+  it("inherits only one exact direct parent top-level context", async () => {
+    await expect(
+      discoverModelContexts([
+        { id: "Parent", max_model_len: 8_192 },
+        { id: "case-mismatch", parent: "parent" },
+        { id: "self", parent: "self" },
+        { id: "cycle-a", parent: "cycle-b" },
+        { id: "cycle-b", parent: "cycle-a" },
+        { id: "grandparent", max_model_len: 4_096 },
+        { id: "middle", parent: "grandparent" },
+        { id: "child", parent: "middle" },
+        { id: "root-only", root: "Parent" },
+        { id: "metadata-parent", meta: { n_ctx_train: 6_144 } },
+        { id: "metadata-child", parent: "metadata-parent" },
+        { id: "invalid-parent", max_model_len: 0 },
+        { id: "invalid-child", parent: "invalid-parent" },
+      ]),
+    ).resolves.toEqual({
+      Parent: 8_192,
+      "case-mismatch": 128_000,
+      self: 128_000,
+      "cycle-a": 128_000,
+      "cycle-b": 128_000,
+      grandparent: 4_096,
+      middle: 4_096,
+      child: 128_000,
+      "root-only": 128_000,
+      "metadata-parent": 6_144,
+      "metadata-child": 128_000,
+      "invalid-parent": 128_000,
+      "invalid-child": 128_000,
+    });
   });
 });

@@ -23,8 +23,8 @@ vi.mock("../../commands/auth-choice-options.js", () => ({
   formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
 }));
 
-vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
-  CORE_ONBOARD_AUTH_FLAGS: [
+vi.mock("../../plugins/provider-auth-choices.js", () => ({
+  resolveProviderOnboardAuthFlags: () => [
     {
       cliOption: "--mistral-api-key <key>",
       description: "Mistral API key",
@@ -32,18 +32,13 @@ vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
     },
     {
       cliOption: "--openai-api-key <key>",
-      description: "OpenAI API key (core fallback)",
-      optionKey: "openaiApiKey",
-    },
-  ] as Array<{ cliOption: string; description: string; optionKey: string }>,
-}));
-
-vi.mock("../../plugins/provider-auth-choices.js", () => ({
-  resolveProviderOnboardAuthFlags: () => [
-    {
-      cliOption: "--openai-api-key <key>",
       description: "OpenAI API key",
       optionKey: "openaiApiKey",
+    },
+    {
+      cliOption: "--openai-api-key <key>",
+      description: "Another provider's conflicting API key flag",
+      optionKey: "anotherProviderApiKey",
     },
   ],
 }));
@@ -62,13 +57,14 @@ vi.mock("../../commands/system-agent-with-inference.js", () => ({
   runSystemAgentWithInference: mocks.runSystemAgentWithInference,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
 describe("registerOnboardCommand", () => {
   async function runCli(args: string[]) {
-    const program = new Command();
+    const program = new Command().enablePositionalOptions().exitOverride();
     registerOnboardCommand(program);
     await program.parseAsync(args, { from: "user" });
   }
@@ -95,6 +91,26 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
+  it.each(["writer", "", "   ", "writer!"])(
+    "preserves explicit agent '%s' for command validation",
+    async (agent) => {
+      await runCli(["onboard", "recommendations", "--agent", agent, "--json"]);
+      expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith(
+        { agent, json: true },
+        runtime,
+      );
+
+      await runCli(["onboard", "recommendations", "--agent", agent, "acknowledge"]);
+      expect(mocks.acknowledgeOnboardRecommendationsCommand).toHaveBeenCalledWith(
+        { agent, retry: undefined },
+        runtime,
+      );
+
+      await runCli(["onboard", "recommendations", "--agent", agent, "refresh"]);
+      expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith({ agent }, runtime);
+    },
+  );
+
   it("routes the recommendations acknowledgement subcommand", async () => {
     await runCli(["onboard", "recommendations", "acknowledge"]);
 
@@ -104,6 +120,112 @@ describe("registerOnboardCommand", () => {
     );
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      args: ["--agent", "writer", "--json"],
+      target: "onboardRecommendationsCommand",
+      expected: { agent: "writer", json: true },
+    },
+    {
+      args: ["--json", "--agent", "writer"],
+      target: "onboardRecommendationsCommand",
+      expected: { agent: "writer", json: true },
+    },
+    {
+      args: ["--agent", "writer", "acknowledge"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: undefined },
+    },
+    {
+      args: ["acknowledge", "--agent", "writer"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: undefined },
+    },
+    {
+      args: ["--agent", "writer", "acknowledge", "--retry", "chat-plugin"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: ["chat-plugin"] },
+    },
+    {
+      args: ["acknowledge", "--agent", "writer", "--retry", "chat-plugin"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: ["chat-plugin"] },
+    },
+    {
+      args: ["acknowledge", "--retry", "chat-plugin", "--agent", "writer"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: ["chat-plugin"] },
+    },
+    {
+      args: ["--agent", "writer", "refresh"],
+      target: "refreshOnboardRecommendationsCommand",
+      expected: { agent: "writer" },
+    },
+    {
+      args: ["refresh", "--agent", "writer"],
+      target: "refreshOnboardRecommendationsCommand",
+      expected: { agent: "writer" },
+    },
+  ] as const)("accepts agent option placement $args", async ({ args, target, expected }) => {
+    await runCli(["onboard", "recommendations", ...args]);
+    expect(mocks[target]).toHaveBeenCalledExactlyOnceWith(expected, runtime);
+  });
+
+  it.each(["acknowledge", "refresh"] as const)(
+    "prefers explicit agent leaf selection for %s",
+    async (leaf) => {
+      await runCli(["onboard", "recommendations", "--agent", "writer", leaf, "--agent", "analyst"]);
+      const target =
+        leaf === "acknowledge"
+          ? mocks.acknowledgeOnboardRecommendationsCommand
+          : mocks.refreshOnboardRecommendationsCommand;
+      expect(target).toHaveBeenCalledWith(expect.objectContaining({ agent: "analyst" }), runtime);
+    },
+  );
+
+  it.each(["", "   ", "ghost"])(
+    "preserves invalid agent leaf value '%s' over its parent",
+    async (agent) => {
+      await runCli([
+        "onboard",
+        "recommendations",
+        "--agent",
+        "writer",
+        "refresh",
+        "--agent",
+        agent,
+      ]);
+      expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledExactlyOnceWith(
+        { agent },
+        runtime,
+      );
+    },
+  );
+
+  it.each(["acknowledge", "refresh"] as const)(
+    "inherits the parent agent option instead of a %s leaf default",
+    async (leafName) => {
+      const program = new Command().enablePositionalOptions().exitOverride();
+      registerOnboardCommand(program);
+      const recommendations = program.commands
+        .find((command) => command.name() === "onboard")
+        ?.commands.find((command) => command.name() === "recommendations");
+      const leaf = recommendations?.commands.find((command) => command.name() === leafName);
+      if (!leaf) {
+        throw new Error(`Expected registered recommendations ${leafName} command`);
+      }
+      leaf.setOptionValueWithSource("agent", "analyst", "default");
+      await program.parseAsync(["onboard", "recommendations", "--agent", "writer", leafName], {
+        from: "user",
+      });
+      const target =
+        leafName === "acknowledge"
+          ? mocks.acknowledgeOnboardRecommendationsCommand
+          : mocks.refreshOnboardRecommendationsCommand;
+      expect(target).toHaveBeenCalledWith(expect.objectContaining({ agent: "writer" }), runtime);
+    },
+  );
 
   it("routes failed recommendation ids through acknowledgement", async () => {
     await runCli([
@@ -125,7 +247,7 @@ describe("registerOnboardCommand", () => {
   it("routes the recommendations refresh subcommand", async () => {
     await runCli(["onboard", "recommendations", "refresh"]);
 
-    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith(runtime);
+    expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledWith({}, runtime);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
@@ -143,6 +265,7 @@ describe("registerOnboardCommand", () => {
     const unsupportedFlag = args.includes("--reset") ? "--reset" : "--json";
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(unsupportedFlag));
     expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
     expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
     expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
@@ -153,6 +276,36 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard", "--json", "recommendations"]);
 
     expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
+  });
+
+  it.each(
+    [
+      { flag: "--reset", option: ["--reset"] },
+      { flag: "--workspace", option: ["--workspace", "/tmp/recommendations"] },
+      { flag: "--classic", option: ["--classic"] },
+      { flag: "--flow", option: ["--flow", "advanced"] },
+      { flag: "--mode", option: ["--mode", "remote"] },
+      { flag: "--gateway-port", option: ["--gateway-port", "18789"] },
+      { flag: "--install-daemon", option: ["--install-daemon"] },
+      { flag: "--skip-skills", option: ["--skip-skills"] },
+      { flag: "--import-from", option: ["--import-from", "hermes"] },
+    ].flatMap(({ flag, option }) => [
+      { flag, placement: "parent", args: ["--json", ...option, "recommendations"] },
+      { flag, placement: "leaf", args: [...option, "recommendations", "--json"] },
+    ]),
+  )("reports rejected $flag as one $placement JSON error", async ({ flag, args }) => {
+    await runCli(["onboard", ...args]);
+
+    const message = `This recommendations command does not support parent option(s): ${flag}.`;
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+    );
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
@@ -178,7 +331,7 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().gatewayPort).toBe(18789);
   });
 
-  it.each(["not-a-port", "70000"])(
+  it.each(["", " \t ", "not-a-port", "70000"])(
     "rejects invalid --gateway-port %s before onboarding dispatch",
     async (gatewayPort) => {
       await runCli(["onboard", "--gateway-port", gatewayPort]);
@@ -251,13 +404,54 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().skipUi).toBe(true);
   });
 
-  it("rejects conflicting custom model input capabilities", async () => {
-    await runCli(["onboard", "--custom-image-input", "--custom-text-input"]);
+  it.each([false, true])(
+    "rejects conflicting custom model input capabilities (json: %s)",
+    async (json) => {
+      await runCli([
+        "onboard",
+        "--custom-image-input",
+        "--custom-text-input",
+        ...(json ? ["--json"] : []),
+      ]);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Use either --custom-image-input or --custom-text-input, not both.",
-    );
+      const message = "Use either --custom-image-input or --custom-text-input, not both.";
+      expect(runtime.error).toHaveBeenCalledWith(message);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      if (json) {
+        expect(runtime.log).toHaveBeenCalledWith(
+          JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+        );
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      rejection: "modern onboarding without risk acknowledgement",
+      args: ["--modern", "--non-interactive"],
+      message: "Non-interactive setup requires explicit risk acknowledgement.",
+    },
+    {
+      rejection: "modern onboarding with unsupported setup flags",
+      args: ["--modern", "--classic"],
+      message: "--modern cannot be combined with: --classic.",
+    },
+  ])("emits one options JSON object for $rejection", async ({ args, message }) => {
+    await runCli(["onboard", "--json", ...args]);
+
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload).toEqual({
+      ok: false,
+      phase: "options",
+      message: expect.stringContaining(message),
+    });
+    expect(runtime.error).toHaveBeenCalledWith(payload.message);
     expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 

@@ -4,9 +4,11 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -20,6 +22,7 @@ import type {
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
+import { hasUsableCustomProviderApiKey } from "../model-auth-provider-config.js";
 import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
@@ -38,7 +41,6 @@ import {
 } from "./model-registry-runtime.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
-  clearConfigValueCache,
   resolveConfigValueOrThrow,
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
@@ -137,6 +139,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
 
 const OpenAIResponsesCompatSchema = Type.Object({
   supportsTemperature: Type.Optional(Type.Boolean()),
+  supportsInstructions: Type.Optional(Type.Boolean()),
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
@@ -259,6 +262,7 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 }
 
 type ModelRegistryOptions = {
+  config?: OpenClawConfig;
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
@@ -312,14 +316,12 @@ function mergeCompat(
   return merged as Model["compat"];
 }
 
-/** Clear the config value command cache. Exported for testing. */
-export const clearApiKeyCache = clearConfigValueCache;
-
 /**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
 export class ModelRegistry {
   private models: Model[] = [];
+  private config: OpenClawConfig | undefined;
   private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
   private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
   private registeredProviders: Map<string, ProviderConfigInput> = new Map();
@@ -339,6 +341,7 @@ export class ModelRegistry {
     options: ModelRegistryOptions = {},
   ) {
     this.authStorage = authStorage;
+    this.config = options.config ?? options.sourceSnapshot?.config;
     this.includePluginCatalogs = options.includePluginCatalogs !== false;
     initializeModelRegistryRuntime(this);
     if (options.sourceSnapshot) {
@@ -554,6 +557,10 @@ export class ModelRegistry {
         options.requireGeneratedCatalog === true
           ? filterGeneratedPluginModelCatalogProviders({
               catalogPluginId: options.catalogPluginId,
+              config: this.config,
+              isProviderAvailable: (providerId) =>
+                this.authStorage.hasAuth(normalizeProviderId(providerId)) ||
+                hasUsableCustomProviderApiKey(this.config, providerId),
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: config.providers,
@@ -583,13 +590,9 @@ export class ModelRegistry {
       if (options.includePluginCatalogs !== false) {
         let pluginCatalogs: readonly PersistedPluginModelCatalog[] = [];
         try {
-          if (this.pluginCatalogs) {
-            pluginCatalogs = this.pluginCatalogs;
-          } else {
-            const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
-            pluginCatalogs = loaded.catalogs;
-            pluginCatalogErrors.push(...loaded.warnings);
-          }
+          const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
+          pluginCatalogs = loaded.catalogs;
+          pluginCatalogErrors.push(...loaded.warnings);
         } catch (error) {
           pluginCatalogErrors.push(
             `Failed to load generated plugin model catalogs: ${
@@ -597,21 +600,10 @@ export class ModelRegistry {
             }`,
           );
         }
-        for (const pluginCatalog of pluginCatalogs) {
-          const pluginResult = this.loadCustomModels(
-            `sqlite:plugin-model-catalog/${pluginCatalog.pluginId}`,
-            {
-              catalogPluginId: pluginCatalog.pluginId,
-              contents: pluginCatalog.contents,
-              includePluginCatalogs: false,
-              requireGeneratedCatalog: true,
-            },
-          );
-          if (pluginResult.error) {
-            pluginCatalogErrors.push(pluginResult.error);
-            continue;
-          }
-          models.push(...pluginResult.models);
+        const pluginResult = this.loadCapturedPluginCatalogs(pluginCatalogs);
+        models.push(...pluginResult.models);
+        if (pluginResult.error) {
+          pluginCatalogErrors.push(pluginResult.error);
         }
       }
 

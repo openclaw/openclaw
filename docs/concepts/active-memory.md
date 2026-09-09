@@ -61,10 +61,13 @@ This does not merge transcripts, change session keys or delivery routes, widen
 workspace memory (`MEMORY.md` and `memory/*.md`) keeps its existing behavior.
 
 Active Memory must remain enabled. Retrieval adds a bounded blocking step to
-eligible replies; timeout, unavailable search, and empty results all continue
-the reply without recalled transcript context. OpenClaw's built-in memory
-provider supports this protected transcript-recall path. Other memory providers keep their own recall behavior but do
-not automatically receive private transcript authorization. `openclaw doctor`
+eligible replies. An intentional no-intent skip or an unavailable search adds a
+short hidden outcome note instead of recalled transcript context. This tells
+the main model that recall did not run or could not finish without exposing
+provider errors. Timeout and empty results keep their existing behavior.
+OpenClaw's built-in memory provider supports this protected transcript-recall
+path. Other memory providers keep their own recall behavior but do not
+automatically receive private transcript authorization. `openclaw doctor`
 reports an unsupported provider or missing `memory_search` tool.
 
 ## Advanced Active Memory quick start
@@ -132,17 +135,20 @@ flowchart LR
   U["User Message"] --> D["Deterministic Trigger Recall"]
   D -->|strong trusted match| I["Inject Bounded Hidden Context"]
   D -->|weak or empty| H["Check Recall Intent"]
-  H -->|no| M["Main Reply"]
+  H -->|no| O["Inject Bounded Recall Outcome"]
   H -->|yes| R["Active Memory Deep Recall Sub-Agent"]
   R -->|NONE| M
+  R -->|unavailable| O
   R -->|relevant summary| I
+  O --> M["Main Reply"]
   I --> M
 ```
 
 The deep-recall sub-agent can call only the configured memory recall tools (see
 [Memory tools](#memory-tools)). If the connection between the query and
-available memory is weak, it returns `NONE` and the main reply proceeds
-without extra context.
+available memory is weak, it returns `NONE` and the main reply proceeds without
+extra context. Intentional no-intent skips and unavailable recall add only a
+fixed, bounded outcome note.
 
 Active memory is a conversational enrichment feature, not a platform-wide
 inference feature:
@@ -464,6 +470,18 @@ call for advanced Active Memory. Defaults depend on the current memory provider:
 | Built-in memory | `["memory_search", "memory_get"]` |
 | LanceDB         | `["memory_recall"]`               |
 
+`toolsAllow` is a limit, not a permission grant. Before starting recall, Active
+Memory filters these names through the parent agent's finalized tool policy.
+A plugin can register a tool that the parent agent's selected profile excludes.
+Use explicit `tools.alsoAllow` entries to extend a restrictive profile, as in
+the [Lossless Claw example](/concepts/active-memory#lossless-claw). These grants also give the parent
+agent access to the named tools; they are not recall-only permissions. Explicit
+denies and provider, agent, and sandbox restrictions still apply, and recall
+cannot continue after the parent turn's tool authority expires.
+If only some configured tools are allowed, recall can still run with that
+smaller set. For example, `memory_search` may remain available even when the
+Lossless Claw tools are excluded.
+
 If none of the configured tools are available, or the sub-agent run fails,
 active memory skips recall for that turn and the main reply continues
 without memory context. For custom recall tools, non-empty model-visible
@@ -526,10 +544,28 @@ configuration above when LanceDB is the active memory provider.
 external context-engine plugin (`openclaw plugins install
 @martian-engineering/lossless-claw`) with its own recall tools. Set it up as
 a context engine first; see [Context engine](/concepts/context-engine). Then
-point active memory at its tools:
+grant its recall tools to the parent agent and point Active Memory at them.
+This example keeps the `main` agent on the restrictive `coding` profile and
+adds only the three named Lossless Claw tools through
+`agents.entries.main.tools.alsoAllow`. Merge these entries into that agent's
+existing tool configuration. Keep your selected profile and any other required
+grants and denies. This example assumes that agent scope does not also define
+`tools.allow`: `allow` and `alsoAllow` cannot be combined in the same scope.
+A later allowlist cannot restore tools excluded by a profile. See
+[Tool policy](/gateway/config-tools) before adapting an existing layered allowlist:
 
 ```json5
 {
+  agents: {
+    entries: {
+      main: {
+        tools: {
+          profile: "coding",
+          alsoAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
+        },
+      },
+    },
+  },
   plugins: {
     slots: {
       contextEngine: "lossless-claw",
@@ -603,6 +639,13 @@ Blocking sub-agent runs keep their runtime transcript in the agent's SQLite
 store. By default, OpenClaw removes the temporary sub-agent session rows after
 the run finishes and does not create a JSONL file.
 
+If cleanup crosses the recall deadline, a completed summary grounded in memory
+results can still be recovered as `timeout_partial` after cleanup settles.
+This works with temporary transcripts; `persistTranscripts` only controls
+debugging exports. Failed runs, failed cleanup, and unavailable memory results
+remain ineligible for timeout recovery. Recovered summaries are not cached or
+stored in session debug lines.
+
 To export those transcripts as JSONL artifacts for debugging:
 
 ```json5
@@ -622,17 +665,18 @@ To export those transcripts as JSONL artifacts for debugging:
 }
 ```
 
-Exported transcript artifacts go under the target agent's sessions folder, in
-a separate directory from active runtime state:
+Exported transcript artifacts go under the OpenClaw state directory, in a
+plugin-owned, per-agent directory separate from active runtime state:
 
 ```text
-agents/<agent>/sessions/active-memory/<blocking-memory-sub-agent-session-id>.jsonl
+<state-dir>/plugins/active-memory/transcripts/agents/<encoded-agent>/active-memory/<blocking-memory-sub-agent-session-id>.jsonl
 ```
 
-Change the relative artifact subdirectory with `config.transcriptDir`. Use this
-carefully: exports can accumulate quickly on busy sessions, `full` query mode
-duplicates a lot of conversation context, and these artifacts contain hidden
-prompt context plus recalled memories.
+Agent ids are URI-encoded in this path: for example, `support/agent` becomes
+`support%2Fagent`. Change the final artifact subdirectory with
+`config.transcriptDir`. Use this carefully: exports can accumulate quickly on busy
+sessions, `full` query mode duplicates a lot of conversation context, and these
+artifacts contain hidden prompt context plus recalled memories.
 
 ## Configuration
 
@@ -659,7 +703,7 @@ All active memory configuration lives under `plugins.entries.active-memory`.
 | `config.maxSummaryChars`     | `number`                                                                                             | Maximum characters in the active-memory summary (range 40-1000; default 220)                                                                                                                                                                      |
 | `config.logging`             | `boolean`                                                                                            | Emits active memory logs while tuning                                                                                                                                                                                                             |
 | `config.persistTranscripts`  | `boolean`                                                                                            | Exports blocking sub-agent transcripts as JSONL artifacts before removing their temporary SQLite session rows                                                                                                                                     |
-| `config.transcriptDir`       | `string`                                                                                             | Relative transcript-artifact directory under the agent sessions folder (default `"active-memory"`)                                                                                                                                                |
+| `config.transcriptDir`       | `string`                                                                                             | Relative artifact directory under the plugin-owned per-agent transcript directory (default `"active-memory"`)                                                                                                                                     |
 | `config.modelFallback`       | `string`                                                                                             | Optional model used only as the last step in the [model fallback chain](#model-fallback-policy)                                                                                                                                                   |
 
 Useful tuning fields:
@@ -780,6 +824,27 @@ provider must support OpenClaw's protected same-agent/private-session recall
 path.
 
 <AccordionGroup>
+  <Accordion title="Registered recall tools return `status=policy-disabled`">
+    This status means none of the configured recall tools remain in the parent
+    agent's authorized tool surface. Active Memory skips the blocking sub-agent
+    and the main reply continues without recalled context.
+
+    - Check the selected agent's profile and explicit `tools.alsoAllow` grants.
+      Under a restrictive profile, listing plugin tools in `config.toolsAllow`
+      alone does not authorize them. Use the scoped [Lossless Claw example](/concepts/active-memory#lossless-claw).
+    - Check explicit denies and provider, agent, and sandbox tool policies.
+      `alsoAllow` extends the profile; it does not override those restrictions.
+      Provider-specific profiles have their own `alsoAllow` configuration.
+    - Confirm that `config.toolsAllow` contains the intended concrete recall
+      names. Active Memory can use only the intersection of this list and the
+      parent agent's effective tools. Keep `memory_search` when using Remember
+      across conversations.
+    - Use `openclaw plugins inspect lossless-claw --runtime --json` to check
+      registration. A tool listed there is registered, but that output does not
+      prove the parent agent or Active Memory is authorized to call it.
+
+  </Accordion>
+
   <Accordion title="Embedding provider switched or stopped working">
     If `memory.search.provider` is unset, OpenClaw uses OpenAI embeddings. Set
     `memory.search.provider` explicitly for Bedrock, DeepInfra, Gemini, GitHub

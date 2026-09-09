@@ -34,7 +34,11 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
-import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
+import {
+  applyZaiConnectionConfig,
+  applyZaiProviderConnectionConfig,
+  resolveZaiModelId,
+} from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveThinkingProfile, resolveZaiReasoningEffort } from "./provider-policy-api.js";
 
@@ -115,8 +119,9 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
   let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
   const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
   const reasoningEffort = resolveZaiReasoningEffort(ctx.modelId, ctx.thinkingLevel);
+  const disableThinking = isDisabledThinkingLevel(ctx.thinkingLevel) && !reasoningEffort;
 
-  if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking && !reasoningEffort) {
+  if (!disableThinking && !preserveThinking && !reasoningEffort) {
     return streamFn;
   }
 
@@ -125,7 +130,7 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
       return;
     }
 
-    if (isDisabledThinkingLevel(ctx.thinkingLevel)) {
+    if (disableThinking) {
       payload.thinking = { type: "disabled" };
       return;
     }
@@ -168,7 +173,7 @@ async function runZaiApiKeyAuth(
   endpoint?: ZaiEndpointId,
 ): Promise<{
   profiles: Array<{ profileId: string; credential: ReturnType<typeof buildApiKeyCredential> }>;
-  configPatch: ReturnType<typeof applyZaiProviderConfig>;
+  configPatch: ReturnType<typeof applyZaiProviderConnectionConfig>;
   defaultModel: string;
   notes?: string[];
 }> {
@@ -225,7 +230,7 @@ async function runZaiApiKeyAuth(
         ),
       },
     ],
-    configPatch: applyZaiProviderConfig(ctx.config, preset),
+    configPatch: applyZaiProviderConnectionConfig(ctx.config, preset),
     defaultModel: `zai/${resolveZaiModelId(preset)}`,
     ...(detected?.note ? { notes: [detected.note] } : {}),
   };
@@ -271,7 +276,7 @@ async function runZaiApiKeyAuthNonInteractive(
     provider: PROVIDER_ID,
     mode: "api_key",
   });
-  return applyZaiConfig(next, {
+  return applyZaiConnectionConfig(next, {
     ...(nextEndpoint ? { endpoint: nextEndpoint } : {}),
     ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
   });
@@ -348,7 +353,7 @@ export default defineSingleProviderPluginEntry({
         endpoint: "cn",
       }),
     ],
-    catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true },
+    catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true, discoveryMode: "strict" },
     resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
     matchesContextOverflowError: ({ errorMessage }) =>
       /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(

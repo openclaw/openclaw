@@ -2,7 +2,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mts";
 import {
@@ -132,7 +131,7 @@ describe("bundled plugin assets", () => {
 
       const classifier = createRunNodePathClassifier({ rootDir });
       classifier.refreshGeneratedPluginAssetPaths();
-      const generatedPath = "extensions/canvas/assets/generated-runtime.js";
+      const generatedPath = path.join("extensions", "canvas", "assets", "generated-runtime.js");
       expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(true);
 
       packageJson.openclaw.assetScripts.buildOutputs = ["assets/generated-runtime.js"];
@@ -141,6 +140,20 @@ describe("bundled plugin assets", () => {
 
       expect(classifier.isBuildRelevantRunNodePath(generatedPath)).toBe(false);
       expect(classifier.isRestartRelevantRunNodePath(generatedPath)).toBe(false);
+
+      if (process.platform !== "win32") {
+        // Literal backslashes in native basenames do not identify the generated paths.
+        for (const sourcePath of [
+          path.join("extensions", "canvas", "assets\\generated-runtime.js"),
+          path.join("extensions", "canvas", "src", "host", "qa\\widget.bundle.js"),
+        ]) {
+          const absolutePath = path.join(rootDir, sourcePath);
+          fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+          fs.writeFileSync(absolutePath, "export {};\n");
+          expect(classifier.isBuildRelevantRunNodePath(sourcePath), sourcePath).toBe(true);
+          expect(classifier.isRestartRelevantRunNodePath(sourcePath), sourcePath).toBe(true);
+        }
+      }
     });
   });
 
@@ -176,23 +189,30 @@ describe("bundled plugin assets", () => {
       fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
       fs.mkdirSync(path.join(pluginDir, "scripts"));
       const pidFile = path.join(pluginDir, "stall.pid");
+      const readyFile = path.join(pluginDir, "stall.ready");
+      fs.writeFileSync(
+        path.join(pluginDir, "scripts", "stall.mjs"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          'process.on("SIGTERM", () => {});',
+          `writeFileSync(${JSON.stringify(readyFile)}, String(process.pid));`,
+          "setInterval(() => {}, 100);",
+          "",
+        ].join("\n"),
+      );
       fs.writeFileSync(
         path.join(pluginDir, "scripts", "launch-stall.mjs"),
         [
           'import { spawn } from "node:child_process";',
           'import { writeFileSync } from "node:fs";',
-          "const child = spawn(process.execPath, [",
-          '  "-e",',
-          '  "process.on(\\"SIGTERM\\", () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 100);",',
-          '], { stdio: "ignore" });',
-          `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
           'process.on("SIGTERM", () => {});',
+          'const child = spawn(process.execPath, ["scripts/stall.mjs"], { stdio: "ignore" });',
+          `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
           "setInterval(() => {}, 100);",
           "",
         ].join("\n"),
       );
 
-      const startedAt = Date.now();
       let thrown: unknown;
       let childPid = 0;
       try {
@@ -201,9 +221,10 @@ describe("bundled plugin assets", () => {
         thrown = error;
       }
       try {
-        expect(Date.now() - startedAt).toBeLessThan(2_000);
         childPid = Number(fs.readFileSync(pidFile, "utf8"));
-        await waitForProcessExit(childPid);
+        // Timeout rejection must join cleanup, not leave the caller to poll for it.
+        expect(isProcessAlive(childPid)).toBe(false);
+        expect(fs.readFileSync(readyFile, "utf8")).toBe(String(childPid));
         expect(thrown).toMatchObject({
           code: "ETIMEDOUT",
           message: "Bundled plugin asset build hook timed out after 500ms: canvas",
@@ -288,16 +309,6 @@ describe("bundled plugin assets", () => {
     });
   });
 });
-
-async function waitForProcessExit(pid: number, timeoutMs = 1_500) {
-  const startedAt = Date.now();
-  while (isProcessAlive(pid)) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`process ${pid} remained alive after timeout cleanup`);
-    }
-    await delay(5);
-  }
-}
 
 function isProcessAlive(pid: number) {
   try {

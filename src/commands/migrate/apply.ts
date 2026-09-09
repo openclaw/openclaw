@@ -1,5 +1,6 @@
 /** Applies migration plans with backup, filtering, reporting, and progress output. */
 import fs from "node:fs/promises";
+import { exitCliAfterOutput } from "../../cli/one-shot-exit.js";
 import { withProgress } from "../../cli/progress.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -52,6 +53,7 @@ export async function runMigrationApply(params: {
   opts: MigrateApplyOptions;
   providerId: string;
   provider: MigrationProviderPlugin;
+  onApplyCompleted?: () => void;
 }): Promise<MigrationApplyResult> {
   const applyMigration = async (progress?: ProgressReporter) => {
     const total = (params.opts.preflightPlan ? 0 : 1) + (params.opts.noBackup ? 0 : 1) + 1;
@@ -118,6 +120,7 @@ export async function runMigrationApply(params: {
     });
     progress?.setLabel("Applying migration…");
     const result = await params.provider.apply(ctx, selectedPlan);
+    params.onApplyCompleted?.();
     tick();
     const withBackup = {
       ...result,
@@ -134,7 +137,16 @@ export async function runMigrationApply(params: {
       );
   writeApplyResult(params.runtime, params.opts, withBackup);
   if (!params.opts.allowPartialResult) {
-    assertApplySucceeded(withBackup);
+    try {
+      assertApplySucceeded(withBackup);
+    } catch (error) {
+      // The JSON result already describes partial failure; a generic error would
+      // append a second document and make stdout impossible to parse as JSON.
+      if (params.opts.json) {
+        exitCliAfterOutput(params.runtime, 1);
+      }
+      throw error;
+    }
   }
   return withBackup;
 }

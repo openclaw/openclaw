@@ -1,4 +1,3 @@
-// Registers provider plugins into the provider registry.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -6,7 +5,7 @@ import { compileSafeRegex } from "../security/safe-regex.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import type { PluginLoadOptions } from "./loader.js";
+import type { PluginLoadOptions } from "./loader-types.js";
 import {
   isActivatedManifestOwner,
   passesManifestOwnerBasePolicy,
@@ -16,6 +15,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import {
   loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata,
   normalizePluginsConfigWithRegistry,
   type PluginRegistryRecord,
   type PluginRegistrySnapshot,
@@ -127,7 +127,9 @@ function pluginOwnsProviderRef(plugin: PluginManifestRecord, normalizedProvider:
   return false;
 }
 
-function resolvesRuntimeModelCatalogAugment(plugin: PluginManifestRecord): boolean {
+export function manifestPluginResolvesRuntimeModelCatalogAugment(
+  plugin: PluginManifestRecord,
+): boolean {
   return (
     plugin.modelCatalog?.runtimeAugment === true ||
     (plugin.origin !== "bundled" && plugin.providers.length > 0)
@@ -165,6 +167,7 @@ function resolveEffectiveRegistryPluginActivation(params: {
   return resolveEffectivePluginActivationState({
     id: params.plugin.pluginId,
     origin: params.plugin.origin,
+    channelIds: params.plugin.contributions?.channels,
     config: params.normalizedConfig,
     rootConfig: params.rootConfig,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
@@ -561,25 +564,23 @@ function resolveProviderOwnershipContext(
           ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
           allowWorkspaceScopedSnapshot: true,
         }));
-  const config = params.config ?? {};
-  const env = params.env ?? process.env;
-  const manifestRegistry =
-    params.manifestRegistry ??
-    metadataSnapshot?.manifestRegistry ??
-    resolveManifestRegistry({
-      config,
-      workspaceDir: params.workspaceDir,
-      env,
-      registry: loadProviderRegistrySnapshot({
-        config,
-        workspaceDir: params.workspaceDir,
-        env,
-      }),
-      includeDisabled: true,
-    });
+  const manifestRegistry = params.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
+  if (manifestRegistry) {
+    return { manifestRegistry, ...(metadataSnapshot ? { metadataSnapshot } : {}) };
+  }
+  const registryParams = {
+    config: params.config ?? {},
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  };
+  const loaded = loadPluginRegistrySnapshotWithMetadata(registryParams);
   return {
-    manifestRegistry,
-    ...(metadataSnapshot ? { metadataSnapshot } : {}),
+    manifestRegistry: loadPluginManifestRegistryForInstalledIndex({
+      ...registryParams,
+      index: loaded.snapshot,
+      manifestRegistry: loaded.manifestRegistry,
+      includeDisabled: true,
+    }),
   };
 }
 
@@ -758,7 +759,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   );
   const runtimeAugmentPluginIds = new Set(
     manifestRegistry.plugins.flatMap((plugin) =>
-      resolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
+      manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
     ),
   );
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);

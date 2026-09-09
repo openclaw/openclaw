@@ -45,6 +45,10 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/models/openai-native-web-search-live.yaml");
+    expect(scenario.coverage).toEqual({
+      primary: ["web-search.web-search-exposure-openai"],
+      secondary: ["web-search.web-search-exposure", "openai.canonical-openai-model-routing-openai"],
+    });
     expect(scenario.gatewayConfigPatch?.tools).toEqual({
       web: {
         search: {
@@ -144,6 +148,7 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredProvider).toBe("openai");
     expect(config?.pluginSpec).toBe("npm:@openclaw/kitchen-sink@latest");
     expect(JSON.stringify(scenario.execution.flow)).toContain('"--force"');
+    expect(JSON.stringify(scenario.execution.flow)).toContain('"--accept-capabilities"');
     expect(config?.pluginId).toBe("openclaw-kitchen-sink-fixture");
     expect(config?.pluginPersonality).toBe("conformance");
     expect(config?.adversarialPersonality).toBe("adversarial");
@@ -163,7 +168,7 @@ describe("qa scenario catalog", () => {
       "plugin must declare contracts.tools for: kitchen-sink-tool",
     );
     expect(config?.requiredAdversarialDiagnostics).toContain(
-      'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+      'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
     );
     expect(config?.requiredAdversarialDiagnostics).toContain(
       'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',

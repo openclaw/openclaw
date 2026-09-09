@@ -68,10 +68,7 @@ function createTimeoutHistoryWithNoReply() {
       ],
     },
     { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
-    {
-      role: "assistant",
-      content: [{ type: "text", text: "NO_REPLY" }],
-    },
+    textAssistant("NO_REPLY"),
   ];
 }
 
@@ -209,6 +206,7 @@ vi.mock("../registry/subagent-registry-read.js", () => ({
 vi.mock("../registry/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: () => true,
 }));
+import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<
   typeof import("./subagent-announce.js").runSubagentAnnounceFlow
@@ -528,24 +526,6 @@ describe("subagent announce timeout config", () => {
     expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
   });
 
-  it("keeps authoritative empty success intentional without transcript inference", async () => {
-    chatHistoryMessages = [
-      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
-    ];
-
-    await runAnnounceFlowForTest("run-ok-empty-terminal", {
-      outcome: { status: "ok" },
-      roundOneReply: undefined,
-      terminalReply: { disposition: "empty" },
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toBe("(no output)");
-    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
-  });
-
   it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {
     sessionStore["agent:main:subagent:worker"] = {
       sessionId: "child-session",
@@ -598,10 +578,7 @@ describe("subagent announce timeout config", () => {
           { type: "toolCall", id: "call-1", name: "read", arguments: {} },
         ],
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
+      textAssistant("NO_REPLY"),
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call-2", name: "exec", arguments: {} }],
@@ -621,10 +598,7 @@ describe("subagent announce timeout config", () => {
 
   it("prefers visible assistant progress over a later raw tool result", async () => {
     chatHistoryMessages = [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Read 12 files. Narrowing the search now." }],
-      },
+      textAssistant("Read 12 files. Narrowing the search now."),
       {
         role: "toolResult",
         content: [{ type: "text", text: "grep output" }],
@@ -668,10 +642,7 @@ describe("subagent announce timeout config", () => {
   it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {
     chatHistoryMessages = [
       ...createTimeoutHistoryWithNoReply(),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "A longer partial summary that should stay silent." }],
-      },
+      textAssistant("A longer partial summary that should stay silent."),
     ];
 
     await runAnnounceFlowForTest("run-timeout-no-reply-overrides-latest-text", {

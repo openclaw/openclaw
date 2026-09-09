@@ -8,8 +8,8 @@ import {
 } from "../../config/types.secrets.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../../plugin-sdk/secret-ref-readonly.internal.js";
 import {
+  isBuiltInDefaultSecretProviderRef,
   isValidSecretRef,
-  resolveDefaultSecretProviderAlias,
   SINGLE_VALUE_FILE_REF_ID,
 } from "../../secrets/ref-contract.js";
 import {
@@ -18,6 +18,7 @@ import {
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "../model-auth-markers.js";
 import { hasUsableOAuthCredential, resolveTokenExpiryState } from "./credential-state.js";
+import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { AuthProfileCredential } from "./types.js";
 
 type ReadOnlyCredentialAvailability = boolean | undefined;
@@ -55,9 +56,7 @@ export function resolveSecretRefReadOnlyAvailability(
     return hasSecret(env[value.id]) ? true : undefined;
   }
   const source = cfg.secrets?.providers?.[value.provider];
-  const isImplicitProvider =
-    value.source === "store" && value.provider === resolveDefaultSecretProviderAlias(cfg, "store");
-  if ((!source && !isImplicitProvider) || (source && source.source !== value.source)) {
+  if (source?.source !== value.source && !isBuiltInDefaultSecretProviderRef(cfg, value)) {
     return false;
   }
   if (
@@ -118,6 +117,9 @@ export function resolveStoredCredentialReadOnlyAvailability(params: {
   }
   if (hasUsableOAuthCredential(credential, { now })) {
     return true;
+  }
+  if (isOAuthRefreshFence(credential)) {
+    return false;
   }
   // Refresh material is runnable only when the caller owns a refresh path.
   // Ref-only OAuth may hydrate from the runtime snapshot, so it stays unknown.

@@ -1,10 +1,11 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Reset OpenClaw like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/restart-mac-gateway.sh"
+source "${ROOT_DIR}/scripts/lib/mac-app-bundle.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
@@ -375,15 +376,11 @@ if [[ "$TARGET_ONLY" -eq 1 ]]; then
   fi
   log "==> Keeping managed OpenClaw running while the replacement builds"
 else
-  stop_launch_agent
-  log "==> Killing existing OpenClaw instances"
-  if ! kill_all_openclaw; then
-    fail "OpenClaw instances did not exit after cleanup attempts"
-  fi
+  log "==> Keeping existing OpenClaw instances running while the replacement builds"
 fi
 
 # Bundle Gateway-hosted plugin assets.
-run_step "bundle plugin assets" bash -c "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
+run_step "bundle plugin assets" /bin/bash -c "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
 
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
   if check_signing_keys; then
@@ -410,24 +407,12 @@ fi
 # 3) Package and sign outside the live bundle. A failed package/sign operation
 # must leave the currently running and on-disk app untouched.
 run_step "package app" env \
-  SKIP_TSC="${SKIP_TSC:-1}" \
   OPENCLAW_PACKAGE_APP_ROOT="${STAGED_APP_BUNDLE}" \
   "${ROOT_DIR}/scripts/package-mac-app.sh"
 run_step "verify packaged app" /usr/bin/codesign --verify --deep --strict "${STAGED_APP_BUNDLE}"
 
 install_staged_app() {
-  local previous="${ROOT_DIR}/dist/.OpenClaw.app.previous-$$"
-  rm -rf "${previous}"
-  if [[ -d "${TARGET_APP_BUNDLE}" ]]; then
-    mv "${TARGET_APP_BUNDLE}" "${previous}"
-  fi
-  if ! mv "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"; then
-    if [[ -d "${previous}" && ! -d "${TARGET_APP_BUNDLE}" ]]; then
-      mv "${previous}" "${TARGET_APP_BUNDLE}"
-    fi
-    return 1
-  fi
-  rm -rf "${previous}" "${STAGED_APP_DIR}"
+  replace_mac_app_bundle "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"
 }
 
 choose_app_bundle() {
@@ -460,8 +445,8 @@ fi
 # When unsigned, ensure the gateway LaunchAgent targets the repo CLI (before the app launches).
 # This reduces noisy "could not connect" errors during app startup.
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "install gateway launch agent (unsigned)" bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon install --force --runtime node"
-  run_step "restart gateway daemon (unsigned)" bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon restart"
+  run_step "install gateway launch agent (unsigned)" /bin/bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon install --force --runtime node"
+  run_step "restart gateway daemon (unsigned)" /bin/bash -c "cd '${ROOT_DIR}' && node openclaw.mjs daemon restart"
   if [[ "${GATEWAY_WAIT_SECONDS}" -gt 0 ]]; then
     run_step "wait for gateway (unsigned)" sleep "${GATEWAY_WAIT_SECONDS}"
   fi
@@ -498,6 +483,12 @@ if [[ "$TARGET_ONLY" -eq 1 ]]; then
   if ! kill_managed_openclaw; then
     fail "Managed OpenClaw instances did not exit after cleanup attempts"
   fi
+else
+  stop_launch_agent
+  log "==> Killing existing OpenClaw instances"
+  if ! kill_all_openclaw; then
+    fail "OpenClaw instances did not exit after cleanup attempts"
+  fi
 fi
 
 run_step "install packaged app" install_staged_app
@@ -529,5 +520,5 @@ else
 fi
 
 if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
-  run_step "show gateway launch agent args (unsigned)" bash -c "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist' | head -n 40 || true"
+  run_step "show gateway launch agent args (unsigned)" /bin/bash -c "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/ai.openclaw.gateway.plist' | head -n 40 || true"
 fi

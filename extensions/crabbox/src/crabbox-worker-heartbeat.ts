@@ -13,8 +13,9 @@ type HeartbeatContext = {
 };
 
 type HeartbeatEntry = HeartbeatContext & {
-  controller?: AbortController;
+  controller: AbortController;
   failureWarned: boolean;
+  pending?: Promise<void>;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -31,9 +32,8 @@ function permanentHeartbeatFailure(result: SpawnResult): "command" | "provider" 
     /\b(?:unexpected argument|unknown command|unrecognized command)[^\r\n]*\bheartbeat\b/iu.test(
       output,
     ) || /\bheartbeat\b[^\r\n]*\b(?:unknown|unrecognized)\b/iu.test(output);
-  return commandUnknown || (result.termination === "exit" && result.code === 2)
-    ? "command"
-    : undefined;
+  // Exit 2 also reports claim conflicts; only explicit capability errors disable renewal.
+  return commandUnknown ? "command" : undefined;
 }
 
 export function createCrabboxHeartbeatManager(dependencies: {
@@ -41,7 +41,9 @@ export function createCrabboxHeartbeatManager(dependencies: {
   warn: (message: string) => void;
 }) {
   const entries = new Map<string, HeartbeatEntry>();
-  const isCurrent = (entry: HeartbeatEntry) => entries.get(entry.id) === entry;
+  let disposed = false;
+  const isCurrent = (entry: HeartbeatEntry) =>
+    !disposed && entries.get(entry.id) === entry && !entry.controller.signal.aborted;
   const warn = (entry: HeartbeatEntry, message: string) =>
     dependencies.warn(
       `${message}; cloud worker machines may be reaped after ${entry.idleTimeout} of coordinator-idle time`,
@@ -51,29 +53,28 @@ export function createCrabboxHeartbeatManager(dependencies: {
     if (!isCurrent(entry)) {
       return;
     }
-    entry.timer = setTimeout(() => void heartbeat(entry), delayMs);
+    entry.timer = setTimeout(() => {
+      entry.pending = heartbeat(entry);
+    }, delayMs);
     entry.timer.unref?.();
   };
 
   const heartbeat = async (entry: HeartbeatEntry): Promise<void> => {
-    if (!isCurrent(entry) || entry.controller) {
+    if (!isCurrent(entry)) {
       return;
     }
-    const controller = new AbortController();
-    entry.controller = controller;
     let result: SpawnResult;
+    const startedAt = Date.now();
     try {
-      result = await dependencies.run(entry, controller.signal);
+      result = await dependencies.run(entry, entry.controller.signal);
     } catch (error) {
       if (isCurrent(entry) && !entry.failureWarned) {
         entry.failureWarned = true;
         warn(entry, error instanceof Error ? error.message : "Crabbox heartbeat failed");
       }
-      delete entry.controller;
       schedule(entry);
       return;
     }
-    delete entry.controller;
     if (!isCurrent(entry)) {
       return;
     }
@@ -93,30 +94,43 @@ export function createCrabboxHeartbeatManager(dependencies: {
     }
     if (!entry.failureWarned) {
       entry.failureWarned = true;
-      warn(entry, crabboxCommandError("heartbeat", result).message);
+      const message = crabboxCommandError("heartbeat", result).message;
+      warn(entry, message.replace("(timeout)", `(timeout after ${Date.now() - startedAt} ms)`));
     }
     schedule(entry);
   };
 
+  const stop = async (leaseId: string): Promise<void> => {
+    const entry = entries.get(leaseId);
+    if (!entry) {
+      return;
+    }
+    entry.controller.abort();
+    clearTimeout(entry.timer);
+    // Keep the closed owner visible until its child settles: later stop/dispose
+    // must join it, and same-lease inspection must not start another heartbeat.
+    try {
+      await entry.pending;
+    } finally {
+      if (entries.get(leaseId) === entry) {
+        entries.delete(leaseId);
+      }
+    }
+  };
+
   return {
     start(context: HeartbeatContext): void {
-      if (entries.has(context.id)) {
+      if (disposed || entries.has(context.id)) {
         return;
       }
-      const entry = { ...context, failureWarned: false };
+      const entry = { ...context, failureWarned: false, controller: new AbortController() };
       entries.set(context.id, entry);
       schedule(entry, 0);
     },
-    stop(leaseId: string): void {
-      const entry = entries.get(leaseId);
-      if (!entry) {
-        return;
-      }
-      entries.delete(leaseId);
-      if (entry.timer) {
-        clearTimeout(entry.timer);
-      }
-      entry.controller?.abort();
+    stop,
+    async dispose(): Promise<void> {
+      disposed = true;
+      await Promise.all([...entries.keys()].map(stop));
     },
   };
 }
