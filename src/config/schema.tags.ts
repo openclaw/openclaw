@@ -23,8 +23,6 @@ const TAG_ORDER = [
 
 type ConfigTag = (typeof TAG_ORDER)[number];
 
-const TAG_BITS = new Map<string, number>(TAG_ORDER.map((tag, index) => [tag, 1 << index]));
-
 const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   worktreeRoot: ["storage", "advanced"],
   cloudWorkers: ["network", "automation"],
@@ -108,59 +106,52 @@ const WILDCARD_TAG_OVERRIDES = Object.entries(TAG_OVERRIDES)
   .filter(([pattern]) => pattern.includes("*"))
   .map(([pattern, tags]) => ({ pattern: patternToRegExp(pattern), tags }));
 
-function addTag(mask: number, tag: ConfigTag): number {
-  const bit = TAG_BITS.get(tag);
-  return bit !== undefined ? mask | bit : mask;
-}
-
-function addTags(mask: number, tags: ReadonlyArray<ConfigTag>): number {
-  let next = mask;
+function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
   for (const tag of tags) {
-    next = addTag(next, tag);
+    set.add(tag);
   }
-  return next;
 }
 
 /** Derive known config UI tags from a schema path and optional hint metadata. */
-function deriveTagsForPath(path: string, hint?: ConfigUiHint): number {
+function deriveTagsForPath(path: string, hint?: ConfigUiHint): Set<ConfigTag> {
   const override =
     TAG_OVERRIDES[path] ?? WILDCARD_TAG_OVERRIDES.find(({ pattern }) => pattern.test(path))?.tags;
   if (override) {
-    return addTags(0, override);
+    return new Set(override);
   }
 
   const lowerPath = normalizeLowercaseStringOrEmpty(path);
-  let tags = 0;
+  const tags = new Set<ConfigTag>();
   for (const rule of PREFIX_RULES) {
     if (lowerPath.startsWith(rule.prefix)) {
-      tags = addTags(tags, rule.tags);
+      addTags(tags, rule.tags);
     }
   }
 
   for (const rule of KEYWORD_RULES) {
     if (rule.pattern.test(path)) {
-      tags = addTags(tags, rule.tags);
+      addTags(tags, rule.tags);
     }
   }
 
   if (MODEL_PATH_PATTERN.test(path)) {
-    tags = addTag(tags, "models");
+    tags.add("models");
   }
   if (MEDIA_PATH_PATTERN.test(path)) {
-    tags = addTag(tags, "media");
+    tags.add("media");
   }
   if (AUTOMATION_PATH_PATTERN.test(path)) {
-    tags = addTag(tags, "automation");
+    tags.add("automation");
   }
 
   if (hint?.sensitive) {
-    tags = addTag(tags, "security");
+    tags.add("security");
     if (AUTH_KEYWORD_PATTERN.test(path)) {
-      tags = addTag(tags, "auth");
+      tags.add("auth");
     }
   }
   if (hint?.advanced) {
-    tags = addTag(tags, "advanced");
+    tags.add("advanced");
   }
 
   return tags;
@@ -171,25 +162,17 @@ export function applyDerivedTags(hints: ConfigUiHints): ConfigUiHints {
   const next: ConfigUiHints = {};
   for (const [path, hint] of Object.entries(hints)) {
     const existingTags = Array.isArray(hint?.tags) ? hint.tags : [];
-    let derivedTags = deriveTagsForPath(path, hint);
-    let customTags: Set<string> | undefined;
+    const derivedTags: Set<string> = deriveTagsForPath(path, hint);
     for (const tag of existingTags) {
       const normalized = normalizeLowercaseStringOrEmpty(tag);
       if (normalized) {
-        const bit = TAG_BITS.get(normalized);
-        if (bit !== undefined) {
-          derivedTags |= bit;
-        } else {
-          (customTags ??= new Set()).add(normalized);
-        }
+        derivedTags.add(normalized);
       }
     }
     // Preserve unknown tags after known tags so external/custom UI tags survive normalization.
-    const tags: string[] = TAG_ORDER.filter((_, index) => (derivedTags & (1 << index)) !== 0);
-    if (customTags) {
-      for (const tag of customTags) {
-        tags.push(tag);
-      }
+    const tags: string[] = TAG_ORDER.filter((tag) => derivedTags.delete(tag));
+    for (const tag of derivedTags) {
+      tags.push(tag);
     }
     next[path] = { ...hint, tags };
   }
