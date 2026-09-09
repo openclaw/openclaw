@@ -43,6 +43,7 @@ export function registerWorkboardResultMethods(
       async (context) => {
         try {
           context.respond(true, await handler(context));
+          return;
         } catch (error) {
           respondError(context.respond, error);
         }
