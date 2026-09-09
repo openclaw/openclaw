@@ -18,9 +18,11 @@ const originalPlatform = process.platform;
 
 function trackedRoot(exited = false): ChildProcess {
   const child = new ChildProcess();
-  child.pid = ROOT;
-  child.exitCode = exited ? 0 : null;
-  child.signalCode = null;
+  Object.defineProperties(child, {
+    pid: { value: ROOT },
+    exitCode: { value: exited ? 0 : null },
+    signalCode: { value: null },
+  });
   return child;
 }
 

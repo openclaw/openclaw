@@ -26,7 +26,7 @@ it("tree termination reaps adopted zombies after root exit without consuming oth
   Object.defineProperty(process, "platform", { value: "linux" });
   vi.useFakeTimers();
   const child = new ChildProcess();
-  child.pid = 400;
+  Object.defineProperty(child, "pid", { value: 400 });
   signalChildProcessTree(child, "SIGTERM");
   vi.advanceTimersByTime(100);
   expect(nativeWait).not.toHaveBeenCalled();

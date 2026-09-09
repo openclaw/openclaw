@@ -18,11 +18,10 @@ function loadWaitPid(): WaitPid | null {
     return waitPid;
   }
   try {
-    // SAFETY: Koffi's require export matches its typed default export. Linux
-    // waitpid accepts a null status pointer when only reaping is required.
+    // SAFETY: Koffi's require export matches its typed default export.
     const koffi = require("koffi") as typeof import("koffi").default;
-    const nativeWaitPid = koffi.load(null).func("int waitpid(int pid, int *status, int options)");
-    waitPid = (pid, status, options) => nativeWaitPid(pid, status, options) as number;
+    // Linux waitpid accepts a null status pointer when only reaping is required.
+    waitPid = koffi.load(null).func("int waitpid(int pid, int *status, int options)");
   } catch {
     // Native cleanup is best effort; loading it must not interrupt tree termination.
     waitPid = null;
