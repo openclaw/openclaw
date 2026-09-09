@@ -292,6 +292,38 @@
     "target": "自我学习"
   },
   {
+    "source": "Personal library authoring",
+    "target": "个人技能库创作"
+  },
+  {
+    "source": "How Skill Workshop works",
+    "target": "Skill Workshop 工作原理"
+  },
+  {
+    "source": "Collection review",
+    "target": "集合审查"
+  },
+  {
+    "source": "Chat and CLI authoring",
+    "target": "聊天与 CLI 创作"
+  },
+  {
+    "source": "Proposal content, support files, and the agent tool",
+    "target": "提案内容、支持文件与代理工具"
+  },
+  {
+    "source": "Self-learning and approval settings",
+    "target": "自我学习与审批设置"
+  },
+  {
+    "source": "Gateway methods, storage, and limits",
+    "target": "Gateway 方法、存储与限制"
+  },
+  {
+    "source": "Skill Workshop troubleshooting",
+    "target": "Skill Workshop 故障排查"
+  },
+  {
     "source": "local loopback",
     "target": "local loopback"
   },

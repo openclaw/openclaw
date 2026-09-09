@@ -1888,6 +1888,19 @@
                   "tools/skills",
                   "tools/custodian-skills",
                   "tools/skill-workshop",
+                  {
+                    "group": "Skill Workshop",
+                    "pages": [
+                      "tools/skill-workshop/personal-library",
+                      "tools/skill-workshop/how-it-works",
+                      "tools/skill-workshop/collection-review",
+                      "tools/skill-workshop/authoring",
+                      "tools/skill-workshop/proposals",
+                      "tools/skill-workshop/configuration",
+                      "tools/skill-workshop/reference",
+                      "tools/skill-workshop/troubleshooting"
+                    ]
+                  },
                   "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
