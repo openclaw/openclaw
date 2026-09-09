@@ -151,6 +151,11 @@ chained after the update. After a handoff result, use the printed follow-up comm
 for the final outcome. Plain terminal updates remain synchronous, and `--no-restart`
 does not authorize stopping the agent's Gateway.
 
+Post-core steps follow the verified replacement package, including pnpm updates
+that change the target of the global package link. The helper retains the
+original installation identity for recovery; a child running from a different
+installation is still rejected.
+
 The Gateway core auto-updater requires a managed service restart path. It hands
 the CLI update to a detached helper before activation. A foreground
 Gateway keeps update hints but leaves installation and activation to the
