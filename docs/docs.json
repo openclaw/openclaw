@@ -2481,7 +2481,18 @@
                       "gateway/prometheus",
                       "gateway/logging",
                       "gateway/diagnostics",
-                      "gateway/troubleshooting"
+                      "gateway/troubleshooting",
+                      {
+                        "group": "Troubleshooting",
+                        "pages": [
+                          "gateway/troubleshooting/updates-and-rollbacks",
+                          "gateway/troubleshooting/skills-and-model-providers",
+                          "gateway/troubleshooting/agent-replies-and-control-ui",
+                          "gateway/troubleshooting/gateway-service-and-process",
+                          "gateway/troubleshooting/config-validation-and-probes",
+                          "gateway/troubleshooting/channel-delivery-and-tools"
+                        ]
+                      }
                     ]
                   },
                   {
