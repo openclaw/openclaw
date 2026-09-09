@@ -87,24 +87,15 @@ type MirrorTextBlock =
   | MessagePresentation["blocks"][number]
   | LegacyInteractiveReply["blocks"][number];
 
-function collectBlockMirrorText(
-  blocks: readonly MirrorTextBlock[],
-  options: { includeContext?: boolean } = {},
-): string[] {
-  const lines: string[] = [];
+function appendBlockMirrorText(lines: string[], blocks: readonly MirrorTextBlock[]): void {
   for (const block of blocks) {
-    if (
-      (block.type === "text" || (options.includeContext === true && block.type === "context")) &&
-      block.text.trim()
-    ) {
+    if ((block.type === "text" || block.type === "context") && block.text.trim()) {
       lines.push(block.text.trim());
       continue;
     }
     if (block.type === "buttons") {
       for (const button of block.buttons) {
-        if (button.label.trim()) {
-          lines.push(button.label.trim());
-        }
+        lines.push(button.label);
       }
       continue;
     }
@@ -117,29 +108,14 @@ function collectBlockMirrorText(
       continue;
     }
     if (block.type === "select") {
-      if (block.placeholder?.trim()) {
-        lines.push(block.placeholder.trim());
+      if (block.placeholder) {
+        lines.push(block.placeholder);
       }
       for (const option of block.options) {
-        if (option.label.trim()) {
-          lines.push(option.label.trim());
-        }
+        lines.push(option.label);
       }
     }
   }
-  return lines;
-}
-
-function collectPresentationMirrorText(presentation: MessagePresentation | undefined): string[] {
-  if (!presentation) {
-    return [];
-  }
-  const lines: string[] = [];
-  if (presentation.title?.trim()) {
-    lines.push(presentation.title.trim());
-  }
-  lines.push(...collectBlockMirrorText(presentation.blocks, { includeContext: true }));
-  return lines;
 }
 
 /** Renders user-visible payload content safely for every outbound transcript mirror. */
@@ -149,18 +125,28 @@ export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string 
     : payload.location && formatLocationText(payload.location);
   const presentation = normalizeMessagePresentation(payload.presentation);
   if (text?.trim()) {
-    const structuredDataText = presentation
-      ? collectBlockMirrorText(
-          presentation.blocks.filter((block) => block.type === "chart" || block.type === "table"),
-        )
-      : [];
-    return [text, ...structuredDataText].join("\n");
+    if (!presentation) {
+      return text;
+    }
+    const lines = [text];
+    appendBlockMirrorText(
+      lines,
+      presentation.blocks.filter((block) => block.type === "chart" || block.type === "table"),
+    );
+    return lines.join("\n");
   }
+  const lines: string[] = [];
   const interactive = normalizeLegacyInteractiveReply(payload.interactive);
-  return [
-    ...collectPresentationMirrorText(presentation),
-    ...collectBlockMirrorText(interactive?.blocks ?? []),
-  ].join("\n");
+  if (presentation?.title?.trim()) {
+    lines.push(presentation.title.trim());
+  }
+  if (presentation) {
+    appendBlockMirrorText(lines, presentation.blocks);
+  }
+  if (interactive) {
+    appendBlockMirrorText(lines, interactive.blocks);
+  }
+  return lines.join("\n");
 }
 
 function isSuppressedRelayStatusText(text: string): boolean {
