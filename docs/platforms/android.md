@@ -45,13 +45,13 @@ The Wear OS companion uses the paired Android phone's authenticated Gateway conn
 
 ## Install outside Google Play
 
-Selected GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance. Releases without Android artifacts only publish CLI/SDK assets; the latest APK lives on the most recent release that carries the asset, which is not necessarily the latest Gateway release.
+Selected GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance. Not every release ships Android artifacts; the latest APK lives on the most recent release that carries the asset, which is not necessarily the latest Gateway release.
 
-To find a release that ships the APK, list recent releases and look for the `OpenClaw-Android.apk` asset:
+To find a release that ships the APK, query the releases API for tags that carry the `OpenClaw-Android.apk` asset:
 
 ```bash
-gh release list --repo openclaw/openclaw --limit 50 \
-  --json tagName,assets --jq '.[] | {tag: .tagName, apk: ([.assets[].name] | any(. == "OpenClaw-Android.apk"))}'
+gh api "repos/openclaw/openclaw/releases?per_page=50" \
+  --jq '.[] | {tag: .tag_name, apk: ([.assets[].name] | any(. == "OpenClaw-Android.apk")), checksum: ([.assets[].name] | any(. == "OpenClaw-Android-SHA256SUMS.txt"))} | select(.apk and .checksum)'
 ```
 
 Pick a release that lists both assets, then download and verify that exact tag before sideloading:
