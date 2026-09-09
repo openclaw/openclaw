@@ -10,12 +10,8 @@ import {
   resolvePluginRuntimeFormat,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
-import {
-  listMissingPackageStaticAssetSources,
-  runPackageAssetBuild,
-} from "./plugin-npm-runtime-assets.mts";
+import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
 import { isRecord } from "./record-shared.mjs";
-import { copyStaticExtensionAssetsForPackage } from "./static-extension-assets.mts";
 
 const env = {
   NODE_ENV: "production",
@@ -417,21 +413,9 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     );
   }
   rewriteCommonJsRuntimeSpecifiers(plan);
-  const assetBuildCommand = runPackageAssetBuild(plan);
-  const missingStaticAssets = listMissingPackageStaticAssetSources(plan);
-  if (missingStaticAssets.length > 0) {
-    throw new Error(
-      `${plan.pluginDir} missing static asset source(s): ${missingStaticAssets.join(", ")}`,
-    );
-  }
-  const copiedStaticAssets = copyStaticExtensionAssetsForPackage({
-    rootDir: plan.repoRoot,
-    pluginDir: plan.pluginDir,
-  });
   return {
     ...plan,
-    assetBuildCommand,
-    copiedStaticAssets,
+    ...preparePackageRuntimeAssets(plan),
   };
 }
 

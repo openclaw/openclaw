@@ -56,7 +56,7 @@ function createStressReviewer(params: {
   return { reviewer, prepare, complete };
 }
 
-function modelResponse(decision: "allow" | "ask", risk: "low" | "medium") {
+function modelResponse(decision: "allow" | "deny" | "ask", risk: "low" | "medium") {
   return {
     stopReason: "stop" as const,
     content: [
@@ -863,13 +863,15 @@ describe("exec auto-review concurrency stress", () => {
         const match = /--case=(\d+)/.exec(prompt);
         const index = Number(match?.[1]);
         await Promise.resolve();
-        switch (index % 4) {
+        switch (index % 5) {
           case 0:
             return modelResponse("allow", "low");
           case 1:
             return modelResponse("allow", "medium");
           case 2:
             return modelResponse("ask", "medium");
+          case 3:
+            return modelResponse("deny", "medium");
           default:
             throw new Error("stress provider failure");
         }
@@ -890,7 +892,7 @@ describe("exec auto-review concurrency stress", () => {
 
     for (const [index, decision] of decisions.entries()) {
       expect(decision.decision, `concurrent case ${index}`).toBe(
-        index % 4 === 0 ? "allow-once" : "ask",
+        index % 5 < 2 ? "allow-once" : index % 5 === 3 ? "deny" : "ask",
       );
     }
     expect(prepare).toHaveBeenCalledTimes(128);

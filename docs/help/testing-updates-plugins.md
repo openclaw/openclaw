@@ -161,7 +161,15 @@ The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one
 without an explicit agent and one owned by `ops`. It leaves `systemAgent`
 unset, installs one version-matched npm plugin through the local registry, and
-preserves a workspace skill. A mock OpenAI server verifies a real agent turn
+preserves a workspace skill. It also configures DuckDuckGo without an install
+record: bundled baselines use their own CLI web-search settings; newer baselines
+receive the retained configuration of an already-broken upgrade. The local
+registry supplies the candidate's official external DuckDuckGo package. Before
+standalone Doctor or consent repair, assertions require the npm install record,
+candidate package version and integrity, `plugins list` entry, and clean
+`config validate --json`. A separate isolated missing-plugin state exercises
+`doctor --fix --non-interactive` without an update or capability acceptance.
+A mock OpenAI server verifies a real agent turn
 before and after the update without provider credentials. After the update,
 the lane checks approvals and legacy-file retirement, effective cron owners,
 the candidate plugin artifact, the candidate state schema, an idempotent update,
@@ -238,6 +246,20 @@ This is a package-update test inside Docker. It does not prove container image
 replacement or background update campaigns; see [Updating](/install/updating)
 for those separate entry points. A required plugin capability consent remains
 an explicit recovery step and is recorded in the survivor summary.
+
+The `2026.9.2` to `2026.9.3` survivor transition exercises the installed updater.
+Shared-state migration content can be current while the published schema version
+remains at 15 until the old updater clears its publication grace period. Schema
+proof records both values and requires current content; it does not wait for or
+force publication. See [older updater schema handling](/reference/database-schemas#schema-bumps-and-older-updaters).
+
+`test:docker:release-upgrade-user-journey` separately covers the explicit external
+package-manager and fresh Doctor procedure, with an owner-stopped Gateway,
+verified backup, and retained baseline and new conversations through Gateway
+history. Its receipt records `selfUpdatePassed: false` and a `not-run` self-update
+status; external installation is not evidence of an internal updater outcome.
+Agent-schema and unsupported shared-state migration refusals remain covered by
+the Doctor owner tests.
 
 Scale the fixture with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION`, and

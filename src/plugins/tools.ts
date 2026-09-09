@@ -10,7 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getLoadedRuntimePluginRegistry,
-  registryMatchesManifestPluginIds,
+  createRuntimePluginManifestLookup,
 } from "./active-runtime-registry.js";
 import {
   isBundledConversationReadToolRegistration,
@@ -639,15 +639,16 @@ function registryHasScopedPluginTools(
   if (pluginIds === undefined) {
     return (registry.tools?.length ?? 0) > 0;
   }
-  const scopedPluginIds = new Set(pluginIds);
-  if (scopedPluginIds.size === 0) {
+  if (pluginIds.length === 0) {
     return true;
   }
   const registryPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
-  return (
-    Array.from(scopedPluginIds).every((pluginId) => registryPluginIds.has(pluginId)) &&
-    (manifestPlugins === undefined ||
-      registryMatchesManifestPluginIds(registry, manifestPlugins, pluginIds))
+  const isOwnerEligible = manifestPlugins
+    ? createRuntimePluginManifestLookup(registry, manifestPlugins)
+    : undefined;
+  return pluginIds.every(
+    (pluginId) =>
+      registryPluginIds.has(pluginId) && (!isOwnerEligible || Boolean(isOwnerEligible(pluginId))),
   );
 }
 
@@ -810,7 +811,6 @@ export function resolvePluginTools(params: {
   const blockedPlugins = new Set<string>();
   const factoryTimingStartedAt = Date.now();
   const factoryTimings: PluginToolFactoryTiming[] = [];
-  const manifestPluginsById = new Map(snapshot.plugins.map((plugin) => [plugin.id, plugin]));
 
   for (const entry of registry.tools) {
     if (!scopedPluginIds.has(entry.pluginId)) {
@@ -843,7 +843,7 @@ export function resolvePluginTools(params: {
       blockedPlugins.add(entry.pluginId);
       continue;
     }
-    const manifestPlugin = manifestPluginsById.get(entry.pluginId);
+    const manifestPlugin = snapshot.byPluginId.get(entry.pluginId);
     const declaredNames = entry.names ?? [];
     const availabilityNames =
       declaredNames.length > 0 ? declaredNames : (entry.declaredNames ?? []);

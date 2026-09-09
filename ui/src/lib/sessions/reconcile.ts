@@ -138,22 +138,26 @@ function thinkingMetadataIdentityMatches(
   );
 }
 
-function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
+function preserveMissingThinkingMetadata<T extends ThinkingMetadataCarrier>(
   incoming: T,
   existing: ThinkingMetadataCarrier | undefined,
 ): T {
-  if (existing && !thinkingMetadataIdentityMatches(incoming, existing)) {
-    return incoming;
-  }
-  const existingLevels = existing?.thinkingLevels;
-  if (!existingLevels?.length || (incoming.thinkingLevels?.length ?? 0) >= existingLevels.length) {
+  if (
+    !existing ||
+    (existing.thinkingLevels === undefined && existing.thinkingOptions === undefined) ||
+    !thinkingMetadataIdentityMatches(incoming, existing) ||
+    incoming.thinkingLevels !== undefined ||
+    incoming.thinkingOptions !== undefined
+  ) {
     return incoming;
   }
   return {
     ...incoming,
-    thinkingLevels: existingLevels,
-    ...(existing?.thinkingOptions ? { thinkingOptions: existing.thinkingOptions } : {}),
-    ...(incoming.thinkingDefault === undefined && existing?.thinkingDefault !== undefined
+    ...(existing.thinkingLevels !== undefined ? { thinkingLevels: existing.thinkingLevels } : {}),
+    ...(existing.thinkingOptions !== undefined
+      ? { thinkingOptions: existing.thinkingOptions }
+      : {}),
+    ...(incoming.thinkingDefault === undefined && existing.thinkingDefault !== undefined
       ? { thinkingDefault: existing.thinkingDefault }
       : {}),
   };
@@ -632,7 +636,7 @@ export function reconcileSessionHistory(
     matchesExistingSession(candidate, session, selectedGlobalAgentId),
   );
   const nextDefaults = defaults
-    ? preserveRicherThinkingMetadata(defaults, result.defaults)
+    ? preserveMissingThinkingMetadata(defaults, result.defaults)
     : result.defaults;
   // Lineage and repeated events can supply the current defaults. Preserve
   // result identity when nothing changes so shared subscribers stay quiet.
@@ -649,7 +653,7 @@ export function reconcileSessionHistory(
   }
   const visibleKey = existing?.key ?? session.key;
   const visibleSession = preserveRosterPresentationMetadata(
-    preserveRicherThinkingMetadata(
+    preserveMissingThinkingMetadata(
       visibleKey === session.key ? session : { ...session, key: visibleKey },
       existing,
     ),

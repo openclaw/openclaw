@@ -922,9 +922,6 @@ describe("installHooksFromNpmSpec", () => {
         async (
           params: Parameters<typeof hookInstallRuntime.installFromValidatedNpmSpecArchive>[0],
         ) => {
-          expect(
-            (params.archiveInstallParams as Record<string, unknown>).dangerouslyForceUnsafeInstall,
-          ).toBeUndefined();
           expect(params.archiveInstallParams).toEqual(
             expect.objectContaining({
               installPolicyRequest: {

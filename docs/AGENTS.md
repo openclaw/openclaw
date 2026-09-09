@@ -21,6 +21,7 @@ This directory owns docs authoring, published link rules, and docs i18n policy.
 
 ## Docs Content Rules
 
+- When `node-version.mjs`, `package.json` engines, the Bun minimum in `src/infra/runtime-guard.ts`, or the SQLite floors in `src/infra/sqlite-runtime-version.ts` change, update the supported-versions and history tables in `docs/install/node-compatibility.md` and `docs/install/bun-compatibility.md`.
 - For docs, UI copy, and picker lists, order services and providers alphabetically. The one exception is a section that explicitly describes runtime order or auto-detection order.
 - Keep bundled plugin naming consistent with the repo-wide plugin terminology rules in the root `AGENTS.md`.
 - CI verifies JSON5 and JSON config fences that look like whole `openclaw.json` documents against the schema. `pnpm docs:check-config-examples` runs that verification. Deliberately partial or legacy snippets opt out with `validate=false` in the fence info string.

@@ -497,7 +497,10 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
-            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) => result.classification,
+            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) =>
+              result.result.meta.modelFallbackStopReason
+                ? { stopReason: result.result.meta.modelFallbackStopReason }
+                : result.classification,
           }),
       ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
       ...(params.behavior.kind === "maintenance"

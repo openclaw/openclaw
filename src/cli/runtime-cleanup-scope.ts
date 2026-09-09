@@ -2,10 +2,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
 
 export type CliHarnessCleanup = {
   harnesses: Map<AgentHarness, () => Promise<void>>;
   registries: Set<PluginRegistry>;
+  pluginResources?: CliPluginInvocationResources;
 };
 
 // Entry modules must stay runtime-free. Only executable bootstraps grant this scope;
@@ -21,6 +23,12 @@ export function withCliProcessScope<T>(run: () => T): T {
 
 export function hasCliProcessScope(): boolean {
   return scope.getStore() !== undefined;
+}
+
+/** Caller-owned programs and Gateway boot have no executable resource owner. */
+export function getCliPluginInvocationResources(): CliPluginInvocationResources | undefined {
+  const current = scope.getStore();
+  return current && current !== "process" ? current.pluginResources : undefined;
 }
 
 /** Finalizers own their Windows descendants until executable process exit. */
@@ -46,7 +54,11 @@ export function withCliCommandCleanup<T>(
   if (scope.getStore() !== "process") {
     return run();
   }
-  const cleanup: CliHarnessCleanup = { harnesses: new Map(), registries: new Set() };
+  const cleanup: CliHarnessCleanup = {
+    harnesses: new Map(),
+    registries: new Set(),
+    pluginResources: new CliPluginInvocationResources(),
+  };
   return scope.run(cleanup, () => run(cleanup));
 }
 
@@ -64,7 +76,11 @@ export function retainCliRegistryHarnesses(
       // Preserve request facts as well as the exact registry binding after helpers unwind.
       current.harnesses.set(
         harness,
-        AsyncLocalStorage.bind(() => dispose(harness)),
+        AsyncLocalStorage.bind(() =>
+          current.pluginResources
+            ? current.pluginResources.runCleanup(() => dispose(harness))
+            : dispose(harness),
+        ),
       );
     }
   }

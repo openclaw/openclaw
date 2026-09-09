@@ -27,7 +27,10 @@ import {
   runProcess,
   translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
+import { loadControlUiSourceCatalog } from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
+import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -99,6 +102,68 @@ describe("translation provider privacy and fallback", () => {
     expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
   });
 
+  it.each([
+    { args: ["sync", "--refresh-key"], error: "requires a catalog key" },
+    {
+      args: ["sync", "--locale", "pl", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["sync", "--write", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["check", "--locale", "pl", "--refresh-key", "chat.parentSession"],
+      error: "requires sync --write --locale",
+    },
+    {
+      args: ["sync", "--write", "--locale", "pl", "--force", "--refresh-key", "chat.parentSession"],
+      error: "cannot be combined with --force",
+    },
+    {
+      args: [
+        "sync",
+        "--write",
+        "--locale",
+        "pl",
+        ...Array.from({ length: 65 }, (_, i) => ["--refresh-key", `key${i}`]).flat(),
+      ],
+      error: "at most 64 distinct keys",
+    },
+    {
+      args: ["sync", "--write", "--locale", "pl", "--refresh-key", "missing.fixture.key"],
+      error: "unknown refresh key: missing.fixture.key",
+    },
+  ])("rejects invalid targeted refresh: $error", async ({ args, error }) => {
+    const result = await runProcess(process.execPath, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/control-ui-i18n.ts",
+      ...args,
+    ]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(error);
+  });
+
+  it("requires provider authentication for targeted refresh even when auth is optional", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL", "1");
+    const result = await runProcess(process.execPath, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/control-ui-i18n.ts",
+      "sync",
+      "--write",
+      "--locale",
+      "pl",
+      "--refresh-key",
+      "chat.parentSession",
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
+  });
+
   it("translates outside the Gateway runtime without state access or model diagnostics", async () => {
     const temp = createTempDirTracker();
     const stateDir = path.join(temp.make("openclaw-translation-runtime-"), "state");
@@ -113,8 +178,13 @@ describe("translation provider privacy and fallback", () => {
         net.connect = net.createConnection = net.Socket.prototype.connect = rejectNetwork;
         syncBuiltinESMExports();
         let requests = 0;
-        globalThis.fetch = async () => {
+        globalThis.fetch = async (input, init) => {
           requests += 1;
+          const request = new Request(input, init);
+          const payload = await request.json();
+          assert.ok(JSON.stringify(payload.input).includes("apps/android/wear/src/main/res/values/strings.xml"), "native owner context must reach the serialized provider request");
+          assert.ok(JSON.stringify(payload.input).includes("VoiceGestureLabel(onHold: startDictate)"), "native owner excerpt must reach the serialized provider request");
+          assert.ok(JSON.stringify(payload.input).includes("unnumbered printf"), "native formatting must retain source argument roles");
           const item = { id: "message", type: "message", role: "assistant", content: [] };
           const text = JSON.stringify({ connect: "Connecter" });
           const events = [
@@ -128,7 +198,7 @@ describe("translation provider privacy and fallback", () => {
           return new Response(events.map(event => "data: " + JSON.stringify(event) + "\\n\\n").join(""), { headers: { "Content-Type": "text/event-stream" } });
         };
         const { translateNativeEntries } = await import(${JSON.stringify(scriptUrl)});
-        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "fixture" }], "fr");
+        const result = await translateNativeEntries([{ id: "connect", source: "Connect", sourcePath: "apps/android/wear/src/main/res/values/strings.xml", sourceContext: "VoiceGestureLabel(onHold: startDictate)" }], "fr");
         assert.equal(result.get("connect"), "Connecter");
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
@@ -169,6 +239,20 @@ describe("translation provider privacy and fallback", () => {
     expect(log).not.toContain(fallback);
   });
 
+  it("includes native owner context in the translation batch budget", async () => {
+    vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET", "500");
+    llm.completeSimple.mockResolvedValue(response());
+    const contextualEntries = entries.slice(0, 2).map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      sourcePath: "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
+      sourceContext: "Button(enabled = !runPending) ".repeat(6),
+    }));
+
+    expect((await translateNativeEntries(contextualEntries, "fr")).size).toBe(2);
+    expect(llm.completeSimple).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["401", "403", "404", "429", "insufficient_quota", "ECONNRESET"])(
     "keeps %s failures private without changing models",
     async (errorCode) => {
@@ -203,6 +287,19 @@ describe("translation provider privacy and fallback", () => {
       "provider_error",
     );
     expect(vi.mocked(process.stdout).write.mock.calls.flat().join("")).not.toContain(primary);
+  });
+});
+
+describe("control-ui config hint source catalog", () => {
+  it("includes core config labels and help under collision-safe keys", () => {
+    const source = flattenTranslations(loadControlUiSourceCatalog());
+
+    const label = "Gateway Token";
+    expect(source.get(configHintTranslationKey("gateway.auth.token", "label", label))).toBe(label);
+    const helpEntry = [...source].find(([key]) =>
+      key.startsWith("configHints.gateway%2Eauth%2Etoken.help."),
+    );
+    expect(helpEntry?.[1]).toBeTypeOf("string");
   });
 });
 
@@ -301,6 +398,7 @@ describe("control-ui-i18n generated ownership", () => {
       "scripts/control-ui-i18n.ts",
       "scripts/control-ui-i18n-verify.ts",
       "scripts/lib/control-ui-i18n-catalog.ts",
+      "scripts/lib/control-ui-i18n-catalog-values.ts",
       "scripts/lib/control-ui-i18n-sync-plan.ts",
       "ui/AGENTS.md",
       "ui/config/control-ui-locales.ts",

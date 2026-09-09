@@ -61,8 +61,7 @@ function createRouteSessions() {
 type AppLifecycleState = {
   loginToken: string;
   loginPassword: string;
-  loginShowGatewayToken: boolean;
-  loginShowGatewayPassword: boolean;
+  loginShowGatewaySecret: boolean;
   disconnectedCallback: () => void;
   synchronizeGateway: (gateway: ApplicationGateway) => void;
 };
@@ -283,13 +282,11 @@ function committedRouterState(
 describe("OpenClaw app lifecycle", () => {
   it("hides revealed login credentials when the app connection epoch ends", () => {
     const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
-    app.loginShowGatewayToken = true;
-    app.loginShowGatewayPassword = true;
+    app.loginShowGatewaySecret = true;
 
     app.disconnectedCallback();
 
-    expect(app.loginShowGatewayToken).toBe(false);
-    expect(app.loginShowGatewayPassword).toBe(false);
+    expect(app.loginShowGatewaySecret).toBe(false);
   });
 
   it("hides revealed login credentials when the Gateway source changes", () => {
@@ -313,13 +310,11 @@ describe("OpenClaw app lifecycle", () => {
       },
     } as ApplicationGateway;
     app.synchronizeGateway(firstGateway);
-    app.loginShowGatewayToken = true;
-    app.loginShowGatewayPassword = true;
+    app.loginShowGatewaySecret = true;
 
     app.synchronizeGateway(secondGateway);
 
-    expect(app.loginShowGatewayToken).toBe(false);
-    expect(app.loginShowGatewayPassword).toBe(false);
+    expect(app.loginShowGatewaySecret).toBe(false);
     expect(app.loginToken).toBe("second");
     expect(app.loginPassword).toBe("second-password");
   });
@@ -878,23 +873,33 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     }
   });
 
-  it("normalizes an unloaded palette toggle shortcut to open", async () => {
-    const element = createLazyElementSpec("command palette");
-    const openPalette = vi.fn();
-    const shell = configureLazyPaletteShell(element, openPalette);
-    stubRenderedWhenDefined(shell);
-    const event = new KeyboardEvent("keydown", {
-      key: "л",
-      code: "KeyK",
-      ctrlKey: true,
-      cancelable: true,
-    });
+  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+    "opens an unloaded palette only with the platform shortcut on %s",
+    async (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const element = createLazyElementSpec("command palette");
+      const openPalette = vi.fn();
+      const shell = configureLazyPaletteShell(element, openPalette);
+      stubRenderedWhenDefined(shell);
+      const chord = (metaKey: boolean) =>
+        new KeyboardEvent("keydown", {
+          key: "л",
+          code: "KeyK",
+          metaKey,
+          ctrlKey: !metaKey,
+          cancelable: true,
+        });
+      const other = chord(platform !== "MacIntel");
+      shell.handleDocumentKeydown(other);
+      expect(other.defaultPrevented).toBe(false);
+      expect(openPalette).not.toHaveBeenCalled();
 
-    shell.handleDocumentKeydown(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    await vi.waitFor(() => expect(openPalette).toHaveBeenCalledOnce());
-  });
+      const primary = chord(platform === "MacIntel");
+      shell.handleDocumentKeydown(primary);
+      expect(primary.defaultPrevented).toBe(true);
+      await vi.waitFor(() => expect(openPalette).toHaveBeenCalledOnce());
+    },
+  );
 
   it("clears a rejected command palette action on Close", async () => {
     vi.stubGlobal("sessionStorage", createStorageMock());

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { replacePatternBounded } from "./redact-bounded.js";
 import {
   DEFAULT_REDACT_PATTERNS,
   TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
@@ -42,6 +43,42 @@ afterEach(() => {
     fs.rmSync(dir, { force: true, recursive: true });
   }
   tempDirs = [];
+});
+
+describe("bounded replacement output", () => {
+  it.each<[RegExp, string, string]>([
+    [/aaaa/g, "blue", "bluebbbbcccc"],
+    [/bbbb/g, "blue", "aaaabluecccc"],
+    [/cccc/g, "blue", "aaaabbbbblue"],
+    [/none/g, "blue", "aaaabbbbcccc"],
+    [/aaaa/g, "", "bbbbcccc"],
+  ])("preserves complete output for %s", (pattern, replacement, expected) => {
+    expect(
+      replacePatternBounded("aaaabbbbcccc", pattern, () => replacement, {
+        chunkThreshold: 4,
+        chunkSize: 4,
+      }),
+    ).toBe(expected);
+  });
+
+  it("keeps calling a stateful replacer after unchanged results", () => {
+    const calls: Array<{ match: string; offset: number; input: string }> = [];
+    const output = replacePatternBounded(
+      "red red red",
+      /red/g,
+      (match, offset, input) => {
+        calls.push({ match, offset, input });
+        return calls.length === 3 ? "blue" : match;
+      },
+      { chunkThreshold: 4, chunkSize: 4 },
+    );
+    expect(output).toBe("red red blue");
+    expect(calls).toEqual([
+      { match: "red", offset: 0, input: "red " },
+      { match: "red", offset: 0, input: "red " },
+      { match: "red", offset: 0, input: "red" },
+    ]);
+  });
 });
 
 describe("default redact pattern ownership", () => {
@@ -955,6 +992,21 @@ describe("redactSensitiveText", () => {
     const header = "X-OpenClaw-Token=prefix&actual-secret#tail";
     const headerBitmap = computeSensitiveRedactionBitmap(header, resolved);
     expect(headerBitmap.slice(header.indexOf("=") + 1).every(Boolean)).toBe(true);
+  });
+
+  it("keeps original bitmap offsets after empty values and Unicode line prefixes", () => {
+    const input = '😀safe\r\nbody: code=&safe=1\rclient%5Fsecret="abc";&safe=2';
+    const resolved = resolveRedactOptions({ mode: "tools" });
+    const bitmap = computeSensitiveRedactionBitmap(input, resolved);
+    const secretStart = input.indexOf('"abc"');
+
+    expect(redactSensitiveText(input)).toBe(
+      "😀safe\r\nbody: code=***&safe=1\rclient%5Fsecret=***;&safe=2",
+    );
+    expect(bitmap).toHaveLength(input.length);
+    expect(bitmap.slice(0, secretStart).some(Boolean)).toBe(false);
+    expect(bitmap.slice(secretStart, secretStart + 5).every(Boolean)).toBe(true);
+    expect(bitmap.slice(secretStart + 5).some(Boolean)).toBe(false);
   });
 
   it("masks token prefixes embedded after adjacent text", () => {
@@ -2036,6 +2088,60 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("1//0fake-refresh-token");
     expect(serialized).not.toContain("opaque-access-token-value");
     expect(serialized).not.toContain("opaque-refresh-token-value");
+  });
+
+  it.each([
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ECONNABORTED",
+    "ENETRESET",
+    "EPIPE",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "EHOSTDOWN",
+  ])("preserves the known transport code %s only in object cause chains", (code) => {
+    expect(redactSecrets({ cause: { code, cause: { code } } })).toEqual({
+      cause: { code, cause: { code } },
+    });
+    expect(redactSecrets({ Cause: { CODE: code } })).toEqual({ Cause: { CODE: code } });
+  });
+
+  it.each([
+    { input: { cause: { code: "p4Q6x7J9" } }, expected: { cause: { code: "***" } } },
+    {
+      input: { cause: { code: "token-EAI_AGAIN-secret" } },
+      expected: { cause: { code: "token-…cret" } },
+    },
+    { input: { cause: { code: " EAI_AGAIN" } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: "EAI_AGAIN\n" } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: 123456 } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: true } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: 123456n } }, expected: { cause: { code: "***" } } },
+    {
+      input: { oauth: { cause: { code: "EAI_AGAIN" } } },
+      expected: { oauth: { cause: { code: "***" } } },
+    },
+    {
+      input: { providerAuth: { cause: { code: "p4Q6x7J9" } } },
+      expected: { providerAuth: { cause: { code: "***" } } },
+    },
+    { input: { cause: [{ code: "EAI_AGAIN" }] }, expected: { cause: [{ code: "***" }] } },
+    { input: { cause: { code: ["EAI_AGAIN"] } }, expected: { cause: { code: ["***"] } } },
+    { input: [{ cause: { code: "EAI_AGAIN" } }], expected: [{ cause: { code: "***" } }] },
+  ])(
+    "masks authorization codes outside the exact transport boundary: $input",
+    ({ input, expected }) => {
+      expect(redactSecrets(input)).toEqual(expected);
+    },
+  );
+
+  it("keeps secret masking ahead of known transport code preservation", () => {
+    registerSecretValueForRedaction("EAI_AGAIN");
+    const output = redactSecrets({ cause: { code: "EAI_AGAIN", token: "opaque-neighbor-secret" } });
+    expect(output.cause.code).not.toBe("EAI_AGAIN");
+    expect(output.cause.token).not.toBe("opaque-neighbor-secret");
   });
 
   it("keeps structured error codes while redacting OAuth authorization codes", () => {

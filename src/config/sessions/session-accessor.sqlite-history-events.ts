@@ -31,6 +31,12 @@ import {
   readTranscriptDisplaySource,
 } from "./session-accessor.sqlite-display-position.js";
 import {
+  isVisibleHistoryNonMessageEventSql,
+  parseStoredTranscriptEvent,
+  readHistoricalHistoryAnchorPage,
+  resolveHistoricalHistoryEventById,
+} from "./session-accessor.sqlite-history-interval.js";
+import {
   assertVisibleMessageRangeJson,
   hasUnindexedVisibleMessages,
   iterateVisibleMessageRange,
@@ -96,7 +102,12 @@ function resolveVisibleHistoryProjection(
           .as("next_message_position"),
       )
       .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("identity.event_type", "in", ["compaction", "reset"])
+      .where((eb) =>
+        isVisibleHistoryNonMessageEventSql(
+          eb.ref("identity.event_type"),
+          eb.ref("event.event_json"),
+        ),
+      )
       .orderBy("active.active_position", "asc"),
   ).rows;
   const resetIndex = rows.findLastIndex((row) => row.event_type === "reset");
@@ -171,10 +182,15 @@ function readBoundaryEvents(
         )
         .select(["event.seq", "event.event_json"])
         .where("active.session_id", "=", projection.resolved.sessionId)
-        .where("identity.event_type", "in", ["compaction", "reset"])
+        .where((eb) =>
+          isVisibleHistoryNonMessageEventSql(
+            eb.ref("identity.event_type"),
+            eb.ref("event.event_json"),
+          ),
+        )
         .where("identity.seq", ">=", firstSeq)
         .where("identity.seq", "<=", lastSeq),
-    ).rows.map((row) => [row.seq, JSON.parse(row.event_json) as TranscriptEvent]),
+    ).rows.map((row) => [row.seq, parseStoredTranscriptEvent(row.event_json)]),
   );
 }
 
@@ -313,7 +329,7 @@ function readVisibleMessageById(
   return seq === undefined
     ? undefined
     : {
-        event: JSON.parse(row.event_json) as TranscriptEvent,
+        event: parseStoredTranscriptEvent(row.event_json),
         eventSeq: row.event_seq,
         seq,
       };
@@ -403,6 +419,13 @@ export function readTranscriptDisplayDelta(
               : resolveHistoryMessageSequence(visible, history, row.message_position),
           ]),
     );
+    if (firstSeq !== undefined && lastSeq !== undefined) {
+      for (const boundary of history.boundaries) {
+        if (boundary.eventSeq >= firstSeq && boundary.eventSeq <= lastSeq) {
+          sequences.set(boundary.eventSeq, boundary.displayPosition + 1);
+        }
+      }
+    }
     const events = positionTranscriptDisplayEvents(
       projection,
       history.displaySource,
@@ -539,7 +562,9 @@ export function readSessionTranscriptHistoryEventById(
 ): SessionTranscriptMessageEvent | undefined {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
-    const event = resolveHistoryEventById(projection, eventId, history);
+    const event =
+      resolveHistoryEventById(projection, eventId, history) ??
+      resolveHistoricalHistoryEventById(projection, eventId);
     return event
       ? positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0]
       : undefined;
@@ -604,14 +629,19 @@ export function readSessionTranscriptHistoryAnchorPage(
     const history = resolveVisibleHistoryProjection(projection);
     const anchor = resolveHistoryEventById(projection, options.messageId, history);
     if (!anchor) {
-      return {
-        events: [],
-        found: false,
-        hasOverreadContext: false,
-        offset: 0,
-        displaySource: history.displaySource,
-        totalMessages: history.total,
-      };
+      // Explicit anchors reopen the closed reset interval that still contains the
+      // active-path row. Unanchored history and current-display lookup stay
+      // latest-reset-relative; missing or off-path IDs stay not-found.
+      return (
+        readHistoricalHistoryAnchorPage(projection, history.displaySource, options) ?? {
+          events: [],
+          found: false,
+          hasOverreadContext: false,
+          offset: 0,
+          displaySource: history.displaySource,
+          totalMessages: history.total,
+        }
+      );
     }
     const pageSize = Math.max(
       1,

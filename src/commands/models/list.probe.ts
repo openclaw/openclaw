@@ -45,7 +45,7 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
-import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -385,15 +385,12 @@ export async function buildProbeTargets(params: {
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await readPreparedModelCatalog({
     config: cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
-    // A provider probe only needs candidate selection. Keep it request-scoped so it cannot
-    // supersede or be superseded by the Gateway's concurrent full-catalog materialization.
     readOnly: true,
-    providerDiscoveryProviderIds: providers,
   });
   const candidates = buildProbeCandidateMap(modelCandidates);
   const targets: AuthProbeTarget[] = [];

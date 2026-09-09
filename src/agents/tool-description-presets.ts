@@ -81,7 +81,7 @@ export function describeSessionsListTool(options?: SessionLinkDescriptionOptions
 export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Read sanitized visible-session history.",
-    "Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
+    "Before reply/debug/resume. Use messageId (optionally sessionId) for anchored history; offset is ignored when messageId is set. Without messageId, use offset for plain pagination. limit bounds either mode. Include tool messages with includeTools.",
     "pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
@@ -116,7 +116,7 @@ export function describeSubagentSpawnContext(threadAvailable: boolean): string {
 }
 
 export const SESSIONS_SPAWN_COLLECTOR_GUIDANCE =
-  "`collect=true` (swarm): parallel fan-out collector children with no completion notification; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
+  "Default to ordinary spawn for one or a few children. Reserve `collect=true` (swarm) for large parallel fan-out (several similar children, about five or more). Collectors send no completion notification and cannot be steered; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
 
 /** Describes the sessions_spawn tool for model-facing instructions. */
 export function describeSessionsSpawnTool(options?: {

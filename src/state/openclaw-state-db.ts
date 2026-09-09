@@ -87,7 +87,10 @@ import {
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import {
+  assertSupportedStateSchemaVersion,
+  readStateSchemaContentVersion,
+} from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   initializeNativeOpenClawStateConnection,
@@ -104,7 +107,6 @@ import {
 } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import {
-  readStateSchemaContentVersion,
   readStateSchemaPublicationBlocker,
   type StateSchemaPublicationBlocker,
 } from "./openclaw-state-schema-publication.js";
@@ -165,9 +167,12 @@ function repairStateSchema(
         const applied: string[] = [];
         const previousVersion = readStateSchemaContentVersion(db);
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
-          for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-            allowMissingColumns: true,
-          })) {
+          for (const name of verifyAndRepairCanonicalSqliteIndexes(
+            db,
+            pathname,
+            OPENCLAW_STATE_SCHEMA_SQL,
+            { allowMissingColumns: true },
+          )) {
             rebuiltIndexNames.add(name);
           }
           // Current-schema doctor repair may normalize recognized columns or
@@ -177,8 +182,6 @@ function repairStateSchema(
           });
         } else {
           openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
-        }
-        if (rebuiltIndexNames.size === 0) {
           assertSqliteIntegrity(db, pathname);
         }
         dropLegacyStateTables(db);

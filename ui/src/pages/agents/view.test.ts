@@ -4,10 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
+import type { MultiSelect } from "../../components/multi-select.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
@@ -288,10 +290,13 @@ describe("renderAgents", () => {
       container,
     );
 
-    const defaultSelect = container.querySelector("wa-select.model-picker__select");
-    expect(defaultSelect?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe(
-      "openai/gpt-5.4",
-    );
+    await updatePickers(container);
+    const defaultSelect = container.querySelector("openclaw-select-picker.model-picker__select");
+    expect(
+      defaultSelect
+        ?.querySelector('[role="option"][aria-selected="true"]')
+        ?.getAttribute("data-value"),
+    ).toBe("openai/gpt-5.4");
 
     render(
       renderAgents(
@@ -309,10 +314,11 @@ describe("renderAgents", () => {
       container,
     );
 
-    const inheritedSelect = container.querySelector("wa-select.model-picker__select");
-    expect(inheritedSelect?.querySelector("wa-option[selected]")?.textContent?.trim()).toBe(
-      "Inherit default (openai/gpt-5.4)",
-    );
+    await updatePickers(container);
+    const inheritedSelect = container.querySelector("openclaw-select-picker.model-picker__select");
+    expect(
+      inheritedSelect?.querySelector('[role="option"][aria-selected="true"]')?.textContent?.trim(),
+    ).toBe("Inherit default (openai/gpt-5.4)");
   });
 
   it("shows canonical model names alongside configured aliases in agent options", async () => {
@@ -376,13 +382,14 @@ describe("renderAgents", () => {
       container,
     );
 
-    const select = container.querySelector("wa-select.model-picker__select");
-    expect(select?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe(
-      "anthropic/claude-opus-4-8",
-    );
+    await updatePickers(container);
+    const select = container.querySelector("openclaw-select-picker.model-picker__select");
+    expect(
+      select?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("anthropic/claude-opus-4-8");
     const options = new Map(
-      Array.from(select?.querySelectorAll("wa-option") ?? []).map((option) => [
-        option.getAttribute("value"),
+      Array.from(select?.querySelectorAll('[role="option"]') ?? []).map((option) => [
+        option.getAttribute("data-value"),
         option.querySelector(".picker-select__label")?.textContent?.trim(),
       ]),
     );
@@ -426,10 +433,8 @@ describe("renderAgents", () => {
       container,
     );
 
-    expect(container.querySelectorAll(".agent-chip-input .chip")).toHaveLength(0);
-    expect(container.querySelector<HTMLInputElement>(".agent-chip-input input")?.placeholder).toBe(
-      "provider/model",
-    );
+    const field = container.querySelector<MultiSelect>("openclaw-multi-select.agent-fallbacks");
+    expect(field?.value).toEqual([]);
   });
 
   it("remounts overview model controls when switching selected agents", async () => {
@@ -465,8 +470,11 @@ describe("renderAgents", () => {
       container,
     );
 
-    const betaSelect = container.querySelector("wa-select.model-picker__select");
-    expect(betaSelect?.querySelector('wa-option[value="openai/gpt-5.4"]')).not.toBeNull();
+    await updatePickers(container);
+    const betaSelect = container.querySelector("openclaw-select-picker.model-picker__select");
+    expect(
+      betaSelect?.querySelector('[role="option"][data-value="openai/gpt-5.4"]'),
+    ).not.toBeNull();
 
     render(
       renderAgents(
@@ -484,9 +492,10 @@ describe("renderAgents", () => {
       container,
     );
 
-    const alphaSelect = container.querySelector("wa-select.model-picker__select");
+    await updatePickers(container);
+    const alphaSelect = container.querySelector("openclaw-select-picker.model-picker__select");
     expect(
-      alphaSelect?.querySelector('wa-option[value="anthropic/claude-sonnet-4-6"]'),
+      alphaSelect?.querySelector('[role="option"][data-value="anthropic/claude-sonnet-4-6"]'),
     ).not.toBeNull();
     expect(alphaSelect).not.toBe(betaSelect);
   });
@@ -1023,6 +1032,7 @@ describe("renderAgentFiles", () => {
     ]);
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
+    expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Collapse preview");
 
     container.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')?.click();
 
@@ -1035,5 +1045,6 @@ describe("renderAgentFiles", () => {
     ]);
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
+    expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Expand preview");
   });
 });

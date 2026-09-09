@@ -65,6 +65,7 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onFocusComposer"
+  | "onAddToChat"
   | "onOpenSession"
   | "onSend"
 > &
@@ -204,6 +205,14 @@ export function renderChat(props: ChatProps) {
         onDiscardQueuedMessage: props.onQueueRemove,
         onCompanionPrefill:
           props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
+        onAddToChat:
+          props.canSend && !props.suggestionComposer
+            ? (question) => {
+                const draft = props.getDraft?.() ?? props.draft;
+                props.onDraftChange(draft ? `${draft}\n\n${question}` : question);
+                requestUpdate();
+              }
+            : undefined,
         onOpenSession: props.onSessionSelect,
         onFocusComposer: () =>
           chatSection
@@ -246,21 +255,24 @@ export function renderChat(props: ChatProps) {
     taskSuggestionTray === nothing
       ? nothing
       : html`<div class="chat-gutter-stack">${taskSuggestionTray}</div>`;
-  const scrollToBottomButton =
-    props.showNewMessages && props.onScrollToBottom
-      ? html`
-          <div class="chat-scroll-to-bottom-wrap">
-            <button
-              class="chat-scroll-to-bottom"
-              type="button"
-              @click=${() => props.onScrollToBottom?.({ smooth: true })}
-              aria-label=${t("chat.actions.scrollToLatest")}
-            >
-              ${icons.arrowDown}
-            </button>
-          </div>
-        `
-      : nothing;
+  // Keep the affordance mounted so visibility changes can finish their exit transition.
+  const scrollToBottomButton = props.onScrollToBottom
+    ? html`
+        <div class="chat-scroll-to-bottom-wrap">
+          <button
+            class="chat-scroll-to-bottom"
+            data-visible=${Boolean(props.showNewMessages)}
+            type="button"
+            ?inert=${!props.showNewMessages}
+            aria-hidden=${!props.showNewMessages}
+            @click=${() => props.onScrollToBottom?.({ smooth: true })}
+            aria-label=${t("chat.actions.scrollToLatest")}
+          >
+            ${icons.arrowDown}
+          </button>
+        </div>
+      `
+    : nothing;
   const historyState = props.historyState;
   const historyLoadState = historyState ? getChatHistoryLoadState(historyState) : undefined;
   const historyFailed =

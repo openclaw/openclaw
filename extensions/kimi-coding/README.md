@@ -11,6 +11,14 @@ openclaw gateway restart
 
 See <https://docs.openclaw.ai/providers/moonshot> for setup and configuration.
 
+## Quota errors
+
+Kimi can return HTTP 403 when a weekly usage limit is exhausted. OpenClaw treats
+explicit weekly, seven-day, or quota-reset errors as rate limits. Wait for the
+provider's quota window to reset or use another configured provider; replacing a
+valid API key does not restore quota. Invalid keys and access restrictions keep
+their authentication error handling.
+
 ## Catalog notes
 
 Model rows live in `openclaw.plugin.json` under `modelCatalog.providers.kimi`.

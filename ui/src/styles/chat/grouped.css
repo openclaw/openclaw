@@ -186,7 +186,8 @@
   pointer-events: auto;
 }
 
-.chat-group-footer--send-failure {
+/* Delivery recovery stays visible even when identity metadata is collapsed. */
+.chat-group-footer.chat-group-footer--send-failure {
   opacity: 1;
   pointer-events: auto;
 }
@@ -641,7 +642,6 @@
 .chat-avatar.user {
   background: var(--accent-subtle);
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* Attributed sender initials carry their stable identity color inline. */
@@ -1056,7 +1056,6 @@ img.chat-avatar.chat-avatar--logo {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 8px;
   padding: 0;
   border: 0;
   background: transparent;

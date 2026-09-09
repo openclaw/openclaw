@@ -270,9 +270,13 @@ transports, or control the hosting platform. The host must fence its ingress
 before preparation and remains responsible for wake, snapshot/freeze, and
 stop. `activeCount` is the aggregate tracked-work count, while `blockers`
 contains the non-zero category counts and bounded task details. This is not a
-general process-quiescence barrier. A `background-exec` blocker is aggregate
-only: command text, process IDs, output, and session or scope identifiers never
-cross the protocol. Channel health, maintenance, cache refresh, established
+general process-quiescence barrier. The process registry's `background-exec` entry
+is aggregate only. Durable background exec tasks also use `background-exec`
+and retain their bounded `task` metadata; other task kinds remain `task`.
+A process can contribute to both counts. This classification does not change
+`activeCount` or readiness, and adds no command text, output, operating system
+process IDs, or session or scope identifiers. Channel health, maintenance,
+cache refresh, established
 plugin WebSocket sessions, and unregistered plugin-owned background work can
 remain active.
 The hosting platform must freeze or snapshot the full process tree and its
@@ -284,7 +288,7 @@ contract.
   plugin and project idempotent full snapshots to the external host adapter.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
-  projection](/plugins/hooks#safe-external-cron-projection).
+  projection](/plugins/hooks/lifecycle#safe-external-cron-projection).
 </Tip>
 
 ## App code vs plugin code

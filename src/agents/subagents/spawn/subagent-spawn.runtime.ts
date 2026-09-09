@@ -31,7 +31,7 @@ export {
 } from "../../../utils/delivery-context.shared.js";
 export { resolveAgentConfig } from "../../agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "../../lanes.js";
-export { loadPreparedModelCatalog } from "../../prepared-model-catalog.js";
+export { readPreparedModelCatalog } from "../../prepared-model-catalog.js";
 export { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 export {
   resolveInternalSessionKey,

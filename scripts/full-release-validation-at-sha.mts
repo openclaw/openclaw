@@ -21,6 +21,7 @@ import {
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import { validatePackageSourceRef } from "./package-source-preflight.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW = "full-release-validation.yml";
@@ -1068,6 +1069,10 @@ function main() {
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha, targetVersion);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha, args.trustedWorkflowRef);
   const trustedWorkflowHarness = assertTrustedWorkflowHarness(workflowSha);
+  // Read target blobs with trusted tooling before creating remote transport refs.
+  validatePackageSourceRef(targetSha, {
+    allowUnreleasedChangelog: args.inputs.allow_unreleased_changelog === "true",
+  });
   if (trustedWorkflowHarness.contract === "1") {
     args.inputs.reuse_evidence = "false";
   }
@@ -1082,11 +1087,11 @@ function main() {
     ...(trustedWorkflowHarness.contract === RELEASE_ISOLATION_TOOLING_CONTRACT
       ? {
           trusted_workflow_json: JSON.stringify({
-            ref: args.trustedWorkflowRef,
             fullRef:
               args.trustedWorkflowRef === "main"
                 ? "refs/heads/main"
                 : `refs/tags/${args.trustedWorkflowRef}`,
+            ref: args.trustedWorkflowRef,
             sha: workflowSha,
           }),
         }

@@ -103,6 +103,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   },
 }));
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { ResponsesContinuationRequest } from "./openai-responses-continuation.js";
@@ -405,14 +406,7 @@ describe("Responses WebSocket steering handoff", () => {
     expect(firstAnswer.stopReason).not.toBe("error");
     context.messages.push(
       firstAnswer,
-      {
-        role: "toolResult",
-        toolCallId: "call_1|fc_1",
-        toolName: "lookup",
-        content: [{ type: "text", text: "found" }],
-        isError: false,
-        timestamp: 1,
-      },
+      makeTextToolResult("call_1|fc_1", "lookup", "found", false, 1),
       steeringUser,
     );
     socket.emit({ type: "response.created", response: { id: "resp_2" } });

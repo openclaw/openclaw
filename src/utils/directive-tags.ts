@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
-// Directive tag helpers parse inline directive tags from user text.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 
@@ -58,8 +57,9 @@ export function replaceOutsideCodeRegions(
   regex: RegExp,
   replacement: (match: string, captures: unknown[], offset: number, source: string) => string,
 ): string {
-  const codeRegions = text.includes("[[") ? findCodeRegions(text) : [];
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
   return text.replace(regex, (...args: unknown[]) => {
+    codeRegions ??= text.includes("[[") ? findCodeRegions(text) : [];
     const match = String(args[0]);
     const offset = args.at(-2);
     return typeof offset === "number" && isInsideCode(offset + match.indexOf("[["), codeRegions)
@@ -69,13 +69,12 @@ export function replaceOutsideCodeRegions(
 }
 
 function normalizeDirectiveWhitespace(text: string): string {
-  // Extract → normalize prose → restore:
-  // Stash every code block (fenced ``` / ~~~ and indent-code 4-space/tab)
-  // under a sentinel-delimited placeholder so the prose regexes never touch them.
+  // Stash canonical code regions before normalizing prose. Indented code also
+  // occurs inside Markdown containers without any backtick or tilde delimiter.
   const blockSentinel = createBlockSentinel(text);
   const blockPlaceholderRe = new RegExp(`${blockSentinel}(\\d+)${blockSentinel}`, "g");
   const blocks: string[] = [];
-  const codeRegions = text.includes("`") || text.includes("~~~") ? findCodeRegions(text) : [];
+  const codeRegions = findCodeRegions(text);
   let masked = "";
   let cursor = 0;
   // The canonical scanner keeps false closers, indented closers, and open fences intact.
@@ -84,10 +83,7 @@ function normalizeDirectiveWhitespace(text: string): string {
     masked += `${text.slice(cursor, span.start)}${blockSentinel}${blocks.length - 1}${blockSentinel}`;
     cursor = span.end;
   }
-  masked = `${masked}${text.slice(cursor)}`.replace(/(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm, (block) => {
-    blocks.push(block);
-    return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
-  });
+  masked += text.slice(cursor);
 
   const normalized = masked
     .replace(/\r\n/g, "\n")
@@ -141,7 +137,7 @@ export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDi
   }
   // Only malformed prefixes at the absolute message start are control text; keep
   // the regex non-multiline while code-region scanning preserves literal examples.
-  const codeRegions = findCodeRegions(text);
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
   const parts: string[] = [];
   let cursor = 0;
   let searchFrom = 0;
@@ -164,7 +160,7 @@ export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDi
       continue;
     }
     previousMatchEnd = searchFrom;
-    if (isInsideCode(marker, codeRegions)) {
+    if (isInsideCode(marker, (codeRegions ??= findCodeRegions(text)))) {
       continue;
     }
     parts.push(text.slice(cursor, start), match[0].includes("]]") ? " " : "");

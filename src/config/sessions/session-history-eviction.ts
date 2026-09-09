@@ -545,52 +545,62 @@ async function enforceSessionHistoryMaintenanceSerialized(
         }
         // Extract-before-delete is the retention invariant. The lifecycle hold
         // fences admission while the store writer is released for archive I/O.
-        const committedArchives = await runExclusiveSqliteSessionReclamation(async () => {
+        return await runExclusiveSqliteSessionReclamation(async () => {
           const materialized = await materializeSessionStateDeletePlans([plan]);
           const diagnostics: SqliteSessionReclamationDiagnostics = {};
-          return await runExclusiveSqliteSessionWrite(
+          const reclamationPlan = await runExclusiveSqliteSessionWrite(
             resolved,
             async () => {
               const database = openOpenClawAgentDatabase(databaseOptions);
-              const reclamationPlan = createHistoryEvictionReclamationPlan({
+              const protectedSessionIds = collectCandidateAdditionalProtection({
+                database,
+                preserveRecentMs: params.maintenance.preserveRecentMs,
+                sessionId,
+                storePath: params.storePath,
+              });
+              if (protectedSessionIds.has(sessionId)) {
+                return null;
+              }
+              return createHistoryEvictionReclamationPlan({
                 databaseOptions,
                 diskBudget: { preserveRecentMs: params.maintenance.preserveRecentMs },
                 materializedPlans: materialized,
-                protectedSessionIds: collectCandidateAdditionalProtection({
-                  database,
-                  preserveRecentMs: params.maintenance.preserveRecentMs,
-                  sessionId,
-                  storePath: params.storePath,
-                }),
+                protectedSessionIds,
                 sessionId,
               });
-              const reclaimed = await runSqliteSessionReclamation({
-                diagnostics,
-                forceInProcess: false,
-                plan: reclamationPlan,
-              });
-              if (reclaimed.kind !== reclamationPlan.kind) {
-                throw new Error(
-                  `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
-                );
-              }
-              if (!reclaimed.value.deleted) {
-                return null;
-              }
-              return reclaimed.value.archivedTranscripts;
             },
             diagnostics,
           );
+          if (!reclamationPlan) {
+            return { kind: "protected" as const };
+          }
+          const reclaimed = await runSqliteSessionReclamation({
+            diagnostics,
+            forceInProcess: false,
+            plan: reclamationPlan,
+          });
+          if (reclaimed.kind !== reclamationPlan.kind) {
+            throw new Error(
+              `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
+            );
+          }
+          if (!reclaimed.value.deleted) {
+            return null;
+          }
+          return {
+            kind: "reclaimed" as const,
+            archivedTranscripts: reclaimed.value.archivedTranscripts,
+          };
         });
-        if (!committedArchives) {
-          return null;
-        }
-        return {
-          archivedTranscripts: committedArchives,
-        };
       },
     });
     if (!eviction) {
+      continue;
+    }
+    if (eviction.kind === "protected") {
+      // A peer may have freed space during materialization. Recheck after both
+      // holds release so stale pressure cannot evict another candidate.
+      usage = await measureSessionPhysicalDiskUsage(params.storePath);
       continue;
     }
     // The lifecycle and SQLite writer lanes are both released before file I/O;

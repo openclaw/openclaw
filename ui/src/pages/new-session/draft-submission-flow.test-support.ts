@@ -18,10 +18,14 @@ type FixtureOptions = {
   selfUser?: { id: string };
   data?: NewSessionRouteData;
   request?: (method: string, params?: unknown) => Promise<unknown>;
+  modelCatalog?: (params?: unknown) => Promise<unknown>;
 };
 
 export function createDraftFixture(options: FixtureOptions = {}) {
   const request = vi.fn((method: string, params?: unknown) => {
+    if (method === "models.list") {
+      return options.modelCatalog ? options.modelCatalog(params) : Promise.resolve({ models: [] });
+    }
     if (options.request) {
       return options.request(method, params);
     }
@@ -31,6 +35,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   const phase = options.phase ?? "connected";
   const context = {
     gateway: {
+      subscribeEvents: () => () => undefined,
       connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: {
         phase,

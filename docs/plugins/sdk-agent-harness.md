@@ -472,7 +472,7 @@ route with no authored request override. The `openai/*` prefix alone never
 selects Codex. Custom endpoints, Completions adapters, and authored request
 behavior stay on OpenClaw. Plaintext official HTTP endpoints are rejected. Older `codex/gpt-*`
 refs remain compatibility inputs. See
-[OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+[OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime).
 
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).
@@ -789,6 +789,32 @@ still reject unavailable modes. New host-owned declarations use the harness's
 existing catalog-registration lifecycle.
 OpenClaw Code Mode's joined `agents.run()` path retains internal waiting; this
 helper does not make raw collector calls available without a native result reader.
+
+### Exec reviewer outcomes
+
+`reviewExecRequestWithConfiguredModel(...)` from
+`openclaw/plugin-sdk/agent-harness-exec-review-runtime` returns an
+`ExecAutoReviewDecision`, also exported by
+`openclaw/plugin-sdk/agent-harness-runtime`. Plugin consumers must handle all
+three outcomes explicitly:
+
+- `allow-once` with `risk: "low"` or `risk: "medium"`: run the reviewed command
+  once, subject to the current execution policy and authority checks.
+- `deny`: do not run the command. Return the rationale and rejection guidance
+  to the agent; never escalate this result to human approval.
+- `ask`: route the request to human approval.
+
+The rejection guidance tells the agent not to pursue the same outcome through
+workarounds, indirect execution, or policy circumvention. It may choose a
+materially safer alternative, or explain the risk and ask the user to approve
+the exact command separately. This does not turn a plugin's `deny` result into
+an automatic approval request.
+
+The configured exec reviewer returns `ask` when no reviewer is configured, on
+provider failures or timeouts, for invalid responses, or for an `allow` response
+whose risk is not low or medium. Detected reviewer-directed prompt injection
+returns `deny` with high risk. Facade loading or reviewer construction errors
+may still reject the promise; an error is never permission to execute.
 
 ### Paired-device execution
 

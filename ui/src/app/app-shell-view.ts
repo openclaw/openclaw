@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import { icons } from "../components/icons.ts";
@@ -56,6 +56,7 @@ import {
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import {
   isBrowserPanelAvailable,
+  isBrowserPanelSurfaceAvailable,
   isDesktopPanelAvailable,
   isHomePanelAvailable,
 } from "./panel-availability.ts";
@@ -140,7 +141,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
   const watchUpdateProgress = createUpdateProgressWatcher(context);
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
-  const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
+  const browserPanelAvailable = isBrowserPanelSurfaceAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
   const custodianPanelAvailable =
@@ -175,8 +176,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       isSettingsNavigationRoute(activeRoute) ||
       activeRoute === "skills" ||
       activeRoute === "cron");
-  const settingsTakeover =
-    isSettingsNavigationRoute(activeRoute) && !host.onboardingMode && !nativeEmbed;
+  const settingsTakeover = isSettingsTakeover(activeRoute) && !host.onboardingMode && !nativeEmbed;
   const runtimeConfig = context.runtimeConfig.state;
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
@@ -304,6 +304,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           activeSearch: host.routeState.location?.search ?? "",
           activeHash: host.routeState.location?.hash ?? "",
           offline: gatewaySnapshot.offlineStable,
+          phase: gatewaySnapshot.phase,
           restartPending: gatewaySnapshot.restartPending,
           suspensionPhase: gatewaySnapshot.suspensionPhase,
           queuedOutboxCount: storedOutboxes?.total ?? 0,
@@ -616,6 +617,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                 data-chat-autotype-exempt
                 .client=${gatewayConnected ? gatewaySnapshot.client : null}
                 .available=${browserPanelAvailable}
+                .remoteAvailable=${isBrowserPanelAvailable(gatewaySnapshot)}
                 .suppressed=${settingsTakeover || nativeEmbed}
                 .resourceBasePath=${context.resourceBasePath}
                 .authToken=${resolveControlUiAuthToken({

@@ -46,6 +46,15 @@ Full Release Validation run ID and pin `full_release_validation_run_attempt`.
 The publisher resolves the independent `Full Release Artifacts` producer from
 that validation manifest's sealed `publicationArtifacts.npmPreflight` descriptor.
 The producer ID alone does not carry Full Release Validation authorization.
+
+`Docker Release` requests the `docker-release` environment approval in a
+separate job after source identity and image preparation succeed (or prepared
+artifacts are supplied). Approval waits stay outside `docker-release-publish`;
+only the approved publisher enters that global registry/alias lock. It then
+revalidates the immutable source, prepared artifacts, attestations and alias
+state before writing. Docker Hub credentials remain required caller-provided
+secrets. Failed preparation, denied approval and cancellation cannot publish.
+
 Historical recovery may still supply a separate successful `OpenClaw NPM Release`
 preflight run ID alongside the matching successful Full Release Validation run
 and attempt. Create the tooling tag with the [release publish commands](/reference/RELEASING#regular-release-publish-automation);
@@ -224,6 +233,16 @@ see [Testing updates and plugins](/help/testing-updates-plugins).
 
 Release checks call Package Acceptance with `source=artifact`, the prepared release package artifact, `suite_profile=custom`, `docker_lanes='doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape'`, and `telegram_mode=mock-openai`. This keeps package migration, update, live ClawHub skill install, stale-plugin-dependency cleanup, configured-plugin install repair, offline plugin, plugin-update, and Telegram proof on the same resolved package tarball. Set `release_package_spec` on Full Release Validation or OpenClaw Release Checks after publishing a beta to run the same matrix against the shipped npm package without rebuilding; set `package_acceptance_package_spec` only when Package Acceptance needs a different package from the rest of release validation. Cross-OS release checks still cover OS-specific onboarding, installer, and platform behavior; package/update product validation should start with Package Acceptance.
 
+Upgrade-survivor assertion ownership follows the selected target's release train,
+read from its immutable package metadata after source-identity validation.
+Extended-stable targets retain their shipped scenario runner, assertions, and
+fixtures; regular targets keep the trusted scenario together, including its
+serving-turn/post-inference assertions.
+The historical baseline does not select the assertion owner. Invalid target
+versions and unsupported extended-stable correction versions fail before Docker.
+
+Docker seed CI resolves an exact published stable predecessor of the selected source package version before running `published-upgrade-survivor`. It uses the release baseline resolver and selected release context, so publishing `latest` never turns the first upgrade into an already-current operation. Missing predecessors fail before Docker starts; the separate already-current control remains unchanged.
+
 The `published-upgrade-survivor` Docker lane validates one published package baseline per scenario. In Package Acceptance, the resolved `package-under-test` tarball is always the candidate and `published_upgrade_survivor_baseline` selects the fallback published baseline, defaulting to `openclaw@latest`; failed-lane rerun commands preserve that baseline. Current source release checks set `published_upgrade_survivor_baselines=supported-lines` for `legacy-operator-state`: npm's current `latest`, the preceding stable version, `extended-stable` when that tag exists, and the documented oldest supported baseline `2026.6.34`. The resolver reads `npm view openclaw versions` and `npm view openclaw dist-tags` at run time, pins exact versions before fanout, and deduplicates overlapping lines. Normal current-source release checks retain `base` and add `legacy-operator-state`; release soak selects `reported-issues`, including legacy operator state and the existing issue-shaped fixtures.
 
 Expanded release qualification requires the candidate's `YYYY.M.PATCH` base version
@@ -385,6 +404,7 @@ including generated plugin assets and local build metadata, and install their
 own Chromium and sandbox prerequisites. Each group has four test slots, so long
 UI shards start together without waiting for Gateway declarations or tests.
 A failed producer blocks its own consumers; other diagnostics continue.
+
 Gateway shards retain the existing
 four fresh-process boundaries and two-worker limit. Each UI shard runs its
 bundled files with up to two workers, then its private-server, real-Gateway, and
@@ -394,9 +414,14 @@ existing 90-minute job deadline is unchanged. Local `pnpm test:e2e` still runs
 its suite commands sequentially; each UI command uses the same project policy.
 
 This removes seven builds per invocation and raises peak test concurrency from
-six to eight. Release checks use GitHub-hosted runners, so this adds no
-Blacksmith registrations there. A standalone Blacksmith invocation can register
-eleven runners: two producers and nine test jobs. Producer artifact identities
+six to eight. Release checks route the full Gateway build and four Gateway test
+shards to the existing `blacksmith-32vcpu-ubuntu-2404` profile through
+`gateway_repo_e2e_use_github_hosted_runners: false`. This uses five Blacksmith
+registrations per campaign, with at most four Gateway test runners at once;
+UI, plugin, and other live-suite routing stays unchanged. Other callers default
+the Gateway option to true and retain their overall hosted-runner choice.
+A standalone Blacksmith invocation can register eleven runners: two producers
+and nine test jobs. Producer artifact identities
 survive consumer-only retries; consumers never select an artifact by their own
 current attempt number.
 
@@ -425,6 +450,8 @@ pnpm test:docker:timings <summary>   # slow-lane and phase critical-path summari
 The scheduled live/E2E workflow runs the full release-path Docker suite daily and, after it succeeds, invokes the explicit publisher for the exact tested image artifacts.
 
 ## Plugin Prerelease
+
+Plugin batch execution preserves existing process limits when the only forwarded options are numeric `--retry` and exact-file `--exclude` selections. Codex retains at most 12 files per sequential process, including release runs with those options. Watch mode, suite-wide bail or sharding, reports, broad exclusion patterns, and other options retain their single-process semantics.
 
 `Plugin Prerelease` is more expensive product/package coverage, so it is a separate workflow dispatched by `Full Release Validation` or by an explicit operator. Normal pull requests, `main` pushes, and standalone manual CI dispatches keep that suite off. It balances non-Telegram bundled plugin tests across eight generic extension workers; those jobs run up to two plugin config groups at a time with one Vitest worker per group and a larger Node heap. Telegram runs in dedicated shards of at most ten test files, preserving one-file Vitest processes while scheduling two processes concurrently. The combined extension matrix is capped at 12 concurrent jobs. The release-only Docker prerelease path (enabled by the `full_release_validation` input) batches targeted Docker lanes in groups of four to avoid reserving dozens of runners for one-to-three-minute jobs. The workflow also uploads an informational `plugin-inspector-advisory` artifact from `@openclaw/plugin-inspector`; inspector findings are triage input and do not change the blocking Plugin Prerelease gate.
 

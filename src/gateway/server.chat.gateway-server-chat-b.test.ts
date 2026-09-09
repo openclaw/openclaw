@@ -215,6 +215,7 @@ function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMeta
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -2217,7 +2218,10 @@ describe("gateway server chat", () => {
                 string,
                 Promise<{
                   modelCatalog: ModelCatalogEntry[];
-                  metadata: { models: unknown[]; swarmEnabled: boolean };
+                  metadata: {
+                    models: import("../../packages/gateway-protocol/src/index.js").ModelChoice[];
+                    swarmEnabled: boolean;
+                  };
                 }>
               >();
               const projectAgent = (
@@ -2255,7 +2259,7 @@ describe("gateway server chat", () => {
                 const projection = Promise.all([
                   projector.projectCatalog(),
                   buildModelsListResult({
-                    context,
+                    source: { kind: "gateway", context },
                     agentId,
                     params: { view: "configured" },
                     preloadedCatalog: {
@@ -5745,7 +5749,15 @@ describe("gateway server chat", () => {
         );
 
         const history = await rpcReq<{
-          messages?: Array<{ role?: unknown; content?: unknown }>;
+          messages?: Array<{
+            role?: unknown;
+            content?: unknown;
+            __openclaw?: {
+              importedFrom?: unknown;
+              externalId?: unknown;
+              cliSessionId?: unknown;
+            };
+          }>;
         }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
         expect(history.ok).toBe(true);
         const assistantMessages = (history.payload?.messages ?? []).filter(
@@ -5764,6 +5776,13 @@ describe("gateway server chat", () => {
           ),
         ).toHaveLength(1);
         expect(contentBlocks.filter((block) => block.type === "audio")).toHaveLength(1);
+        expect(assistantMessages[0]?.["__openclaw"]).toEqual(
+          expect.objectContaining({
+            importedFrom: "claude-cli",
+            externalId: "assistant-delivery-ready",
+            cliSessionId,
+          }),
+        );
         expect(JSON.stringify(assistantMessages)).not.toContain("[[reply_to:");
       } finally {
         homeEnvSnapshot.restore();

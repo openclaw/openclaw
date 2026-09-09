@@ -432,22 +432,18 @@ describe("script-specific dev tooling hardening", () => {
     const signals: NodeJS.Signals[] = [];
     const stopper = tuiPtyWatchTesting.createChildStopper(
       { kill: () => true },
-      {
-        signalChild(_child, signal: NodeJS.Signals): void {
-          signals.push(signal);
-        },
-        sigkillGraceMs: 20,
-        sigtermGraceMs: 10,
+      (_child, signal: NodeJS.Signals): void => {
+        signals.push(signal);
       },
     );
 
     stopper.stop();
     expect(signals).toEqual(["SIGINT"]);
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(500);
     expect(signals).toEqual(["SIGINT", "SIGTERM"]);
 
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
   });
 
@@ -1136,24 +1132,21 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("bounds Claude usage response body reads by content-length", async () => {
-    const maxBytes = claudeUsageTesting.FETCH_RESPONSE_MAX_BYTES;
+    const maxBytes = 256 * 1024;
     const response = new Response("{}", {
       headers: { "content-length": String(maxBytes + 1) },
     });
-    const controller = new AbortController();
 
     await expect(
-      claudeUsageTesting.readBoundedResponseText(
-        response,
-        "Claude usage test",
-        controller.signal,
-        maxBytes,
-      ),
-    ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
+        fetchImpl: async () => response,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
   });
 
   it("bounds Claude usage response body reads by streamed bytes", async () => {
-    const maxBytes = claudeUsageTesting.FETCH_RESPONSE_MAX_BYTES;
+    const maxBytes = 256 * 1024;
     const response = new Response(
       new ReadableStream({
         start(controller) {
@@ -1162,16 +1155,13 @@ describe("script-specific dev tooling hardening", () => {
         },
       }),
     );
-    const controller = new AbortController();
 
     await expect(
-      claudeUsageTesting.readBoundedResponseText(
-        response,
-        "Claude usage test",
-        controller.signal,
-        maxBytes,
-      ),
-    ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+      claudeUsageTesting.fetchAnthropicOAuthUsage("test-token", {
+        fetchImpl: async () => response,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow(`Anthropic OAuth usage request response body exceeded ${maxBytes} bytes`);
   });
 
   it.each([

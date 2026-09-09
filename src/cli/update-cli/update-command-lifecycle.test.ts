@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   events: [] as string[],
   leaseActive: false,
   readConfig: vi.fn(),
+  doctorWarnings: [] as string[],
 }));
 
 const validConfigSnapshot = {
@@ -46,6 +47,10 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 // This fixture proves lease ordering; process tests cover durable ledger writes.
 vi.mock("../../infra/update-run-ledger.js", () => ({
   createUpdateRun: vi.fn(() => ({ runId: "lease-order-fixture" })),
+  adoptUpdateRun: vi.fn(() => ({
+    origin: { driver: { host: "lease-order-fixture", pid: 1, startIdentity: "1" } },
+  })),
+  heartbeatUpdateRun: vi.fn(),
   recordUpdateRunStep: vi.fn(),
   finishUpdateRun: vi.fn(),
   recordUpdateRunDiagnostic: vi.fn(),
@@ -110,12 +115,14 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
     sourceConfig: {},
     authoredConfig: {},
   })),
-  restoreDroppedPreUpdateChannels: vi.fn((snapshot: unknown) => {
-    record("restore-channels");
+  preparePostCorePluginConfig: vi.fn(async () => {
+    const configSnapshot = await mocks.readConfig();
+    record("prepare-config");
     return {
-      snapshot,
-      changed: false,
-      authoredChannels: [],
+      configSnapshot,
+      configWriteOptions: {},
+      configChanged: false,
+      restoredAuthoredChannels: [],
     };
   }),
 }));
@@ -128,9 +135,12 @@ vi.mock("./update-command-fresh-doctor.js", () => ({
       configSnapshot: validConfigSnapshot,
     };
   }),
-  runUpdateFinalizationDoctorInFreshProcess: vi.fn(async () => {
-    record("fresh-doctor");
-  }),
+  runUpdateFinalizationDoctorInFreshProcess: vi.fn(
+    async (params: { onWarnings?: (warnings: string[]) => void }) => {
+      record("fresh-doctor");
+      params.onWarnings?.(mocks.doctorWarnings);
+    },
+  ),
   withPrePluginUpdateDoctorEnv: async (run: () => Promise<unknown>) => await run(),
 }));
 
@@ -163,12 +173,7 @@ function expectLifecycleBoundary(preLeaseEvent: string): void {
     (event, index) => index > preLeaseIndex && event === "read-config:true",
   );
   expect(authoritativeReadIndex).toBeGreaterThan(preLeaseIndex);
-  for (const event of [
-    "persist-channel:true",
-    "restore-channels:true",
-    "installed-records:true",
-    "plugin-update:true",
-  ]) {
+  for (const event of ["prepare-config:true", "installed-records:true", "plugin-update:true"]) {
     expect(mocks.events).toContain(event);
   }
   expect(mocks.events.indexOf("plugin-update:true")).toBeGreaterThan(authoritativeReadIndex);
@@ -180,6 +185,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.unstubAllEnvs();
     mocks.events = [];
     mocks.leaseActive = false;
+    mocks.doctorWarnings = [];
     mocks.readConfig.mockImplementation(async () => {
       record("read-config");
       return validConfigSnapshot;
@@ -248,5 +254,21 @@ describe("update plugin lifecycle lease boundaries", () => {
       mocks.events.lastIndexOf("lease-exit:false"),
     );
     expect(mocks.events).not.toContain("persisted-index:true");
+  });
+
+  it("keeps nonfatal Doctor warnings in terminal JSON without failing finalization", async () => {
+    mocks.doctorWarnings = ["Optional version probe timed out; recheck after restart."];
+    await updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true });
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "warning",
+        restart: false,
+        postUpdate: expect.objectContaining({
+          doctor: { status: "warning", warnings: mocks.doctorWarnings },
+        }),
+      }),
+    );
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 });

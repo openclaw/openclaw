@@ -2457,6 +2457,7 @@ describe("models.authLogout", () => {
     expect(mocks.resolveAgentDir).toHaveBeenCalledWith(cfg, expectedAgentId);
     expect(mocks.ensureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(expectedDir);
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
+      cfg,
       provider: "openrouter",
       agentDir: expectedDir,
     });
@@ -2493,6 +2494,7 @@ describe("models.authLogout", () => {
     await logoutHandler(opts);
 
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
+      cfg: {},
       provider: "openrouter",
       agentDir: "/tmp/agent",
     });
@@ -2534,6 +2536,7 @@ describe("models.authLogout", () => {
     await logoutHandler(opts);
 
     expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
+      cfg: {},
       profileIds: ["openrouter:oauth"],
       agentDir: "/tmp/agent",
     });
@@ -2686,6 +2689,7 @@ describe("models.authLogout", () => {
     await logoutHandler(opts);
 
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
+      cfg,
       provider: "openrouter",
       agentDir: "/tmp/agent",
     });
@@ -2709,10 +2713,12 @@ describe("models.authLogout", () => {
     await logoutHandler(opts);
 
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
+      cfg: {},
       provider: "openrouter",
       agentDir: "/tmp/agent",
     });
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
+      cfg: {},
       provider: "openrouter",
       agentDir: undefined,
     });

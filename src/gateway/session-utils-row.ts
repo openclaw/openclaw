@@ -14,6 +14,7 @@ import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
+  resolveProjectedSessionContextBudgetStatus,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
@@ -55,7 +56,7 @@ import {
   resolveLatestCompactionCheckpoint,
   resolvePositiveNumber,
   resolveProjectableCompactionCheckpoints,
-  resolveRuntimeChildSessionKeys,
+  buildStoreChildSessionIndex,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
@@ -68,8 +69,6 @@ import {
   resolveSessionDisplayModelIdentityRefCached,
 } from "./session-utils-model.js";
 import {
-  mergeChildSessionKeys,
-  resolveChildSessionKeys,
   resolveSessionSelectedModelRef,
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
@@ -157,6 +156,7 @@ export function buildGatewaySessionRow(params: {
     sessionKey: key,
     entry,
     agentId: sessionAgentId,
+    sessionStore: store,
     rowContext,
     allowPluginNormalization: !lightweight,
   });
@@ -187,13 +187,19 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
   });
-  const childSessions = params.storeChildSessionsByKey
-    ? mergeChildSessionKeys(
-        resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
-        params.storeChildSessionsByKey.get(key),
-      )
-    : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
-  const pinnedAt = isPinnableSessionEntry(key, entry) ? entry?.pinnedAt : undefined;
+  const childSessions = (
+    params.storeChildSessionsByKey ??
+    buildStoreChildSessionIndex({
+      store,
+      keys: [key],
+      now,
+      subagentRuns: rowContext?.subagentRuns,
+    })
+  ).get(key);
+  const pinnedAt =
+    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
+      ? entry.pinnedAt
+      : undefined;
   const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
   const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
     ? compactionCheckpoints.length
@@ -495,11 +501,19 @@ export function buildGatewaySessionRow(params: {
     model: rowModelIdentity.model,
     activeModelProvider: activeFallback.active ? runtimeModels.active.provider : undefined,
     activeModel: activeFallback.active ? runtimeModels.active.model : undefined,
-    modelOverrideSource: resolveSessionModelOverrideSource(entry),
+    modelOverrideSource:
+      selectedModel.storedOverrideSource === "parent"
+        ? "inherited"
+        : resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,
-    contextBudgetStatus: entry?.contextBudgetStatus,
+    contextBudgetStatus: resolveProjectedSessionContextBudgetStatus({
+      entry,
+      provider: rowModelProvider,
+      model: rowModel,
+      contextTokens,
+    }),
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel,
     lastTo: deliveryFields.lastTo,

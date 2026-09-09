@@ -404,8 +404,13 @@ jobs:
           }
           BASH
 
+      - name: Set up Docker verification for manual recovery
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery }}
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
       - name: Verify release workflow evidence
         env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ needs.resolve.outputs.full_release_validation_run_id }}
@@ -437,8 +442,46 @@ jobs:
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --json workflowName,event,status,conclusion,headSha,jobs \
             > "$RUNNER_TEMP/release-publish-run.json"
-          node --input-type=module - "$RUNNER_TEMP/release-publish-run.json" <<'NODE'
-          import { readFileSync } from "node:fs";
+
+          manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
+          rm -rf "$manifest_dir"
+          mkdir -p "$manifest_dir"
+          evidence_version="${EVIDENCE_TAG#v}"
+          manifest_asset="openclaw-${evidence_version}-release-manifest.json"
+          manifest_checksum_asset="${manifest_asset}.sha256"
+          gh_with_retry release download "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$manifest_asset" \
+            --pattern "$manifest_checksum_asset" \
+            --dir "$manifest_dir"
+          node .closeout-tooling/scripts/verify-stable-main-closeout.mjs verify-checksum "$manifest_dir/$manifest_asset"
+          tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
+          jq -e \
+            --arg tag_sha "$tag_sha" \
+            --arg run_id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+            --arg run_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '
+            .workflowName == "Full Release Validation" and
+            .runId == $run_id and
+            .runAttempt == $run_attempt and
+            .targetSha == $tag_sha and
+            .rerunGroup == "all" and
+            .runReleaseSoak == "true" and
+            .controls.performanceBlocking == true and
+            .childRuns.productPerformance.conclusion == "success"
+          ' "$manifest_dir/$manifest_asset" >/dev/null || {
+            echo "Full Release Validation manifest does not contain the required stable release controls." >&2
+            exit 1
+          }
+
+          recovery_evidence="$manifest_dir/openclaw-${evidence_version}-postpublish-evidence.json"
+          if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
+            gh_with_retry release download "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$(basename "$recovery_evidence")" \
+              --pattern "$(basename "$recovery_evidence").sha256" --dir "$manifest_dir"
+          fi
+          SOURCE_SHA="$tag_sha" node --input-type=module - "$RUNNER_TEMP/release-publish-run.json" "$manifest_dir/$manifest_asset" "$recovery_evidence" <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { verifyReleaseEvidenceChecksum } from "./.closeout-tooling/scripts/lib/stable-release-closeout.mjs";
+          import { basename } from "node:path";
           const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
           for (const [key, expected] of [
             ["workflowName", "OpenClaw Release Publish"],
@@ -461,7 +504,27 @@ jobs:
               `OpenClaw Release Publish must have conclusion=success, got ${run.conclusion ?? "<missing>"}.`,
             );
           }
+          let recoveryEvidence = null;
           if (failedRecovery) {
+            const bytes = readFileSync(process.argv[4]);
+            const checksum = readFileSync(`${process.argv[4]}.sha256`, "utf8");
+            verifyReleaseEvidenceChecksum({ assetName: basename(process.argv[4]), assetBytes: bytes, checksum });
+            recoveryEvidence = JSON.parse(bytes);
+          }
+          if (failedRecovery && (recoveryEvidence?.operatorRecovery?.npmPublishRunId !== undefined ||
+            recoveryEvidence?.operatorRecovery?.dockerPromotionRunId !== undefined)) {
+            const { verifyStablePublishRecovery } = await import('./.closeout-tooling/scripts/lib/stable-publish-recovery.mjs');
+            if (recoveryEvidence.releasePublishRunId !== process.env.RELEASE_PUBLISH_RUN_ID) {
+              throw new Error("Recovery parent differs from resolved postpublish evidence.");
+            }
+            const recovery = await verifyStablePublishRecovery({
+              evidence: recoveryEvidence,
+              manifest: JSON.parse(readFileSync(process.argv[3], "utf8")),
+              sourceSha: process.env.SOURCE_SHA,
+              tag: process.env.RELEASE_TAG,
+            });
+            writeFileSync(`${process.env.RUNNER_TEMP}/stable-publish-recovery.json`, JSON.stringify(recovery));
+          } else if (failedRecovery) {
             // App failures cannot hold npm closeout; the Gateway distribution
             // still needs successful npm and Docker publication in this parent.
             const requiredJobs = [
@@ -481,41 +544,6 @@ jobs:
             console.log("Accepting failed Release Publish parent with verified npm and Docker publication; apps may be pending.");
           }
           NODE
-
-          manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
-          rm -rf "$manifest_dir"
-          mkdir -p "$manifest_dir"
-          evidence_version="${EVIDENCE_TAG#v}"
-          manifest_asset="openclaw-${evidence_version}-release-manifest.json"
-          manifest_checksum_asset="${manifest_asset}.sha256"
-          gh_with_retry release download "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$manifest_asset" \
-            --pattern "$manifest_checksum_asset" \
-            --dir "$manifest_dir"
-          (
-            cd "$manifest_dir"
-            sha256sum --strict --status -c "$manifest_checksum_asset"
-          ) || {
-            echo "Full Release Validation manifest checksum failed for $EVIDENCE_TAG." >&2
-            exit 1
-          }
-          tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
-          jq -e \
-            --arg tag_sha "$tag_sha" \
-            --arg run_id "$FULL_RELEASE_VALIDATION_RUN_ID" \
-            --arg run_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '
-            .workflowName == "Full Release Validation" and
-            .runId == $run_id and
-            .runAttempt == $run_attempt and
-            .targetSha == $tag_sha and
-            .rerunGroup == "all" and
-            .runReleaseSoak == "true" and
-            .controls.performanceBlocking == true and
-            .childRuns.productPerformance.conclusion == "success"
-          ' "$manifest_dir/$manifest_asset" >/dev/null || {
-            echo "Full Release Validation manifest does not contain the required stable release controls." >&2
-            exit 1
-          }
 
       - name: Verify stable state and write closeout manifest
         env:
@@ -548,6 +576,10 @@ jobs:
             existing_manifest_args=(--existing-manifest "$CLOSEOUT_DIR/$closeout_asset"
               --published-appcast "$CLOSEOUT_DIR/published-appcast.xml")
           fi
+          recovery_args=()
+          if [[ -f "$RUNNER_TEMP/stable-publish-recovery.json" ]]; then
+            recovery_args=(--publish-recovery "$RUNNER_TEMP/stable-publish-recovery.json")
+          fi
           node .closeout-tooling/scripts/verify-stable-main-closeout.mjs \
             --tag "$RELEASE_TAG" \
             --main-dir "$GITHUB_WORKSPACE" \
@@ -561,6 +593,7 @@ jobs:
             --allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT" \
             --allow-failed-publish-recovery "$ALLOW_FAILED_PUBLISH_RECOVERY" \
             "${existing_manifest_args[@]}" \
+            "${recovery_args[@]}" \
             --output "$CLOSEOUT_DIR/stable-main-closeout.json"
           jq -r '"Apps: \(.apps // "not recorded in legacy snapshot")\nAppcast: \(.appcast // "verified")"' \
             "$CLOSEOUT_DIR/stable-main-closeout.json" >> "$GITHUB_STEP_SUMMARY"

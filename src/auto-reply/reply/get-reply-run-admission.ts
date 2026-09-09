@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
@@ -214,10 +213,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionId,
           isFirstTurnInSession,
           workspaceDir: context.skillsWorkspaceDir,
-          executionSkillsDir: path.join(
+          executionWorkspaceDir:
             sessionEntry?.worktree?.canonicalWorkspaceDir ?? context.workspaceDir,
-            "skills",
-          ),
           cfg,
           execOverrides: params.execOverrides,
           skillFilter: opts?.skillFilter,
@@ -516,8 +513,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
     const adoption = await admitReplyTurn({
-      sessionKey: commandTurnContinuationTargetKey,
       agentId,
+      sessionKey: commandTurnContinuationTargetKey,
       sessionId: providedReplyOperation.sessionId,
       expectedSessionId: preparedSessionState.sessionEntry?.sessionId,
       storePath,

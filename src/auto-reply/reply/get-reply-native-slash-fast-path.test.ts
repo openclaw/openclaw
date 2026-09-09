@@ -612,7 +612,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     { selection: "automatic fallback", source: "auto" as const },
     { selection: "channel override", source: undefined },
   ])("preserves canonical native /status $selection", async (testCase) => {
-    vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalog").mockResolvedValueOnce([]);
+    vi.spyOn(preparedModelCatalog, "readPreparedModelCatalog").mockResolvedValueOnce([]);
     const targetSessionKey = "agent:main:main";
     const storePath = path.join(tempDirs.make("openclaw-native-status-"), "sessions.json");
     await replaceSessionEntry(

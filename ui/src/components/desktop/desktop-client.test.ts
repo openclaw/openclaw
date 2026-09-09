@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { DesktopClient } from "./desktop-client.ts";
+import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 
 type RfbConstructor = NonNullable<ConstructorParameters<typeof DesktopClient>[0]>;
 type RfbClient = InstanceType<RfbConstructor>;
@@ -38,6 +39,63 @@ function createFakeRfb() {
 }
 
 describe("DesktopClient", () => {
+  it.each(["blur", "reset", "replacement", "view-only"])(
+    "does not restore old keyboard modifiers after %s",
+    async (transition) => {
+      const { Rfb } = createFakeRfb();
+      const client = new DesktopClient(Rfb, (url) => new FakeSocket(url) as unknown as WebSocket);
+      const target = document.createElement("div");
+      const canvas = document.createElement("canvas");
+      target.append(canvas);
+      const connect = () =>
+        client.connect({
+          target,
+          wsUrl: "ws://control.example.test/desktop/observe",
+          viewOnly: false,
+          isCurrent: () => true,
+        });
+      const original = await connect();
+      let handle = original;
+      let controlling = true;
+      const input = document.createElement("textarea");
+      const keyboard = new DesktopMobileKeyboard({
+        connection: () => handle,
+        controlling: () => controlling,
+        input: () => input,
+      });
+      input.addEventListener("input", (event) => keyboard.handleInput(event as InputEvent));
+      const keys: string[] = [];
+      canvas.addEventListener("keydown", (event) => keys.push(event.key));
+      try {
+        keyboard.reset();
+        keyboard.handleKeyboardEvent(
+          new KeyboardEvent("keydown", {
+            key: "Control",
+            code: "ControlLeft",
+            ctrlKey: true,
+            location: 1,
+          }),
+        );
+        if (transition === "blur") {
+          window.dispatchEvent(new Event("blur"));
+        } else if (transition === "reset") {
+          keyboard.reset();
+        } else if (transition === "replacement") {
+          original.disconnect();
+          handle = await connect();
+        } else {
+          controlling = false;
+        }
+        input.value += "p";
+        input.dispatchEvent(new InputEvent("input", { inputType: "insertFromPaste", data: "p" }));
+        expect(keys).toEqual(transition === "view-only" ? ["Control"] : ["Control", "p"]);
+      } finally {
+        keyboard.reset();
+        handle.disconnect();
+      }
+    },
+  );
+
   it.each([false, true])(
     "opens a socket after the RFB loader only while the operation remains current (%s)",
     async (remainsCurrent) => {
