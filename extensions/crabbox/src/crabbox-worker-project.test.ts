@@ -504,6 +504,52 @@ describe("Crabbox project snapshot provisioning", () => {
     },
   );
 
+  it.each([false, true])(
+    "preserves capture uncertainty but reports the source cleanup result after cancellation (stopFails=%s)",
+    async (stopFails) => {
+      const controller = new AbortController();
+      const { options } = projectOptions([], controller);
+      const leaseId = operationLeaseId("cancelled-project-capture");
+      const { provider, calls, warn } = createWarmProvider(({ argv }) => {
+        if (argv[2] === "create") {
+          controller.abort();
+          return commandResult({ code: 2, stderr: "capture interrupted" });
+        }
+        if (argv[1] === "stop" && stopFails) {
+          return commandResult({ code: 5, stderr: "source cleanup still pending" });
+        }
+        return undefined;
+      });
+
+      await expect(
+        provider.provision(PROFILE, "cancelled-project-capture", options),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      const capture = listCrabboxWarmImages()[0]?.capture;
+      expect(capture).toMatchObject({ leaseId, phase: "uncertain" });
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+      calls.length = 0;
+      warn.mockClear();
+
+      const cleanup = provider.destroy({ leaseId, profile: PROFILE });
+      if (stopFails) {
+        await expect(cleanup).rejects.toThrow("source cleanup still pending");
+        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]).toBeDefined();
+      } else {
+        await expect(cleanup).resolves.toBeUndefined();
+        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(capture!.selector));
+      }
+      expect(calls.map(({ argv }) => argv[1])).toEqual(["stop"]);
+      expect(listCrabboxWarmImages()[0]?.capture).toMatchObject({
+        selector: capture!.selector,
+        leaseId,
+        phase: "uncertain",
+      });
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves the lease when enrollment's owning operation has closed", async () => {
     const { provider, calls } = createWarmProvider();
     const beginNodeEnrollment = vi.fn(async () => {
