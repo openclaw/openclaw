@@ -54,7 +54,7 @@ const ensureSupportedRuntimeVersion = async () => {
   }
   const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
   if (unsupportedCommand === "diagnostic") {
-    return;
+    return false;
   }
 
   process.stderr.write(`openclaw: ${failure}\n`);
@@ -86,7 +86,9 @@ const ensureSupportedRuntimeVersion = async () => {
       `  nvm alias default ${RECOMMENDED_NODE_MAJOR}\n`,
   );
   if (unsupportedCommand === "update") {
-    return;
+    // A later CLI startup respawn must not repeat this invocation's recovery offer.
+    process.env.OPENCLAW_NODE_UPDATE_RESPAWNED = "1";
+    return false;
   }
   return process.exit(1);
 };

@@ -344,6 +344,26 @@ describe("openclaw launcher", () => {
       await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
     });
 
+    it("does not repeat a declined Node offer when update startup respawns", async () => {
+      const fixture = await prepareRecovery();
+      await fs.writeFile(
+        path.join(fixture.root, "dist", "entry.js"),
+        `import { spawnSync } from "node:child_process";
+        if (!process.env.OPENCLAW_TEST_CLI_RESPAWN) {
+          const child = spawnSync(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+            env: { ...process.env, OPENCLAW_TEST_CLI_RESPAWN: "1" }, stdio: "inherit",
+          });
+          process.exit(child.status ?? 1);
+        }
+        process.stdout.write("update-entry\\n");`,
+      );
+      const result = fixture.run("n\n", ["update"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("update-entry");
+      expect(result.stderr.match(/Update NodeJS:/g)).toHaveLength(1);
+      await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
     it("keeps a supported active Node even when a private runtime exists", async () => {
       const fixture = await prepareRecovery({ cached: true, version: process.versions.node });
       const result = fixture.run("");
