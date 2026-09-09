@@ -5,7 +5,11 @@ import {
   type GatewayMethodProfileAccess,
 } from "../gateway/methods/descriptor.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
+import type {
+  GatewayRequestHandler,
+  PluginGatewayRequestHandler,
+  RespondFn,
+} from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
@@ -30,7 +34,9 @@ import type {
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
 
-function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+function adaptPluginGatewayMethodHandler(
+  handler: PluginGatewayRequestHandler,
+): GatewayRequestHandler {
   return async (opts) => {
     let responded = false;
     const respond: RespondFn = (ok, payload, error, meta) => {
@@ -58,7 +64,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
   const registerGatewayMethod = (
     record: PluginRecord,
     method: string,
-    handler: GatewayRequestHandler,
+    handler: PluginGatewayRequestHandler,
     opts?: { scope?: OperatorScope; profileAccess?: GatewayMethodProfileAccess },
   ) => {
     const trimmed = method.trim();

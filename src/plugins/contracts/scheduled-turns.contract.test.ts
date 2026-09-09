@@ -34,7 +34,8 @@ import type { OpenClawPluginApi } from "../types.js";
 
 // Return-value gateway handlers are part of the public SDK contract. This
 // assignment must remain valid for plugins that return an implicit response.
-const returnedGatewayHandlerResult: Awaited<ReturnType<GatewayRequestHandler>> = {
+type PluginGatewayMethodHandler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+const returnedGatewayHandlerResult: Awaited<ReturnType<PluginGatewayMethodHandler>> = {
   ok: true,
 };
 void returnedGatewayHandlerResult;

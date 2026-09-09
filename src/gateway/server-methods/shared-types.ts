@@ -423,12 +423,13 @@ export type GatewayRequestHandlerOptions = {
   signal?: AbortSignal;
 };
 
-/**
- * Single gateway method implementation. Handlers may either call `respond` or
- * return a value for an implicit success response. Keep the result visible in
- * the public type so plugin authors can use that form without casts.
- */
-export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<unknown> | void;
+/** Single core gateway method implementation. */
+export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
+
+/** Plugin-facing handler; the registration adapter turns returned values into responses. */
+export type PluginGatewayRequestHandler = (
+  opts: GatewayRequestHandlerOptions,
+) => Promise<unknown> | void;
 
 /** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;
