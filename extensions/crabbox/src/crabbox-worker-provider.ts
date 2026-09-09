@@ -20,8 +20,8 @@ import {
 } from "./crabbox-worker-desktop-setup.js";
 import {
   createCrabboxVersionResolver,
-  CRABBOX_WSL2_MIN_VERSION,
-  supportsCrabboxWsl2,
+  CRABBOX_NON_LINUX_MIN_VERSION,
+  supportsCrabboxNonLinuxTargets,
 } from "./crabbox-worker-doctor-runtime.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
@@ -32,6 +32,7 @@ import {
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
 import {
+  CRABBOX_OS_LABELS,
   CRABBOX_WORKER_PROVIDER_ID,
   nonEmptyString,
   operationLeaseId,
@@ -279,12 +280,12 @@ export function createCrabboxWorkerProvider(
     const allocation = await resolveAllocation(profile, operationId);
     signal?.throwIfAborted();
     const binary = resolveBinary(parsed.binary);
-    if (parsed.target === "windows/wsl2") {
+    if (parsed.target !== "linux") {
       const version = await resolveVersion(binary);
       signal?.throwIfAborted();
-      if (version.status === "indeterminate" || !supportsCrabboxWsl2(version.version)) {
+      if (version.status === "indeterminate" || !supportsCrabboxNonLinuxTargets(version.version)) {
         throw new WorkerProviderError(
-          `Crabbox Windows (WSL2) cloud workers require Crabbox ${CRABBOX_WSL2_MIN_VERSION} or newer; ${version.status === "indeterminate" ? version.reason : `found ${version.version}`}. Upgrade ${binary} and restart the Gateway.`,
+          `Crabbox ${CRABBOX_OS_LABELS[parsed.target]} cloud workers require Crabbox ${CRABBOX_NON_LINUX_MIN_VERSION} or newer; ${version.status === "indeterminate" ? version.reason : `found ${version.version}`}. Upgrade ${binary} and restart the Gateway.`,
         );
       }
     }

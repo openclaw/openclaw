@@ -3,7 +3,7 @@ import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coer
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   type createCrabboxVersionResolver,
-  supportsCrabboxWsl2,
+  supportsCrabboxNonLinuxTargets,
 } from "./crabbox-worker-doctor-runtime.js";
 import {
   type CrabboxMachineShape,
@@ -120,14 +120,14 @@ export function createCrabboxMachineOptionsResolver(
       machineShapesByBinary.set(binary, shapes);
     }
     const catalog = (await shapes).get(parsed.provider);
-    if (catalog?.operatingSystems.includes("windows/wsl2")) {
+    if (catalog?.operatingSystems.some((os) => os !== "linux")) {
       const version = await dependencies.resolveVersion(binary);
-      if (version.status === "indeterminate" || !supportsCrabboxWsl2(version.version)) {
+      if (version.status === "indeterminate" || !supportsCrabboxNonLinuxTargets(version.version)) {
         return {
           parsed,
           catalog: {
-            operatingSystems: catalog.operatingSystems.filter((os) => os !== "windows/wsl2"),
-            machines: catalog.machines.filter((machine) => machine.os !== "windows/wsl2"),
+            operatingSystems: catalog.operatingSystems.filter((os) => os === "linux"),
+            machines: catalog.machines.filter((machine) => machine.os === "linux"),
           },
         };
       }
