@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "./errno.js";
 import { tryResolvePathCaseInsensitive } from "./path-case.js";
-import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
+import type { ManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
 // Match fs-safe sidecar identity without creating missing source directories.
 function sourceKey(resource: string): string {
@@ -124,7 +124,10 @@ function sameSource(left: string, right: string): boolean {
 }
 
 /** Read-only compatibility for preserved v3 records. No current producer mints them. */
-export function assertNoRetainedSourceBorrower(resource: string, rows: ManagedHandoffLease[]) {
+export function assertNoRetainedSourceBorrower(
+  resource: string,
+  rows: ManagedHandoffLeasePayload[],
+) {
   // Reading/decoding every row is deliberate: unreadable prospective data
   // cannot establish that the source is unrelated. No liveness probe here.
   const key = sourceKey(resource);
