@@ -546,15 +546,16 @@ Always allow will mint.
 
 ### What a grant covers, and when it stops
 
-A grant fails closed back to a normal prompt whenever anything changed: the
-job was edited or deleted (any configuration change invalidates it), the
-command, working directory, or environment differs by even one byte, the
-grant was revoked or expired, or the original approval record is gone. The
-check runs immediately before the process spawns, so a revocation or job
-edit that lands mid-flight still wins. Mutable file operands and commands
-that require explicit review (heredocs, strict inline eval, audit
-suppression) keep prompting per occurrence. Non-automation approvals are
-unchanged.
+A grant fails closed back to a normal prompt when the job is deleted or its
+substantive definition changes, even if a later edit restores the earlier
+definition. Pausing and re-enabling the unchanged automation preserves the
+grant. The grant also stops matching when the command, working directory, or
+environment differs by even one byte, when it is revoked or expired, or when
+the original approval record is gone. The check runs immediately before the
+process spawns, so a revocation or job edit that lands mid-flight still wins.
+Mutable file operands and commands that require explicit review (heredocs,
+strict inline eval, audit suppression) keep prompting per occurrence.
+Non-automation approvals are unchanged.
 
 ### Grant lifetime
 
@@ -583,8 +584,9 @@ Every standing grant is visible and revocable:
   `openclaw approvals grants revoke <grant-id>` revokes one grant. Revocation
   is idempotent and takes effect at the next occurrence's spawn boundary —
   that occurrence prompts again.
-- Deleting or editing the automation, or reversing the minting approval,
-  also invalidates the grant without touching the grants surface.
+- Deleting or substantively editing the automation, or reversing the minting
+  approval, also invalidates the grant without touching the grants surface.
+  Pausing and re-enabling the unchanged automation does not.
 
 The minting `operator_approvals` row remains the sole authorization owner: a
 grant is derivative correlation, revalidated against the live approval row,

@@ -372,6 +372,9 @@ export interface CronJobs {
   declaration_key: string | null;
   description: string | null;
   enabled: number;
+  grant_definition_generation: number | null;
+  grant_definition_revision: string | null;
+  grant_definition_updated_at: number | null;
   job_id: string;
   job_json: string;
   name: string;
@@ -998,6 +1001,7 @@ export interface OperatorApprovalStandingGrants {
   expires_at_ms: number | null;
   grant_id: string;
   job_config_revision: string;
+  job_definition_generation: number | null;
   last_used_at_ms: number | null;
   minted_by_approval_id: string;
   operation_binding: string;

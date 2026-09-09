@@ -272,6 +272,10 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       "web_push_subscriptions.device_id TEXT",
       "web_push_subscriptions.user_profile_id TEXT",
       "web_push_subscriptions.preferences_json TEXT",
+      "cron_jobs.grant_definition_revision TEXT",
+      "cron_jobs.grant_definition_generation INTEGER",
+      "cron_jobs.grant_definition_updated_at INTEGER",
+      "operator_approval_standing_grants.job_definition_generation INTEGER",
     ]);
 
     const database = createGlobalDatabase();

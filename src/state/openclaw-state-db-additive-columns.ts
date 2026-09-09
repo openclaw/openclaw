@@ -35,6 +35,10 @@ const lazyColumns = [
   ["web_push_subscriptions", "device_id", "TEXT", true],
   ["web_push_subscriptions", "user_profile_id", "TEXT", true],
   ["web_push_subscriptions", "preferences_json", "TEXT", true],
+  ["cron_jobs", "grant_definition_revision", "TEXT"],
+  ["cron_jobs", "grant_definition_generation", "INTEGER"],
+  ["cron_jobs", "grant_definition_updated_at", "INTEGER"],
+  ["operator_approval_standing_grants", "job_definition_generation", "INTEGER", true],
 ] as const satisfies readonly LazyColumn[];
 
 function lazyColumnDefinitions(firstUseOnly?: boolean) {

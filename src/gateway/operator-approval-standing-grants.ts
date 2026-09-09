@@ -6,14 +6,18 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "@openclaw/normalization-core";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import { loadedCronStoreFromRows } from "../cron/store/row-codec.js";
+import {
+  loadedCronStoreFromRows,
+  resolveCronJobGrantDefinitionGenerationFloor,
+  resolveCronJobGrantDefinitionRevision,
+} from "../cron/store/row-codec.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { buildSystemRunApprovalEnvBinding } from "../infra/system-run-approval-binding.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -34,6 +38,7 @@ CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
   agent_id TEXT NOT NULL CHECK (length(agent_id) > 0),
   cron_job_id TEXT NOT NULL CHECK (length(cron_job_id) > 0),
   job_config_revision TEXT NOT NULL CHECK (length(job_config_revision) > 0),
+  job_definition_generation INTEGER,
   operation_binding TEXT NOT NULL CHECK (length(operation_binding) > 0),
   created_at_ms INTEGER NOT NULL,
   expires_at_ms INTEGER CHECK (expires_at_ms IS NULL OR expires_at_ms >= created_at_ms),
@@ -139,6 +144,11 @@ function ensureStandingGrantSchema(db: DatabaseSync): void {
   }
   // sqlite-allow-raw -- first-use additive schema DDL; grant rows use Kysely.
   db.exec(STANDING_GRANT_SCHEMA_SQL);
+  ensureColumn(db, STANDING_GRANT_TABLE, "job_definition_generation INTEGER");
+}
+
+function decodeDefinitionGeneration(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
 }
 
 /**
@@ -167,6 +177,48 @@ export function mintCronStandingGrantLocked(
       .where("expires_at_ms", "is not", null)
       .where("expires_at_ms", "<=", params.nowMs),
   );
+  const jobRows = executeSqliteQuerySync(
+    database.db,
+    stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", params.cronJobId).limit(2),
+  ).rows;
+  if (jobRows.length !== 1) {
+    return;
+  }
+  const jobRow = jobRows[0]!;
+  const loaded = loadedCronStoreFromRows(jobRows);
+  const job = loaded.store.jobs.find((entry) => entry.id === params.cronJobId);
+  if (!job || resolveCronJobConfigRevision(job) !== params.jobConfigRevision) {
+    return;
+  }
+  const grantDefinitionRevision = resolveCronJobGrantDefinitionRevision(job);
+  let jobDefinitionGeneration = decodeDefinitionGeneration(jobRow.grant_definition_generation);
+  const projectionStale =
+    jobRow.grant_definition_revision !== grantDefinitionRevision ||
+    jobRow.grant_definition_updated_at !== jobRow.updated_at;
+  if (projectionStale || jobDefinitionGeneration === null) {
+    const retainedGenerationFloor = resolveCronJobGrantDefinitionGenerationFloor(
+      database.db,
+      params.cronJobId,
+    );
+    jobDefinitionGeneration = decodeDefinitionGeneration(
+      Math.max((jobDefinitionGeneration ?? 0) + 1, retainedGenerationFloor),
+    );
+    if (jobDefinitionGeneration === null) {
+      return;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .updateTable("cron_jobs")
+        .set({
+          grant_definition_revision: grantDefinitionRevision,
+          grant_definition_generation: jobDefinitionGeneration,
+          grant_definition_updated_at: jobRow.updated_at,
+        })
+        .where("store_key", "=", jobRow.store_key)
+        .where("job_id", "=", jobRow.job_id),
+    );
+  }
   executeSqliteQuerySync(
     database.db,
     stateDb
@@ -183,6 +235,7 @@ export function mintCronStandingGrantLocked(
       agent_id: params.agentId,
       cron_job_id: params.cronJobId,
       job_config_revision: params.jobConfigRevision,
+      job_definition_generation: jobDefinitionGeneration,
       operation_binding: params.operationBinding,
       created_at_ms: params.nowMs,
       expires_at_ms: params.expiresAtMs,
@@ -278,6 +331,18 @@ function lookupCronStandingGrant(
       return { outcome: "job-missing" };
     }
     if (resolveCronJobConfigRevision(job) !== grant.job_config_revision) {
+      return { outcome: "job-revision-changed" };
+    }
+    const jobRow = jobRows[0]!;
+    if (jobRow.grant_definition_revision !== resolveCronJobGrantDefinitionRevision(job)) {
+      return { outcome: "job-revision-changed" };
+    }
+    if (jobRow.grant_definition_updated_at !== jobRow.updated_at) {
+      return { outcome: "job-revision-changed" };
+    }
+    const grantGeneration = decodeDefinitionGeneration(grant.job_definition_generation);
+    const jobGeneration = decodeDefinitionGeneration(jobRow.grant_definition_generation);
+    if (grantGeneration === null || jobGeneration === null || grantGeneration !== jobGeneration) {
       return { outcome: "job-revision-changed" };
     }
     // Parent reversal fails closed: the approval row is the sole authorization

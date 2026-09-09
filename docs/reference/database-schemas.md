@@ -661,6 +661,36 @@ The checkpoint normally does not apply to a read-only query that preserves exist
 
 For an urgent data-loss, security, or recovery fix, a maintainer may authorize a narrowly scoped exception before implementation. The appropriate public or private review record must capture the reason, temporary scope, rollback and validation plan, and any follow-up needed for the full design decision. The exception accelerates the design record; it does not waive review before merge.
 
+### Cron definition generations
+
+`cron_jobs.job_json` remains the canonical job definition. Each cron row also
+keeps a derived definition revision and monotonic definition generation, and a
+cron standing grant records the generation current when it is minted. Cron row
+upserts update both projections atomically: substantive definition writes
+advance the generation, including a sequence that restores earlier text, while
+lifecycle-only enable and disable writes preserve it. Runtime-only writes do not
+touch either field.
+
+Definition upserts perform one indexed point read of the existing cron row,
+then guard generation preservation against those exact canonical bytes and the
+row's definition-update watermark in the write statement. A concurrent or older
+writer that leaves the projection stale therefore causes an increment instead
+of preserving the prior generation. A newly inserted row also starts above any
+generation retained by a matching deleted-job grant.
+
+The projection fields are bare nullable same-version additions so older readers
+can ignore them. Existing cron rows initialize on their next current-version
+write or grant mint. A current reader rejects a stale projection left by an
+older writer, and refreshes it when minting a new grant. Older grants without a
+generation remain inert. An enable-only cycle written entirely by an older
+version may conservatively require approval again because that writer cannot
+refresh the watermark. Deleting a cron row revokes matching grants before
+removing its projections; if an older writer deletes it, the replacement row
+starts above generations retained by matching grants. Deleting or pruning a
+grant deletes its recorded generation. Rolling back the change leaves ignored
+nullable fields, and reinstalling a current version resumes from their last
+value.
+
 ## Preflight a target release
 
 Before activating or rolling back a release, run that target release's CLI against one explicit copied state database:

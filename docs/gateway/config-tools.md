@@ -296,7 +296,7 @@ Control UI issue and pull request hover previews use the selected agent's effect
 
 Values shown are defaults except `applyPatch.allowModels` (empty/unset by default, meaning any compatible model may use `apply_patch`). `approvalRunningNoticeMs` emits a running notice when approval-backed exec runs long; `0` disables it.
 
-`tools.exec.grantExpiryDays` (unset by default) sets the default lifetime, in days (1–3650), for standing grants minted by Always allow on automation approvals. Unset keeps grants valid until revoked or the owning automation changes. Terms freeze at mint, so changing the value affects only future grants; see [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations).
+`tools.exec.grantExpiryDays` (unset by default) sets the default lifetime, in days (1–3650), for standing grants minted by Always allow on automation approvals. Unset keeps grants valid until revoked or the owning automation's substantive definition changes; pausing and re-enabling an otherwise unchanged automation preserves its grants. Terms freeze at mint, so changing the value affects only future grants; see [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations).
 
 ### `tools.loopDetection`
 
