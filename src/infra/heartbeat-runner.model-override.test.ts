@@ -259,6 +259,15 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
+  it("retires the bundle MCP runtime only for isolated heartbeat runs", async () => {
+    // Isolated runs mint a fresh session ID per heartbeat, so nothing reuses the runtime.
+    const isolatedOpts = await runDefaultsHeartbeat({ isolatedSession: true });
+    expectReplyOptions(isolatedOpts, { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true });
+
+    const sharedOpts = await runDefaultsHeartbeat({});
+    expectReplyOptions(sharedOpts, { isHeartbeat: true, cleanupBundleMcpOnRunEnd: undefined });
+  });
+
   it("uses isolated session key when isolatedSession is enabled", async () => {
     await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
