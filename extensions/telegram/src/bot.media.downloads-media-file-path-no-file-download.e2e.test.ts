@@ -23,6 +23,11 @@ type ReplyPayload = {
   ChannelStructuredContext?: unknown[];
 } & Record<string, unknown>;
 type MockWithCalls = { mock: { calls: unknown[][] } };
+type InboundMediaAssertionParams = {
+  fetchSpy: ReturnType<typeof vi.spyOn>;
+  replySpy: ReturnType<typeof vi.fn>;
+  runtimeError: ReturnType<typeof vi.fn>;
+};
 
 function mockCall(mock: MockWithCalls, index: number): unknown[] {
   const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
@@ -140,7 +145,6 @@ describe("telegram inbound media", () => {
 
       for (const scenario of [
         {
-          name: "downloads via file_path",
           messageId: 1,
           getFile: async () => ({ file_path: "photos/1.jpg" }),
           setupFetch: () =>
@@ -148,11 +152,7 @@ describe("telegram inbound media", () => {
               contentType: "image/jpeg",
               bytes: new Uint8Array([0xff, 0xd8, 0xff, 0x00]),
             }),
-          assert: (params: {
-            fetchSpy: ReturnType<typeof vi.spyOn>;
-            replySpy: ReturnType<typeof vi.fn>;
-            runtimeError: ReturnType<typeof vi.fn>;
-          }) => {
+          assert: (params: InboundMediaAssertionParams) => {
             expect(params.runtimeError).not.toHaveBeenCalled();
             const request = downloadRequest(params.fetchSpy, -1);
             expect(request.url).toBe("https://api.telegram.org/file/bottok/photos/1.jpg");
@@ -167,15 +167,10 @@ describe("telegram inbound media", () => {
           },
         },
         {
-          name: "reports unavailable media when file_path is missing",
           messageId: 2,
           getFile: async () => ({}),
           setupFetch: () => watchTelegramFetch(),
-          assert: (params: {
-            fetchSpy: ReturnType<typeof vi.spyOn>;
-            replySpy: ReturnType<typeof vi.fn>;
-            runtimeError: ReturnType<typeof vi.fn>;
-          }) => {
+          assert: (params: InboundMediaAssertionParams) => {
             expect(params.fetchSpy).not.toHaveBeenCalled();
             expect(params.replySpy).toHaveBeenCalledTimes(1);
             expect(replyPayload(params.replySpy)).toMatchObject({
@@ -186,24 +181,54 @@ describe("telegram inbound media", () => {
             expect(params.runtimeError).not.toHaveBeenCalled();
           },
         },
+        {
+          messageId: 3,
+          media: {
+            animation: {
+              file_id: "animation-file-id",
+              file_unique_id: "animation-unique-id",
+              width: 320,
+              height: 240,
+              duration: 2,
+            },
+          },
+          getFile: async () => ({ file_path: "animations/animation.mp4" }),
+          setupFetch: () =>
+            mockTelegramFileDownload({
+              contentType: "video/mp4",
+              bytes: new Uint8Array([0x00, 0x00, 0x00, 0x18]),
+            }),
+          assert: (params: InboundMediaAssertionParams) => {
+            expect(params.runtimeError).not.toHaveBeenCalled();
+            expect(downloadRequest(params.fetchSpy, -1).filePathHint).toBe(
+              "animations/animation.mp4",
+            );
+            expect(replyPayload(params.replySpy)).toMatchObject({
+              MediaTypes: ["video/mp4"],
+              media: [expect.objectContaining({ kind: "video" })],
+            });
+          },
+        },
       ]) {
         replySpy.mockClear();
         replySpy.mockResolvedValueOnce({ text: "ack" });
         runtimeError.mockClear();
         const fetchSpy = scenario.setupFetch();
 
+        const getFile = vi.fn(scenario.getFile);
         await handler({
           message: {
             message_id: scenario.messageId,
             chat: { id: 1234, type: "private" },
             from: { id: 777, is_bot: false, first_name: "Ada" },
-            photo: [{ file_id: "fid" }],
+            ...("media" in scenario ? scenario.media : { photo: [{ file_id: "fid" }] }),
             date: 1736380800, // 2025-01-09T00:00:00Z
           },
           me: { username: "openclaw_bot" },
-          getFile: scenario.getFile,
+          getFile,
         });
 
+        expect(getFile).toHaveBeenCalledTimes(1);
         scenario.assert({ fetchSpy, replySpy, runtimeError });
         fetchSpy.mockRestore();
       }

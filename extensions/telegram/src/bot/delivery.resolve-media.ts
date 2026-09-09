@@ -88,6 +88,7 @@ interface MediaMetadata {
     | NonNullable<TelegramContext["message"]["photo"]>[number]
     | TelegramContext["message"]["video"]
     | TelegramContext["message"]["video_note"]
+    | TelegramContext["message"]["animation"]
     | TelegramContext["message"]["document"]
     | TelegramContext["message"]["audio"]
     | TelegramContext["message"]["voice"];
@@ -101,6 +102,7 @@ function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
       msg.photo?.[msg.photo.length - 1] ??
       msg.video ??
       msg.video_note ??
+      msg.animation ??
       msg.document ??
       msg.audio ??
       msg.voice,
