@@ -1,13 +1,26 @@
+import { createRouter } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  createSubscriptionHydrationHarness,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
+import { routeKey, routeKeyFromSearch } from "./catalog-target.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { page } from "./route.ts";
 
 // The loader is exercised through the page contract so route.ts keeps its
 // internals unexported; new-session routes never resolve to RouteNotFound.
 const loadNewSessionData = (context: ApplicationContext, search: string) =>
-  page.loader?.(context, { location: { search } } as never) as Promise<NewSessionRouteData>;
+  page.loader?.(context, {
+    signal: new AbortController().signal,
+    shouldRun: () => true,
+    revalidating: false,
+    location: { pathname: "/new", search, hash: "" },
+    deps: search,
+    cause: "navigation",
+  }) as Promise<NewSessionRouteData>;
 
 function createContext(params: {
   assistantAgentId: string | null;
@@ -56,8 +69,75 @@ function createContext(params: {
 }
 
 describe("new-session route catalog target", () => {
+  it("keeps the replacement agent catalog when navigation cancels a lazy group route", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.groups.list") {
+        const agentId = typeof params?.agentId === "string" ? params.agentId : "main";
+        return { agentId, groups: [{ name: `${agentId} group`, position: 0 }] };
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 1);
+      }
+      return {};
+    });
+    const { gateway, selection, sessions, connect } = createSubscriptionHydrationHarness(
+      request,
+      "main",
+    );
+    const context = {
+      gateway,
+      agentSelection: selection,
+      sessions,
+    } as unknown as ApplicationContext;
+    const router = createRouter<
+      "new-session" | "other",
+      ApplicationContext,
+      null,
+      NewSessionRouteData | undefined
+    >({
+      routes: [
+        { ...page, component: () => null },
+        { id: "other", path: "/other", component: () => null },
+      ],
+    });
+    const location = { pathname: "/new", search: "?agent=writer&group=writer+group", hash: "" };
+    try {
+      connect();
+      await sessions.groupsLoad();
+      expect(sessions.state.groups).toEqual(["main group"]);
+      request.mockClear();
+
+      const loading = router.navigate("new-session", context, {}, location);
+      // import() yields even when cached; this real navigation retires that loader first.
+      await router.navigate("other", context);
+      await loading;
+
+      expect(router.getState().matches[0]?.routeId).toBe("other");
+      expect(selection.state.selectedId).toBe("main");
+      expect(sessions.state.groupsAgentId).toBe("main");
+      expect(sessions.state.groups).toEqual(["main group"]);
+      expect(
+        request.mock.calls.filter(([method]) => method.startsWith("sessions.groups.")),
+      ).toEqual([]);
+
+      await router.navigate("new-session", context, {}, location);
+      expect(router.getState().matches[0]?.data).toMatchObject({
+        agentId: "writer",
+        group: "writer group",
+        groupStatus: "resolved",
+      });
+      expect(selection.state.selectedId).toBe("writer");
+      expect(sessions.state.groupsAgentId).toBe("writer");
+      expect(sessions.state.groups).toEqual(["writer group"]);
+    } finally {
+      router.stop();
+      sessions.dispose();
+    }
+  });
+
   it("does not apply group defaults from a retired connection", async () => {
     const context = {
+      agentSelection: { state: { selectedId: "main" } },
       sessions: {
         state: {
           groupSettings: [
@@ -79,6 +159,7 @@ describe("new-session route catalog target", () => {
 
   it("marks a deleted group target missing", async () => {
     const context = {
+      agentSelection: { state: { selectedId: "main" } },
       sessions: {
         state: { groupSettings: [] },
         groupsLoad: vi.fn(async () => []),
@@ -92,6 +173,52 @@ describe("new-session route catalog target", () => {
     expect(data.group).toBe("Deleted");
     expect(data.groupStatus).toBe("missing");
   });
+
+  it.each(["", "&catalog=claude"])(
+    "keeps agentless group defaults and catalog targets on the selected agent (%s)",
+    async (catalogSearch) => {
+      const { context, request } = createContext({
+        assistantAgentId: "main",
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "main" }, { id: "research" }],
+        },
+      });
+      const settings = [{ name: "Shared", position: 0, cwd: "/research", worktree: true }];
+      Object.assign(context, {
+        agentSelection: { state: { selectedId: "research" } },
+        sessions: {
+          state: { groupsAgentId: "research", groupSettings: settings },
+          groupsLoad: vi.fn(async () => settings),
+          groupsGeneration: vi.fn(() => 1),
+          groupsStatus: vi.fn(() => "ready"),
+        },
+      });
+      const search = `?group=Shared${catalogSearch}`;
+
+      const data = await loadNewSessionData(context, search);
+
+      expect(data).toMatchObject({
+        agentId: "research",
+        requestedAgentId: "",
+        groupStatus: "resolved",
+        groupCwd: "/research",
+        groupWorktree: true,
+      });
+      expect(routeKey(data)).toBe(routeKeyFromSearch(search));
+      if (catalogSearch) {
+        expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
+          agentId: "research",
+          catalogId: "claude",
+          limitPerHost: 1,
+        });
+      } else {
+        expect(request).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("defers an unvalidated route agent before roster hydration", async () => {
     const { context, request } = createContext({

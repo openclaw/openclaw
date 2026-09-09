@@ -1,6 +1,9 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import {
+  normalizeAgentId,
+  resolveUiSelectedGlobalAgentId,
+} from "../../lib/sessions/session-key.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
@@ -10,12 +13,21 @@ export async function load(
 ): Promise<NewSessionRouteData> {
   const requestedLocation = newSessionLocationFromSearch(search);
   const requestedAgentId = requestedLocation.agentId.trim();
+  let groupAgentId: string | undefined;
   let groupCwd = "";
   let groupWorktree = false;
   let groupStatus: NewSessionRouteData["groupStatus"];
   let groupCatalogGeneration: number | undefined;
   let groupDefaultsStatus: NewSessionRouteData["groupDefaultsStatus"];
   if (requestedLocation.group) {
+    if (requestedAgentId) {
+      context.agentSelection.set(normalizeAgentId(requestedAgentId));
+    }
+    // Group defaults and creation share one owner, including agentless URLs.
+    groupAgentId = normalizeAgentId(
+      context.agentSelection.state.selectedId ??
+        resolveUiSelectedGlobalAgentId(context.gateway.snapshot),
+    );
     const startedGeneration = context.sessions.groupsGeneration();
     const settings = await context.sessions.groupsLoad();
     groupCatalogGeneration = context.sessions.groupsGeneration();
@@ -32,6 +44,7 @@ export async function load(
   if (!requestedLocation.catalogId) {
     return {
       ...requestedLocation,
+      agentId: groupAgentId ?? requestedLocation.agentId,
       requestedAgentId,
       groupStatus,
       groupCwd,
@@ -97,11 +110,13 @@ export async function load(
       ? agentsList.defaultId
       : availableAgents[0]?.id
     : gatewayDefaultId;
-  const agentId = fallbackAgentId
-    ? agentsList
-      ? resolveAgentId(requestedLocation, availableAgents, fallbackAgentId)
-      : resolveAgentId(undefined, [], fallbackAgentId)
-    : "";
+  const agentId =
+    groupAgentId ??
+    (fallbackAgentId
+      ? agentsList
+        ? resolveAgentId(requestedLocation, availableAgents, fallbackAgentId)
+        : resolveAgentId(undefined, [], fallbackAgentId)
+      : "");
   const plain = unresolved(agentId);
   if (gateway.phase !== "connected" || !gateway.client || !agentId) {
     return plain;

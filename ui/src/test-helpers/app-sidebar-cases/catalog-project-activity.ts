@@ -64,7 +64,7 @@ describe("AppSidebar project session activity", () => {
     await sidebar.updateComplete;
     expect(customGroup?.getAttribute("aria-expanded")).toBe("true");
     expect(
-      JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]"),
+      JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections:main") ?? "[]"),
     ).not.toContain("catalog-project:codex:gateway:local:custom:repo");
 
     project?.click();
@@ -74,7 +74,7 @@ describe("AppSidebar project session activity", () => {
     expect(project?.getAttribute("aria-expanded")).toBe("false");
     expect(customGroup?.getAttribute("aria-expanded")).toBe("false");
     expect(
-      JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]"),
+      JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections:main") ?? "[]"),
     ).toEqual([
       "catalog-project:codex:gateway:local:project:custom:repo",
       "catalog-custom:codex:gateway:local:custom:repo",
@@ -136,7 +136,7 @@ describe("AppSidebar project session activity", () => {
     person?.click();
     await sidebar.updateComplete;
     expect(
-      JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]"),
+      JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections:main") ?? "[]"),
     ).toEqual(["catalog-person:codex:gateway:local:person:profile:profile-ada"]);
   });
 

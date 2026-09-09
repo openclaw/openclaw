@@ -32,7 +32,8 @@ describe("credential changes retire boot records synchronously", () => {
       };
       const { gateway } = createGatewayStoreTestStore({ settings });
       const record: BootRecord = {
-        version: 2,
+        version: 3,
+        groupsAgentId: "main",
         authMethod: "token",
         credential: "9d17676d",
         scope: gatewayCredentialScope(settings.gatewayUrl),

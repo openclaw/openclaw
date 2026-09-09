@@ -9,6 +9,7 @@ const maintenanceReasons = {
   "audit-events-v2": "state database schema migration",
   "legacy-workspace": "workspace setup state migration",
   "legacy-session-store": "session store migration",
+  "session-groups-per-agent": "per-agent session group migration",
 } as const;
 
 export class StartupMaintenanceRequiredError extends Error {

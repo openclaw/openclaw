@@ -1,3 +1,4 @@
+import type { AgentsListResult } from "../../api/types.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { formatUiError } from "../format-error.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
@@ -19,6 +20,7 @@ import type {
 
 type SessionGroupCatalogHost = {
   connection: SessionConnectionOwner;
+  agentId: () => string;
   snapshot: () => SessionGateway["snapshot"];
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
@@ -51,6 +53,7 @@ function readLegacyStoredGroups(): string[] {
 }
 
 export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
+  let agentRevision = 0;
   let loadedEpoch = -1;
   let loadGeneration = 0;
   let catalogGeneration = 0;
@@ -77,7 +80,14 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     host.publish({ ...host.readState() });
   };
 
+  const reset = () => {
+    agentRevision += 1;
+    invalidate();
+    publishCatalog([], [], "loading");
+  };
+
   const dispose = () => {
+    agentRevision += 1;
     loadedEpoch = -1;
     loadGeneration += 1;
     pendingLoad = null;
@@ -110,9 +120,16 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       });
     const statusChanged = defaultsStatus !== status;
     defaultsStatus = status;
-    if (!groupsUnchanged || !settingsUnchanged || !orderUnchanged || statusChanged) {
+    if (
+      state.groupsAgentId !== host.agentId() ||
+      !groupsUnchanged ||
+      !settingsUnchanged ||
+      !orderUnchanged ||
+      statusChanged
+    ) {
       host.publish({
         ...state,
+        groupsAgentId: host.agentId(),
         groups: [...groups],
         groupSettings: [...groupSettings],
         sectionOrder: [...sectionOrder],
@@ -161,9 +178,10 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     scope: SessionConnectionScope,
     generation: number,
     advertised: boolean | null,
+    agentId: string,
   ) => {
     try {
-      const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
+      const listed = await scope.client.request(GROUPS_LIST_METHOD, { agentId });
       if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
         return null;
       }
@@ -178,18 +196,67 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
           requiredScope: "operator.write",
         }).allowed
       ) {
-        if (settings.length === 0) {
-          const put = await scope.client.request("sessions.groups.put", { names: legacy });
+        // Selection defaults can name the first agent even when system ownership
+        // points elsewhere. Only the Gateway can identify the legacy destination.
+        const ambient = await scope.client
+          .request<{ agentId?: string }>(GROUPS_LIST_METHOD, {})
+          .catch(() => null);
+        if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+          return null;
+        }
+        if (ambient?.agentId === agentId) {
+          // Doctor assigns names with members to those agents. Import only
+          // orphan names after a complete scan of the current Gateway roster.
+          const roster = await scope.client
+            .request<AgentsListResult>("agents.list", {})
+            .catch(() => null);
           if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
             return null;
           }
-          settings = readSessionCustomGroups(put);
-          sectionOrder = readSidebarSectionOrder(put);
-        }
-        try {
-          getSafeLocalStorage()?.removeItem(LEGACY_GROUPS_STORAGE_KEY);
-        } catch {
-          // The gateway catalog is canonical even when browser cleanup fails.
+          let complete =
+            roster !== null &&
+            roster.agents.length <= 1000 &&
+            roster.agents.some((agent) => agent.id === agentId);
+          const assigned = new Set(settings.map((group) => group.name));
+          if (complete && roster) {
+            for (const agent of roster.agents) {
+              if (agent.id === agentId) {
+                continue;
+              }
+              const catalog = await scope.client
+                .request(GROUPS_LIST_METHOD, { agentId: agent.id })
+                .catch(() => null);
+              if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+                return null;
+              }
+              if (catalog === null) {
+                complete = false;
+                break;
+              }
+              for (const group of readSessionCustomGroups(catalog)) {
+                assigned.add(group.name);
+              }
+            }
+          }
+          if (complete) {
+            const names = [
+              ...settings.map((group) => group.name),
+              ...legacy.filter((name) => !assigned.has(name)),
+            ];
+            if (names.length !== settings.length) {
+              const put = await scope.client.request("sessions.groups.put", { agentId, names });
+              if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
+                return null;
+              }
+              settings = readSessionCustomGroups(put);
+              sectionOrder = readSidebarSectionOrder(put);
+            }
+            try {
+              getSafeLocalStorage()?.removeItem(LEGACY_GROUPS_STORAGE_KEY);
+            } catch {
+              // The gateway catalog is canonical even when browser cleanup fails.
+            }
+          }
         }
       }
       const defaultsAllowed =
@@ -206,7 +273,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       // readiness only gates group-target routes and must not erase those names.
       publishCatalog(settings, sectionOrder, "loading");
       try {
-        const defaults = await scope.client.request(GROUPS_DEFAULTS_METHOD, {});
+        const defaults = await scope.client.request(GROUPS_DEFAULTS_METHOD, { agentId });
         if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
           return null;
         }
@@ -222,8 +289,9 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
-  /** Group consumers may probe once per connection; explicitly absent features never probe. */
+  /** Load once per selected agent and connection; explicitly absent features never probe. */
   const load = async () => {
+    const agentId = host.agentId();
     const scope = host.connection.capture();
     if (!scope) {
       return null;
@@ -243,7 +311,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       publishCatalog([], [], "ready");
       return [];
     }
-    const promise = loadAttempt(scope, generation, advertised).finally(() => {
+    const promise = loadAttempt(scope, generation, advertised, agentId).finally(() => {
       if (pendingLoad === promise) {
         pendingLoad = null;
       }
@@ -263,20 +331,39 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     void load();
   };
 
+  const captureMutation = () => {
+    const agentId = host.agentId();
+    const issuedAgentRevision = agentRevision;
+    const scope = host.connection.capture();
+    if (!scope) {
+      return null;
+    }
+    return {
+      agentId,
+      scope,
+      isCurrent: () =>
+        host.connection.isCurrent(scope) &&
+        issuedAgentRevision === agentRevision &&
+        agentId === host.agentId(),
+    };
+  };
+
   const put = async (
     names: readonly string[],
     sectionOrder?: readonly string[],
   ): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
+    const mutation = captureMutation();
+    if (!mutation) {
       return "stale";
     }
+    const { agentId, scope, isCurrent } = mutation;
     try {
       const result = await scope.client.request("sessions.groups.put", {
+        agentId,
         names: [...names],
         ...(sectionOrder === undefined ? {} : { sectionOrder: [...sectionOrder] }),
       });
-      if (!host.connection.isCurrent(scope)) {
+      if (!isCurrent()) {
         return "stale";
       }
       publishPathFreeMutation(
@@ -287,18 +374,23 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       );
       return "completed";
     } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
+      return finishMutationFailure(isCurrent(), error);
     }
   };
 
   const rename = async (from: string, to: string): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
+    const mutation = captureMutation();
+    if (!mutation) {
       return "stale";
     }
+    const { agentId, scope, isCurrent } = mutation;
     try {
-      const result = await scope.client.request("sessions.groups.rename", { name: from, to });
-      if (!host.connection.isCurrent(scope)) {
+      const result = await scope.client.request("sessions.groups.rename", {
+        agentId,
+        name: from,
+        to,
+      });
+      if (!isCurrent()) {
         return "stale";
       }
       const current = host.readState().groupSettings;
@@ -314,18 +406,19 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       void host.refreshRows();
       return "completed";
     } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
+      return finishMutationFailure(isCurrent(), error);
     }
   };
 
   const remove = async (name: string): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
+    const mutation = captureMutation();
+    if (!mutation) {
       return "stale";
     }
+    const { agentId, scope, isCurrent } = mutation;
     try {
-      const result = await scope.client.request("sessions.groups.delete", { name });
-      if (!host.connection.isCurrent(scope)) {
+      const result = await scope.client.request("sessions.groups.delete", { agentId, name });
+      if (!isCurrent()) {
         return "stale";
       }
       publishPathFreeMutation(
@@ -337,7 +430,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       void host.refreshRows();
       return "completed";
     } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
+      return finishMutationFailure(isCurrent(), error);
     }
   };
 
@@ -345,13 +438,18 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     name: string,
     defaults: { cwd: string | null; worktree: boolean },
   ): Promise<SessionGroupMutationResult> => {
-    const scope = host.connection.capture();
-    if (!scope) {
+    const mutation = captureMutation();
+    if (!mutation) {
       return "stale";
     }
+    const { agentId, scope, isCurrent } = mutation;
     try {
-      const result = await scope.client.request("sessions.groups.update", { name, ...defaults });
-      if (!host.connection.isCurrent(scope)) {
+      const result = await scope.client.request("sessions.groups.update", {
+        agentId,
+        name,
+        ...defaults,
+      });
+      if (!isCurrent()) {
         return "stale";
       }
       const state = host.readState();
@@ -366,7 +464,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       );
       return "completed";
     } catch (error) {
-      return finishMutationFailure(host.connection.isCurrent(scope), error);
+      return finishMutationFailure(isCurrent(), error);
     }
   };
 
@@ -374,10 +472,12 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     delete: remove,
     dispose,
     generation: () => catalogGeneration,
+    agentGeneration: () => agentRevision,
     invalidate,
     load,
     put,
     rename,
+    reset,
     status: () => defaultsStatus,
     update,
   };

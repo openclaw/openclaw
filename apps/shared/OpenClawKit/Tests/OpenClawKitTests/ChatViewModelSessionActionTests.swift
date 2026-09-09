@@ -79,6 +79,7 @@ private actor SessionActionTransportState {
     var patchIdentities: [(key: String, expectedSessionID: String?)] = []
     var deletedKeys: [String] = []
     var groupPuts: [[String]] = []
+    var groupAgentIDs: [String?] = []
     var createdKeys: [String] = []
     var createdAgentIDs: [String?] = []
     var createdParentKeys: [String?] = []
@@ -123,8 +124,13 @@ private actor SessionActionTransportState {
         self.patchIdentities.append((key: key, expectedSessionID: expectedSessionID))
     }
 
-    func recordGroupPut(_ names: [String]) {
+    func recordGroupOwner(_ agentID: String?) {
+        self.groupAgentIDs.append(agentID)
+    }
+
+    func recordGroupPut(_ names: [String], agentID: String?) {
         self.groupPuts.append(names)
+        self.groupAgentIDs.append(agentID)
     }
 
     func recordDelete(_ key: String) {
@@ -339,16 +345,17 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         await self.state.recordPatch(key, expectedSessionID: expectedSessionID)
     }
 
-    func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease? {
+    func acquireSessionGroupsRouteLease(agentID: String?) async -> OpenClawChatSessionGroupsRouteLease? {
         let state = self.state
         return OpenClawChatSessionGroupsRouteLease(
             listGroups: {
-                OpenClawChatSessionGroupsResponse(groups: [
+                await state.recordGroupOwner(agentID)
+                return OpenClawChatSessionGroupsResponse(agentId: agentID, groups: [
                     OpenClawChatSessionGroup(name: "Existing", position: 0),
                 ])
             },
             putGroups: { names in
-                await state.recordGroupPut(names)
+                await state.recordGroupPut(names, agentID: agentID)
                 return OpenClawChatSessionGroupsMutationResponse(
                     ok: true,
                     groups: names.enumerated().map {
@@ -357,10 +364,12 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
                     updatedSessions: nil)
             },
             renameGroup: { _, _ in
-                OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [], updatedSessions: nil)
+                await state.recordGroupOwner(agentID)
+                return OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [], updatedSessions: nil)
             },
             deleteGroup: { _ in
-                OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [], updatedSessions: nil)
+                await state.recordGroupOwner(agentID)
+                return OpenClawChatSessionGroupsMutationResponse(ok: true, groups: [], updatedSessions: nil)
             })
     }
 
@@ -462,6 +471,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         await self.state.groupPuts
     }
 
+    func groupAgentIDs() async -> [String?] {
+        await self.state.groupAgentIDs
+    }
+
     func deletedKeys() async -> [String] {
         await self.state.deletedKeys
     }
@@ -558,15 +571,36 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.patchIdentities().map(\.expectedSessionID) == ["session-durable"])
     }
 
-    @Test func `group create lists and replaces through one captured route lease`() async throws {
+    @Test(arguments: [
+        ("main", "research", "per-sender|main|default-agent", "research"),
+        ("agent:research:main", nil, "per-sender|main|default-agent", "research"),
+        ("main", nil, "per-sender|main|default-agent", "default-agent"),
+        ("global", nil, "global|main|default-agent", "default-agent"),
+    ] as [(String, String?, String, String)])
+    func `group operations retain their captured owner when routing changes`(
+        sessionKey: String,
+        activeAgentID: String?,
+        routingContract: String,
+        expectedOwner: String) async throws
+    {
         let transport = SessionActionTransport()
-        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: sessionKey,
+            transport: transport,
+            activeAgentId: activeAgentID,
+            sessionRoutingContract: routingContract)
         let lease = try await viewModel.sessionGroupsRouteLease()
+        viewModel.syncDeliveryIdentity(
+            activeAgentId: "support",
+            sessionRoutingContract: "per-sender|main|changed-default")
 
         let groups = try await viewModel.createSessionGroup(named: "New", using: lease)
 
         #expect(groups.map(\.name) == ["Existing", "New"])
         #expect(await transport.groupPuts() == [["Existing", "New"]])
+        _ = try await lease.renameGroup(name: "New", to: "Renamed")
+        _ = try await lease.deleteGroup(name: "Renamed")
+        #expect(await transport.groupAgentIDs() == Array(repeating: expectedOwner, count: 4))
         // Catalog-only mutations must bump the revision so sidebar group fetches
         // keyed on it refetch instead of staying stale until reconnect.
         #expect(viewModel.sessionGroupsRevision == 1)

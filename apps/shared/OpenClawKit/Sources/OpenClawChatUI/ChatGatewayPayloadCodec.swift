@@ -24,7 +24,8 @@ public enum OpenClawChatGatewayPayloadCodec {
                     id: $0.id,
                     name: $0.name,
                     workspaceGit: $0.workspacegit)
-            })
+            },
+            selectionRequired: result.selectionrequired)
     }
 
     public static func decodeProgressCard(_ data: Data, agentID: String?) throws -> ProgressCard? {

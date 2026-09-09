@@ -15,7 +15,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { setStateDirEnv, withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveSessionGroupMutationTargetsByName } from "./session-groups.js";
 
-test("discovers groups across more than the handle cap without writable database maintenance", async () => {
+test("isolates each group owner across more than the handle cap without writable database maintenance", async () => {
   await withStateDirEnv("openclaw-session-group-readonly-", async ({ stateDir }) => {
     setStateDirEnv(fs.realpathSync(stateDir));
     closeOpenClawAgentDatabasesForTest();
@@ -45,10 +45,16 @@ test("discovers groups across more than the handle cap without writable database
     const walSpy = vi.spyOn(sqliteWal, "configureSqliteConnectionPragmas");
 
     try {
-      let targets: ReturnType<typeof resolveSessionGroupMutationTargetsByName> | undefined;
+      let memberCount = 0;
       const startedAt = performance.now();
       try {
-        targets = resolveSessionGroupMutationTargetsByName(config);
+        for (const agentId of agentIds) {
+          const targets = resolveSessionGroupMutationTargetsByName(config, agentId);
+          expect(targets.get("Shared work")).toEqual([
+            { agentId, sessionKey: `agent:${agentId}:main` },
+          ]);
+          memberCount += targets.get("Shared work")?.length ?? 0;
+        }
       } finally {
         console.info(
           JSON.stringify({
@@ -62,14 +68,12 @@ test("discovers groups across more than the handle cap without writable database
             leaseClaims: claimSpy.mock.calls.length,
             leaseReleases: releaseSpy.mock.calls.length,
             openWriterHandles: listOpenClawAgentDatabasesForTest().length,
-            groupMembers: targets?.get("Shared work")?.length ?? 0,
+            groupMembers: memberCount,
           }),
         );
       }
 
-      expect(targets?.get("Shared work")).toEqual(
-        agentIds.map((agentId) => ({ agentId, sessionKey: `agent:${agentId}:main` })),
-      );
+      expect(memberCount).toBe(agentIds.length);
       expect(integritySpy.mock.calls.length).toBe(0);
       expect(claimSpy.mock.calls.length).toBe(0);
       expect(releaseSpy.mock.calls.length).toBe(0);

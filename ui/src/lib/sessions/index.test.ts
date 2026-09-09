@@ -15,6 +15,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import { defineSessionGroupSelectionTests } from "./session-group-selection.test-support.ts";
 
 function sessionChangedEvent(key: string): GatewayEventFrame {
   return {
@@ -33,6 +34,8 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
 }
 
 describe("createSessionCapability", () => {
+  defineSessionGroupSelectionTests();
+
   it.each(["direct", "subscription"] as const)(
     "shares confirmed archive visibility after %s reconciliation",
     async (path) => {

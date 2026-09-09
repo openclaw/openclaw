@@ -229,7 +229,7 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
     expect(onlineToggle?.getAttribute("aria-expanded")).toBe("false");
     expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(0);
-    expect(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections")).toBe(
+    expect(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections:main")).toBe(
       JSON.stringify(["online"]),
     );
 

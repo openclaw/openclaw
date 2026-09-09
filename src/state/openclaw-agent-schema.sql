@@ -778,3 +778,17 @@ CREATE TABLE IF NOT EXISTS session_pending_inputs (
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_pending_inputs_session
   ON session_pending_inputs(session_key, session_id, seq DESC);
+
+-- Agent-owned custom session groups.
+CREATE TABLE IF NOT EXISTS session_groups (
+  name TEXT NOT NULL PRIMARY KEY,
+  position INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  cwd TEXT,
+  worktree INTEGER
+) STRICT;
+CREATE TABLE IF NOT EXISTS session_group_state (
+  singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+  section_order_json TEXT NOT NULL,
+  import_fingerprint TEXT
+) STRICT;

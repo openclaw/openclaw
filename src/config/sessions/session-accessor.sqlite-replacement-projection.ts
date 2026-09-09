@@ -48,6 +48,7 @@ type ReplacementProjectionOptions = {
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   consumePendingReset?: boolean;
   requireWriteSuccess?: boolean;
   sessionKeys?: readonly string[];
@@ -73,6 +74,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.activeSessionKey ?? params.sessionKeys?.[0] ?? "",
     storePath: params.storePath,
+    env: params.env,
   });
   const preparedWrite = await runPreparedSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));

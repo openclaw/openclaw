@@ -176,12 +176,7 @@ export class DraftPlaceState {
   }
 
   get remoteRepository(): SessionCreateParams["repository"] {
-    const project = this.browser.remoteProject;
-    if (!this.remotePlacement || !project) {
-      return undefined;
-    }
-    const ref = this.baseRef.trim();
-    return { url: project.cloneUrl, ...(ref ? { ref } : {}) };
+    return this.repositoryState.remoteRepository;
   }
 
   get worktreeName(): string {
@@ -495,17 +490,22 @@ export class DraftPlaceState {
     this.callbacks.requestUpdate();
   }
 
-  selectAgentId(agentId: string) {
+  selectAgentId(agentId: string): string | undefined {
     const snapshot = this.read();
     if (
       snapshot.submitting ||
       snapshot.pendingPlacementSessionKey ||
       catalog.isTarget(snapshot.data)
     ) {
-      return;
+      return undefined;
     }
     if (normalizeAgentId(agentId) === normalizeAgentId(this.agentIdValue)) {
-      return;
+      return undefined;
+    }
+    if (snapshot.data?.group) {
+      // The route owns group defaults. Return a navigation instead of pairing
+      // another draft agent with the current route's category and workspace.
+      return newSessionSearch(normalizeAgentId(agentId), { group: snapshot.data.group });
     }
     this.agentIdValue = normalizeAgentId(agentId);
     this.folderValidation.cancel();
@@ -516,6 +516,7 @@ export class DraftPlaceState {
     this.resetPlaceSelection();
     this.browser.close();
     this.adoptAgentDefaults({ preserveSelectedAgent: true });
+    return undefined;
   }
 
   applyFolder(folder: string) {

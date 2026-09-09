@@ -82,7 +82,8 @@ describe("sidebar warm roster publication", () => {
         { state: { selectedId: "main" }, subscribe: () => () => undefined },
         {
           bootRecord: {
-            version: 2,
+            version: 3,
+            groupsAgentId: "main",
             authMethod: "token",
             credential: "9d17676d",
             scope: gatewayCredentialScope(gateway.gateway.connection.gatewayUrl),
@@ -121,7 +122,7 @@ describe("sidebar warm roster publication", () => {
           controller.hostConnected();
         }
         cachedRoster.resolve({
-          version: 1,
+          version: 2,
           scope: gatewayCredentialScope(gateway.gateway.connection.gatewayUrl),
           savedAt: Date.now(),
           profileId: null,

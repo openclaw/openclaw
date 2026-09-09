@@ -10,6 +10,16 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 
+export type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
+export type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
+export type SessionGroupDefaultsDialogOpener =
+  (typeof import("./session-group-defaults-dialog.ts"))["showSessionGroupDefaultsDialog"];
+
+export type SidebarZoneDropTarget = {
+  entry: string;
+  position: "before" | "after";
+};
+
 export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly sessionData: Pick<
     SessionDataController,
@@ -25,13 +35,14 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   sessionsShowCron: boolean;
   sessionsShowPreview: boolean;
   sessionsShowSystem: boolean;
-  sessionsHideEmptyGroups: boolean;
+  expandedAgentId(): string;
   sessionsStatusFilter: SidebarSessionStatusFilter;
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
   listSessionGroupFolders(path?: string): Promise<FsListDirResult>;
   inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus>;
+  sessionGroupAgentGeneration(): number;
   sessionGroupDefaults(name: string): { cwd: string; worktree: boolean } | null;
   knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];

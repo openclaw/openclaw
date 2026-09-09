@@ -10,7 +10,8 @@ const BOOT_RECORD_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
 let bootRecordGeneration = 0;
 
 export type BootRecord = {
-  version: 2;
+  version: 3;
+  groupsAgentId: string | null;
   authMethod: string;
   credential: string;
   savedAt: number;
@@ -44,7 +45,8 @@ function isBootRecord(value: unknown): value is BootRecord {
   }
   const agents = value.agents;
   return (
-    value.version === 2 &&
+    value.version === 3 &&
+    (value.groupsAgentId === null || typeof value.groupsAgentId === "string") &&
     (value.authMethod === "token" || value.authMethod === "device-token") &&
     typeof value.credential === "string" &&
     typeof value.savedAt === "number" &&

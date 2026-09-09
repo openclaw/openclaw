@@ -301,10 +301,6 @@ export function loadStoredSidebarSessionsShowSystem(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY) === "true";
 }
 
-export function loadStoredSidebarSessionsHideEmptyGroups(): boolean {
-  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY) === "true";
-}
-
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY);
   return stored === "archived" || stored === "all" ? stored : "active";
@@ -340,9 +336,16 @@ export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
   return stored === "updated" || stored === "people" ? stored : "created";
 }
 
-export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
+function loadStoredCollapsedSessionSections(agentId?: string): ReadonlySet<string> {
   try {
-    const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
+    const storage = getSafeLocalStorage();
+    storage?.removeItem(SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY);
+    const raw =
+      (agentId
+        ? storage?.getItem(
+            `${SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY}:${encodeURIComponent(agentId)}`,
+          )
+        : null) ?? storage?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
     if (raw == null) {
       // First run: Coding stays muted while Online preserves its expanded
       // default until the user explicitly collapses it.
@@ -392,10 +395,6 @@ export function storeSidebarSessionsShowPreview(show: boolean) {
 
 export function storeSidebarSessionsShowSystem(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
-}
-
-export function storeSidebarSessionsHideEmptyGroups(hide: boolean) {
-  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_HIDE_EMPTY_GROUPS_STORAGE_KEY, String(hide));
 }
 
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
@@ -449,11 +448,54 @@ export function storeSidebarSessionSortMode(
   return resolved;
 }
 
-export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {
+function storeCollapsedSessionSections(sections: ReadonlySet<string>, agentId?: string) {
   getSafeLocalStorage()?.setItem(
-    SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
+    agentId
+      ? `${SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY}:${encodeURIComponent(agentId)}`
+      : SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
     JSON.stringify([...sections]),
   );
+}
+
+export class SidebarSessionSectionState {
+  private readonly collapsedByAgent = new Map<string, ReadonlySet<string>>();
+
+  constructor(
+    private readonly agentId: () => string,
+    private readonly requestUpdate: () => void,
+  ) {}
+
+  get collapsed(): ReadonlySet<string> {
+    const agentId = this.agentId();
+    let sections = this.collapsedByAgent.get(agentId);
+    if (!sections) {
+      // The legacy snapshot seeds each agent once; later writes stay agent-local.
+      sections = loadStoredCollapsedSessionSections(agentId);
+      this.collapsedByAgent.set(agentId, sections);
+    }
+    return sections;
+  }
+
+  save(sections: ReadonlySet<string>) {
+    const agentId = this.agentId();
+    this.collapsedByAgent.set(agentId, new Set(sections));
+    this.requestUpdate();
+    try {
+      storeCollapsedSessionSections(sections, agentId);
+    } catch {
+      // Group membership and ordering remain usable without local persistence.
+    }
+  }
+
+  toggle(sectionId: string) {
+    const collapsed = new Set(this.collapsed);
+    if (collapsed.has(sectionId)) {
+      collapsed.delete(sectionId);
+    } else {
+      collapsed.add(sectionId);
+    }
+    this.save(collapsed);
+  }
 }
 
 function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {

@@ -16,11 +16,12 @@ struct ChatSessionSidebar: View {
     @State private var sessionPendingRename: OpenClawChatSessionEntry?
     @State private var renameText = ""
     @State private var groups: [OpenClawChatSessionGroup] = []
+    @State private var groupsAgentID: String?
     @State private var groupRefreshNonce = 0
     @State private var groupLoadFailed = false
     @State private var inspectedSession: OpenClawChatSessionEntry?
     @State private var isPresentingNewSessionOptions = false
-    @AppStorage("openclaw.chat.collapsedSessionGroups") private var collapsedSessionGroups = ""
+    @AppStorage("openclaw.chat.collapsedSessionGroupsByAgent") private var collapsedSessionGroups = Data()
 
     var body: some View {
         let sections = ChatSessionSidebarModel.sections(
@@ -28,7 +29,7 @@ struct ChatSessionSidebar: View {
             currentSessionKey: self.viewModel.sessionKey,
             mainSessionKey: self.viewModel.resolvedMainSessionKey,
             activeAgentID: self.viewModel.activeAgentId,
-            groups: self.groups,
+            groups: self.groupsAgentID == self.viewModel.sessionGroupsAgentID ? self.groups : [],
             query: self.query)
         List(selection: self.selectionBinding) {
             Color.clear
@@ -107,12 +108,18 @@ struct ChatSessionSidebar: View {
             }
         }
         .task(id: self.groupRefreshID) {
+            let agentID = self.viewModel.sessionGroupsAgentID
+            self.migrateCollapsedGroups()
+            self.groups = []
             self.viewModel.refreshSessions(limit: 200)
             do {
                 let groups = try await self.viewModel.fetchSessionGroups()
+                guard !Task.isCancelled, agentID == self.viewModel.sessionGroupsAgentID else { return }
+                self.groupsAgentID = agentID
                 self.groups = groups
                 self.groupLoadFailed = false
             } catch {
+                guard !Task.isCancelled else { return }
                 self.groupLoadFailed = true
             }
         }
@@ -170,7 +177,7 @@ struct ChatSessionSidebar: View {
     private var groupRefreshID: String {
         let categories = self.viewModel.sessions.compactMap(\.category).sorted().joined(separator: "|")
         let revision = self.viewModel.sessionGroupsRevision
-        return "\(self.viewModel.healthOK)|\(categories)|\(revision)|\(self.groupRefreshNonce)"
+        return "\(self.viewModel.sessionGroupsAgentID ?? "")|\(self.viewModel.healthOK)|\(categories)|\(revision)|\(self.groupRefreshNonce)"
     }
 
     private var deleteDialogTitle: String {
@@ -327,16 +334,32 @@ struct ChatSessionSidebar: View {
         }
     }
 
+    private var collapsedGroupsByAgent: [String: [String]] {
+        (try? JSONDecoder().decode([String: [String]].self, from: self.collapsedSessionGroups)) ?? [:]
+    }
+
+    private var collapseAgentKey: String { self.viewModel.sessionGroupsAgentID ?? "" }
+
+    private func migrateCollapsedGroups() {
+        var groups = self.collapsedGroupsByAgent
+        guard groups[self.collapseAgentKey] == nil else { return }
+        let legacy = UserDefaults.standard.string(forKey: "openclaw.chat.collapsedSessionGroups") ?? ""
+        groups[self.collapseAgentKey] = legacy.split(separator: "\u{1F}").map(String.init)
+        if let encoded = try? JSONEncoder().encode(groups) { self.collapsedSessionGroups = encoded }
+    }
+
     private func isGroupCollapsed(_ name: String) -> Bool {
-        Set(self.collapsedSessionGroups.split(separator: "\u{1F}").map(String.init)).contains(name)
+        self.collapsedGroupsByAgent[self.collapseAgentKey]?.contains(name) == true
     }
 
     private func toggleGroupCollapsed(_ name: String) {
-        var names = Set(self.collapsedSessionGroups.split(separator: "\u{1F}").map(String.init))
+        var groups = self.collapsedGroupsByAgent
+        var names = Set(groups[self.collapseAgentKey] ?? [])
         if !names.insert(name).inserted {
             names.remove(name)
         }
-        self.collapsedSessionGroups = names.sorted().joined(separator: "\u{1F}")
+        groups[self.collapseAgentKey] = names.sorted()
+        if let encoded = try? JSONEncoder().encode(groups) { self.collapsedSessionGroups = encoded }
     }
 
     private func actionLabel(_ title: String, systemImage: String) -> some View {

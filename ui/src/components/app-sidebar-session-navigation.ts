@@ -65,7 +65,6 @@ import {
   loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsGrouping,
-  loadStoredSidebarSessionsHideEmptyGroups,
   loadStoredSidebarSessionsShowCron,
   loadStoredSidebarSessionsShowPreview,
   loadStoredSidebarSessionsShowSystem,
@@ -167,7 +166,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   @state() sessionsShowCron = loadStoredSidebarSessionsShowCron();
   @state() sessionsShowPreview = loadStoredSidebarSessionsShowPreview();
   @state() sessionsShowSystem = loadStoredSidebarSessionsShowSystem();
-  @state() sessionsHideEmptyGroups = loadStoredSidebarSessionsHideEmptyGroups();
   @state() sessionsStatusFilter: SidebarSessionStatusFilter =
     loadStoredSidebarSessionStatusFilter();
   @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
@@ -357,7 +355,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
           ? []
           : this.visibleSessionCatalogs().map((catalog) => catalog.id),
       collapsedSections: this.collapsedSessionSections,
-      hideEmptyGroups: this.sessionsHideEmptyGroups || this.sessionOwnerFilterActive,
+      hideEmptyGroups: this.sessionOwnerFilterActive,
       visibleSessionLimits: this.sessionData.visibleSessionLimits,
       sortMode: this.effectiveSessionSortMode(),
       statusFilter: this.sessionsStatusFilter,

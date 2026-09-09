@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { resolveSessionGroupAgent } from "../session-group-agent.js";
 import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
 import {
   deleteSessionGroup,
@@ -37,15 +38,25 @@ import {
 } from "./workspace-path-containment.js";
 
 export const sessionGroupHandlers: GatewayRequestHandlers = {
-  "sessions.groups.list": async ({ params, respond }) => {
+  "sessions.groups.list": async ({ params, respond, context }) => {
     if (
       !assertValidParams(params, validateSessionsGroupsListParams, "sessions.groups.list", respond)
     ) {
       return;
     }
+    const owner = resolveSessionGroupAgent(context.getRuntimeConfig(), params.agentId, "read");
+    if (!owner.ok) {
+      respond(false, undefined, owner.error);
+      return;
+    }
+    const agentId = owner.agentId;
     respond(
       true,
-      { groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },
+      {
+        agentId,
+        groups: listSessionGroups(agentId),
+        sectionOrder: listSidebarSectionOrder(agentId),
+      },
       undefined,
     );
   },
@@ -60,10 +71,17 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const owner = resolveSessionGroupAgent(context.getRuntimeConfig(), params.agentId, "read");
+    if (!owner.ok) {
+      respond(false, undefined, owner.error);
+      return;
+    }
+    const agentId = owner.agentId;
     const defaults = filterMutableSessionGroupRecords({
+      agentId,
       cfg: context.getRuntimeConfig(),
       client,
-      records: listSessionGroupDefaults(),
+      records: listSessionGroupDefaults(agentId),
     });
     respond(true, { defaults }, undefined);
   },
@@ -73,17 +91,28 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const owner = resolveSessionGroupAgent(context.getRuntimeConfig(), params.agentId, "write");
+    if (!owner.ok) {
+      respond(false, undefined, owner.error);
+      return;
+    }
+    const agentId = owner.agentId;
     try {
       const groups = putSessionGroups({
         cfg: context.getRuntimeConfig(),
+        agentId,
         names: params.names,
         sectionOrder: params.sectionOrder,
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
-      respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
+      respond(
+        true,
+        { ok: true, groups, sectionOrder: listSidebarSectionOrder(agentId) },
+        undefined,
+      );
       // Catalog-only changes still need to reach other open clients.
-      emitSessionsChanged(context, { reason: "groups" });
+      emitSessionsChanged(context, { reason: "groups", agentId });
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
@@ -106,9 +135,16 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const owner = resolveSessionGroupAgent(context.getRuntimeConfig(), params.agentId, "write");
+    if (!owner.ok) {
+      respond(false, undefined, owner.error);
+      return;
+    }
+    const agentId = owner.agentId;
     try {
       const result = await renameSessionGroup({
         cfg: context.getRuntimeConfig(),
+        agentId,
         name: params.name,
         to: params.to,
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
@@ -126,7 +162,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     } finally {
       // Interrupted sweeps can retain catalog entries and committed member moves.
-      emitSessionsChanged(context, { reason: "groups" });
+      emitSessionsChanged(context, { reason: "groups", agentId });
     }
   },
   "sessions.groups.update": async ({
@@ -146,6 +182,12 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const owner = resolveSessionGroupAgent(context.getRuntimeConfig(), params.agentId, "write");
+    if (!owner.ok) {
+      respond(false, undefined, owner.error);
+      return;
+    }
+    const agentId = owner.agentId;
     if (params.cwd && !path.isAbsolute(params.cwd)) {
       respond(
         false,
@@ -183,15 +225,20 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     sessionMutationAuthorization?.assertCurrent();
     if (sessionMutationAuthorization) {
       const currentTargets =
-        resolveSessionGroupMutationTargetsByName(context.getRuntimeConfig()).get(name) ?? [];
+        resolveSessionGroupMutationTargetsByName(context.getRuntimeConfig(), agentId).get(name) ??
+        [];
       for (const target of currentTargets) {
         sessionMutationAuthorization.assertTargetCurrent(target);
       }
     }
-    const defaults = updateSessionGroupDefaults(name, {
-      cwd,
-      worktree: params.worktree,
-    });
+    const defaults = updateSessionGroupDefaults(
+      name,
+      {
+        cwd,
+        worktree: params.worktree,
+      },
+      agentId,
+    );
     if (!defaults) {
       respond(
         false,
@@ -205,6 +252,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         defaults: filterMutableSessionGroupRecords({
+          agentId,
           cfg: context.getRuntimeConfig(),
           client,
           records: defaults,
@@ -212,7 +260,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    emitSessionsChanged(context, { reason: "groups" });
+    emitSessionsChanged(context, { reason: "groups", agentId });
   },
   "sessions.groups.delete": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (
@@ -225,9 +273,16 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const owner = resolveSessionGroupAgent(context.getRuntimeConfig(), params.agentId, "write");
+    if (!owner.ok) {
+      respond(false, undefined, owner.error);
+      return;
+    }
+    const agentId = owner.agentId;
     try {
       const result = await deleteSessionGroup({
         cfg: context.getRuntimeConfig(),
+        agentId,
         name: params.name,
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
@@ -239,7 +294,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     } finally {
-      emitSessionsChanged(context, { reason: "groups" });
+      emitSessionsChanged(context, { reason: "groups", agentId });
     }
   },
 };

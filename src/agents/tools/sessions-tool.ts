@@ -334,7 +334,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, ownership, reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.",
+      "Session settings, ownership, reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows this agent's catalog; group_set replaces its ordered catalog; group_rename/group_delete change one group and its member sessions in this agent. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -433,8 +433,40 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         });
         return jsonResult(result);
       }
-      if (action === "group_list") {
-        return jsonResult(await callGateway("sessions.groups.list", {}));
+      if (
+        action === "group_list" ||
+        action === "group_set" ||
+        action === "group_rename" ||
+        action === "group_delete"
+      ) {
+        const context = resolveSessionToolContext(opts);
+        const agentId = resolveSessionAgentId({
+          config: context.cfg,
+          sessionKey: context.effectiveRequesterKey,
+          agentId: opts.requesterAgentIdOverride,
+        });
+        if (action === "group_list") {
+          return jsonResult(await callGateway("sessions.groups.list", { agentId }));
+        }
+        if (action === "group_set") {
+          const names = readGroupNames(params.names);
+          return jsonResult(await callGateway("sessions.groups.put", { agentId, names }));
+        }
+        if (action === "group_rename") {
+          return jsonResult(
+            await callGateway("sessions.groups.rename", {
+              agentId,
+              name: readGroupName(params.name, "name"),
+              to: readGroupName(params.to, "to"),
+            }),
+          );
+        }
+        return jsonResult(
+          await callGateway("sessions.groups.delete", {
+            agentId,
+            name: readGroupName(params.name, "name"),
+          }),
+        );
       }
       if (action === "assign_owner") {
         const ownerType = readToolStringParam(params, "ownerType", { required: true });
@@ -468,26 +500,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             ...(result.owner.actor.label ? { label: result.owner.actor.label } : {}),
           },
         });
-      }
-      // Group catalog is global by contract. Owner-only tool gating protects mutations.
-      if (action === "group_set") {
-        const names = readGroupNames(params.names);
-        return jsonResult(await callGateway("sessions.groups.put", { names }));
-      }
-      if (action === "group_rename") {
-        return jsonResult(
-          await callGateway("sessions.groups.rename", {
-            name: readGroupName(params.name, "name"),
-            to: readGroupName(params.to, "to"),
-          }),
-        );
-      }
-      if (action === "group_delete") {
-        return jsonResult(
-          await callGateway("sessions.groups.delete", {
-            name: readGroupName(params.name, "name"),
-          }),
-        );
       }
       if (action !== "patch") {
         throw new ToolInputError(`Unknown action: ${action}`);

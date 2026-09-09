@@ -86,6 +86,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   override readonly sidebarMenus = new SidebarMenusController(this);
   private readonly people = new SidebarPeopleController(this);
 
+  sessionGroupAgentGeneration(): number {
+    return this.context?.sessions.groupsAgentGeneration() ?? -1;
+  }
+
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
       return null;

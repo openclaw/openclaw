@@ -75,6 +75,7 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   13: LAZY_ADDITIVE_STATE_TABLES,
   14: LAZY_ADDITIVE_STATE_TABLES,
   15: LAZY_ADDITIVE_STATE_TABLES,
+  16: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -137,20 +138,21 @@ function assertOpenClawStateDatabaseVersionForMigration(
   options: { pathname: string; version: OpenClawStateMigrationVersion },
 ): void {
   const userVersion = readSqliteUserVersion(database);
-  if (userVersion !== options.version) {
+  const contentVersion = readStateSchemaContentVersion(database);
+  if (userVersion <= 0 || contentVersion !== options.version) {
     throw new Error(
-      `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; expected ${options.version} before migrating it.`,
+      `OpenClaw state database ${options.pathname} uses schema content version ${contentVersion}; expected ${options.version} before migrating it.`,
     );
   }
   assertOpenClawStateDatabaseOwner(database, options);
   const metadata = database
     .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
     .get() as { schema_version?: unknown } | undefined;
-  if (metadata?.schema_version !== options.version) {
+  if (metadata?.schema_version !== userVersion) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
     throw new Error(
-      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${options.version}; repair the ownership metadata before migrating it.`,
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; repair the ownership metadata before migrating it.`,
     );
   }
   assertSqliteSchemaTablesPresent(database, options.pathname, OPENCLAW_STATE_SCHEMA_SQL, {
@@ -248,6 +250,11 @@ export const openClawStateMigrationAssertions = new Map([
       assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 15 }),
   ],
 ]);
+
+// v16 has the same retained tables as v17; Doctor verifies and retires its catalog separately.
+openClawStateMigrationAssertions.set(16, (database, options) =>
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 16 }),
+);
 
 export function markCurrentStateSchemaVersion(
   db: DatabaseSync,

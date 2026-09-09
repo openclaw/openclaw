@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   catalogPage,
@@ -92,7 +93,7 @@ describe("AppSidebar section reordering", () => {
         row.kind = "group";
       }
     }
-    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    const { sidebar, context } = await mountSidebar(gateway.gateway, harness.sessions);
     sidebar.connected = true;
     harness.publish({ groups, sectionOrder });
     await sidebar.updateComplete;
@@ -101,7 +102,7 @@ describe("AppSidebar section reordering", () => {
         expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull(),
       );
     }
-    return { sidebar, harness };
+    return { sidebar, harness, context };
   }
 
   function groupHeader(sidebar: SidebarLifecycleState, sectionId: string) {
@@ -207,21 +208,66 @@ describe("AppSidebar section reordering", () => {
     );
   });
 
-  it("persists a built-in section move with the full section order", async () => {
-    const { sidebar, harness } = await mountWithGroups([]);
-    const dataTransfer = createDataTransferStub();
-
-    dispatchDragEvent(groupHeader(sidebar, "work"), "dragstart", dataTransfer);
-    const threadsSection = sidebar.querySelector('[data-session-section="ungrouped"]');
-    if (!threadsSection) {
-      throw new Error("expected Threads section");
-    }
-    dispatchDragEvent(threadsSection, "drop", dataTransfer);
-
-    await waitForFast(() =>
-      expect(harness.groupsPut).toHaveBeenCalledWith([], ["work", "ungrouped", "groups"]),
-    );
-  });
+  it.each(["ready", "unavailable", "retired"] as const)(
+    "waits for the full group catalog before reordering sections (catalog: %s)",
+    async (outcome) => {
+      const { sidebar, harness, context } = await mountWithGroups(["Visible"]);
+      const catalog = [
+        { name: "Saved", position: 0, cwd: "/workspace/saved", worktree: true },
+        { name: "Visible", position: 1 },
+      ];
+      const pendingCatalog = createDeferred<typeof catalog | null>();
+      const loadCatalog = vi
+        .spyOn(harness.sessions, "groupsLoad")
+        .mockReturnValue(pendingCatalog.promise);
+      // The roster has arrived after selection, but the catalog and its order have not.
+      harness.publish({ groups: [], sectionOrder: [] });
+      await sidebar.updateComplete;
+      loadCatalog.mockClear();
+      const dataTransfer = createDataTransferStub();
+      dispatchDragEvent(groupHeader(sidebar, "work"), "dragstart", dataTransfer);
+      const threadsSection = sidebar.querySelector('[data-session-section="ungrouped"]');
+      if (!threadsSection) {
+        throw new Error("expected Threads section");
+      }
+      dispatchDragEvent(threadsSection, "drop", dataTransfer);
+      await waitForFast(() =>
+        expect(loadCatalog.mock.calls.length + harness.groupsPut.mock.calls.length).toBeGreaterThan(
+          0,
+        ),
+      );
+      expect(harness.groupsPut).not.toHaveBeenCalled();
+      if (outcome === "retired") {
+        context.agentSelection.set("research");
+        context.agentSelection.set("main");
+      }
+      if (outcome === "ready") {
+        harness.publish({
+          groups: catalog.map((group) => group.name),
+          groupSettings: catalog,
+          sectionOrder: ["ungrouped", "category:Saved", "category:Visible", "work", "groups"],
+        });
+      }
+      pendingCatalog.resolve(outcome === "unavailable" ? null : catalog);
+      await pendingCatalog.promise;
+      await sidebar.updateComplete;
+      if (outcome === "ready") {
+        await waitForFast(() =>
+          expect(harness.groupsPut).toHaveBeenCalledWith(
+            ["Saved", "Visible"],
+            ["work", "ungrouped", "category:Saved", "category:Visible", "groups"],
+          ),
+        );
+      } else {
+        if (outcome === "unavailable") {
+          await waitForFast(() =>
+            expect(sidebar.sessionData.sessionMutationError).toContain("Refresh and try again"),
+          );
+        }
+        expect(harness.groupsPut).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("clears a group session category when it drops onto Groups", async () => {
     const { sidebar, harness } = await mountWithGroups(["Done"], [], {

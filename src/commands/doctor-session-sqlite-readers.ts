@@ -19,6 +19,7 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -322,41 +323,46 @@ export function readSqliteEntryCount(target: SessionStoreTarget): number {
 
 export function readOnlySqliteValidationSnapshot(
   target: SessionStoreTarget,
+  sqlitePath?: string,
 ): ReadOnlySqliteValidationSnapshotResult {
   const empty: ReadOnlySqliteValidationSnapshot = {
     sessionIdsBySessionKey: new Map(),
     transcriptEventCountsBySessionId: new Map(),
   };
-  const result = readSessionDatabase(target, (database) => {
-    const projection = resolveSessionIdentityProjection(database);
-    const sessionIdsBySessionKey = new Map<string, string>();
-    if (projection) {
-      const statement = database.prepare(
-        `SELECT session_key, ${projection.sessionIdColumn} AS session_id
+  const result = readSessionDatabase(
+    target,
+    (database) => {
+      const projection = resolveSessionIdentityProjection(database);
+      const sessionIdsBySessionKey = new Map<string, string>();
+      if (projection) {
+        const statement = database.prepare(
+          `SELECT session_key, ${projection.sessionIdColumn} AS session_id
                FROM ${projection.source}
               ORDER BY session_key`,
-      );
-      // SAFETY: the selected SQLite columns have stable TEXT identities.
-      for (const row of statement.iterate() as Iterable<SessionIdentityRow>) {
-        sessionIdsBySessionKey.set(row.session_key, row.session_id);
-      }
-    }
-    const transcriptEventCountsBySessionId = new Map<string, number>();
-    if (tableExists(database, "transcript_events")) {
-      const statement = database.prepare(
-        "SELECT session_id, COUNT(*) AS count FROM transcript_events GROUP BY session_id ORDER BY session_id",
-      );
-      for (const row of statement.iterate()) {
-        if (typeof row.session_id === "string" && typeof row.count === "number") {
-          transcriptEventCountsBySessionId.set(row.session_id, row.count);
+        );
+        // SAFETY: the selected SQLite columns have stable TEXT identities.
+        for (const row of statement.iterate() as Iterable<SessionIdentityRow>) {
+          sessionIdsBySessionKey.set(row.session_key, row.session_id);
         }
       }
-    }
-    return {
-      sessionIdsBySessionKey,
-      transcriptEventCountsBySessionId,
-    };
-  });
+      const transcriptEventCountsBySessionId = new Map<string, number>();
+      if (tableExists(database, "transcript_events")) {
+        const statement = database.prepare(
+          "SELECT session_id, COUNT(*) AS count FROM transcript_events GROUP BY session_id ORDER BY session_id",
+        );
+        for (const row of statement.iterate()) {
+          if (typeof row.session_id === "string" && typeof row.count === "number") {
+            transcriptEventCountsBySessionId.set(row.session_id, row.count);
+          }
+        }
+      }
+      return {
+        sessionIdsBySessionKey,
+        transcriptEventCountsBySessionId,
+      };
+    },
+    sqlitePath,
+  );
   return result.ok ? { ok: true, snapshot: result.value ?? empty } : result;
 }
 
@@ -388,8 +394,8 @@ export function scanReadOnlySqliteActiveTranscriptFiles(
 function readSessionDatabase<T>(
   target: SessionStoreTarget,
   read: (database: DatabaseSync) => T,
+  sqlitePath = resolveTargetSqlitePath(target),
 ): ReadOnlySqliteResult<T | undefined> {
-  const sqlitePath = resolveTargetSqlitePath(target);
   if (!fs.existsSync(sqlitePath)) {
     return { ok: true, value: undefined };
   }
@@ -512,7 +518,15 @@ export function resolveTargetSqliteOptions(target: SessionStoreTarget, env?: Nod
 export function resolveTargetSqlitePath(
   target: SessionStoreTarget,
   env?: NodeJS.ProcessEnv,
+  registeredDatabases?: readonly { agentId: string; path: string }[],
 ): string {
+  if (registeredDatabases) {
+    return resolveSqliteTargetFromSessionStorePath(target.sqlitePath ?? target.storePath, {
+      agentId: target.agentId,
+      env,
+      registeredDatabases,
+    }).path;
+  }
   return resolveOpenClawAgentSqlitePath(resolveTargetSqliteOptions(target, env));
 }
 

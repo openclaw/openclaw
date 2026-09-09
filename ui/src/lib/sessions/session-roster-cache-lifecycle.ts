@@ -3,6 +3,25 @@ import { resolveBootRecordAuth } from "../../app/boot-record.ts";
 import type { SessionGateway, SessionListOptions, SessionState } from "./session-capability.ts";
 import { sessionRosterCache, type SessionRosterCacheOptions } from "./session-roster-cache.ts";
 
+export function createInitialSessionState(
+  agentId: string | null,
+  options: SessionRosterCacheOptions,
+): SessionState {
+  const bootGroups = options.bootRecord?.groupsAgentId === agentId ? options.bootRecord : undefined;
+  return {
+    result: null,
+    agentId: null,
+    modelOverrides: {},
+    loading: false,
+    error: null,
+    deletedSessions: [],
+    groupsAgentId: bootGroups?.groupsAgentId ?? null,
+    groups: bootGroups?.groups.map((group) => group.name) ?? [],
+    groupSettings: bootGroups?.groups ?? [],
+    sectionOrder: bootGroups?.sectionOrder ?? [],
+  };
+}
+
 export function createSessionRosterCacheLifecycle(
   gateway: SessionGateway,
   agentSelection: { readonly state: { readonly selectedId: string | null } },
@@ -74,6 +93,7 @@ export function createSessionRosterCacheLifecycle(
     },
     persist(state: SessionState) {
       if (
+        state.groupsAgentId !== state.agentId ||
         !state.result ||
         state.resultCached ||
         !host.connected() ||
@@ -84,7 +104,7 @@ export function createSessionRosterCacheLifecycle(
       }
       cachedProfileId = undefined;
       cache.write({
-        version: 1,
+        version: 2,
         scope: gatewayCredentialScope(gateway.connection.gatewayUrl),
         savedAt: Date.now(),
         profileId: gateway.snapshot.selfUser?.id ?? null,

@@ -471,7 +471,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     }
 }
 
-/// One physical gateway connection captured while a group catalog is shown.
+/// One physical gateway connection and agent captured while a group catalog is shown.
 /// Group replacement submits the complete catalog, so list and mutations must
 /// never retarget independently when the selected gateway changes.
 public struct OpenClawChatSessionGroupsRouteLease: Sendable {
@@ -844,11 +844,11 @@ public protocol OpenClawChatTransport: Sendable {
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease?
     func listAgents() async throws -> OpenClawChatAgentsListResponse?
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease?
-    func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse?
-    func putSessionGroups(names: [String]) async throws -> OpenClawChatSessionGroupsMutationResponse
-    func renameSessionGroup(name: String, to: String) async throws -> OpenClawChatSessionGroupsMutationResponse
-    func deleteSessionGroup(name: String) async throws -> OpenClawChatSessionGroupsMutationResponse
-    func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease?
+    func listSessionGroups(agentID: String?) async throws -> OpenClawChatSessionGroupsResponse?
+    func putSessionGroups(names: [String], agentID: String?) async throws -> OpenClawChatSessionGroupsMutationResponse
+    func renameSessionGroup(name: String, to: String, agentID: String?) async throws -> OpenClawChatSessionGroupsMutationResponse
+    func deleteSessionGroup(name: String, agentID: String?) async throws -> OpenClawChatSessionGroupsMutationResponse
+    func acquireSessionGroupsRouteLease(agentID: String?) async -> OpenClawChatSessionGroupsRouteLease?
     // Keep optional patch fields aligned with the writer; protocol requirements cannot declare their defaults.
     // swiftlint:disable:next function_parameter_count
     func patchSession(
@@ -1050,13 +1050,13 @@ extension OpenClawChatTransport {
             })
     }
 
-    public func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease? {
+    public func acquireSessionGroupsRouteLease(agentID: String?) async -> OpenClawChatSessionGroupsRouteLease? {
         let transport = self
         return OpenClawChatSessionGroupsRouteLease(
-            listGroups: { try await transport.listSessionGroups() },
-            putGroups: { try await transport.putSessionGroups(names: $0) },
-            renameGroup: { try await transport.renameSessionGroup(name: $0, to: $1) },
-            deleteGroup: { try await transport.deleteSessionGroup(name: $0) })
+            listGroups: { try await transport.listSessionGroups(agentID: agentID) },
+            putGroups: { try await transport.putSessionGroups(names: $0, agentID: agentID) },
+            renameGroup: { try await transport.renameSessionGroup(name: $0, to: $1, agentID: agentID) },
+            deleteGroup: { try await transport.deleteSessionGroup(name: $0, agentID: agentID) })
     }
 
     public func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
@@ -1201,11 +1201,11 @@ extension OpenClawChatTransport {
         nil
     }
 
-    public func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse? {
+    public func listSessionGroups(agentID: String?) async throws -> OpenClawChatSessionGroupsResponse? {
         nil
     }
 
-    public func putSessionGroups(names _: [String]) async throws -> OpenClawChatSessionGroupsMutationResponse {
+    public func putSessionGroups(names _: [String], agentID _: String?) async throws -> OpenClawChatSessionGroupsMutationResponse {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
@@ -1214,7 +1214,8 @@ extension OpenClawChatTransport {
 
     public func renameSessionGroup(
         name _: String,
-        to _: String) async throws -> OpenClawChatSessionGroupsMutationResponse
+        to _: String,
+        agentID _: String?) async throws -> OpenClawChatSessionGroupsMutationResponse
     {
         throw NSError(
             domain: "OpenClawChatTransport",
@@ -1222,7 +1223,7 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.groups.rename not supported by this transport"])
     }
 
-    public func deleteSessionGroup(name _: String) async throws -> OpenClawChatSessionGroupsMutationResponse {
+    public func deleteSessionGroup(name _: String, agentID _: String?) async throws -> OpenClawChatSessionGroupsMutationResponse {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,

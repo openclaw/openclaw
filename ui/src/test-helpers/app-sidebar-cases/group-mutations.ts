@@ -163,7 +163,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([
+    expect(JSON.parse(localStorage.getItem(`${COLLAPSED_STORAGE_KEY}:main`) ?? "[]")).toEqual([
       "category:Beta",
     ]);
   });
@@ -209,7 +209,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([]);
+    expect(JSON.parse(localStorage.getItem(`${COLLAPSED_STORAGE_KEY}:main`) ?? "[]")).toEqual([]);
   });
 
   it("keeps a reconnected group delete retryable after its confirm opened", async () => {

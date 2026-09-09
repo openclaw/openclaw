@@ -24,7 +24,7 @@ function record(
   rows: GatewaySessionRow[] = [{ key: "agent:main:one", kind: "direct" }],
 ): SessionRosterRecord {
   return {
-    version: 1,
+    version: 2,
     scope,
     savedAt: Date.now(),
     profileId: "profile-one",

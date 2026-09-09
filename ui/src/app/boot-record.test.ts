@@ -13,7 +13,8 @@ const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 const credential = () => "test-token";
 const scope = "https://gateway.example";
 const record = (): BootRecord => ({
-  version: 2,
+  version: 3,
+  groupsAgentId: "main",
   authMethod: "token",
   credential: "9d17676d",
   scope,
@@ -75,6 +76,7 @@ describe("Control UI boot record", () => {
   it.each([
     ["invalid JSON", "{"],
     ["version-1 record", { ...record(), version: 1 }],
+    ["unscoped version-2 record", { ...record(), version: 2 }],
     ["missing method", { ...record(), authMethod: undefined }],
     ["proxy method", { ...record(), authMethod: "trusted-proxy" }],
     ["missing fingerprint", { ...record(), credential: undefined }],

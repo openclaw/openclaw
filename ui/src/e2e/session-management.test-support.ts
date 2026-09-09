@@ -17,7 +17,8 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForConfirmModal };
 
-export const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
+export const collapsedSessionSectionsStorageKey =
+  "openclaw:sidebar:sessions:collapsed-sections:main";
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 export function createSessionManagementE2eSuite(source = false) {

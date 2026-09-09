@@ -280,6 +280,9 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sessionCatalogRevision += 1;
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
 
+    if (agentChanged) {
+      this.invalidateSessionMutations();
+    }
     if (agentChanged || catalogAgentChanged) {
       // Catalog cursors and rows belong to the selected agent, not just its host.
       this.sessionCatalogs = [];
@@ -756,6 +759,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     return (
       this.host.connected &&
       this.sessionMutationEpoch === scope.epoch &&
+      this.host.selectedAgentIdForSessions() === scope.selectedAgentId &&
       context === scope.context &&
       gateway === scope.gateway &&
       context.sessions === scope.sessions &&

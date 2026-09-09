@@ -10,6 +10,7 @@ import type {
 /** Keep shared group settings visible only where every member session is mutable. */
 export function filterMutableSessionGroupRecords<T extends { name: string }>(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   client: GatewayClient | null;
   records: readonly T[];
 }): T[] {
@@ -19,7 +20,10 @@ export function filterMutableSessionGroupRecords<T extends { name: string }>(par
   }
   const storeCache: GatewaySessionStoreCache = new Map();
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  for (const [name, targetRefs] of resolveSessionGroupMutationTargetsByName(params.cfg)) {
+  for (const [name, targetRefs] of resolveSessionGroupMutationTargetsByName(
+    params.cfg,
+    params.agentId,
+  )) {
     if (!allowed.has(name)) {
       continue;
     }

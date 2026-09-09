@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
@@ -29,7 +30,7 @@ describe("session sharing group mutations", () => {
     "refreshes groups after %s rejects changed member authority",
     async (action) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        putSessionGroups({ cfg: {}, names: ["Old"] });
+        putSessionGroups({ agentId: "main", cfg: {}, names: ["Old"] });
         const sessionKey = "agent:main:changed-group-authority";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
@@ -73,7 +74,7 @@ describe("session sharing group mutations", () => {
         });
         expect(respond).not.toHaveBeenCalled();
         expect(loadSessionEntry({ agentId: "main", sessionKey })?.category).toBe("Old");
-        expect(listSessionGroups()).toContainEqual({ name: "Old", position: 0 });
+        expect(listSessionGroups("main")).toContainEqual({ name: "Old", position: 0 });
         expect(broadcastToConnIds).toHaveBeenCalledWith(
           "sessions.changed",
           expect.objectContaining({ reason: "groups" }),
@@ -85,7 +86,7 @@ describe("session sharing group mutations", () => {
   );
   it("refuses restricted group drops at put admission while allowing retained groups", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      putSessionGroups({ cfg: {}, names: ["Projects"] });
+      putSessionGroups({ agentId: "main", cfg: {}, names: ["Projects"] });
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:restricted-put-member" },
         {
@@ -120,7 +121,7 @@ describe("session sharing group mutations", () => {
 
   it("rechecks late group members before committing a put drop", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const groups = putSessionGroups({ cfg: {}, names: ["Race"] });
+      const groups = putSessionGroups({ agentId: "main", cfg: {}, names: ["Race"] });
       const viewer = roleClient("none", "put-viewer");
       const context = {
         getRuntimeConfig: () => rolePolicyConfig(),
@@ -154,14 +155,14 @@ describe("session sharing group mutations", () => {
           respond: () => undefined,
         } as never),
       ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
-      expect(listSessionGroups()).toEqual(groups);
+      expect(listSessionGroups("main")).toEqual(groups);
     });
   });
 
   it("rechecks group members before committing a defaults update", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      putSessionGroups({ cfg: {}, names: ["Race"] });
-      updateSessionGroupDefaults("Race", { cwd: "/repos/race", worktree: true });
+      putSessionGroups({ agentId: "main", cfg: {}, names: ["Race"] });
+      updateSessionGroupDefaults("Race", { cwd: "/repos/race", worktree: true }, "main");
       const viewer = client({ user: "viewer@example.com" });
       const context = {
         getRuntimeConfig: () => ({}),
@@ -195,7 +196,7 @@ describe("session sharing group mutations", () => {
           respond: () => undefined,
         } as never),
       ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
-      expect(listSessionGroupDefaults()).toEqual([
+      expect(listSessionGroupDefaults("main")).toEqual([
         { name: "Race", cwd: "/repos/race", worktree: true },
       ]);
     });
@@ -203,9 +204,9 @@ describe("session sharing group mutations", () => {
 
   it("filters group defaults and blocks updates for sessions the caller cannot mutate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      putSessionGroups({ cfg: {}, names: ["Projects", "Personal"] });
-      updateSessionGroupDefaults("Projects", { cwd: "/repos/projects", worktree: true });
-      updateSessionGroupDefaults("Personal", { cwd: "/repos/personal", worktree: false });
+      putSessionGroups({ agentId: "main", cfg: {}, names: ["Projects", "Personal"] });
+      updateSessionGroupDefaults("Projects", { cwd: "/repos/projects", worktree: true }, "main");
+      updateSessionGroupDefaults("Personal", { cwd: "/repos/personal", worktree: false }, "main");
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:restricted-project" },
         {
@@ -264,6 +265,79 @@ describe("session sharing group mutations", () => {
       expect(updateResponses).toEqual([
         [true, { ok: true, defaults: [{ name: "Personal", worktree: false }] }, undefined],
       ]);
+    });
+  });
+
+  it("does not let a foreign same-name member deny the selected agent's group authority or defaults", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = {
+        ...rolePolicyConfig(),
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, other: {} },
+        },
+      };
+      for (const agentId of ["main", "other"]) {
+        putSessionGroups({ cfg, agentId, names: ["Projects"] });
+        updateSessionGroupDefaults(
+          "Projects",
+          { cwd: `/repos/${agentId}`, worktree: true },
+          agentId,
+        );
+      }
+      await upsertSessionEntryCore(
+        { agentId: "other", sessionKey: "agent:other:restricted-project" },
+        {
+          sessionId: "restricted-project",
+          updatedAt: Date.now(),
+          category: "Projects",
+          visibility: "read-only",
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+        },
+      );
+      const viewer = roleClient("none", "group-viewer");
+      const context = {
+        getRuntimeConfig: () => cfg,
+        getSessionEventSubscriberConnIds: () => new Set<string>(),
+      } as unknown as GatewayRequestContext;
+      for (const [method, requestParams] of [
+        ["sessions.groups.rename", { name: "Projects", to: "Renamed" }],
+        ["sessions.groups.delete", { name: "Projects" }],
+        ["sessions.groups.update", { name: "Projects", cwd: null, worktree: false }],
+        ["sessions.groups.put", { names: [] }],
+      ] as const) {
+        expect(
+          resolveSessionMutationAuthorization({
+            client: viewer,
+            method,
+            requestParams: { ...requestParams, agentId: "main" },
+            context,
+          }).error,
+        ).toBeNull();
+        expect(
+          resolveSessionMutationAuthorization({
+            client: viewer,
+            method,
+            requestParams: { ...requestParams, agentId: "other" },
+            context,
+          }).error,
+        ).not.toBeNull();
+      }
+      const respond = vi.fn();
+      await sessionGroupHandlers["sessions.groups.defaults"]?.({
+        params: { agentId: "main" },
+        client: viewer,
+        context,
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          defaults: [{ name: "Projects", cwd: "/repos/main", worktree: true }],
+        },
+        undefined,
+      );
     });
   });
 });

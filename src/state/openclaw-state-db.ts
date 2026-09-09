@@ -1,4 +1,3 @@
-// OpenClaw state database manages shared persisted state and migrations.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -37,6 +36,7 @@ import {
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
+import * as sessionGroupRetirement from "./openclaw-session-groups-retirement.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import {
   openClawStateDatabaseCache as stateDbCache,
@@ -133,14 +133,6 @@ export function confirmOpenClawStateDatabaseIntegrity(
   return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
 }
 
-/** Reject a fresh shared-state open after known corruption until repair clears it. */
-function assertOpenClawStateDatabaseFreshOpenAllowed(
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  const env = options.env ?? process.env;
-  stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(resolveDatabasePath(options), env);
-}
-
 const stateDbLog = createSubsystemLogger("state/db");
 const deferredStateDatabases = new WeakSet<DatabaseSync>();
 
@@ -158,6 +150,7 @@ function repairStateSchema(
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedStateSchemaVersion(db, pathname);
+    sessionGroupRetirement.assertSessionGroupRetirementReady(db, pathname);
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runStateSchemaMigrationTransaction(
       db,
@@ -213,7 +206,9 @@ function repairStateSchema(
           );
         }
         assertCanonicalStateSchemaShape(db, pathname);
-        if (tableExists(db, "audit_events")) {
+        // The supported pre-v2 store may predate the audit ledger entirely.
+        // Doctor must finish its canonical bootstrap before retiring legacy groups and publishing.
+        if (tableExists(db, "audit_events") || previousVersion === 1) {
           ensureAdditiveStateColumns(db);
           for (const migration of versionedStateMigrations) {
             if (migration.migrate(db, previousVersion)) {
@@ -245,6 +240,7 @@ function repairStateSchema(
             rebuiltIndexNames.add(name);
           }
         }
+        sessionGroupRetirement.retireLegacySessionGroups(db, pathname);
         markCurrentStateSchemaVersion(db, {
           createMetadataIfMissing: previousVersion < OPENCLAW_STATE_SCHEMA_VERSION,
         });
@@ -348,6 +344,7 @@ function ensureSchema(
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   initializeNativeOnly = false,
 ): void {
+  sessionGroupRetirement.assertSessionGroupRetirementReady(db, pathname);
   try {
     if (isOpenClawStateSchemaFastPathEligible(db, pathname)) {
       // Recheck ownership so a claim made during validation cannot retain a writable handle.
@@ -417,6 +414,7 @@ function ensureSchema(
           repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             verifyPhysicalIntegrity: false,
           });
+          sessionGroupRetirement.retireLegacySessionGroups(db, pathname);
           writeCurrentStateSchemaMetadata(db, now);
           assertOpenClawStateDatabaseForMaintenance(db, { pathname });
           warnAgentPathMigration(stateDbLog, pathMigration, pathname);
@@ -459,7 +457,10 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
   if (!existsSync(pathname)) {
     return undefined;
   }
-  assertOpenClawStateDatabaseFreshOpenAllowed(options);
+  stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+    pathname,
+    options.env ?? process.env,
+  );
   const prepared = await prepareSqliteReadOnlyLocation(pathname);
   let db: DatabaseSync;
   try {
@@ -541,6 +542,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   }
   const cached = stateDbCache.getCachedOpenClawStateDatabase(pathname);
   if (cached?.db.isOpen) {
+    sessionGroupRetirement.assertSessionGroupRetirementReady(cached.db, pathname);
     assertOpenClawStateWriteAllowed({
       database: cached.db,
       databasePath: pathname,
@@ -556,7 +558,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
     return cached;
   }
   try {
-    assertOpenClawStateDatabaseFreshOpenAllowed(options);
+    stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   } catch (error) {
     stateDbCache.recordOpenClawStateDatabaseLifecycleOpenError(pathname, error);
     throw error;

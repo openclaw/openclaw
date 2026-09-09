@@ -74,6 +74,8 @@ export function migratedSessionColumn(
 const AGENT_SCHEMA_COMPATIBILITY = {
   allowCompatibleAdditiveColumns: true,
   allowedMissingTables: [
+    "session_groups",
+    "session_group_state",
     "memory_entry_origins",
     "memory_session_tombstones",
     MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,

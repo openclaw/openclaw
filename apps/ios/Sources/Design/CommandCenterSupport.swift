@@ -324,9 +324,7 @@ struct CommandSessionActionsModifier: ViewModifier {
             self.actions.rename(value)
         case .newGroup:
             if let value {
-                // Web parity: only prompt-created groups join the stored list,
-                // so they survive as empty sections after members leave.
-                SessionGroupStore.remember(value)
+                // The Gateway registers the category in its owning agent catalog.
                 self.actions.moveToGroup(value)
             }
         case nil:

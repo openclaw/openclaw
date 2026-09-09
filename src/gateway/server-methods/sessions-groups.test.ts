@@ -85,13 +85,13 @@ describe("sessions.groups.put", () => {
   });
 
   it("replaces the catalog using the runtime config and authorization guards", async () => {
-    const cfg = { agents: { list: [{ id: "main" }] } };
+    const cfg = { agents: { entries: { main: { default: true }, other: {} } } };
     const names = ["Keep"];
     const sectionOrder = ["category:Keep", "ungrouped"];
     const groups = [{ name: "Keep", position: 0 }];
     groupMocks.put.mockReturnValue(groups);
     const respond = vi.fn();
-    const options = updateOptions({ names, sectionOrder }, respond);
+    const options = updateOptions({ agentId: "other", names, sectionOrder }, respond);
     options.context.getRuntimeConfig = () => cfg;
     const assertCurrent = vi.fn();
     const assertTargetCurrent = vi.fn();
@@ -104,6 +104,7 @@ describe("sessions.groups.put", () => {
 
     expect(groupMocks.put).toHaveBeenCalledExactlyOnceWith({
       cfg,
+      agentId: "other",
       names,
       sectionOrder,
       assertCurrent,
@@ -219,10 +220,14 @@ describe("sessions.groups.update", () => {
     )(options);
 
     expect(assertCurrent).toHaveBeenCalledOnce();
-    expect(groupMocks.update).toHaveBeenCalledWith("Client", {
-      cwd: "/workspace/client",
-      worktree: true,
-    });
+    expect(groupMocks.update).toHaveBeenCalledWith(
+      "Client",
+      {
+        cwd: "/workspace/client",
+        worktree: true,
+      },
+      "main",
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       {

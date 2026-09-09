@@ -6,9 +6,12 @@ import {
   getCanonicalSqliteNamedIndexContracts,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
-import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import {
+  assertNoRetiredStateTableDependencies,
+  assertRetainedVirtualTablesUsable,
+} from "./sqlite-retirement-dependencies.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
 export const logRetiredStateTableMigration = (message: string) => stateDbLog.info(message);
@@ -190,107 +193,6 @@ export function hasRecognizedRetiredCommitmentsSchema(db: DatabaseSync): boolean
   );
 }
 
-function assertNoRetiredCommitmentsForeignKeys(db: DatabaseSync): void {
-  const tables = db
-    .prepare(
-      `SELECT name
-         FROM sqlite_schema
-        WHERE type = 'table' AND name <> 'commitments'
-        ORDER BY name`,
-    )
-    // SAFETY: sqlite_schema projection returns exactly the selected name column.
-    .all() as Array<{ name: string }>;
-  for (const table of tables) {
-    const foreignKeys = db
-      .prepare(`PRAGMA foreign_key_list(${quoteSqliteIdentifier(table.name)})`)
-      // SAFETY: PRAGMA foreign_key_list rows are widened to unknown before use.
-      .all() as Array<{ table?: unknown }>;
-    if (
-      foreignKeys.some(
-        (foreignKey) =>
-          typeof foreignKey.table === "string" && foreignKey.table.toLowerCase() === "commitments",
-      )
-    ) {
-      throw new Error(
-        `Retired OpenClaw commitments schema is referenced by table ${table.name}; refusing destructive migration.`,
-      );
-    }
-  }
-}
-
-function collectRetainedSchemaSql(db: DatabaseSync): Map<string, string> {
-  return new Map(
-    (
-      db
-        .prepare(
-          `SELECT type, name, sql
-             FROM sqlite_schema
-            WHERE type IN ('trigger', 'view')
-              AND tbl_name <> 'commitments'
-              AND sql IS NOT NULL
-            ORDER BY type, name`,
-        )
-        // SAFETY: sqlite_schema projection returns exactly the selected text columns.
-        .all() as Array<{ name: string; sql: string; type: string }>
-    ).map((object) => [`${object.type}:${object.name}`, object.sql]),
-  );
-}
-
-function assertNoRetiredCommitmentsSchemaDependencies(db: DatabaseSync): void {
-  const probeTable = "__openclaw_retired_commitments_probe";
-  if (tableExists(db, probeTable)) {
-    throw new Error(
-      `OpenClaw state database already contains ${probeTable}; refusing destructive migration.`,
-    );
-  }
-  const before = collectRetainedSchemaSql(db);
-  const savepoint = "openclaw_probe_commitments_dependencies";
-  db.exec(`SAVEPOINT ${savepoint};`);
-  let changedObject: string | undefined;
-  try {
-    db.exec(`ALTER TABLE commitments RENAME TO ${quoteSqliteIdentifier(probeTable)};`);
-    const after = collectRetainedSchemaSql(db);
-    changedObject = [...before].find(([object, sql]) => after.get(object) !== sql)?.[0];
-  } catch (error) {
-    db.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint};`);
-    // A broken retained object makes dependency resolution ambiguous. Refuse
-    // rather than discard rows that object may still own indirectly.
-    throw new Error(
-      "Could not prove retained SQLite views and triggers independent of commitments; refusing destructive migration.",
-      { cause: error },
-    );
-  }
-  db.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint};`);
-  if (changedObject) {
-    const [type, name] = changedObject.split(":", 2);
-    throw new Error(
-      `Retired OpenClaw commitments schema is referenced by ${type} ${name}; refusing destructive migration.`,
-    );
-  }
-}
-
-function assertVirtualTablesUsable(db: DatabaseSync, phase: "before" | "after"): void {
-  const virtualTables = db
-    .prepare(
-      `SELECT name
-         FROM sqlite_schema
-        WHERE type = 'table' AND lower(sql) LIKE 'create virtual table%'
-        ORDER BY name`,
-    )
-    // SAFETY: sqlite_schema projection returns exactly the selected name column.
-    .all() as Array<{ name: string }>;
-  for (const table of virtualTables) {
-    try {
-      db.prepare(`SELECT * FROM ${quoteSqliteIdentifier(table.name)} LIMIT 1`).all();
-    } catch (error) {
-      throw new Error(
-        `SQLite virtual table ${table.name} is unusable ${phase} commitments retirement.`,
-        { cause: error },
-      );
-    }
-  }
-}
-
 function migrateRetiredCommitmentsSchema(db: DatabaseSync, previousVersion: number): boolean {
   if (previousVersion >= RETIRED_COMMITMENTS_SCHEMA_VERSION) {
     return false;
@@ -301,15 +203,14 @@ function migrateRetiredCommitmentsSchema(db: DatabaseSync, previousVersion: numb
   // The commitments runtime was removed before v7; retained rows are inert
   // migration debt and have no remaining product owner or export contract.
   assertRecognizedRetiredCommitmentsSchema(db);
-  assertNoRetiredCommitmentsForeignKeys(db);
-  assertNoRetiredCommitmentsSchemaDependencies(db);
-  assertVirtualTablesUsable(db, "before");
+  assertNoRetiredStateTableDependencies(db, "commitments");
+  assertRetainedVirtualTablesUsable(db, "commitments", "before");
   const savepoint = "openclaw_retire_commitments_v7";
   db.exec(`SAVEPOINT ${savepoint};`);
   try {
     // DROP TABLE removes only the validated table's indexes and sqlite_stat rows.
     db.exec("DROP TABLE commitments;");
-    assertVirtualTablesUsable(db, "after");
+    assertRetainedVirtualTablesUsable(db, "commitments", "after");
     db.exec(`RELEASE ${savepoint};`);
     return true;
   } catch (error) {

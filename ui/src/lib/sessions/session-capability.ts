@@ -44,6 +44,8 @@ export type SessionState = {
   loading: boolean;
   error: string | null;
   deletedSessions: readonly SessionDeletionFact[];
+  /** Agent whose catalog is currently published. */
+  groupsAgentId?: string | null;
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
   /** New Session defaults associated with each gateway-owned group. */
@@ -280,15 +282,17 @@ export type SessionCapability = {
     leafEntryId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsBranchesSwitchResult>;
-  /** Loads one connection-owned group catalog; null means the attempt retired or failed. */
+  /** Loads the selected agent's group catalog; null means the attempt retired or failed. */
   groupsLoad: () => Promise<readonly SessionGroupSettings[] | null>;
   /** Generation of the catalog/defaults snapshot used by group-target routes. */
   groupsGeneration: () => number;
+  /** Selection incarnation for dialogs; returning to the same agent is a new owner. */
+  groupsAgentGeneration: () => number;
   /** Whether group defaults are current enough for a group-target route. */
   groupsStatus: () => SessionGroupDefaultsStatus;
-  /** Invalidates the connection-owned group catalog before an explicit route retry. */
+  /** Invalidates the selected agent's group catalog before an explicit route retry. */
   groupsInvalidate: () => void;
-  /** Replaces the group catalog; stale means the initiating connection retired. */
+  /** Replaces the group catalog; stale means its agent selection or connection retired. */
   groupsPut: (
     names: readonly string[],
     sectionOrder?: readonly string[],

@@ -403,7 +403,7 @@ describe("AppSidebar session attention", () => {
   it("bubbles unloaded child attention to its parent and collapsed section", async () => {
     const parentKey = "agent:main:parent";
     for (const kind of ["question", "approval"] as const) {
-      localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
+      localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections:main", "[]");
       const childKey = `agent:main:subagent:${kind}`;
       const gatewayHarness = createGatewayHarness({
         request: vi.fn().mockResolvedValue({ questions: [] }),

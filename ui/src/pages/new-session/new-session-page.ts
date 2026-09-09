@@ -377,7 +377,14 @@ export class NewSessionPage extends OpenClawLightDomElement {
               agentIdentity: this.context?.agentIdentity,
               disabled:
                 this.submission.submitting || Boolean(this.submission.pendingPlacement.sessionKey),
-              onSelect: (agentId) => this.place.selectAgentId(agentId),
+              onSelect: (agentId) => {
+                const search = this.place.selectAgentId(agentId);
+                if (search) {
+                  const destination = catalog.routeKeyFromSearch(search);
+                  retainDraft(this.context, this.submission, destination, destination);
+                  this.context?.navigate("new-session", { search });
+                }
+              },
               onOpenChange: (open) => {
                 this.agentPickerOpen = open;
               },

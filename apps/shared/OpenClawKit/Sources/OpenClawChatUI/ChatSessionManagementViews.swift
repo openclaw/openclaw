@@ -253,10 +253,18 @@ struct ChatSessionInspectorSheet: View {
             }
             // Keyed to the catalog revision so group create/rename/delete while
             // the inspector is open refreshes the picker instead of going stale.
-            .task(id: self.viewModel.sessionGroupsRevision) {
+            .task(id: "\(self.viewModel.sessionGroupsAgentID ?? "")|\(self.viewModel.sessionGroupsRevision)") {
+                self.groups = []
                 do {
-                    self.groups = try await self.viewModel.fetchSessionGroups()
+                    let agentID = self.session.agentId
+                        ?? OpenClawChatSessionKey.agentID(from: self.session.key)
+                        ?? self.viewModel.sessionGroupsAgentID
+                    let routeLease = try await self.viewModel.sessionGroupsRouteLease(agentID: agentID)
+                    let groups = try await self.viewModel.fetchSessionGroups(using: routeLease)
+                    guard !Task.isCancelled else { return }
+                    self.groups = groups
                 } catch {
+                    guard !Task.isCancelled else { return }
                     self.errorText = error.localizedDescription
                 }
             }
@@ -421,7 +429,7 @@ struct ChatSessionGroupsSheet: View {
             }
             // Keyed to the catalog revision so remote group mutations (reason
             // "groups" events) refresh an open manager instead of going stale.
-            .task(id: self.viewModel.sessionGroupsRevision) { await self.loadGroups() }
+            .task(id: "\(self.viewModel.sessionGroupsAgentID ?? "")|\(self.viewModel.sessionGroupsRevision)") { await self.loadGroups() }
             .alert(
                 "Rename Group",
                 isPresented: Binding(
@@ -464,13 +472,21 @@ struct ChatSessionGroupsSheet: View {
 
     private func loadGroups() async {
         self.isLoading = true
-        defer { self.isLoading = false }
+        self.routeLease = nil
+        self.groups = []
+        self.renameTarget = nil
+        self.deleteTarget = nil
+        let agentID = self.viewModel.sessionGroupsAgentID
+        defer { if !Task.isCancelled { self.isLoading = false } }
         do {
             let routeLease = try await self.viewModel.sessionGroupsRouteLease()
+            let groups = try await self.viewModel.fetchSessionGroups(using: routeLease)
+            guard !Task.isCancelled, agentID == self.viewModel.sessionGroupsAgentID else { return }
             self.routeLease = routeLease
-            self.groups = try await self.viewModel.fetchSessionGroups(using: routeLease)
+            self.groups = groups
             self.errorText = nil
         } catch {
+            guard !Task.isCancelled else { return }
             self.routeLease = nil
             self.errorText = error.localizedDescription
         }

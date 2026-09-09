@@ -58,7 +58,8 @@ export function subscribeBootRecordPersistence({
     const agentsList = agents.state.agentsList;
     if (agentsList && !agents.state.agentsListCached && sessions.groupsStatus() === "ready") {
       persistBootRecord({
-        version: 2,
+        version: 3,
+        groupsAgentId: sessions.state.groupsAgentId ?? null,
         ...auth,
         savedAt: Date.now(),
         scope,

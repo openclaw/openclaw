@@ -352,8 +352,9 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
         listener(state);
       }
     },
-    groupsLoad: () => Promise.resolve(),
+    groupsLoad: () => Promise.resolve(state.groups.map((name, position) => ({ name, position }))),
     groupsGeneration: () => 0,
+    groupsAgentGeneration: () => 0,
     groupsStatus: () => "ready",
     groupsInvalidate: () => undefined,
     groupsPut,

@@ -3,6 +3,7 @@ import type {
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { DraftRepositoryState } from "./discovery.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
@@ -55,6 +56,15 @@ export class DraftRepositoryController {
 
   get worktree(): boolean {
     return this.worktreeValue;
+  }
+
+  get remoteRepository(): SessionCreateParams["repository"] {
+    const { remotePlacement, remoteProject } = this.read();
+    if (!remotePlacement || !remoteProject) {
+      return undefined;
+    }
+    const ref = this.baseRef.trim();
+    return { url: remoteProject.cloneUrl, ...(ref ? { ref } : {}) };
   }
 
   get worktreeName(): string {

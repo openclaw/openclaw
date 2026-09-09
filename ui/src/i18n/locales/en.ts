@@ -1367,7 +1367,6 @@ export const en: TranslationMap & {
     groupByCategory: "Custom groups",
     groupByPerson: "Person",
     showSessionPreview: "Show message preview",
-    hideEmptyGroups: "Hide empty groups",
     showCronSessions: "Show automation sessions",
     showSystemSessions: "Show system sessions",
     groupByChannel: "Channel",
@@ -1381,6 +1380,7 @@ export const en: TranslationMap & {
     newGroupTitle: "New group",
     newGroupCreate: "Create group",
     newGroupFailed: "Could not create the group.",
+    groupCatalogUnavailable: "Could not load this agent’s groups. Refresh and try again.",
     newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",

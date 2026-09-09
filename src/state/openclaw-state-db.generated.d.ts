@@ -1153,14 +1153,6 @@ export interface SecretStoreEntries {
   value: string;
 }
 
-export interface SessionGroups {
-  created_at: number;
-  cwd: string | null;
-  name: string;
-  position: number;
-  worktree: number | null;
-}
-
 export interface SessionRepositoryWorkspaces {
   agent_id: string;
   base_commit: string | null;
@@ -1771,7 +1763,6 @@ export interface DB {
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   secret_store_entries: SecretStoreEntries;
-  session_groups: SessionGroups;
   session_repository_workspaces: SessionRepositoryWorkspaces;
   session_state_events: SessionStateEvents;
   session_state_heads: SessionStateHeads;

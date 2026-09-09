@@ -1858,17 +1858,6 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   PRIMARY KEY (profile_id, pref_key)
 ) STRICT;
 
--- Gateway-owned custom session group catalog (names + display order).
--- Membership stays on each session entry's category field; this table only
--- owns which groups exist and how operator UIs order them.
-CREATE TABLE IF NOT EXISTS session_groups (
-  name TEXT NOT NULL PRIMARY KEY,
-  position INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  cwd TEXT,
-  worktree INTEGER
-) STRICT;
-
 -- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
 -- stays in plugins; this table records only core reconciliation facts.
 CREATE TABLE IF NOT EXISTS worker_environments (

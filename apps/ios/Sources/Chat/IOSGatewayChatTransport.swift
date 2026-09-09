@@ -82,6 +82,72 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             supportsSessionSettingsCAS: supportsSettingsCAS))
     }
 
+    func acquireSessionGroupsRouteLease(agentID: String?) async -> OpenClawChatSessionGroupsRouteLease? {
+        guard let route = await self.currentSessionMutationRoute() else { return nil }
+        let transport = self
+        let request: @Sendable (OpenClawChatGatewayRequest) async throws -> Data = { request in
+            try await transport.requestSessionMutation(request, ifCurrentRoute: route)
+        }
+        let owner: String
+        if let agentID = agentID ?? self.globalAgentId {
+            owner = agentID
+        } else {
+            guard let data = try? await request(OpenClawChatGatewayRequests.agentsList()),
+                  let agents = try? OpenClawChatGatewayPayloadCodec.decodeAgentsList(data),
+                  agents.selectionRequired != true
+            else { return nil }
+            owner = agents.defaultId
+        }
+        return OpenClawChatSessionGroupsRouteLease(
+            listGroups: {
+                let data = try await request(OpenClawChatGatewayRequests.sessionGroupsList(agentID: owner))
+                return try JSONDecoder().decode(OpenClawChatSessionGroupsResponse.self, from: data)
+            },
+            putGroups: { names in
+                let data = try await request(OpenClawChatGatewayRequests.sessionGroupsPut(names: names, agentID: owner))
+                return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+            },
+            renameGroup: { name, target in
+                let data = try await request(OpenClawChatGatewayRequests.sessionGroupsRename(
+                    name: name, to: target, agentID: owner))
+                return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+            },
+            deleteGroup: { name in
+                let data = try await request(OpenClawChatGatewayRequests.sessionGroupsDelete(name: name, agentID: owner))
+                return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+            })
+    }
+
+    func listSessionGroups(agentID: String?) async throws -> OpenClawChatSessionGroupsResponse? {
+        guard let lease = await self.acquireSessionGroupsRouteLease(agentID: agentID) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return try await lease.listGroups()
+    }
+
+    func putSessionGroups(names: [String], agentID: String?) async throws -> OpenClawChatSessionGroupsMutationResponse {
+        guard let lease = await self.acquireSessionGroupsRouteLease(agentID: agentID) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return try await lease.putGroups(names: names)
+    }
+
+    func renameSessionGroup(
+        name: String, to: String, agentID: String?) async throws -> OpenClawChatSessionGroupsMutationResponse
+    {
+        guard let lease = await self.acquireSessionGroupsRouteLease(agentID: agentID) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return try await lease.renameGroup(name: name, to: to)
+    }
+
+    func deleteSessionGroup(name: String, agentID: String?) async throws -> OpenClawChatSessionGroupsMutationResponse {
+        guard let lease = await self.acquireSessionGroupsRouteLease(agentID: agentID) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return try await lease.deleteGroup(name: name)
+    }
+
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease? {
         guard let route = await currentSessionMutationRoute() else { return nil }
         let transport = self

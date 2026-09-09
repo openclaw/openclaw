@@ -26,12 +26,11 @@ export async function rememberSessionGroup(
   name: string,
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {
-  const groups = host.knownSessionGroups();
-  if (groups.includes(name)) {
-    return "completed";
-  }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
+  }
+  if (host.knownSessionGroups().includes(name)) {
+    return "completed";
   }
   if (
     !requireSessionMutationAccess(host, scope, {
@@ -42,6 +41,17 @@ export async function rememberSessionGroup(
     return "failed";
   }
   try {
+    const catalog = await scope.sessions.groupsLoad();
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return "stale";
+    }
+    if (catalog === null || scope.sessions.groupsStatus() !== "ready") {
+      throw new Error(t("sessionsView.groupCatalogUnavailable"));
+    }
+    const groups = catalog.map((group) => group.name);
+    if (groups.includes(name)) {
+      return "completed";
+    }
     const written = await scope.sessions.groupsPut([...groups, name]);
     // The catalog owns the authoritative stale signal; the mutation scope adds
     // its own. Either one retiring means no confirmed entry to assign against.
@@ -178,6 +188,13 @@ export async function reorderSidebarSection(
     return;
   }
   try {
+    const catalog = await scope.sessions.groupsLoad();
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return;
+    }
+    if (catalog === null || scope.sessions.groupsStatus() !== "ready") {
+      throw new Error(t("sessionsView.groupCatalogUnavailable"));
+    }
     // knownSessionGroups() is the full discovered set (gateway catalog plus
     // row-discovered categories), so normalize only prunes deleted groups.
     const knownGroups = host.knownSessionGroups();

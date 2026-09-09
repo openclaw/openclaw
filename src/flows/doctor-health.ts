@@ -146,6 +146,42 @@ async function runDoctorHealthFlowWithResult(
       json: options.json,
     });
 
+    if (
+      maintenance &&
+      schemas.pendingMigrations?.some(
+        (database) =>
+          database.kind === "state" && database.foundVersion > 0 && database.foundVersion < 17,
+      )
+    ) {
+      const { createConfigIO } = await import("../config/io.js");
+      const snapshot = await createConfigIO({
+        env: { ...process.env },
+        observe: false,
+        pluginValidation: "core-only",
+      }).readConfigFileSnapshot();
+      const { getConfigResolutionFacts } = await import("../config/resolution-facts.js");
+      const sourceConfig = snapshot.sourceConfig ?? snapshot.config;
+      const resolutionFacts = getConfigResolutionFacts(sourceConfig);
+      const affectsGroupOwnership = (field: string) =>
+        !field ||
+        field === "agents" ||
+        field.startsWith("agents.") ||
+        field === "session" ||
+        field === "session.store" ||
+        field.startsWith("session.store.");
+      if (
+        (snapshot.exists && resolutionFacts === null) ||
+        [...(resolutionFacts ?? [])].some(affectsGroupOwnership) ||
+        snapshot.issues.some((issue) => affectsGroupOwnership(issue.path))
+      ) {
+        throw new Error(
+          `Cannot migrate session groups until agent ownership and session store configuration can be resolved from ${snapshot.path}. Fix the reported config read, include, environment, or ownership errors and rerun openclaw doctor --fix.`,
+        );
+      }
+      const { migrateDoctorSessionGroups } = await import("../commands/doctor-session-groups.js");
+      await migrateDoctorSessionGroups(sourceConfig, process.env);
+    }
+
     // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
     const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
     const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");

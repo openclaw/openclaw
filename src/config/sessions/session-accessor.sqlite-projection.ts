@@ -96,6 +96,7 @@ export async function applySessionEntryReplacements<T>(params: {
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   consumePendingReset?: boolean;
   requireWriteSuccess?: boolean;
   sessionKeys?: readonly string[];

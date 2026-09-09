@@ -74,7 +74,11 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     return;
   }
   const blockedMigrations = schemas.pendingMigrations.filter(
-    (database) => database.kind === "agent" || !updater.canDeferStateSchema,
+    (database) =>
+      database.kind === "agent" ||
+      !updater.canDeferStateSchema ||
+      // Dropping the legacy catalog is not safe under the old updater's deferred publication.
+      (database.kind === "state" && database.foundVersion < 17),
   );
   if (blockedMigrations.length === 0) {
     return;

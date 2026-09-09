@@ -4,6 +4,7 @@ import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { resolveSessionGroupAgent } from "./session-group-agent.js";
 import {
   listSessionGroups,
   normalizeGroupNames,
@@ -67,9 +68,18 @@ function resolveSessionGroupMutationTargets(params: {
   getCfg: () => OpenClawConfig;
   requestParams: unknown;
 }): SessionMutationTarget[] | undefined {
+  const cfg = params.getCfg();
+  const owner = resolveSessionGroupAgent(
+    cfg,
+    readSessionSharingStringParam(params.requestParams, "agentId"),
+    "write",
+  );
+  if (!owner.ok) {
+    return undefined;
+  }
   const groupName = readSessionSharingStringParam(params.requestParams, "name");
   return groupName
-    ? (resolveSessionGroupMutationTargetsByName(params.getCfg()).get(groupName) ?? [])
+    ? (resolveSessionGroupMutationTargetsByName(cfg, owner.agentId).get(groupName) ?? [])
     : undefined;
 }
 
@@ -84,14 +94,23 @@ function resolveSessionGroupsPutMutationTargets(
   if (!Array.isArray(names)) {
     return undefined;
   }
+  const cfg = getCfg();
+  const owner = resolveSessionGroupAgent(
+    cfg,
+    readSessionSharingStringParam(requestParams, "agentId"),
+    "write",
+  );
+  if (!owner.ok) {
+    return undefined;
+  }
   const requested = new Set(normalizeGroupNames(names.filter((name) => typeof name === "string")));
-  const dropped = listSessionGroups()
+  const dropped = listSessionGroups(owner.agentId)
     .map((group) => group.name)
     .filter((name) => !requested.has(name));
   if (dropped.length === 0) {
     return [];
   }
-  const byName = resolveSessionGroupMutationTargetsByName(getCfg());
+  const byName = resolveSessionGroupMutationTargetsByName(cfg, owner.agentId);
   return dropped.flatMap((name) => byName.get(name) ?? []);
 }
 

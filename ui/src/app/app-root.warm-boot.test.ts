@@ -36,7 +36,8 @@ function createWarmSurface(warm = true) {
   if (warm) {
     const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
     const record: BootRecord = {
-      version: 2,
+      version: 3,
+      groupsAgentId: "main",
       authMethod: "token",
       credential: "9d17676d",
       savedAt: Date.now(),

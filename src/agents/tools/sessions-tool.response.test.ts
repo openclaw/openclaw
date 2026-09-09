@@ -27,29 +27,41 @@ function createTool() {
 }
 
 describe("sessions tool responses", () => {
-  it("routes group actions to existing gateway methods", async () => {
-    gatewayMocks.callGateway.mockImplementation(async (request) => request);
-    const tool = createTool();
+  it.each([
+    { sessionKey: "agent:main:main", requesterAgentIdOverride: undefined, agentId: "main" },
+    { sessionKey: "agent:research:main", requesterAgentIdOverride: undefined, agentId: "research" },
+    { sessionKey: "global", requesterAgentIdOverride: "research", agentId: "research" },
+  ])(
+    "routes every group action to requester $agentId from $sessionKey",
+    async ({ sessionKey, requesterAgentIdOverride, agentId }) => {
+      gatewayMocks.callGateway.mockImplementation(async (request) => request);
+      const tool = createSessionsTool({
+        agentSessionKey: sessionKey,
+        requesterAgentIdOverride,
+        config: {},
+        hasInProcessGatewayContext: () => true,
+      });
 
-    await tool.execute("list", { action: "group_list" });
-    await tool.execute("set", { action: "group_set", names: ["Now", "Later"] });
-    await tool.execute("rename", { action: "group_rename", name: "Now", to: "Next" });
-    await tool.execute("delete", { action: "group_delete", name: "Later" });
+      await tool.execute("list", { action: "group_list" });
+      await tool.execute("set", { action: "group_set", names: ["Now", "Later"] });
+      await tool.execute("rename", { action: "group_rename", name: "Now", to: "Next" });
+      await tool.execute("delete", { action: "group_delete", name: "Later" });
 
-    expect(gatewayMocks.callGateway.mock.calls).toEqual([
-      [{ method: "sessions.groups.list", params: {} }],
-      [{ method: "sessions.groups.put", params: { names: ["Now", "Later"] } }],
-      [{ method: "sessions.groups.rename", params: { name: "Now", to: "Next" } }],
-      [{ method: "sessions.groups.delete", params: { name: "Later" } }],
-    ]);
-    await expect(tool.execute("set-missing", { action: "group_set" })).rejects.toThrow(
-      "names required",
-    );
-    await expect(
-      tool.execute("set-invalid", { action: "group_set", names: ["Now", null] }),
-    ).rejects.toThrow("names[1] required");
-    expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(4);
-  });
+      expect(gatewayMocks.callGateway.mock.calls).toEqual([
+        [{ method: "sessions.groups.list", params: { agentId } }],
+        [{ method: "sessions.groups.put", params: { agentId, names: ["Now", "Later"] } }],
+        [{ method: "sessions.groups.rename", params: { agentId, name: "Now", to: "Next" } }],
+        [{ method: "sessions.groups.delete", params: { agentId, name: "Later" } }],
+      ]);
+      await expect(tool.execute("set-missing", { action: "group_set" })).rejects.toThrow(
+        "names required",
+      );
+      await expect(
+        tool.execute("set-invalid", { action: "group_set", names: ["Now", null] }),
+      ).rejects.toThrow("names[1] required");
+      expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(4);
+    },
+  );
 
   it("returns a bounded acknowledgement instead of the patched session entry", async () => {
     gatewayMocks.callGateway.mockResolvedValue({

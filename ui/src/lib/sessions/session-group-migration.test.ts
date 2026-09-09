@@ -55,12 +55,92 @@ afterEach(() => {
 });
 
 describe("legacy session group migration", () => {
+  it("leaves legacy browser names for the default agent when another agent loads first", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    localStorage.setItem("openclaw:sessions:custom-groups", JSON.stringify(["Legacy"]));
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.list") {
+        return { agentId: "main", groups: [] };
+      }
+      if (method === "sessions.groups.defaults") {
+        return { defaults: [] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const sessions = createTestSessionCapability(
+      createGateway(request, ["operator.write"]),
+      "research",
+    );
+    try {
+      await sessions.groupsLoad();
+      expect(request).toHaveBeenCalledWith("sessions.groups.list", { agentId: "research" });
+      expect(request.mock.calls.some(([method]) => method === "sessions.groups.put")).toBe(false);
+      expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBe(
+        JSON.stringify(["Legacy"]),
+      );
+    } finally {
+      sessions.dispose();
+    }
+  });
+
+  it.each(["research", null])(
+    "uses ambient owner %s instead of the first selectable agent",
+    async (ambientOwner) => {
+      vi.stubGlobal("localStorage", createStorageMock());
+      const legacy = JSON.stringify(["Legacy"]);
+      localStorage.setItem("openclaw:sessions:custom-groups", legacy);
+      const request = vi.fn(async (method: string, params: { agentId?: string }) => {
+        if (method === "sessions.groups.list") {
+          if (!params.agentId && !ambientOwner) {
+            throw new Error("Agent selection required");
+          }
+          return { agentId: params.agentId ?? ambientOwner, groups: [] };
+        }
+        if (method === "agents.list") {
+          return { agents: [{ id: "main" }, { id: "research" }] };
+        }
+        if (method === "sessions.groups.defaults") {
+          return { defaults: [] };
+        }
+        if (method === "sessions.groups.put") {
+          return { groups: [{ name: "Legacy", position: 0 }] };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const gateway = createGateway(request, ["operator.write"]);
+      const first = createTestSessionCapability(gateway, "main");
+      try {
+        await first.groupsLoad();
+        expect(first.groupsStatus()).toBe("ready");
+        expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBe(legacy);
+        expect(request.mock.calls.some(([method]) => method === "sessions.groups.put")).toBe(false);
+      } finally {
+        first.dispose();
+      }
+      if (!ambientOwner) {
+        return;
+      }
+      const systemOwner = createTestSessionCapability(gateway, "research");
+      try {
+        await systemOwner.groupsLoad();
+        expect(request).toHaveBeenCalledWith("sessions.groups.put", {
+          agentId: "research",
+          names: ["Legacy"],
+        });
+        expect(systemOwner.state.groups).toEqual(["Legacy"]);
+        expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBeNull();
+      } finally {
+        systemOwner.dispose();
+      }
+    },
+  );
+
   it("does not migrate browser groups without operator.write", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     localStorage.setItem("openclaw:sessions:custom-groups", JSON.stringify(["Research"]));
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.list") {
-        return { groups: [] };
+        return { agentId: "main", groups: [] };
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -69,37 +149,68 @@ describe("legacy session group migration", () => {
     await sessions.groupsLoad();
 
     expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("sessions.groups.list", {});
+    expect(request).toHaveBeenCalledWith("sessions.groups.list", { agentId: "main" });
     expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBe(
       JSON.stringify(["Research"]),
     );
     sessions.dispose();
   });
 
-  it("migrates browser groups with operator.write", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    localStorage.setItem("openclaw:sessions:custom-groups", JSON.stringify(["Research"]));
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.groups.list") {
-        return { groups: [] };
+  it.each([true, false])(
+    "imports only orphan browser groups after a complete roster scan (readable=%s)",
+    async (readable) => {
+      vi.stubGlobal("localStorage", createStorageMock());
+      const legacy = JSON.stringify(["Foreign", "Empty"]);
+      localStorage.setItem("openclaw:sessions:custom-groups", legacy);
+      const request = vi.fn(async (method: string, params: { agentId?: string }) => {
+        if (method === "agents.list") {
+          return { agents: [{ id: "main" }, { id: "research" }] };
+        }
+        if (method === "sessions.groups.list") {
+          if (params.agentId === "research") {
+            if (!readable) {
+              throw new Error("Research catalog unavailable");
+            }
+            return { agentId: "research", groups: [{ name: "Foreign", position: 0 }] };
+          }
+          return { agentId: "main", groups: [{ name: "Existing", position: 0 }] };
+        }
+        if (method === "sessions.groups.put") {
+          return {
+            groups: [
+              { name: "Existing", position: 0 },
+              { name: "Empty", position: 1 },
+            ],
+          };
+        }
+        if (method === "sessions.groups.defaults") {
+          return { defaults: [] };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+      try {
+        await sessions.groupsLoad();
+        expect(sessions.groupsStatus()).toBe("ready");
+        if (readable) {
+          expect(request).toHaveBeenCalledWith("sessions.groups.put", {
+            agentId: "main",
+            names: ["Existing", "Empty"],
+          });
+          expect(sessions.state.groups).toEqual(["Existing", "Empty"]);
+          expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBeNull();
+        } else {
+          expect(request.mock.calls.some(([method]) => method === "sessions.groups.put")).toBe(
+            false,
+          );
+          expect(sessions.state.groups).toEqual(["Existing"]);
+          expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBe(legacy);
+        }
+      } finally {
+        sessions.dispose();
       }
-      if (method === "sessions.groups.put") {
-        return { groups: [{ name: "Research" }] };
-      }
-      if (method === "sessions.groups.defaults") {
-        return { defaults: [{ name: "Research" }] };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
-
-    await sessions.groupsLoad();
-
-    expect(request).toHaveBeenCalledWith("sessions.groups.put", { names: ["Research"] });
-    expect(sessions.state.groups).toEqual(["Research"]);
-    expect(localStorage.getItem("openclaw:sessions:custom-groups")).toBeNull();
-    sessions.dispose();
-  });
+    },
+  );
 });
 
 describe("session group catalog loading", () => {
@@ -216,7 +327,9 @@ describe("session group catalog loading", () => {
     const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
 
     const backgroundLoad = sessions.groupsLoad();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("sessions.groups.defaults", {}));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.groups.defaults", { agentId: "main" }),
+    );
     let joined = false;
     const routeLoad = sessions.groupsLoad().then(() => {
       joined = true;

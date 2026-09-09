@@ -35,6 +35,16 @@ For malformed legacy `exec-approvals.json`, Doctor preserves the original bytes 
 
 Repair the preserved file locally, then rerun `openclaw doctor --fix` with the same `OPENCLAW_STATE_DIR` setting (leave it unset if it was unset before). Exec approvals remain blocked until migration succeeds. Explicit repair exits nonzero while the legacy file or an interrupted `.doctor-importing` claim remains, before restarting any Gateway stopped for that repair. Do not delete the file or broaden its policy to bypass validation.
 
+Doctor migrates the legacy global session-group catalog into canonical agent
+databases before advancing shared schema 16 to 17. Groups with members are copied
+to each member agent; empty groups go to the configured ambient system owner,
+using the existing legacy or sole-agent fallback when applicable. It verifies
+the copied counts, contents, and sidebar order before dropping the source. Stop
+the Gateway and other OpenClaw writers, retain a complete pre-upgrade backup, and
+run `openclaw doctor --fix` from the compatible installation. Interrupted copies
+can be retried. See [State schema 17](/reference/database-schemas#state-schema-17)
+for updater and downgrade limits.
+
 Agent database schema upgrades are reported with the database path and the observed before and after versions, independently of media rewrites. The media persistence message appears only when transcript sessions or trajectory rows were rewritten and includes both counts. A run that does both reports both; an unchanged rerun reports neither.
 
 Device Pair and Active Memory legacy JSON imports check namespace capacity before writing. If the missing entries do not fit, doctor warns and leaves the source unchanged. These imports also verify that source keys and pre-existing destination keys remain in SQLite before reporting completion and archiving the source. A retention warning keeps the source available for inspection and retry; do not delete it to silence the warning, because it may contain state that SQLite did not retain. Resolve the capacity problem before rerunning `openclaw doctor --fix`.

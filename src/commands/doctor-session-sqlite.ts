@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -275,6 +276,7 @@ function resolveDoctorSessionSqliteTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   mode: DoctorSessionSqliteMode;
+  registeredDatabases?: readonly { agentId: string; path: string }[];
   store?: string;
 }): SessionStoreTarget[] {
   if (params.store) {
@@ -294,7 +296,10 @@ function resolveDoctorSessionSqliteTargets(params: {
     return resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, { env: params.env });
   }
   if (params.allAgents) {
-    const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
+    const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, {
+      env: params.env,
+      registeredDatabases: params.registeredDatabases,
+    });
     if (params.mode !== "dry-run" && params.mode !== "import" && params.mode !== "validate") {
       return targets;
     }
@@ -305,15 +310,140 @@ function resolveDoctorSessionSqliteTargets(params: {
     const legacyTargets = resolveSessionStoreTargets(
       params.cfg,
       { allAgents: true },
-      { env: params.env },
+      { env: params.env, registeredDatabases: params.registeredDatabases },
     ).map((target) => ({
       agentId: target.agentId,
-      sqlitePath: resolveTargetSqlitePath(target),
+      sqlitePath: resolveTargetSqlitePath(target, params.env, params.registeredDatabases),
       storePath: legacyStorePath,
     }));
     return [...legacyTargets, ...targets];
   }
   return resolveSessionStoreTargets(params.cfg, {}, { env: params.env });
+}
+
+/** Read the pending canonical JSON import without opening any SQLite writer. */
+export function planDoctorLegacySessionImports(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  registeredDatabases: readonly { agentId: string; path: string }[],
+) {
+  const configured = resolveSessionStoreTargets(
+    cfg,
+    { allAgents: true },
+    { env, registeredDatabases },
+  );
+  const legacyPath = path.join(resolveStateDir(env), "sessions", "sessions.json");
+  const candidates: SessionStoreTarget[] = [
+    ...configured.map((target) => ({
+      agentId: target.agentId,
+      sqlitePath: resolveTargetSqlitePath(target, env, registeredDatabases),
+      storePath: legacyPath,
+    })),
+    ...resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env, registeredDatabases }),
+    ...configured,
+  ];
+  const sources = new Map<string, string>();
+  const records: Array<{
+    agentId: string;
+    sqlitePath: string;
+    sessionKey: string;
+    entry: SessionEntry;
+  }> = [];
+  const importTargets = resolveDoctorSessionSqliteTargets({
+    cfg,
+    env,
+    allAgents: true,
+    mode: "import",
+    registeredDatabases,
+  });
+  const importedTargets = new Set(
+    importTargets.map((target) => `${target.storePath}\0${target.agentId}`),
+  );
+  const targets = [
+    ...importTargets,
+    ...candidates.filter((target) => {
+      const key = `${target.storePath}\0${target.agentId}`;
+      if (importedTargets.has(key)) {
+        return false;
+      }
+      importedTargets.add(key);
+      return true;
+    }),
+  ];
+  const snapshots = new Map<string, ReadOnlySqliteValidationSnapshot>();
+  const unowned = new Set<string>();
+  const owned = new Set<string>();
+  for (const target of targets) {
+    if (target.storePath.endsWith(".sqlite")) {
+      continue;
+    }
+    const issues: DoctorSessionSqliteIssue[] = [];
+    const allRecords = readLegacySessionRecords(target, issues, {
+      allowMissingStore: true,
+      onRead: (bytes) =>
+        sources.set(target.storePath, createHash("sha256").update(bytes).digest("hex")),
+    });
+    if (issues.length) {
+      throw new Error(issues.map((issue) => `${target.storePath}: ${issue.message}`).join("\n"));
+    }
+    if (!sources.has(target.storePath)) {
+      continue;
+    }
+    assertSafeSessionSqliteMigrationDirectory(path.dirname(target.storePath));
+    const selected = allRecords.filter((record) => {
+      const key = `${target.storePath}\0${record.sessionKey}`;
+      unowned.add(key);
+      if (
+        shouldFilterLegacySessionRecordsByTarget(target) &&
+        !isLegacySessionRecordOwnedByTarget(cfg, target, record.sessionKey)
+      ) {
+        return false;
+      }
+      owned.add(key);
+      return true;
+    });
+    const sqlitePath = resolveTargetSqlitePath(target, env, registeredDatabases);
+    let snapshot = snapshots.get(sqlitePath);
+    if (!snapshot) {
+      const existing = readOnlySqliteValidationSnapshot(target, sqlitePath);
+      if (!existing.ok) {
+        throw new Error(
+          `Cannot inspect legacy import destination ${sqlitePath}: ${String(existing.error)}`,
+        );
+      }
+      snapshot = existing.snapshot;
+      snapshots.set(sqlitePath, snapshot);
+    }
+    const report = createDoctorSessionSqliteTargetReport({ ...target, sqlitePath });
+    const importedTranscriptSources = new Set<string>();
+    const pending = selected.filter(
+      (record) =>
+        prepareLegacySessionImport(target, record, report, importedTranscriptSources, snapshot) !==
+        undefined,
+    );
+    for (const record of pending) {
+      records.push({
+        agentId: target.agentId,
+        sqlitePath,
+        sessionKey: record.sessionKey,
+        entry: record.entry,
+      });
+    }
+    // A later legacy index sees the session identities imported by the preceding target.
+    snapshots.set(sqlitePath, {
+      ...snapshot,
+      sessionIdsBySessionKey: new Map([
+        ...snapshot.sessionIdsBySessionKey,
+        ...pending.map((record) => [record.sessionKey, record.entry.sessionId] as const),
+      ]),
+    });
+  }
+  for (const key of unowned) {
+    if (!owned.has(key)) {
+      throw new Error(`Cannot resolve legacy session owner for ${key.replace("\0", ": ")}`);
+    }
+  }
+  return { sources: [...sources].toSorted(([a], [b]) => a.localeCompare(b)), records };
 }
 
 function filterLegacySessionStoreTargets(
@@ -533,7 +663,7 @@ function gatherLegacyArchiveCoverage(
 function readLegacySessionRecords(
   target: SessionStoreTarget,
   issues: DoctorSessionSqliteIssue[],
-  options: { allowMissingStore?: boolean } = {},
+  options: { allowMissingStore?: boolean; onRead?: (bytes: Uint8Array) => void } = {},
 ): LegacySessionRecord[] {
   // Open a file descriptor first, then stat and read through it to eliminate
   // the TOCTOU race where a file can change between size validation and read.
@@ -584,8 +714,9 @@ function readLegacySessionRecords(
         return [];
       }
       // Fail closed if the pinned file grows past the size validated above.
-      const raw = readFileDescriptorBoundedSync(fd, storeStat.size).toString("utf-8");
-      parsed = JSON.parse(raw);
+      const raw = readFileDescriptorBoundedSync(fd, storeStat.size);
+      options.onRead?.(raw);
+      parsed = JSON.parse(raw.toString("utf-8"));
     } catch (err) {
       issues.push({
         code: "store_unreadable",

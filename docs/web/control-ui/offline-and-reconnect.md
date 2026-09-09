@@ -15,7 +15,7 @@ Warm reload applies only after token or device-token authentication. The browser
 must still hold the Gateway token that authenticated the previous connection, or
 the paired device token retained from that connection, and present that same
 credential again. After that connection, OpenClaw keeps a small agent roster, the
-session list without live run state, and custom groups in browser storage. Recent
+session list without live run state, and custom groups with their owning agent in browser storage. Unscoped older group caches are not restored into another agent's sidebar. Recent
 transcripts use the existing chat cache. On reload, the shell, sidebar, and cached
 conversation can appear while the Gateway is still connecting. Live state replaces
 the cached roster on connect, and chat requests changes from its saved transcript cursor.

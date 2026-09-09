@@ -89,6 +89,58 @@ struct ChatSessionRosterSnapshot: Sendable {
 }
 
 extension NodeAppModel {
+    func loadSessionGroups() async throws -> [OpenClawChatSessionGroup] {
+        let identity = self.chatViewModelIdentityID
+        let owner = self.chatDeliveryAgentId ?? self.gatewayDefaultAgentId
+        let physicalRoute = await self.operatorSession.currentRoute()
+        guard let lease = await self.makeChatTransport().acquireSessionGroupsRouteLease(agentID: owner) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        guard identity == self.chatViewModelIdentityID else { throw CancellationError() }
+        if let owner,
+           let gatewayID = self.chatTranscriptCacheGatewayID {
+            try await SessionGroupStore.importLegacyGroups(
+                using: lease, gatewayID: gatewayID, agentID: owner,
+                resolveLegacyOwner: {
+                    guard let physicalRoute,
+                          await self.operatorSession.currentRoute() == physicalRoute,
+                          identity == self.chatViewModelIdentityID else { return nil }
+                    guard let data = try? await self.operatorSession.request(
+                        OpenClawChatGatewayRequests.sessionGroupsList(agentID: nil),
+                        ifCurrentRoute: physicalRoute),
+                        let response = try? JSONDecoder().decode(OpenClawChatSessionGroupsResponse.self, from: data),
+                        identity == self.chatViewModelIdentityID else { return nil }
+                    return response.agentId
+                },
+                existingCatalogNames: {
+                    guard let physicalRoute,
+                          await self.operatorSession.currentRoute() == physicalRoute,
+                          identity == self.chatViewModelIdentityID else { throw CancellationError() }
+                    let data = try await self.operatorSession.request(
+                        OpenClawChatGatewayRequests.agentsList(), ifCurrentRoute: physicalRoute)
+                    let agents = try OpenClawChatGatewayPayloadCodec.decodeAgentsList(data)
+                    guard agents.agents.count <= 1000 else {
+                        throw NSError(domain: "SessionGroupImport", code: 2, userInfo: [
+                            NSLocalizedDescriptionKey: "Too many agents to safely import legacy groups.",
+                        ])
+                    }
+                    var names = Set<String>()
+                    for agent in agents.agents {
+                        let data = try await self.operatorSession.request(
+                            OpenClawChatGatewayRequests.sessionGroupsList(agentID: agent.id),
+                            ifCurrentRoute: physicalRoute)
+                        let response = try JSONDecoder().decode(OpenClawChatSessionGroupsResponse.self, from: data)
+                        names.formUnion(response.groups.map(\.name))
+                    }
+                    guard identity == self.chatViewModelIdentityID else { throw CancellationError() }
+                    return names
+                })
+        }
+        let response = try await lease.listGroups()
+        guard identity == self.chatViewModelIdentityID else { throw CancellationError() }
+        return response?.groups ?? []
+    }
+
     func loadChatSessionRoster(
         limit: Int,
         archived: Bool = false,
@@ -185,10 +237,37 @@ final class RootSidebarModel {
     }
 
     private(set) var sessions: [OpenClawChatSessionEntry] = []
+    private var loadedSessionGroups: [OpenClawChatSessionGroup] = []
+    private var sessionGroupsIdentity: String?
+
+    func sessionGroups(appModel: NodeAppModel) -> [OpenClawChatSessionGroup] {
+        self.sessionGroupsIdentity == appModel.chatViewModelIdentityID ? self.loadedSessionGroups : []
+    }
+
+    private func refreshSessionGroups(appModel: NodeAppModel, generation: Int) async {
+        guard generation == self.rosterGeneration else { return }
+        let identity = appModel.chatViewModelIdentityID
+        self.loadedSessionGroups = []
+        self.sessionGroupsErrorText = nil
+        self.sessionGroupsIdentity = identity
+        do {
+            let groups = try await appModel.loadSessionGroups()
+            guard !Task.isCancelled, generation == self.rosterGeneration,
+                  identity == appModel.chatViewModelIdentityID else { return }
+            self.loadedSessionGroups = groups
+        } catch {
+            guard generation == self.rosterGeneration,
+                  identity == appModel.chatViewModelIdentityID else { return }
+            self.sessionGroupsErrorText = error.localizedDescription
+        }
+    }
+
     private(set) var usage: CostUsageSummaryLite?
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
-    private(set) var sessionErrorText: String?
+    private var rosterErrorText: String?
+    private var sessionGroupsErrorText: String?
+    var sessionErrorText: String? { self.sessionGroupsErrorText ?? self.rosterErrorText }
     private(set) var isSessionRosterComplete = true
     private var rosterGeneration = 0
     private var dashboardGeneration = 0
@@ -237,6 +316,7 @@ final class RootSidebarModel {
             }
         }
 
+        async let groups: Void = self.refreshSessionGroups(appModel: appModel, generation: rosterGeneration)
         async let roster = self.loadRoster(appModel: appModel)
         async let dashboard = self.loadDashboard(appModel: appModel)
         let loadedRoster = await roster
@@ -246,7 +326,7 @@ final class RootSidebarModel {
             case let .success(loadedRoster):
                 self.applyRoster(loadedRoster)
             case let .failure(message):
-                self.sessionErrorText = message
+                self.rosterErrorText = message
             case .cancelled:
                 return
             }
@@ -261,6 +341,7 @@ final class RootSidebarModel {
         if let cronJobs = loadedDashboard.cronJobs {
             self.cronJobs = cronJobs
         }
+        await groups
     }
 
     func refreshSessions(appModel: NodeAppModel) async {
@@ -273,16 +354,18 @@ final class RootSidebarModel {
             }
         }
 
+        async let groups: Void = self.refreshSessionGroups(appModel: appModel, generation: rosterGeneration)
         let loadedRoster = await self.loadRoster(appModel: appModel, allowCachedFallback: false)
         guard !Task.isCancelled, rosterGeneration == self.rosterGeneration else { return }
         switch loadedRoster {
         case let .success(roster):
             self.applyRoster(roster)
         case let .failure(message):
-            self.sessionErrorText = message
+            self.rosterErrorText = message
         case .cancelled:
             return
         }
+        await groups
     }
 
     func setSessionObserverVisibility(appModel: NodeAppModel, visible: Bool) async {
@@ -484,7 +567,7 @@ final class RootSidebarModel {
     }
 
     func reportSessionError(_ error: any Error) {
-        self.sessionErrorText = error.localizedDescription
+        self.rosterErrorText = error.localizedDescription
     }
 
     static func tokenUsageSummary(
@@ -502,18 +585,18 @@ final class RootSidebarModel {
         self.sessions = roster.sessions
         self.isSessionRosterComplete = roster.isComplete
         guard !roster.isComplete, !roster.isCached else {
-            self.sessionErrorText = nil
+            self.rosterErrorText = nil
             return
         }
         if let totalCount = roster.totalCount {
             // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
             // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
-            self.sessionErrorText = String(
+            self.rosterErrorText = String(
                 format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
                 roster.sessions.count,
                 totalCount)
         } else {
-            self.sessionErrorText = String(localized: "Some sessions could not be loaded. Refresh to try again.")
+            self.rosterErrorText = String(localized: "Some sessions could not be loaded. Refresh to try again.")
         }
     }
 

@@ -152,6 +152,74 @@ export type AgentDatabasePathMigrationSummary = {
   preserved: number;
 };
 
+type AgentDatabasePathChange = {
+  agentId: string;
+  from: string;
+  to: string | null;
+  kind: "relativized" | "reanchored" | "deleted";
+};
+
+/** Plan the existing v9 path normalization without writing the source registry. */
+export function planAgentDatabaseRelativePaths(
+  entries: readonly { agentId: string; path: string }[],
+  previousVersion: number,
+  databasePath: string,
+): AgentDatabasePathChange[] {
+  if (previousVersion >= 9) {
+    return [];
+  }
+  const rows = entries.map((row) => ({ ...row }));
+  const changes: AgentDatabasePathChange[] = [];
+  for (const row of rows) {
+    if (!path.isAbsolute(row.path)) {
+      continue;
+    }
+    const stored = resolveOpenClawAgentDatabaseStoredPath(databasePath, row.path);
+    if (!path.isAbsolute(stored)) {
+      changes.push({ agentId: row.agentId, from: row.path, to: stored, kind: "relativized" });
+      row.path = stored;
+    }
+  }
+  const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
+  // Duplicate-path repairs remove rows while the snapshot is being inspected.
+  for (const row of rows.slice()) {
+    if (
+      !path.isAbsolute(row.path) ||
+      !isDefaultAgentDatabasePath(path.resolve(row.path), row.agentId)
+    ) {
+      continue;
+    }
+    const counterpartAbsolute = path.join(
+      stateDir,
+      "agents",
+      row.agentId,
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const counterpartStored = resolveOpenClawAgentDatabaseStoredPath(
+      databasePath,
+      counterpartAbsolute,
+    );
+    if (
+      rows.some(
+        (candidate) => candidate.agentId === row.agentId && candidate.path === counterpartStored,
+      )
+    ) {
+      changes.push({ agentId: row.agentId, from: row.path, to: null, kind: "deleted" });
+      rows.splice(rows.indexOf(row), 1);
+    } else if (existsSync(counterpartAbsolute)) {
+      changes.push({
+        agentId: row.agentId,
+        from: row.path,
+        to: counterpartStored,
+        kind: "reanchored",
+      });
+      row.path = counterpartStored;
+    }
+  }
+  return changes;
+}
+
 export function migrateAgentDatabaseRelativePaths(
   db: DatabaseSync,
   previousVersion: number,
@@ -160,70 +228,34 @@ export function migrateAgentDatabaseRelativePaths(
   if (previousVersion >= 9 || !tableExists(db, "agent_databases")) {
     return { relativized: 0, reanchored: [], deleted: [], preserved: 0 };
   }
-  const rows = db.prepare("SELECT agent_id, path FROM agent_databases").all();
+  const rows = db
+    .prepare("SELECT agent_id, path FROM agent_databases")
+    .all()
+    .map((row) => {
+      if (typeof row.agent_id !== "string" || typeof row.path !== "string") {
+        throw new Error("OpenClaw v8 agent database registry paths are not canonical");
+      }
+      return { agentId: row.agent_id, path: row.path };
+    });
+  const changes = planAgentDatabaseRelativePaths(rows, previousVersion, databasePath);
   const updatePath = db.prepare(
     "UPDATE agent_databases SET path = ? WHERE agent_id = ? AND path = ?",
   );
   const deletePath = db.prepare("DELETE FROM agent_databases WHERE agent_id = ? AND path = ?");
-  const hasPath = db.prepare(
-    "SELECT 1 FROM agent_databases WHERE agent_id = ? AND path = ? LIMIT 1",
-  );
-  let relativized = 0;
-  const reanchored: string[] = [];
-  const deleted: string[] = [];
-  for (const row of rows) {
-    const agentId = row.agent_id;
-    const registeredPath = row.path;
-    if (typeof agentId !== "string" || typeof registeredPath !== "string") {
-      throw new Error("OpenClaw v8 agent database registry paths are not canonical");
-    }
-    if (!path.isAbsolute(registeredPath)) {
-      continue;
-    }
-    const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath);
-    if (!path.isAbsolute(storedPath)) {
-      updatePath.run(storedPath, agentId, registeredPath);
-      relativized += 1;
+  for (const change of changes) {
+    if (change.to === null) {
+      deletePath.run(change.agentId, change.from);
+    } else {
+      updatePath.run(change.to, change.agentId, change.from);
     }
   }
-  const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
-  for (const row of rows) {
-    const agentId = row.agent_id;
-    const registeredPath = row.path;
-    if (
-      typeof agentId !== "string" ||
-      typeof registeredPath !== "string" ||
-      !path.isAbsolute(registeredPath) ||
-      !path.isAbsolute(resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath))
-    ) {
-      continue;
-    }
-    const absolutePath = path.resolve(registeredPath);
-    if (isDefaultAgentDatabasePath(absolutePath, agentId)) {
-      const counterpartAbsolute = path.join(
-        stateDir,
-        "agents",
-        agentId,
-        "agent",
-        "openclaw-agent.sqlite",
-      );
-      const counterpartStored = resolveOpenClawAgentDatabaseStoredPath(
-        databasePath,
-        counterpartAbsolute,
-      );
-      if (hasPath.get(agentId, counterpartStored)) {
-        // The same agent already owns its in-root canonical registration. Keeping a second
-        // default-layout registration guarantees duplicate canonical session keys on every list.
-        deletePath.run(agentId, registeredPath);
-        deleted.push(registeredPath);
-      } else if (existsSync(counterpartAbsolute)) {
-        // Re-anchor a copied or moved state directory onto its copied database instead of
-        // deleting the registration or leaving it dangling at the source root.
-        updatePath.run(counterpartStored, agentId, registeredPath);
-        reanchored.push(registeredPath);
-      }
-    }
-  }
+  const relativized = changes.filter((change) => change.kind === "relativized").length;
+  const reanchored = changes
+    .filter((change) => change.kind === "reanchored")
+    .map((change) => change.from);
+  const deleted = changes
+    .filter((change) => change.kind === "deleted")
+    .map((change) => change.from);
   return {
     relativized,
     reanchored,

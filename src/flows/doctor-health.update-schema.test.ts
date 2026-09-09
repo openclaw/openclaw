@@ -25,6 +25,15 @@ const { mocks } = await import("./doctor-health.test-support.js");
 function setSchemaVersion(databasePath: string, version: number): void {
   const db = new DatabaseSync(databasePath);
   try {
+    if (
+      version === 16 &&
+      db.prepare("SELECT role FROM schema_meta WHERE meta_key = 'primary'").get()?.role === "global"
+    ) {
+      db.exec(`CREATE TABLE session_groups (
+        name TEXT NOT NULL PRIMARY KEY, position INTEGER NOT NULL,
+        created_at INTEGER NOT NULL, cwd TEXT, worktree INTEGER
+      ) STRICT;`);
+    }
     db.exec(`PRAGMA user_version = ${version};`);
     db.prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'").run(version);
   } finally {
@@ -117,20 +126,20 @@ describe("Doctor schema bumps under an updating parent", () => {
   );
 
   it.each([
-    { ledger: "running", update: "1", driver: "2026.9.2", bump: true, deferred: true },
-    { ledger: "running", update: "1", driver: "2026.9.2-rebuild.1", bump: true, deferred: true },
+    { ledger: "running", update: "1", driver: "2026.9.2", bump: true, refused: true },
+    { ledger: "running", update: "1", driver: "2026.9.2-rebuild.1", bump: true, refused: true },
     { ledger: "missing", update: "1", driver: "2026.9.1", bump: true },
-    { ledger: "finished", update: "1", driver: "2026.9.2", bump: true, deferred: true },
+    { ledger: "finished", update: "1", driver: "2026.9.2", bump: true, refused: true },
     { ledger: "running", update: "1", driver: "2026.9.3", bump: true },
     { ledger: "running", update: "1", driver: "2026.9.3-beta.1", bump: true },
     { ledger: "running", update: "1", driver: "2026.10.0", bump: true },
     { ledger: "running", update: "1", driver: "2026.9.1", bump: true },
     { ledger: "running", update: "1", driver: "unknown", bump: true },
     { ledger: "running", update: "1", driver: "2026.9.2", bump: false },
-    { ledger: "running", update: undefined, driver: "2026.9.2", bump: true, deferred: true },
+    { ledger: "running", update: undefined, driver: "2026.9.2", bump: true, refused: true },
   ])(
-    "completes real migration when permitted: %j",
-    async ({ ledger, update, driver, bump, deferred }) => {
+    "preserves immediate retirement publication across updater states: %j",
+    async ({ ledger, update, driver, bump, refused }) => {
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update);
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const shared = openOpenClawStateDatabase({ env: state.env }).path;
@@ -155,22 +164,69 @@ describe("Doctor schema bumps under an updating parent", () => {
           expect(result.warnings).toEqual([]);
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        const before = readDatabase(shared);
+        if (refused) {
+          await expect(
+            runDoctorHealthFlow(runtime, {
+              repair: true,
+              nonInteractive: true,
+            }),
+          ).rejects.toMatchObject({ code: "update-schema-bump-unfenced", updaterVersion: driver });
+          expect(readDatabase(shared)).toEqual(before);
+          const preserved = new DatabaseSync(shared, { readOnly: true });
+          try {
+            expect(tableExists(preserved, "session_groups")).toBe(true);
+          } finally {
+            preserved.close();
+          }
+          expect(mocks.runContributions).not.toHaveBeenCalled();
+          return;
+        }
         await runDoctorHealthFlow(runtime, {
           repair: true,
           nonInteractive: true,
         });
-        expect(readDatabase(shared).version).toBe(
-          OPENCLAW_STATE_SCHEMA_VERSION - (deferred ? 1 : 0),
-        );
-        if (deferred) {
-          expect(readDatabase(shared).contentVersion).toBe(String(OPENCLAW_STATE_SCHEMA_VERSION));
-          expect(runtime.log).toHaveBeenCalledWith(
-            expect.stringContaining(
-              `Schema content applied; version publication deferred until update run ${run.runId} finishes`,
-            ),
-          );
-        }
+        expect(readDatabase(shared).version).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+      });
+    },
+  );
+
+  it.each([
+    { label: "malformed JSON", raw: "{" },
+    { label: "missing include", raw: JSON.stringify({ $include: "missing-groups-config.json" }) },
+    {
+      label: "unresolved store environment",
+      raw: JSON.stringify({ session: { store: "${OPENCLAW_GROUP_TEST_MISSING_STORE}" } }),
+    },
+  ])(
+    "refuses group migration from $label without consuming its legacy catalog",
+    async ({ raw }) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+      vi.stubEnv("OPENCLAW_GROUP_TEST_MISSING_STORE", undefined);
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const shared = openOpenClawStateDatabase({ env: state.env }).path;
+        closeOpenClawStateDatabaseForTest();
+        setSchemaVersion(shared, 16);
+        const seed = new DatabaseSync(shared);
+        seed.exec("INSERT INTO session_groups VALUES ('Empty', 0, 1, NULL, NULL)");
+        seed.close();
+        fs.writeFileSync(state.configPath, raw);
+        const before = readDatabase(shared);
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+        ).rejects.toThrow(/Cannot migrate session groups/);
+        expect(readDatabase(shared)).toEqual(before);
+        const preserved = new DatabaseSync(shared, { readOnly: true });
+        try {
+          expect(preserved.prepare("SELECT * FROM session_groups").all()).toEqual([
+            { name: "Empty", position: 0, created_at: 1, cwd: null, worktree: null },
+          ]);
+        } finally {
+          preserved.close();
+        }
+        expect(mocks.runContributions).not.toHaveBeenCalled();
       });
     },
   );

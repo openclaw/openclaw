@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  loadStoredCollapsedSessionSections,
+  SidebarSessionSectionState,
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
@@ -156,7 +156,11 @@ describe("sidebar session sort preference", () => {
 
 describe("collapsed sidebar sections preference", () => {
   it("defaults Coding to compact while Online remains expanded", () => {
-    expect([...loadStoredCollapsedSessionSections()]).toEqual(["work"]);
+    const sections = new SidebarSessionSectionState(
+      () => "main",
+      () => {},
+    );
+    expect([...sections.collapsed]).toEqual(["work"]);
   });
 });
 

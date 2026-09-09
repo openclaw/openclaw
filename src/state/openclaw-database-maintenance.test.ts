@@ -266,8 +266,6 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       "worker_session_placement_moves.target_os TEXT",
       "worktrees.run_end_cleanup_json TEXT",
       "device_bootstrap_tokens.setup_id TEXT",
-      "session_groups.cwd TEXT",
-      "session_groups.worktree INTEGER",
       "secret_store_entries.allowed_hosts TEXT",
       "web_push_subscriptions.device_id TEXT",
       "web_push_subscriptions.user_profile_id TEXT",

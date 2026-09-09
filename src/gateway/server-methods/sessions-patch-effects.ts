@@ -62,8 +62,14 @@ export async function publishSessionPatchEffects(params: {
   if (params.targets.length > 0 && typeof category === "string" && category.trim()) {
     // A first-use category is a group-catalog mutation: clients reload the
     // catalog only on reason "groups" (the sessions.groups.* siblings emit it).
-    if (ensureSessionGroupRegistered(category)) {
-      emitSessionsChanged(params.context, { reason: "groups" }, { accessChanged: false });
+    for (const agentId of new Set(params.targets.map(({ target }) => target.targetAgentId))) {
+      if (ensureSessionGroupRegistered(category, agentId)) {
+        emitSessionsChanged(
+          params.context,
+          { reason: "groups", agentId },
+          { accessChanged: false },
+        );
+      }
     }
   }
   if (params.callerCanManageCron && archivedSessionKeys.size > 0) {

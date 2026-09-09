@@ -221,11 +221,16 @@ export function resolveAllAgentSessionStoreTargetsSync(
   cfg: OpenClawConfig,
   params: {
     env?: NodeJS.ProcessEnv;
+    registeredDatabases?: readonly { agentId: string; path: string }[];
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   } = {},
 ): SessionStoreTarget[] {
   const env = params.env ?? process.env;
-  const { configuredTargets, agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
+  const { configuredTargets, agentsRoots } = resolveSessionStoreDiscoveryState(
+    cfg,
+    env,
+    params.registeredDatabases,
+  );
   const realAgentsRoots = new Map<string, string>();
   const getRealAgentsRoot = (agentsRoot: string): string | undefined => {
     const cached = realAgentsRoots.get(agentsRoot);
@@ -290,6 +295,7 @@ export function resolveAllAgentSessionStoreTargetsSync(
     {
       defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
       env,
+      registeredDatabases: params.registeredDatabases,
       onResolvedTarget: params.onResolvedTarget,
     },
   );

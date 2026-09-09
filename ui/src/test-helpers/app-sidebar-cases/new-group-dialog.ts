@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { installDialogPolyfill, submitInputDialog, waitForInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
@@ -12,46 +13,67 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar new group dialog", () => {
-  it("writes a new group catalog before assigning the selection through patchMany", async () => {
-    const restoreDialogPolyfill = installDialogPolyfill();
-    try {
-      const { sidebar, harness } = await mountMultiSelect([
-        "sessions.groups.put",
-        "sessions.patchMany",
-      ]);
-      click(rowLink(sidebar, "agent:main:a"), { altKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { altKey: true });
-      await sidebar.updateComplete;
-      openContextMenu(sidebar, "agent:main:a");
-      await sidebar.updateComplete;
-      const menu = await sessionMenu(sidebar);
-      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
+  it.each([true, false])(
+    "waits for the catalog before creating and assigning a group (available=%s)",
+    async (available) => {
+      const restoreDialogPolyfill = installDialogPolyfill();
+      try {
+        const { sidebar, harness } = await mountMultiSelect([
+          "sessions.groups.put",
+          "sessions.patchMany",
+        ]);
+        const pendingCatalog = createDeferred<Array<{ name: string; position: number }> | null>();
+        const loadCatalog = vi
+          .spyOn(harness.sessions, "groupsLoad")
+          .mockReturnValue(pendingCatalog.promise);
+        click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+        click(rowLink(sidebar, "agent:main:b"), { altKey: true });
+        await sidebar.updateComplete;
+        openContextMenu(sidebar, "agent:main:a");
+        await sidebar.updateComplete;
+        const menu = await sessionMenu(sidebar);
+        menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
 
-      // Opening the owned dialog is inert: nothing reaches the Gateway until a
-      // name is submitted, and the submitted name is trimmed.
-      await waitForInputDialog();
-      expect(harness.groupsPut).not.toHaveBeenCalled();
-      expect(harness.patchMany).not.toHaveBeenCalled();
-      await submitInputDialog("  Projects  ");
+        // Opening the owned dialog is inert: nothing reaches the Gateway until a
+        // name is submitted, and the submitted name is trimmed.
+        await waitForInputDialog();
+        expect(harness.groupsPut).not.toHaveBeenCalled();
+        expect(harness.patchMany).not.toHaveBeenCalled();
+        await submitInputDialog("  Projects  ");
+        await waitForFast(() => expect(loadCatalog).toHaveBeenCalled());
+        expect(harness.groupsPut).not.toHaveBeenCalled();
+        expect(harness.patchMany).not.toHaveBeenCalled();
+        pendingCatalog.resolve(available ? [{ name: "Existing empty", position: 0 }] : null);
+        if (!available) {
+          await waitForFast(() =>
+            expect(
+              document.querySelector('openclaw-modal-dialog [role="alert"]')?.textContent,
+            ).toContain("Refresh and try again"),
+          );
+          expect(harness.groupsPut).not.toHaveBeenCalled();
+          expect(harness.patchMany).not.toHaveBeenCalled();
+          return;
+        }
 
-      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
-      expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]);
-      expect(harness.patchMany).toHaveBeenCalledWith(
-        [
-          { key: "agent:main:a", agentId: "main", expectedSessionId: "session:agent:main:a" },
-          { key: "agent:main:b", agentId: "main", expectedSessionId: "session:agent:main:b" },
-        ],
-        { category: "Projects" },
-      );
-      expect(harness.groupsPut.mock.invocationCallOrder[0]).toBeLessThan(
-        harness.patchMany.mock.invocationCallOrder[0]!,
-      );
-      expect(harness.patch).not.toHaveBeenCalled();
-      await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    } finally {
-      restoreDialogPolyfill();
-    }
-  });
+        await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
+        expect(harness.groupsPut).toHaveBeenCalledWith(["Existing empty", "Projects"]);
+        expect(harness.patchMany).toHaveBeenCalledWith(
+          [
+            { key: "agent:main:a", agentId: "main", expectedSessionId: "session:agent:main:a" },
+            { key: "agent:main:b", agentId: "main", expectedSessionId: "session:agent:main:b" },
+          ],
+          { category: "Projects" },
+        );
+        expect(harness.groupsPut.mock.invocationCallOrder[0]).toBeLessThan(
+          harness.patchMany.mock.invocationCallOrder[0]!,
+        );
+        expect(harness.patch).not.toHaveBeenCalled();
+        await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
+      } finally {
+        restoreDialogPolyfill();
+      }
+    },
+  );
 
   it("moves captured sessions even when both leave the bounded list mid-write", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();

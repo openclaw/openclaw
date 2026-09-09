@@ -50,7 +50,8 @@ describe("bootstrap routed snapshot prewarm", () => {
     saveSettings(settings);
     persistSessionToken(settings.gatewayUrl, "test-token");
     const record: BootRecord = {
-      version: 2,
+      version: 3,
+      groupsAgentId: "main",
       authMethod: "token",
       credential: "9d17676d",
       scope: gatewayCredentialScope(settings.gatewayUrl),
@@ -132,7 +133,8 @@ describe("warm startup credential binding", () => {
       localStorage.setItem(
         BOOT_RECORD_PREFIX + scope,
         JSON.stringify({
-          version: 2,
+          version: 3,
+          groupsAgentId: "main",
           authMethod,
           credential: "9d17676d",
           savedAt: Date.now(),

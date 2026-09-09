@@ -76,7 +76,15 @@ Loaded child rows stay visible while an expanded or selected parent fetches upda
 
 Session previews are hidden by default for compact, single-line rows. Enable **Show message preview** in the **Sessions** filter menu to restore routine status text and message previews. The browser remembers your choice. Errors and requests for attention remain visible with previews off.
 
-Enable **Hide empty groups** in the same menu to hide custom groups with no sessions in the current sidebar view. It is off by default, and the browser remembers your choice. Collapsed groups with sessions stay visible. Hidden groups keep their membership and order and remain available in **Move to group**; turn the setting off to use their headers as drag targets again.
+Custom group names, defaults, and section order follow the selected agent. Two
+agents can have groups with the same name without sharing membership or edits.
+Empty groups belonging to the selected agent remain available as drop targets
+unless a session-owner filter hides them; the
+former **Hide empty groups** preference is retired. Browser-only legacy group
+names are imported into the Gateway's ambient owner only after checking every
+current agent catalog; names already assigned to an agent are not imported again.
+If that scan cannot complete, import waits for a later successful load. Collapse choices become per-agent,
+with the previous choices retained as the initial defaults.
 
 **Mark as unread** creates a reminder that remains unread while the current chat stays open, including while a run streams or completes. Leave and reopen the session, or choose **Mark as read**, to clear it.
 

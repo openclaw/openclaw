@@ -250,6 +250,20 @@ export interface SessionGoalOperations {
   session_key: string;
 }
 
+export interface SessionGroupState {
+  import_fingerprint: string | null;
+  section_order_json: string;
+  singleton: Generated<number>;
+}
+
+export interface SessionGroups {
+  created_at: number;
+  cwd: string | null;
+  name: string;
+  position: number;
+  worktree: number | null;
+}
+
 export interface SessionKeyContract {
   id: Generated<number>;
   main_key: string;
@@ -542,6 +556,8 @@ export interface DB {
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
   session_goal_operations: SessionGoalOperations;
+  session_group_state: SessionGroupState;
+  session_groups: SessionGroups;
   session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;

@@ -124,9 +124,20 @@ struct IOSGatewayChatTransportTests {
 
     private func withSessionTransport(
         unreadAckAdvertisement: Bool? = true,
+        globalAgentID: String? = " Reviewer ",
+        agentSelectionRequired: Bool? = nil,
         _ run: (IOSGatewayChatTransport, RequestRecorder) async throws -> Void) async throws
     {
         let recorder = RequestRecorder()
+        let agentCatalogPayload: String
+        if let agentSelectionRequired {
+            var catalog = try #require(JSONSerialization.jsonObject(
+                with: Data(GatewayWebSocketTestSupport.agentCatalogPayload.utf8)) as? [String: Any])
+            catalog["selectionRequired"] = agentSelectionRequired
+            agentCatalogPayload = String(decoding: try JSONSerialization.data(withJSONObject: catalog), as: UTF8.self)
+        } else {
+            agentCatalogPayload = GatewayWebSocketTestSupport.agentCatalogPayload
+        }
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                 guard sendIndex > 0 else { return }
@@ -137,8 +148,11 @@ struct IOSGatewayChatTransportTests {
                 }
                 let request = try await recorder.record(data)
                 let payload = switch request.method {
-                case "agents.list": GatewayWebSocketTestSupport.agentCatalogPayload
+                case "agents.list": agentCatalogPayload
                 case "sessions.create": #"{"key":"forked"}"#
+                case "sessions.groups.list": #"{"groups":[{"name":"Projects","position":0}]}"#
+                case "sessions.groups.put", "sessions.groups.rename", "sessions.groups.delete":
+                    #"{"ok":true,"groups":[],"updatedSessions":0}"#
                 default: #"{"entry":{}}"#
                 }
                 socket.emitReceiveSuccess(.data(Data(
@@ -171,11 +185,118 @@ struct IOSGatewayChatTransportTests {
                 onConnected: {},
                 onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
-            try await run(IOSGatewayChatTransport(gateway: gateway, globalAgentId: " Reviewer "), recorder)
+            try await run(IOSGatewayChatTransport(gateway: gateway, globalAgentId: globalAgentID), recorder)
             await gateway.disconnect()
         } catch {
             await gateway.disconnect()
             throw error
+        }
+    }
+
+    @Test @MainActor
+    func `legacy import waits for default agent and does not rewrite assigned groups`() async throws {
+        let suite = "SessionGroupImport-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["Foreign"], forKey: SessionGroupStore.defaultsKey)
+        try await self.withSessionTransport { transport, recorder in
+            let lease = try #require(await transport.acquireSessionGroupsRouteLease(agentID: "reviewer"))
+            try await SessionGroupStore.importLegacyGroups(
+                using: lease, gatewayID: "gateway-test", agentID: "reviewer", resolveLegacyOwner: { nil },
+                existingCatalogNames: {
+                    Issue.record("Unresolved ambient ownership must preserve legacy groups")
+                    return []
+                }, defaults: defaults)
+            #expect(defaults.string(forKey: "openclaw:sessions:custom-groups:imported-owner") == nil)
+            try await SessionGroupStore.importLegacyGroups(
+                using: lease, gatewayID: "gateway-test", agentID: "builder", resolveLegacyOwner: { "reviewer" },
+                existingCatalogNames: {
+                    Issue.record("Nondefault agent must not start legacy import")
+                    return []
+                }, defaults: defaults)
+            try await SessionGroupStore.importLegacyGroups(
+                using: lease, gatewayID: "gateway-test", agentID: "reviewer", resolveLegacyOwner: { "reviewer" },
+                existingCatalogNames: { ["Foreign"] }, defaults: defaults)
+            #expect(await recorder.all().isEmpty)
+        }
+    }
+
+    @Test @MainActor
+    func `legacy group import preserves orphan empties without copying another agent catalog`() async throws {
+        let suite = "SessionGroupImport-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["Foreign", "Empty"], forKey: SessionGroupStore.defaultsKey)
+        try await self.withSessionTransport { transport, recorder in
+            let lease = try #require(await transport.acquireSessionGroupsRouteLease(agentID: "reviewer"))
+            for _ in 0..<2 {
+                try await SessionGroupStore.importLegacyGroups(
+                    using: lease,
+                    gatewayID: "gateway-test",
+                    agentID: "reviewer",
+                    resolveLegacyOwner: { "reviewer" },
+                    existingCatalogNames: { ["Foreign", "Projects"] },
+                    defaults: defaults)
+            }
+            let requests = await recorder.all()
+            #expect(requests.map(\.method) == ["sessions.groups.list", "sessions.groups.put"])
+            #expect(requests[1].params["names"]?.value as? [String] == ["Projects", "Empty"])
+            #expect(SessionGroupStore.load(defaults: defaults) == ["Foreign", "Empty"])
+        }
+    }
+
+    @Test(arguments: [
+        ("builder", " Reviewer ", "builder", false),
+        (nil, " Reviewer ", "reviewer", false),
+        (nil, nil, "system", true),
+    ] as [(String?, String?, String, Bool)])
+    func `group lease resolves one owner and refuses a disconnected route`(
+        requestedAgentID: String?,
+        globalAgentID: String?,
+        expectedOwner: String,
+        resolvesDefault: Bool) async throws
+    {
+        try await self.withSessionTransport(globalAgentID: globalAgentID) { transport, recorder in
+            let lease = try #require(await transport.acquireSessionGroupsRouteLease(agentID: requestedAgentID))
+            let groups = try #require(try await lease.listGroups())
+            #expect(groups.groups.map(\.name) == ["Projects"])
+            _ = try await lease.putGroups(names: ["Projects", "Empty"])
+            _ = try await lease.renameGroup(name: "Projects", to: "Work")
+            _ = try await lease.deleteGroup(name: "Work")
+            await transport.gateway.disconnect()
+            await #expect(throws: Error.self) {
+                _ = try await lease.deleteGroup(name: "Projects")
+            }
+            let requests = await recorder.all()
+            #expect(requests.map(\.method) == (resolvesDefault ? ["agents.list"] : []) + [
+                "sessions.groups.list", "sessions.groups.put", "sessions.groups.rename", "sessions.groups.delete",
+            ])
+            let groupRequests = requests.filter { $0.method != "agents.list" }
+            #expect(groupRequests.allSatisfy { $0.params["agentId"]?.value as? String == expectedOwner })
+            #expect(groupRequests[1].params["names"]?.value as? [String] == ["Projects", "Empty"])
+            #expect(groupRequests[2].params["name"]?.value as? String == "Projects")
+            #expect(groupRequests[2].params["to"]?.value as? String == "Work")
+        }
+    }
+
+    @Test(arguments: [nil, "builder"] as [String?])
+    func `group lease requires selection without rejecting an explicit owner`(agentID: String?) async throws {
+        try await self.withSessionTransport(
+            globalAgentID: nil,
+            agentSelectionRequired: true)
+        { transport, recorder in
+            let lease = await transport.acquireSessionGroupsRouteLease(agentID: agentID)
+            if let agentID {
+                let selectedLease = try #require(lease)
+                _ = try await selectedLease.listGroups()
+                let requests = await recorder.all()
+                #expect(requests.map(\.method) == ["sessions.groups.list"])
+                #expect(requests.first?.params["agentId"]?.value as? String == agentID)
+            } else {
+                #expect(lease == nil)
+                let requests = await recorder.all()
+                #expect(requests.map(\.method) == ["agents.list"])
+            }
         }
     }
 

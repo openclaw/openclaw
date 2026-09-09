@@ -5,16 +5,17 @@ import { sessionLog } from "./sessions-shared.js";
 
 export function registerCreatedSessionCategory(
   category: string | undefined,
+  agentId: string,
   context: Parameters<typeof emitSessionsChanged>[0],
 ): void {
   if (!category) {
     return;
   }
   try {
-    if (ensureSessionGroupRegistered(category)) {
+    if (ensureSessionGroupRegistered(category, agentId)) {
       // Catalog bookkeeping follows the authoritative session commit and has
       // its own invalidation. Its failure must not make a durable create ambiguous.
-      emitSessionsChanged(context, { reason: "groups" });
+      emitSessionsChanged(context, { reason: "groups", agentId });
     }
   } catch (error) {
     sessionLog.warn(`failed to register created session category: ${formatErrorMessage(error)}`);

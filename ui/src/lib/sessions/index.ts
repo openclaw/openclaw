@@ -28,7 +28,10 @@ import {
 import { createSessionMutations } from "./session-mutations.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
 import { sessionRetryDelayMs } from "./session-retry.ts";
-import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
+import {
+  createInitialSessionState,
+  createSessionRosterCacheLifecycle,
+} from "./session-roster-cache-lifecycle.ts";
 import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
@@ -76,17 +79,7 @@ export function createSessionCapability(
   agentSelection: SessionAgentSelection,
   cacheOptions: SessionRosterCacheOptions = {},
 ): SessionCapability {
-  let state: SessionState = {
-    result: null,
-    agentId: null,
-    modelOverrides: {},
-    loading: false,
-    error: null,
-    deletedSessions: [],
-    groups: cacheOptions.bootRecord?.groups.map((group) => group.name) ?? [],
-    groupSettings: cacheOptions.bootRecord?.groups ?? [],
-    sectionOrder: cacheOptions.bootRecord?.sectionOrder ?? [],
-  };
+  let state = createInitialSessionState(agentSelection.state.selectedId, cacheOptions);
   const cacheLifecycle = createSessionRosterCacheLifecycle(gateway, agentSelection, cacheOptions, {
     readState: () => state,
     publish: (next) => publish(next),
@@ -225,6 +218,8 @@ export function createSessionCapability(
 
   const groups = createSessionGroupCatalog({
     connection,
+    agentId: () =>
+      normalizeAgentId(selectedAgentId ?? resolveUiSelectedGlobalAgentId(gateway.snapshot)),
     snapshot: () => gateway.snapshot,
     readState: () => state,
     publish,
@@ -564,6 +559,8 @@ export function createSessionCapability(
       return;
     }
     selectedAgentId = nextAgentId;
+    groups.reset();
+    void groups.load();
     // Selection publishes before Gateway hydration. A new connection bootstraps
     // the current selection; route changes on a hydrated connection replace its roster.
     if (nextAgentId && hydratedClient === gateway.snapshot.client) {
@@ -700,6 +697,7 @@ export function createSessionCapability(
     switchBranch: operations.switchBranch,
     groupsLoad: groups.load,
     groupsGeneration: groups.generation,
+    groupsAgentGeneration: groups.agentGeneration,
     groupsStatus: groups.status,
     groupsInvalidate: groups.invalidate,
     groupsPut: groups.put,

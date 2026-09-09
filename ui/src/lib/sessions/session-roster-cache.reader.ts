@@ -46,7 +46,7 @@ function isRosterQuery(value: unknown): value is SessionListOptions {
 function isSessionRosterRecord(value: unknown): value is SessionRosterRecord {
   return (
     isRecord(value) &&
-    value.version === 1 &&
+    value.version === 2 &&
     typeof value.scope === "string" &&
     value.scope.length > 0 &&
     typeof value.savedAt === "number" &&
@@ -285,6 +285,7 @@ export async function hydrateSessionRoster(
     ...host.readState(),
     result: record.result,
     agentId: record.agentId,
+    groupsAgentId: record.agentId,
     groups: record.groups,
     groupSettings: record.groupSettings,
     sectionOrder: record.sectionOrder,

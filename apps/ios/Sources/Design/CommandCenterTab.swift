@@ -519,9 +519,7 @@ struct CommandCenterTab: View {
     }
 
     private var sessionCategories: [String] {
-        CommandSessionGrouping.categories(
-            from: self.effectiveRecentChatSessions,
-            knownGroups: SessionGroupStore.load())
+        self.dashboardModel.sessionGroups(appModel: self.appModel).map(\.name)
     }
 
     private var effectiveDefaultChatSessionEntry: OpenClawChatSessionEntry? {
@@ -827,14 +825,29 @@ struct CommandSessionsScreen: View {
         case create
     }
 
-    /// Group mutations need the full session store, not a recency window.
-    private static let groupMemberFetchLimit = 10000
-
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
     @State private var loadErrorText: String?
+    @State private var groupOperationID = UUID()
+    @State private var groupOperationError: (identity: String, message: String)?
     @State private var showArchived = false
-    @State private var knownGroups = SessionGroupStore.load()
+    @State private var loadedGroups: [String] = []
+    @State private var groupsIdentity: String?
+    @State private var refreshGeneration = 0
+    @State private var groupRouteLease: OpenClawChatSessionGroupsRouteLease?
+    @State private var groupRouteIdentity: String?
+    @State private var groupRouteGeneration: Int?
+
+    private var sessionErrorText: String? {
+        if let error = self.groupOperationError, error.identity == self.appModel.chatViewModelIdentityID {
+            return error.message
+        }
+        return self.loadErrorText
+    }
+
+    private var knownGroups: [String] {
+        self.groupsIdentity == self.appModel.chatViewModelIdentityID ? self.loadedGroups : []
+    }
     @State private var groupEditor: GroupEditor?
     @State private var groupDraftText = ""
     @State private var groupPendingDelete: String?
@@ -871,7 +884,16 @@ struct CommandSessionsScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
         .task(id: self.refreshID) {
+            self.groupOperationID = UUID()
+            self.groupOperationError = nil
+            let events = await self.appModel.makeChatTransport().events()
             await self.refreshSessions()
+            for await event in events {
+                guard !Task.isCancelled else { return }
+                if case let .sessionsChanged(change) = event, change.reason == "groups" {
+                    await self.refreshSessions()
+                }
+            }
         }
         .alert(self.groupEditorTitle, isPresented: self.groupEditorBinding) {
             TextField("Group name", text: self.$groupDraftText)
@@ -957,14 +979,15 @@ struct CommandSessionsScreen: View {
                 .padding(.top, 10)
                 .padding(.bottom, 3)
 
-                if let loadErrorText {
+                if let loadErrorText = self.sessionErrorText {
                     CommandEmptyStateRow(
                         icon: "exclamationmark.triangle.fill",
                         title: "Sessions unavailable",
                         detail: .verbatim(loadErrorText))
                         .padding(.horizontal, 10)
                         .padding(.bottom, 10)
-                } else if self.visibleSessions.isEmpty {
+                }
+                if self.visibleSessions.isEmpty, self.sessionErrorText == nil {
                     CommandEmptyStateRow(
                         icon: self.appModel
                             .isCommandSessionListAvailable ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
@@ -975,7 +998,7 @@ struct CommandSessionsScreen: View {
                             : String(localized: "Connect to the gateway.")))
                         .padding(.horizontal, 10)
                         .padding(.bottom, 10)
-                } else {
+                } else if !self.visibleSessions.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(self.sessionSections) { section in
                             VStack(alignment: .leading, spacing: 6) {
@@ -1025,7 +1048,7 @@ struct CommandSessionsScreen: View {
     }
 
     private var sessionCategories: [String] {
-        CommandSessionGrouping.categories(from: self.sessions, knownGroups: self.knownGroups)
+        self.knownGroups
     }
 
     private var sessionControlsAvailable: Bool {
@@ -1071,21 +1094,19 @@ struct CommandSessionsScreen: View {
     @ViewBuilder
     private func groupMenu(for group: String) -> some View {
         Button {
-            self.groupDraftText = group
-            self.groupEditor = .rename(group)
+            self.beginGroupEditor(.rename(group))
         } label: {
             Label("Rename Group…", systemImage: "pencil")
                 .font(OpenClawType.subhead)
         }
         Button {
-            self.groupDraftText = ""
-            self.groupEditor = .create
+            self.beginGroupEditor(.create)
         } label: {
             Label("New Group…", systemImage: "folder.badge.plus")
                 .font(OpenClawType.subhead)
         }
         Button(role: .destructive) {
-            self.groupPendingDelete = group
+            self.captureGroupRoute { self.groupPendingDelete = group }
         } label: {
             Label("Delete Group…", systemImage: "trash")
                 .font(OpenClawType.subhead)
@@ -1110,72 +1131,110 @@ struct CommandSessionsScreen: View {
             set: { if !$0 { self.groupPendingDelete = nil } })
     }
 
+    private func captureGroupRoute(_ present: @escaping () -> Void) {
+        let identity = self.appModel.chatViewModelIdentityID
+        let generation = self.refreshGeneration
+        let agentID = self.appModel.chatDeliveryAgentId
+        let transport = self.appModel.makeChatTransport()
+        Task {
+            let lease = await transport.acquireSessionGroupsRouteLease(agentID: agentID)
+            guard generation == self.refreshGeneration,
+                  identity == self.appModel.chatViewModelIdentityID else { return }
+            guard let lease else {
+                self.loadErrorText = "Reconnect to the gateway to manage groups."
+                return
+            }
+            self.groupRouteLease = lease
+            self.groupRouteIdentity = identity
+            self.groupRouteGeneration = generation
+            present()
+        }
+    }
+
+    private func beginGroupEditor(_ editor: GroupEditor) {
+        self.captureGroupRoute {
+            if case let .rename(name) = editor {
+                self.groupDraftText = name
+            } else {
+                self.groupDraftText = ""
+            }
+            self.groupEditor = editor
+        }
+    }
+
     private func commitGroupEditor() {
         let editor = self.groupEditor
         self.groupEditor = nil
         let name = self.groupDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        switch editor {
-        case let .rename(group):
-            guard name != group else { return }
-            self.updateStoredGroups { SessionGroupStore.renaming($0, from: group, to: name) }
-            self.patchGroupMembers(group, category: name)
-        case .create:
-            // Header-created groups start empty: stored-list only, no patches.
-            self.updateStoredGroups { SessionGroupStore.adding($0, name) }
-        case nil:
-            break
+        let identity = self.appModel.chatViewModelIdentityID
+        let generation = self.refreshGeneration
+        self.performGroupMutation { lease in
+            switch editor {
+            case let .rename(group):
+                return try await lease.renameGroup(name: group, to: name)
+            case .create:
+                guard let current = try await lease.listGroups() else {
+                    throw OpenClawChatTransportSendError.notDispatched
+                }
+                guard generation == self.refreshGeneration,
+                      identity == self.appModel.chatViewModelIdentityID
+                else { throw CancellationError() }
+                return try await lease.putGroups(names: SessionGroupStore.adding(current.groups.map(\.name), name))
+            case nil:
+                throw CancellationError()
+            }
         }
     }
 
     private func deleteGroup(_ group: String) {
         self.groupPendingDelete = nil
-        self.updateStoredGroups { SessionGroupStore.removing($0, group) }
-        self.patchGroupMembers(group, category: nil)
+        self.performGroupMutation { lease in
+            try await lease.deleteGroup(name: group)
+        }
     }
 
-    private func updateStoredGroups(_ transform: ([String]) -> [String]) {
-        let updated = transform(SessionGroupStore.load())
-        SessionGroupStore.save(updated)
-        self.knownGroups = updated
-    }
-
-    /// Reassigns (or clears, when `category` is nil) every member of `group`.
-    private func patchGroupMembers(_ group: String, category: String?) {
-        self.performMutation { transport in
-            // Enumerate every member, not the windowed visible list: archived
-            // members must follow a rename so restores land in the new group.
-            // The gateway defaults an absent `limit` to 100 rows, so ask for
-            // an explicitly high limit to cover the whole store.
-            let active = try await transport.listSessions(
-                limit: Self.groupMemberFetchLimit,
-                archived: false)
-            let archived = try await transport.listSessions(
-                limit: Self.groupMemberFetchLimit,
-                archived: true)
-            let members = CommandSessionGrouping.members(
-                of: group,
-                in: [active.sessions, archived.sessions])
-            // Best effort: one failed patch must not abandon the rest of the
-            // group; the first error still surfaces via performMutation.
-            var firstError: (any Error)?
-            for member in members {
-                do {
-                    try await transport.patchSession(
-                        key: member.key,
-                        expectedSessionID: nil,
-                        label: nil,
-                        category: .some(category),
-                        color: nil,
-                        pinned: nil,
-                        archived: nil,
-                        unread: nil)
-                } catch {
-                    firstError = firstError ?? error
+    private func performGroupMutation(
+        _ operation: @escaping (OpenClawChatSessionGroupsRouteLease) async throws -> OpenClawChatSessionGroupsMutationResponse)
+    {
+        guard let lease = self.groupRouteLease,
+              let identity = self.groupRouteIdentity,
+              let generation = self.groupRouteGeneration,
+              generation == self.refreshGeneration,
+              identity == self.appModel.chatViewModelIdentityID else {
+            self.loadErrorText = "The active agent or gateway changed. Open the group action again."
+            return
+        }
+        self.groupRouteLease = nil
+        self.groupRouteIdentity = nil
+        self.groupRouteGeneration = nil
+        let operationID = UUID()
+        self.groupOperationID = operationID
+        self.groupOperationError = nil
+        Task {
+            guard operationID == self.groupOperationID,
+                  generation == self.refreshGeneration,
+                  identity == self.appModel.chatViewModelIdentityID else { return }
+            do {
+                let result = try await operation(lease)
+                guard operationID == self.groupOperationID,
+                      identity == self.appModel.chatViewModelIdentityID else { return }
+                if generation == self.refreshGeneration {
+                    self.loadedGroups = result.groups.map(\.name)
+                    self.groupsIdentity = identity
                 }
-            }
-            if let firstError {
-                throw firstError
+                // Group events reconcile the roster even when this operation fails.
+                // Its outcome belongs to the operation, not that refresh generation.
+                if !result.ok {
+                    self.groupOperationError = (
+                        identity,
+                        "The group change was only partly completed. Refresh and try again.")
+                }
+                await self.refreshSessions()
+            } catch {
+                guard operationID == self.groupOperationID,
+                      identity == self.appModel.chatViewModelIdentityID else { return }
+                self.groupOperationError = (identity, error.localizedDescription)
             }
         }
     }
@@ -1294,28 +1353,46 @@ struct CommandSessionsScreen: View {
     }
 
     private func refreshSessions() async {
-        // Pick up groups stored by other surfaces (for example the per-session
-        // New Group editor) alongside the fresh session list.
-        self.knownGroups = SessionGroupStore.load()
+        self.refreshGeneration &+= 1
+        let generation = self.refreshGeneration
+        let identity = self.appModel.chatViewModelIdentityID
+        self.loadedGroups = []
+        self.groupsIdentity = identity
+        self.sessions = []
         let requestsArchived = self.showArchived
         let sourceGatewayID = self.appModel.chatTranscriptCacheGatewayID
         let sourceAgentID = self.appModel.chatDeliveryAgentId
         self.isLoading = true
         self.loadErrorText = nil
-        defer { self.isLoading = false }
+        defer { if generation == self.refreshGeneration { self.isLoading = false } }
+
+        async let loadedGroups = self.appModel.loadSessionGroups()
 
         do {
             let roster = try await self.appModel.loadChatSessionRoster(
                 limit: CommandCenterTab.recentSessionsFetchLimit,
                 archived: requestsArchived)
-            guard requestsArchived == self.showArchived else { return }
+            guard generation == self.refreshGeneration, identity == self.appModel.chatViewModelIdentityID,
+                  requestsArchived == self.showArchived else { return }
             self.sessions = roster.sessions
         } catch {
-            guard requestsArchived == self.showArchived else { return }
-            self.sessions = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
+            guard generation == self.refreshGeneration, identity == self.appModel.chatViewModelIdentityID,
+                  requestsArchived == self.showArchived else { return }
+            let cached = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
                 gatewayID: sourceGatewayID,
                 agentID: sourceAgentID)
+            guard generation == self.refreshGeneration, identity == self.appModel.chatViewModelIdentityID,
+                  requestsArchived == self.showArchived else { return }
+            self.sessions = cached
             self.loadErrorText = self.sessions.isEmpty ? "Try again after the gateway reconnects." : nil
+        }
+        do {
+            let groups = try await loadedGroups
+            guard generation == self.refreshGeneration, identity == self.appModel.chatViewModelIdentityID else { return }
+            self.loadedGroups = groups.map(\.name)
+        } catch {
+            guard generation == self.refreshGeneration, identity == self.appModel.chatViewModelIdentityID else { return }
+            self.loadErrorText = error.localizedDescription
         }
     }
 }

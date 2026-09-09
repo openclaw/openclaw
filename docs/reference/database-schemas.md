@@ -9,16 +9,35 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in a global SQLite database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in a global SQLite database and agent data in one SQLite database per agent. Schema migrations run forward. Relocating session groups requires offline `openclaw doctor --fix` before runtime opens. Older OpenClaw builds refuse databases written by a newer schema.
 
 ## Database layout
 
-| Scope                | Default path                                               | Contents                                                                                              |
-| -------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
-| Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
+| Scope                | Default path                                               | Contents                                                                                                            |
+| -------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state                           |
+| Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, session groups and sidebar order, transcripts, memory indexes, auth state, and agent-scoped runtime state |
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
+
+### Session groups
+
+Custom session groups and sidebar order belong to the canonical agent database,
+even when `session.store` places session records in a different SQLite store.
+`session_groups` uses the group name as its primary key and retains position,
+creation time, working-directory defaults, and worktree defaults.
+`session_group_state` contains the sidebar section order and Doctor import
+fingerprint. Both tables are declared in the canonical agent schema and ensured
+idempotently on first use; the agent schema remains 19.
+
+Membership remains the name in `SessionEntry.category`, inside the canonical
+session entry JSON. Rename and delete update only that agent's member sessions,
+including sessions in configured stores shared by multiple logical agents.
+Names are unique within an agent; two agents can use the same name independently.
+Group identifiers are not stable across renames.
+
+See [State schema 17](#state-schema-17) for the required migration from the
+former global catalog.
 
 ### Plugin state listing index
 
@@ -365,7 +384,18 @@ the marker, including the schema-16 Skill Workshop rebuild; it does not infer
 completion from table shape or repeat the rebuild. This requires no new table,
 configuration option, or environment override.
 
-Current content is ready for readers even while its version is unpublished.
+Session-group retirement in [state schema 17](#state-schema-17) is an exception:
+Doctor refuses this migration while a recognized older updater still requires
+the shared ledger. Removing the global catalog cannot use deferred publication
+because the old runtime expects that table. Stop the older updater and wait for its existing ledger publication deadline
+to clear before retrying `openclaw doctor --fix` from the compatible installation.
+A newer updater run does not hide an older pending run; Doctor refuses retirement
+while schema 17 publication would be deferred. This check also applies to manual
+Doctor runs. A terminal ledger entry without a finish timestamp has no deadline;
+resolve the reported unfinished ledger state before retrying.
+
+For migrations eligible for deferred publication, current content is ready for
+readers even while its version is unpublished.
 Ordinary CLI commands can run alongside the Gateway throughout this window;
 publication alone does not trigger schema repair or require stopping the Gateway.
 
@@ -751,6 +781,46 @@ Normal admission remains bounded at 32 identities. Same-store alias repair sums 
 | 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
 | 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
 | 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
+| 17      | Session-group catalog and sidebar order move to canonical per-agent databases; Doctor verifies the copy before retiring the global catalog                                                                                                                                                                                      | Unreleased          |
+
+### State schema 17
+
+Schema 17 retires global `session_groups` and the `sidebar.sectionOrder`
+machine-state row. Runtime never reads or writes the old catalog. Existing
+pre-17 state requires offline `openclaw doctor --fix`; ordinary database opens
+refuse until this migration completes.
+
+Doctor copies each group to every agent with a session in that category. Groups
+without sessions go to the ambient system owner (`agents.defaults.systemAgent.agentId`,
+with the existing legacy or sole-agent fallback). A fleet without an ambient owner
+must configure one before migrating empty groups. It preserves group names,
+positions, creation timestamps, defaults, and each destination's applicable
+section order. Session entries are not rewritten by this migration, so membership,
+pinning, and recency stay intact. Categories referenced by sessions but absent
+from the old catalog become groups in their owning agents.
+Pending legacy session JSON imports contribute membership using the session
+importer's ownership and winner rules. Doctor verifies their source bytes before
+cutover; the ordinary session import runs afterward.
+
+The copy records an import fingerprint in each destination and checks the source
+again before cutover. Doctor verifies destination row counts, complete group
+content, order, and receipts before dropping the global table and publishing 17.
+An interrupted copy can be retried; a completed migration does not reimport groups
+later deleted by the user. An unavailable source, conflicting destination, or
+unknown schema dependency blocks retirement and leaves the global source intact.
+
+Back up the shared database and all agent databases before upgrading. Builds
+supporting shared schema 16 or earlier refuse schema 17; lowering version markers
+does not restore the removed catalog. Group data remains in the canonical agent
+databases, but older clients cannot use it through the former global API. Restore
+a complete, verified pre-upgrade backup with its matching build when downgrading.
+See [Downgrade recovery](#downgrade-recovery).
+
+This material ownership and schema change follows the
+[session-group design work](https://github.com/openclaw/openclaw/issues/142226)
+and the [material-change checkpoint](#review-checkpoint-for-material-changes).
+The approved scope is limited to verified Doctor retirement of the global
+catalog. Agent schema 19 and protocol version 4 remain unchanged.
 
 ### State schema 16
 

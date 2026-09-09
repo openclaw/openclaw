@@ -269,36 +269,43 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: timeoutMs)
     }
 
-    public static func sessionGroupsList() -> OpenClawChatGatewayRequest {
-        OpenClawChatGatewayRequest(
+    public static func sessionGroupsList(agentID: String?) -> OpenClawChatGatewayRequest {
+        var params: [String: AnyCodable] = [:]
+        if let agentID = normalized(agentID) { params["agentId"] = AnyCodable(agentID) }
+        return OpenClawChatGatewayRequest(
             method: "sessions.groups.list",
+            params: params,
             timeoutMs: self.defaultTimeoutMs)
     }
 
-    public static func sessionGroupsPut(names: [String]) -> OpenClawChatGatewayRequest {
-        OpenClawChatGatewayRequest(
+    public static func sessionGroupsPut(names: [String], agentID: String?) -> OpenClawChatGatewayRequest {
+        var params: [String: AnyCodable] = ["names": AnyCodable(names)]
+        if let agentID = normalized(agentID) { params["agentId"] = AnyCodable(agentID) }
+        return OpenClawChatGatewayRequest(
             method: "sessions.groups.put",
-            params: ["names": AnyCodable(names)],
+            params: params,
             timeoutMs: self.mutationTimeoutMs)
     }
 
     public static func sessionGroupsRename(
         name: String,
-        to: String) -> OpenClawChatGatewayRequest
+        to: String,
+        agentID: String?) -> OpenClawChatGatewayRequest
     {
-        OpenClawChatGatewayRequest(
+        var params: [String: AnyCodable] = ["name": AnyCodable(name), "to": AnyCodable(to)]
+        if let agentID = normalized(agentID) { params["agentId"] = AnyCodable(agentID) }
+        return OpenClawChatGatewayRequest(
             method: "sessions.groups.rename",
-            params: [
-                "name": AnyCodable(name),
-                "to": AnyCodable(to),
-            ],
+            params: params,
             timeoutMs: self.mutationTimeoutMs)
     }
 
-    public static func sessionGroupsDelete(name: String) -> OpenClawChatGatewayRequest {
-        OpenClawChatGatewayRequest(
+    public static func sessionGroupsDelete(name: String, agentID: String?) -> OpenClawChatGatewayRequest {
+        var params: [String: AnyCodable] = ["name": AnyCodable(name)]
+        if let agentID = normalized(agentID) { params["agentId"] = AnyCodable(agentID) }
+        return OpenClawChatGatewayRequest(
             method: "sessions.groups.delete",
-            params: ["name": AnyCodable(name)],
+            params: params,
             timeoutMs: self.mutationTimeoutMs)
     }
 

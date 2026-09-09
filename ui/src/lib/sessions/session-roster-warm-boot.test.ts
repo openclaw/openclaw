@@ -13,7 +13,8 @@ import type { SessionRosterRecord } from "./session-roster-cache.ts";
 const url = "ws://gateway.example.test";
 const scope = gatewayCredentialScope(url);
 const bootRecord: BootRecord = {
-  version: 2,
+  version: 3,
+  groupsAgentId: "main",
   authMethod: "token",
   credential: "9d17676d",
   savedAt: 1,
@@ -25,7 +26,7 @@ const bootRecord: BootRecord = {
 };
 function roster(): SessionRosterRecord {
   return {
-    version: 1,
+    version: 2,
     scope,
     savedAt: Date.now(),
     profileId: "profile-one",

@@ -18,11 +18,9 @@ import {
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import {
-  loadStoredCollapsedSessionSections,
+  SidebarSessionSectionState,
   storeSidebarSessionStatusFilter,
-  storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
-  storeSidebarSessionsHideEmptyGroups,
   storeSidebarSessionsShowCron,
   storeSidebarSessionsShowPreview,
   storeSidebarSessionsShowSystem,
@@ -34,35 +32,35 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
-import type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
+import type * as Organizer from "./session-organizer-controller-types.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 export type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
 
-type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
-type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
-type SessionGroupDefaultsDialogOpener =
-  (typeof import("./session-group-defaults-dialog.ts"))["showSessionGroupDefaultsDialog"];
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
 export class SessionOrganizerController {
-  collapsedSessionSections = loadStoredCollapsedSessionSections();
+  private readonly sectionState = new SidebarSessionSectionState(
+    () => this.host.expandedAgentId(),
+    () => this.host.requestUpdate(),
+  );
+
+  get collapsedSessionSections(): ReadonlySet<string> {
+    return this.sectionState.collapsed;
+  }
   draggingSessionKey: string | null = null;
   draggingSidebarSection: string | null = null;
   sessionDropTarget: string | null = null;
   sidebarSectionDropTarget: SidebarSectionDropTarget | null = null;
   draggingSidebarEntry: string | null = null;
-  sidebarZoneDropTarget: {
-    entry: string;
-    position: "before" | "after";
-  } | null = null;
+  sidebarZoneDropTarget: Organizer.SidebarZoneDropTarget | null = null;
   sessionListRemovalDrop = false;
-  private operationsLoad: Promise<SessionOrganizerOperations> | null = null;
+  private operationsLoad: Promise<Organizer.SessionOrganizerOperations> | null = null;
 
-  constructor(private readonly host: SessionOrganizerControllerHost) {}
+  constructor(private readonly host: Organizer.SessionOrganizerControllerHost) {}
 
   private async loadOperations(
     scope: SidebarSessionMutationScope,
-  ): Promise<SessionOrganizerOperations | null> {
+  ): Promise<Organizer.SessionOrganizerOperations | null> {
     const load = (this.operationsLoad ??= import("./session-organizer-operations.runtime.ts"));
     try {
       return await load;
@@ -392,7 +390,7 @@ export class SessionOrganizerController {
   }
 
   /** A dialog that never opens still owes the operator a visible outcome. */
-  private async loadInputDialog(): Promise<InputDialogOpener | null> {
+  private async loadInputDialog(): Promise<Organizer.InputDialogOpener | null> {
     try {
       return (await import("./input-dialog.ts")).showInputDialog;
     } catch (error) {
@@ -414,13 +412,19 @@ export class SessionOrganizerController {
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
+    const agentGeneration = this.host.sessionGroupAgentGeneration();
+    const agentId = this.host.expandedAgentId();
     const showInputDialog = await this.loadInputDialog();
     await showInputDialog?.({
       title: t("sessionsView.newGroupTitle"),
       label: t("sessionsView.newGroupPrompt"),
       submitLabel: t("sessionsView.newGroupCreate"),
       requireValue: true,
-      submit: (name) => this.writeSessionGroup(name, sessions),
+      submit: async (name) =>
+        agentGeneration === this.host.sessionGroupAgentGeneration() &&
+        agentId === this.host.expandedAgentId()
+          ? this.writeSessionGroup(name, sessions)
+          : t("sessionsView.newGroupStale"),
     });
   }
 
@@ -456,6 +460,8 @@ export class SessionOrganizerController {
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {
+    const agentGeneration = this.host.sessionGroupAgentGeneration();
+    const agentId = this.host.expandedAgentId();
     const showInputDialog = await this.loadInputDialog();
     // requireChange holds the submit closed on the name the group already has,
     // so the only rename that reaches the Gateway is one that changes something.
@@ -466,7 +472,11 @@ export class SessionOrganizerController {
       requireValue: true,
       requireChange: true,
     });
-    if (!next) {
+    if (
+      !next ||
+      agentGeneration !== this.host.sessionGroupAgentGeneration() ||
+      agentId !== this.host.expandedAgentId()
+    ) {
       return;
     }
     const scope = this.host.sessionData.beginSessionMutation();
@@ -505,7 +515,9 @@ export class SessionOrganizerController {
   }
 
   async editSessionGroupDefaults(group: string): Promise<void> {
-    let showDialog: SessionGroupDefaultsDialogOpener;
+    const agentGeneration = this.host.sessionGroupAgentGeneration();
+    const agentId = this.host.expandedAgentId();
+    let showDialog: Organizer.SessionGroupDefaultsDialogOpener;
     try {
       showDialog = (await import("./session-group-defaults-dialog.ts"))
         .showSessionGroupDefaultsDialog;
@@ -514,6 +526,12 @@ export class SessionOrganizerController {
       if (scope) {
         this.host.sessionData.publishSessionMutationError(scope, error);
       }
+      return;
+    }
+    if (
+      agentGeneration !== this.host.sessionGroupAgentGeneration() ||
+      agentId !== this.host.expandedAgentId()
+    ) {
       return;
     }
     const defaults = this.host.sessionGroupDefaults(group);
@@ -525,7 +543,12 @@ export class SessionOrganizerController {
         inspectRepository: (path) => this.host.inspectSessionGroupRepository(path),
         submit: async (nextDefaults) => {
           const scope = this.host.sessionData.beginSessionMutation();
-          if (!scope || !this.host.sessionGroupDefaults(group)) {
+          if (
+            !scope ||
+            agentGeneration !== this.host.sessionGroupAgentGeneration() ||
+            agentId !== this.host.expandedAgentId() ||
+            !this.host.sessionGroupDefaults(group)
+          ) {
             return t("sessionsView.groupDefaultsStale");
           }
           const operations = await this.loadOperations(scope);
@@ -547,23 +570,11 @@ export class SessionOrganizerController {
   }
 
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {
-    this.collapsedSessionSections = new Set(sections);
-    this.host.requestUpdate();
-    try {
-      storeCollapsedSessionSections(sections);
-    } catch {
-      // Group membership and ordering remain usable without local persistence.
-    }
+    this.sectionState.save(sections);
   }
 
   toggleSection(sectionId: string) {
-    const collapsed = new Set(this.collapsedSessionSections);
-    if (collapsed.has(sectionId)) {
-      collapsed.delete(sectionId);
-    } else {
-      collapsed.add(sectionId);
-    }
-    this.saveCollapsedSessionSections(collapsed);
+    this.sectionState.toggle(sectionId);
   }
 
   private async reorderSidebarSection(
@@ -765,14 +776,5 @@ export class SessionOrganizerController {
       // Keep the in-memory preference when storage is unavailable.
     }
     void this.host.sessionData.refreshSidebarSessions();
-  }
-
-  setSessionsHideEmptyGroups(hide: boolean) {
-    this.host.sessionsHideEmptyGroups = hide;
-    try {
-      storeSidebarSessionsHideEmptyGroups(hide);
-    } catch {
-      // Keep the in-memory preference when storage is unavailable.
-    }
   }
 }

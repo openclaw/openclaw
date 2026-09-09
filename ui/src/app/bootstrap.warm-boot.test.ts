@@ -53,7 +53,8 @@ describe("warm boot profile validation", () => {
       window.history.replaceState({}, "", pathname);
       const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
       const record: BootRecord = {
-        version: 2,
+        version: 3,
+        groupsAgentId: "main",
         authMethod: "token",
         credential: "9d17676d",
         scope,

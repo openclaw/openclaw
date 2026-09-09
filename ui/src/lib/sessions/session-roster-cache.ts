@@ -10,7 +10,7 @@ export const SESSION_ROSTER_MAX_BYTES = 1.5 * 1024 * 1024;
 export let sessionRosterCacheGeneration = 0;
 
 export type SessionRosterRecord = {
-  version: 1;
+  version: 2;
   scope: string;
   savedAt: number;
   profileId: string | null;

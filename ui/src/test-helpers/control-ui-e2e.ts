@@ -583,6 +583,11 @@ export type ControlUiMockGatewayScenario = {
   mainSessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
+  sessionGroupsByAgent?: Record<string, string[]>;
+  sessionGroupDefaultsByAgent?: Record<
+    string,
+    Record<string, { cwd?: string; worktree?: boolean }>
+  >;
   /** Optional New Session defaults keyed by custom group name. */
   sessionGroupDefaults?: Record<string, { cwd?: string; worktree?: boolean }>;
   terminalEnabled?: boolean;
@@ -1203,6 +1208,8 @@ function normalizeScenario(
     sessionKey,
     sessionScope: scenario.sessionScope ?? "per-sender",
     sessionGroups: scenario.sessionGroups ?? [],
+    sessionGroupsByAgent: scenario.sessionGroupsByAgent ?? {},
+    sessionGroupDefaultsByAgent: scenario.sessionGroupDefaultsByAgent ?? {},
     sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
     terminalEnabled: scenario.terminalEnabled ?? false,
     cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
@@ -1423,18 +1430,46 @@ function installControlUiMockGateway(
   // sessionStorage so a page reload keeps the catalog the way the real
   // gateway's SQLite store does; renames replay onto static sessions.list
   // fixtures because the real gateway rewrites member categories server-side.
-  const groupsStateKey = "openclaw.control-ui-e2e.sessionGroups";
-  let groupsState: {
+  const groupsStateKey = "openclaw.control-ui-e2e.sessionGroups.perAgent";
+  type MockGroupCatalog = {
     names: string[];
     defaults: Record<string, { cwd?: string; worktree?: boolean }>;
     sectionOrder: string[];
     renames: Array<{ from: string; to: string | null }>;
-  } = {
-    names: [...input.scenario.sessionGroups],
-    defaults: { ...input.scenario.sessionGroupDefaults },
-    sectionOrder: [],
-    renames: [],
   };
+  let groupsByAgent: Record<string, MockGroupCatalog> = {};
+  const fixtureAgentIds = new Set([
+    scenario.defaultAgentId,
+    ...Object.keys(scenario.sessionGroupsByAgent),
+    ...Object.keys(scenario.sessionGroupDefaultsByAgent),
+  ]);
+  const configuredAgents = scenario.methodResponses["agents.list"];
+  if (isRecord(configuredAgents) && Array.isArray(configuredAgents.agents)) {
+    for (const agent of configuredAgents.agents) {
+      if (isRecord(agent) && typeof agent.id === "string") {
+        fixtureAgentIds.add(agent.id);
+      }
+    }
+  }
+  for (const agentId of fixtureAgentIds) {
+    groupsByAgent[agentId] = {
+      names: [
+        ...(scenario.sessionGroupsByAgent[agentId] ??
+          (agentId === scenario.defaultAgentId ? scenario.sessionGroups : [])),
+      ],
+      defaults: {
+        ...(scenario.sessionGroupDefaultsByAgent[agentId] ??
+          (agentId === scenario.defaultAgentId ? scenario.sessionGroupDefaults : {})),
+      },
+      sectionOrder: [],
+      renames: [],
+    };
+  }
+  const catalogForAgent = (agentId: string): MockGroupCatalog =>
+    (groupsByAgent[agentId] ??= { names: [], defaults: {}, sectionOrder: [], renames: [] });
+  const sessionAgentId = (key: unknown, explicitAgentId?: unknown): string =>
+    (typeof key === "string" ? /^agent:([^:]+):/.exec(key)?.[1] : undefined) ??
+    (typeof explicitAgentId === "string" ? explicitAgentId : scenario.defaultAgentId);
   let online = true;
   try {
     online = window.sessionStorage.getItem(offlineStateKey) !== "1";
@@ -1444,9 +1479,7 @@ function installControlUiMockGateway(
   try {
     const rawGroups = window.sessionStorage.getItem(groupsStateKey);
     if (rawGroups) {
-      groupsState = JSON.parse(rawGroups) as typeof groupsState;
-      groupsState.sectionOrder ??= [];
-      groupsState.defaults ??= {};
+      groupsByAgent = JSON.parse(rawGroups) as typeof groupsByAgent;
     }
   } catch {
     // Storage-disabled browser contexts still get the scenario catalog.
@@ -1521,25 +1554,32 @@ function installControlUiMockGateway(
 
   function persistGroupsState(): void {
     try {
-      window.sessionStorage.setItem(groupsStateKey, JSON.stringify(groupsState));
+      window.sessionStorage.setItem(groupsStateKey, JSON.stringify(groupsByAgent));
     } catch {
       // In-memory catalog still serves the current page.
     }
   }
 
-  function groupsPayload(): {
+  function groupsPayload(agentId: string): {
+    agentId: string;
     groups: Array<{ name: string; position: number }>;
     sectionOrder: string[];
   } {
+    const groupsState = catalogForAgent(agentId);
     return {
+      agentId,
       groups: groupsState.names.map((name, position) => ({ name, position })),
       sectionOrder: [...groupsState.sectionOrder],
     };
   }
 
-  function groupDefaultsPayload() {
+  function groupDefaultsPayload(agentId: string) {
+    const groupsState = catalogForAgent(agentId);
     return {
-      defaults: groupsState.names.map((name) => ({ name, ...groupsState.defaults[name] })),
+      agentId,
+      defaults: groupsState.names.map((name) =>
+        Object.assign({ name }, groupsState.defaults[name]),
+      ),
     };
   }
 
@@ -1956,6 +1996,17 @@ function installControlUiMockGateway(
         };
       }
       const result = sessions.patch(params.key, params);
+      if (
+        !("__mockError" in result) &&
+        typeof params.category === "string" &&
+        params.category.trim()
+      ) {
+        const catalog = catalogForAgent(sessionAgentId(params.key, params.agentId));
+        if (!catalog.names.includes(params.category.trim())) {
+          catalog.names.push(params.category.trim());
+          persistGroupsState();
+        }
+      }
       return "__mockError" in result || (isRecord(response) && Object.keys(response).length === 0)
         ? result
         : response;
@@ -2031,7 +2082,7 @@ function installControlUiMockGateway(
       // Replay group renames/deletes over static fixtures: the real gateway
       // rewrites member categories server-side before the next sessions.list.
       let category = typeof next.category === "string" ? next.category : undefined;
-      for (const rename of groupsState.renames) {
+      for (const rename of catalogForAgent(sessionAgentId(next.key, next.agentId)).renames) {
         if (category === rename.from) {
           category = rename.to ?? undefined;
         }
@@ -2118,6 +2169,26 @@ function installControlUiMockGateway(
   }
 
   function buildResponse(method: string, params: unknown): unknown {
+    const explicitGroupAgentId =
+      isRecord(params) && typeof params.agentId === "string"
+        ? params.agentId.trim().toLowerCase()
+        : "";
+    const groupAgentId = explicitGroupAgentId || scenario.defaultAgentId;
+    if (
+      method.startsWith("sessions.groups.") &&
+      method !== "sessions.groups.list" &&
+      method !== "sessions.groups.defaults" &&
+      !explicitGroupAgentId &&
+      fixtureAgentIds.size > 1
+    ) {
+      return {
+        __mockError: {
+          code: "INVALID_REQUEST",
+          message: "agentId is required for group mutations with multiple agents",
+        },
+      };
+    }
+
     if (configState && baseConfigResponse) {
       if (method === "config.get") {
         const configured = configuredResponse(method, params);
@@ -2560,18 +2631,20 @@ function installControlUiMockGateway(
       case "sessions.patchMany":
         return {};
       case "sessions.groups.list":
-        return groupsPayload();
+        return groupsPayload(groupAgentId);
       case "sessions.groups.defaults":
-        return groupDefaultsPayload();
+        return groupDefaultsPayload(groupAgentId);
       case "sessions.groups.put": {
+        const groupsState = catalogForAgent(groupAgentId);
         groupsState.names = normalizedGroupNames(isRecord(params) ? params.names : undefined);
         if (isRecord(params) && Array.isArray(params.sectionOrder)) {
           groupsState.sectionOrder = normalizedGroupNames(params.sectionOrder);
         }
         persistGroupsState();
-        return { ok: true, ...groupsPayload() };
+        return { ok: true, ...groupsPayload(groupAgentId) };
       }
       case "sessions.groups.rename": {
+        const groupsState = catalogForAgent(groupAgentId);
         const from = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
         const to = isRecord(params) && typeof params.to === "string" ? params.to.trim() : "";
         if (from && to && from !== to) {
@@ -2597,9 +2670,10 @@ function installControlUiMockGateway(
           groupsState.renames.push({ from, to });
           persistGroupsState();
         }
-        return { ok: true, updatedSessions: 0, ...groupsPayload() };
+        return { ok: true, updatedSessions: 0, ...groupsPayload(groupAgentId) };
       }
       case "sessions.groups.update": {
+        const groupsState = catalogForAgent(groupAgentId);
         const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
         if (name) {
           const cwd = isRecord(params) && typeof params.cwd === "string" ? params.cwd.trim() : "";
@@ -2609,9 +2683,10 @@ function installControlUiMockGateway(
           };
           persistGroupsState();
         }
-        return { ok: true, ...groupDefaultsPayload() };
+        return { ok: true, ...groupDefaultsPayload(groupAgentId) };
       }
       case "sessions.groups.delete": {
+        const groupsState = catalogForAgent(groupAgentId);
         const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
         if (name) {
           groupsState.names = groupsState.names.filter((existing) => existing !== name);
@@ -2622,7 +2697,7 @@ function installControlUiMockGateway(
           groupsState.renames.push({ from: name, to: null });
           persistGroupsState();
         }
-        return { ok: true, updatedSessions: 0, ...groupsPayload() };
+        return { ok: true, updatedSessions: 0, ...groupsPayload(groupAgentId) };
       }
       case "sessions.subscribe":
         return { subscribed: true };

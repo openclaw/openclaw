@@ -395,12 +395,12 @@ test("sessions.create assigns and registers its requested group", async () => {
   expect(created.ok).toBe(true);
   const key = requireNonEmptyString(created.payload?.key, "grouped session key");
   expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Client work");
-  expect(listSessionGroups().map((group) => group.name)).toContain("Client work");
+  expect(listSessionGroups("main").map((group) => group.name)).toContain("Client work");
   expect(broadcastToConnIds).toHaveBeenCalledWith(
     "sessions.changed",
-    expect.objectContaining({ reason: "groups" }),
+    expect.objectContaining({ reason: "groups", agentId: "main" }),
     new Set(["conn-1"]),
-    { dropIfSlow: true },
+    { agentId: "main", dropIfSlow: true },
   );
 });
 
@@ -1007,7 +1007,7 @@ test("sessions.create registers a category only after the session commit succeed
   );
 
   expect(failed.ok).toBe(false);
-  expect(listSessionGroups().map((group) => group.name)).not.toContain(category);
+  expect(listSessionGroups("main").map((group) => group.name)).not.toContain(category);
 
   const broadcastToConnIds = vi.fn();
   const created = await directSessionReq(
@@ -1022,7 +1022,7 @@ test("sessions.create registers a category only after the session commit succeed
   );
 
   expect(created.ok).toBe(true);
-  expect(listSessionGroups().filter((group) => group.name === category)).toHaveLength(1);
+  expect(listSessionGroups("main").filter((group) => group.name === category)).toHaveLength(1);
   expect(
     broadcastToConnIds.mock.calls.filter(([, payload]) => payload?.reason === "groups"),
   ).toHaveLength(1);
