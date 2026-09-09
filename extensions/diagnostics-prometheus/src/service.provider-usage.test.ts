@@ -142,7 +142,7 @@ describe("diagnostics-prometheus provider usage", () => {
     expectDefined(listeners[0], "initial provider usage listener")(snapshot);
     expect(exporter.render()).toContain("openclaw_provider_usage_used_ratio");
 
-    await exporter.service.stop?.();
+    exporter.service.stop?.();
     await exporter.service.start(context(false));
     expect(releases[0]).toHaveBeenCalledOnce();
     expect(observeProviderUsage).toHaveBeenCalledOnce();
@@ -151,13 +151,13 @@ describe("diagnostics-prometheus provider usage", () => {
     expectDefined(listeners[0], "retired provider usage listener")(snapshot);
     expect(exporter.render()).not.toContain("openclaw_provider_usage_");
 
-    await exporter.service.stop?.();
+    exporter.service.stop?.();
     await exporter.service.start(context(true));
     expect(observeProviderUsage).toHaveBeenCalledTimes(2);
     expectDefined(listeners[1], "replacement provider usage listener")(snapshot);
     expect(exporter.render()).toContain("openclaw_provider_usage_used_ratio");
 
-    await exporter.service.stop?.();
+    exporter.service.stop?.();
     expect(releases[1]).toHaveBeenCalledOnce();
   });
 });
