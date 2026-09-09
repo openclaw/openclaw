@@ -11,6 +11,10 @@ import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/
 import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { isPathInside } from "../infra/path-guards.js";
+import {
+  type HookMappingSignatureResolved,
+  normalizeHookMappingSignature,
+} from "./hooks-signature.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -36,6 +40,8 @@ export type HookMappingResolved = {
   forEach?: string;
   /** Path-scoped request body bound derived from the producer contract (e.g. gog gmail batches). */
   maxBodyBytes?: number;
+  /** Sender signature the path requires instead of the shared hook token. */
+  signature?: HookMappingSignatureResolved;
 };
 
 type HookMappingTransformResolved = {
@@ -329,6 +335,9 @@ function normalizeHookMapping(
         exportName: normalizeOptionalString(mapping.transform.export),
       }
     : undefined;
+  const signature = mapping.signature
+    ? normalizeHookMappingSignature(mapping.signature, id)
+    : undefined;
 
   return {
     id,
@@ -351,6 +360,7 @@ function normalizeHookMapping(
     thinking: mapping.thinking,
     timeoutSeconds: mapping.timeoutSeconds,
     transform,
+    signature,
   };
 }
 

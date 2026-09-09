@@ -69,6 +69,16 @@ export const HookMappingSchema = z
       })
       .strict()
       .optional(),
+    signature: z
+      .object({
+        scheme: z.literal("standard-webhooks"),
+        secret: z
+          .union([z.string().trim().min(1), z.array(z.string().trim().min(1)).min(1)])
+          .register(sensitive),
+        toleranceSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

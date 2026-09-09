@@ -162,29 +162,39 @@ request, including a transform that returns `null`; later mappings are not tried
 Both match predicates must pass when supplied. Omitting them matches any custom
 hook path.
 
-| Mapping field                | Default                     | Contract                                                                                                                                          |
-| ---------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                         | `mapping-<index>`           | Bounded ingress-source attribution for admitted agent actions, not an authenticated principal or invoker.                                         |
-| `match.path`                 | any custom path             | Subpath after `hooks.path`, with leading/trailing slashes removed (`gmail` matches `/hooks/gmail`).                                               |
-| `match.source`               | any source                  | Exact match against the payload's string `source` field.                                                                                          |
-| `action`                     | `"agent"`                   | `"agent"` or `"wake"`.                                                                                                                            |
-| `wakeMode`                   | `"now"`                     | `"now"` or `"next-heartbeat"`; becomes `mode` for wake actions.                                                                                   |
-| `name`                       | `"Hook"` at dispatch        | Templated agent-run label.                                                                                                                        |
-| `agentId`                    | resolved owner              | Static target agent id; subject to effective-agent allowlist.                                                                                     |
-| `sessionKey`                 | default/generated key       | Static or templated logical key; see session policy.                                                                                              |
-| `sessionMode`                | `"isolated"`                | `"isolated"` or `"persistent"` for agent actions.                                                                                                 |
-| `messageTemplate`            | empty                       | Agent input template; the final action must have a nonempty message.                                                                              |
-| `textTemplate`               | empty                       | Wake text template; the final action must have nonempty text. Use trusted notification text, not raw untrusted content.                           |
-| `forEach`                    | unset                       | Top-level payload array key; one action per item, with a 200-item cap. Nested/prototype paths are rejected.                                       |
-| `deliver`                    | `true`                      | Agent announcement policy. Unlike direct `/agent`, mapped delivery may use `"last"` or defer partial targets to the automation delivery resolver. |
-| `channel`                    | `"last"`                    | Registered channel id or `"last"`. Mappings do not expose `accountId`.                                                                            |
-| `to`                         | unset                       | Templated delivery target. Prefer explicit `channel` and `to`.                                                                                    |
-| `model`                      | agent/model defaults        | Templated model override.                                                                                                                         |
-| `thinking`                   | agent/model defaults        | Templated thinking override.                                                                                                                      |
-| `timeoutSeconds`             | agent timeout               | Positive integer turn timeout.                                                                                                                    |
-| `allowUnsafeExternalContent` | `false`                     | Dangerous: disables agent external-content wrapping for this mapping. Gmail's global unsafe flag can also disable wrapping.                       |
-| `transform.module`           | unset                       | Safe relative JS/TS module under `transformsDir`; absolute, traversal, URL/drive forms, and symlink escapes are rejected.                         |
-| `transform.export`           | `default`, then `transform` | Named function export; an explicitly named export must exist.                                                                                     |
+| Mapping field                | Default                     | Contract                                                                                                                                                |
+| ---------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                         | `mapping-<index>`           | Bounded ingress-source attribution for admitted agent actions, not an authenticated principal or invoker.                                               |
+| `match.path`                 | any custom path             | Subpath after `hooks.path`, with leading/trailing slashes removed (`gmail` matches `/hooks/gmail`).                                                     |
+| `match.source`               | any source                  | Exact match against the payload's string `source` field.                                                                                                |
+| `action`                     | `"agent"`                   | `"agent"` or `"wake"`.                                                                                                                                  |
+| `wakeMode`                   | `"now"`                     | `"now"` or `"next-heartbeat"`; becomes `mode` for wake actions.                                                                                         |
+| `name`                       | `"Hook"` at dispatch        | Templated agent-run label.                                                                                                                              |
+| `agentId`                    | resolved owner              | Static target agent id; subject to effective-agent allowlist.                                                                                           |
+| `sessionKey`                 | default/generated key       | Static or templated logical key; see session policy.                                                                                                    |
+| `sessionMode`                | `"isolated"`                | `"isolated"` or `"persistent"` for agent actions.                                                                                                       |
+| `messageTemplate`            | empty                       | Agent input template; the final action must have a nonempty message.                                                                                    |
+| `textTemplate`               | empty                       | Wake text template; the final action must have nonempty text. Use trusted notification text, not raw untrusted content.                                 |
+| `forEach`                    | unset                       | Top-level payload array key; one action per item, with a 200-item cap. Nested/prototype paths are rejected.                                             |
+| `deliver`                    | `true`                      | Agent announcement policy. Unlike direct `/agent`, mapped delivery may use `"last"` or defer partial targets to the automation delivery resolver.       |
+| `channel`                    | `"last"`                    | Registered channel id or `"last"`. Mappings do not expose `accountId`.                                                                                  |
+| `to`                         | unset                       | Templated delivery target. Prefer explicit `channel` and `to`.                                                                                          |
+| `model`                      | agent/model defaults        | Templated model override.                                                                                                                               |
+| `thinking`                   | agent/model defaults        | Templated thinking override.                                                                                                                            |
+| `timeoutSeconds`             | agent timeout               | Positive integer turn timeout.                                                                                                                          |
+| `allowUnsafeExternalContent` | `false`                     | Dangerous: disables agent external-content wrapping for this mapping. Gmail's global unsafe flag can also disable wrapping.                             |
+| `transform.module`           | unset                       | Safe relative JS/TS module under `transformsDir`; absolute, traversal, URL/drive forms, and symlink escapes are rejected.                               |
+| `transform.export`           | `default`, then `transform` | Named function export; an explicitly named export must exist.                                                                                           |
+| `signature.scheme`           | unset                       | `"standard-webhooks"`: the path authenticates with the sender's `webhook-id`/`webhook-timestamp`/`webhook-signature` headers instead of the hook token. |
+| `signature.secret`           | unset                       | `whsec_<base64>` signing secret (at least 16 bytes), or an array of them during a rotation overlap.                                                     |
+| `signature.toleranceSeconds` | `300`                       | Maximum clock skew accepted for `webhook-timestamp`; older or future-dated deliveries are rejected as replays.                                          |
+
+A mapping with `signature` owns authentication for its `match.path`: the first
+mapping whose path matches decides, before the body is trusted, so `match.source`
+cannot influence it. The signature is verified over the exact request bytes with
+HMAC-SHA256 (Standard Webhooks / Svix scheme); the shared hook token is neither
+required nor sufficient on that path. Verified deliveries reuse `webhook-id` as
+the replay identity when no `Idempotency-Key` is sent.
 
 Templates support `{{payload.field}}` or `{{field}}`, array indexing such as
 `{{messages[0].subject}}`, `{{headers.x-event-type}}`, `{{query.kind}}`, `{{path}}`,

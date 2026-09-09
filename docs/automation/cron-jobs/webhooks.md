@@ -142,6 +142,43 @@ Query-string `?token=...` authentication is rejected. Send JSON with
 [Hooks reference](/gateway/config-hooks#hooks) lists payload fields,
 limits, routing policy, and error responses.
 
+#### Signed senders (Standard Webhooks)
+
+Most SaaS webhook producers cannot attach a custom `Authorization` header, but
+many sign every delivery with the [Standard Webhooks](https://www.standardwebhooks.com/)
+scheme (`webhook-id`, `webhook-timestamp`, and `webhook-signature` headers, as
+used by Svix-compatible senders). Give such a sender its own mapped path and
+declare the signing secret on the mapping. Requests to that path then
+authenticate with the signature instead of the hook token, which is not
+required there:
+
+```json5
+{
+  hooks: {
+    enabled: true,
+    token: "<long-random-hook-token>",
+    mappings: [
+      {
+        match: { path: "ambush" },
+        action: "agent",
+        messageTemplate: "News alert: {{payload.data.headline}}",
+        deliver: true,
+        channel: "telegram",
+        to: "<chat-id>",
+        signature: { scheme: "standard-webhooks", secret: "whsec_..." },
+      },
+    ],
+  },
+}
+```
+
+The Gateway verifies the HMAC-SHA256 over the exact request bytes, rejects
+timestamps outside `toleranceSeconds` (default 300) as replays, and treats the
+sender's `webhook-id` as the idempotency key when the request carries none.
+Provide `secret` as an array while the sender rotates its secret. Invalid or
+missing signatures return `401` and count against the same throttle as bad
+tokens. See [Mapping details](/gateway/config-hooks#mapping-details).
+
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">
     Enqueue a trusted notification for the selected agent's main session and optionally request an immediate heartbeat:
@@ -184,7 +221,7 @@ limits, routing policy, and error responses.
 
 | Observation                | Check or next action                                                                                                                                                                    |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `401`                      | Check the hook token, not Gateway auth; ensure the proxy forwards the auth header.                                                                                                      |
+| `401`                      | Check the hook token, not Gateway auth; ensure the proxy forwards the auth header. On a path with `signature`, check the sender's secret, the `webhook-*` headers, and clock skew.      |
 | `404`                      | Check `hooks.enabled`, `hooks.path`, and whether the custom path matches a mapping.                                                                                                     |
 | `400`                      | Read the response error: JSON, agent selection, session policy, or delivery coordinates may be invalid. Correct the request before retrying.                                            |
 | `405`, `408`, or `413`     | Use `POST`; send the body promptly; stay within the documented body limit.                                                                                                              |

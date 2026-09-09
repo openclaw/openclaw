@@ -1,15 +1,9 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
-import { safeEqualSecret } from "../../security/secret-equal.js";
-import {
-  AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
-  createAuthRateLimiter,
-  normalizeRateLimitClientIp,
-} from "../auth-rate-limit.js";
+import { createAuthRateLimiter, normalizeRateLimitClientIp } from "../auth-rate-limit.js";
 import { applyHookMappings, HOOK_MAPPING_FAN_OUT_MAX_ITEMS } from "../hooks-mapping.js";
 import {
   extractHookToken,
@@ -43,6 +37,7 @@ import { sendJson } from "../http-common.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
+import { admitHookRequest, sendHookBodyError } from "./hooks-request-auth.js";
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
@@ -341,26 +336,27 @@ export function createHooksRequestHandler(
 
     const token = extractHookToken(req);
     const clientKey = resolveHookClientKey(req);
-    if (!safeEqualSecret(token, hooksConfig.token)) {
-      const throttle = hookAuthLimiter.check(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
-      if (!throttle.allowed) {
-        const retryAfter = throttle.retryAfterMs > 0 ? Math.ceil(throttle.retryAfterMs / 1000) : 1;
-        res.statusCode = 429;
-        res.setHeader("Retry-After", String(retryAfter));
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("Too Many Requests");
-        logHooks.warn(`hook auth throttled for ${clientKey}; retry-after=${retryAfter}s`);
-        return true;
-      }
-      hookAuthLimiter.recordFailure(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
-      res.statusCode = 401;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Unauthorized");
+    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
+    // gmail-path mappings carry a producer-derived bound (gog batch contract);
+    // every other path keeps the shared default cap.
+    const bodyLimit = resolveHookPathBodyLimit(hooksConfig, subPath);
+    const headers = normalizeHookHeaders(req);
+    const admission = await admitHookRequest({
+      req,
+      res,
+      hooksConfig,
+      subPath,
+      bodyLimit,
+      headers,
+      token,
+      clientKey,
+      limiter: hookAuthLimiter,
+      warn: (message) => logHooks.warn(message),
+    });
+    if (!admission.ok) {
       return true;
     }
-    hookAuthLimiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
 
-    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
     if (!subPath) {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -368,28 +364,21 @@ export function createHooksRequestHandler(
       return true;
     }
 
-    // gmail-path mappings carry a producer-derived bound (gog batch contract);
-    // every other path keeps the shared default cap.
-    const body = await readJsonBody(req, resolveHookPathBodyLimit(hooksConfig, subPath));
-    if (!body.ok) {
-      const error = { ok: false, error: body.error };
-      if (body.error === "payload too large" || body.error === "request body timeout") {
-        await sendHttpRequestRejection(
-          req,
-          res,
-          body.error === "payload too large" ? 413 : 408,
-          JSON.stringify(error),
-          "application/json; charset=utf-8",
-        );
-      } else {
-        sendJson(res, 400, error);
+    let parsedBody: unknown = admission.body?.value;
+    if (!admission.body) {
+      const body = await readJsonBody(req, bodyLimit);
+      if (!body.ok) {
+        await sendHookBodyError(req, res, body.error);
+        return true;
       }
-      return true;
+      parsedBody = body.value;
     }
 
-    const payload = asRecord(body.value);
-    const headers = normalizeHookHeaders(req);
-    const idempotencyKey = resolveHookIdempotencyKey({ payload, headers });
+    const payload = asRecord(parsedBody);
+    // Signed senders identify each delivery by webhook-id; reuse it for replay
+    // safety when the producer sends no explicit idempotency key.
+    const idempotencyKey =
+      resolveHookIdempotencyKey({ payload, headers }) ?? admission.signedDeliveryId;
     // Later mapped validation errors must report any wake outcome that already occurred.
     let wakeResult: WakeResult | undefined;
     const sendHookError = (error: string) =>

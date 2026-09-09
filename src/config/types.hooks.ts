@@ -10,6 +10,26 @@ export type HookMappingTransform = {
   export?: string;
 };
 
+export type HookMappingSignatureScheme = "standard-webhooks";
+
+/**
+ * Sender signature verification for a mapped hook path. When set, requests to
+ * that path authenticate with the signature instead of the shared hook token,
+ * so producers that cannot attach custom headers (most SaaS webhook senders)
+ * can call the Gateway directly.
+ */
+export type HookMappingSignature = {
+  /** Standard Webhooks (https://www.standardwebhooks.com/) is Svix-compatible. */
+  scheme: HookMappingSignatureScheme;
+  /**
+   * `whsec_<base64>` signing secret(s) issued by the sender. Several entries
+   * accept both the old and the new secret during a rotation overlap.
+   */
+  secret: string | string[];
+  /** Maximum clock skew in seconds between `webhook-timestamp` and the Gateway (default 300). */
+  toleranceSeconds?: number;
+};
+
 export type HookSessionMode = "isolated" | "persistent";
 
 export type HookMappingConfig = {
@@ -46,6 +66,8 @@ export type HookMappingConfig = {
   thinking?: string;
   timeoutSeconds?: number;
   transform?: HookMappingTransform;
+  /** Require and verify a sender signature on this path instead of the shared hook token. */
+  signature?: HookMappingSignature;
 };
 
 export type HooksGmailTailscaleMode = "off" | "serve" | "funnel";
