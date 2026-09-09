@@ -433,11 +433,11 @@ function withCoreLintContext(
     ...check,
     detect(_ctx, scope) {
       const detect = async () => await check.detect(ctx, scope);
-      if (
-        check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID ||
-        check.id === PROJECT_CLONE_SHAPE_CHECK_ID ||
-        check.id === SKILLS_READINESS_CHECK_ID
-      ) {
+      if (check.id === SKILLS_READINESS_CHECK_ID) {
+        // Discovery needs source-profile eligibility; generated links use the private install roots.
+        return ctx.runWithPrivateStateSnapshot(() => ctx.runWithSourceState(detect));
+      }
+      if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID || check.id === PROJECT_CLONE_SHAPE_CHECK_ID) {
         return ctx.runWithPrivateStateSnapshot(detect);
       }
       // Auth health uses read-only loaders but needs uncopied agent stores and source paths.

@@ -325,7 +325,6 @@ describe("doctor lint state isolation", () => {
       extraIds: ["memory-core/managed-local-embedding-setup"],
     },
     { privateCheckId: "core/doctor/project-clone-shape", extraIds: [] },
-    { privateCheckId: "core/doctor/skills-readiness", extraIds: [] },
   ])(
     "restores the private view for $privateCheckId after an auth detector throws",
     async ({ privateCheckId, extraIds }) => {
@@ -376,6 +375,62 @@ describe("doctor lint state isolation", () => {
           stdout.mockRestore();
         }
       });
+    },
+  );
+
+  it.each(["home", "state-only"] as const)(
+    "keeps personal skill discovery scoped to the source profile (%s)",
+    async (layout) => {
+      await withOpenClawTestState(
+        { prefix: "openclaw-doctor-personal-skills-", layout },
+        async (state) => {
+          await state.writeConfig({
+            agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+            memory: { search: { enabled: false } },
+          });
+          const personal = path.join(state.home, ".agents", "skills", "personal-probe");
+          fs.mkdirSync(personal, { recursive: true });
+          fs.writeFileSync(
+            path.join(personal, "SKILL.md"),
+            '---\nname: personal-probe\ndescription: Personal source fixture\nmetadata: {"openclaw":{"requires":{"bins":["missing-personal-probe-bin"]}}}\n---\n',
+          );
+          const actual = await vi.importActual<
+            typeof import("../flows/doctor-health-contributions.js")
+          >("../flows/doctor-health-contributions.js");
+          const check = (await actual.resolveDoctorContributionHealthChecks()).find(
+            (entry) => entry.id === "core/doctor/skills-readiness",
+          );
+          if (!check) {
+            throw new Error("skills-readiness contribution is missing");
+          }
+          mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([check]);
+          const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+          try {
+            await runDoctorLintCli(runtime, { json: true, onlyIds: [check.id] });
+            const findings = JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
+            expect(
+              findings.filter(
+                (finding: { path?: string }) =>
+                  finding.path === "skills.entries.personal-probe.enabled",
+              ),
+            ).toEqual(
+              layout === "home"
+                ? [
+                    expect.objectContaining({
+                      severity: "warning",
+                      message:
+                        "personal-probe is allowed but unavailable: bins: missing-personal-probe-bin.",
+                    }),
+                  ]
+                : [],
+            );
+            expect(fs.existsSync(path.join(state.stateDir, "plugin-skills"))).toBe(false);
+            expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+          } finally {
+            stdout.mockRestore();
+          }
+        },
+      );
     },
   );
 
