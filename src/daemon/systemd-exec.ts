@@ -262,6 +262,7 @@ async function execSystemdUserCommand(
       ? performance.now() + timeoutMs
       : undefined;
   const run = async (scopeArgs: string[]): Promise<ExecResult> => {
+    assertCurrent?.();
     const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
     if (remaining !== undefined && remaining <= 0) {
       return {
@@ -271,7 +272,6 @@ async function execSystemdUserCommand(
         stderr: "systemd user manager command deadline expired",
       };
     }
-    assertCurrent?.();
     // The machine fallback is part of this operation, not a fresh timeout budget.
     return await execSystemdCommand(command, [...scopeArgs, ...args], env, remaining ?? timeoutMs);
   };
@@ -319,8 +319,9 @@ export async function execBusctlUser(
   env: GatewayServiceEnv,
   args: string[],
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ): Promise<ExecResult> {
-  return await execSystemdUserCommand("busctl", env, args, timeoutMs);
+  return await execSystemdUserCommand("busctl", env, args, timeoutMs, assertCurrent);
 }
 
 export async function disableSystemdUserUnitForRemoval(

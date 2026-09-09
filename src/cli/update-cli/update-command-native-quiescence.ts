@@ -11,7 +11,10 @@ import {
   recordUpdateRecoveryNativeObservation,
   type UpdateRecoveryNativeFacts,
 } from "../../infra/update-run-recovery-native.js";
-import { assertExactUpdateRecoveryClaim } from "../../infra/update-run-recovery.js";
+import {
+  assertExactUpdateRecoveryClaim,
+  UpdateRecoveryConflictError,
+} from "../../infra/update-run-recovery.js";
 import { readUpdateCommandNativeObservation } from "./update-command-native-observation.js";
 import { setUpdateCommandNativePolicy } from "./update-command-native-policy.js";
 import {
@@ -72,26 +75,27 @@ export async function quiesceFailedUpdateCommand(params: {
     let current = recovery.getRecord();
     const pending = current.nativeManager!.effects.at(-1);
     if (pending?.state === "intent") {
-      const inspected = await inspectUpdateRecoveryNativeManager(
+      let inspected = await inspectUpdateRecoveryNativeManager(
         current,
         observe,
         fence,
         recovery.options,
       );
       await verify();
-      if (inspected.status === "after") {
-        recovery.onRecord(
-          (
-            await recordUpdateRecoveryNativeObservation(
-              current,
-              pending.effectId,
-              observe,
-              fence,
-              recovery.options,
-            )
-          ).record,
+      if (inspected.status !== "conflict") {
+        // The failed supervisor can settle or retry after the preliminary read.
+        // Resolve from the owner's latest complete observation, not the earlier
+        // classification. A before/conflict result leaves the intent pending.
+        inspected = await recordUpdateRecoveryNativeObservation(
+          current,
+          pending.effectId,
+          observe,
+          fence,
+          recovery.options,
         );
-      } else if (inspected.status === "before") {
+        recovery.onRecord(inspected.record);
+      }
+      if (inspected.status === "before") {
         recovery.onRecord(
           await recordUpdateRecoveryNativeNotApplied(
             current,
@@ -101,7 +105,7 @@ export async function quiesceFailedUpdateCommand(params: {
             recovery.options,
           ),
         );
-      } else {
+      } else if (inspected.status === "conflict") {
         recovery.onRecord(
           await reconcileUpdateRecoveryStoppedSuppression(
             current,
@@ -154,14 +158,49 @@ export async function quiesceFailedUpdateCommand(params: {
       action: "suppress" | "stop",
       target: UpdateRecoveryNativeFacts,
       dispatch: () => Promise<void>,
-    ) => {
+    ): Promise<void> => {
       await verify();
-      const intent = await recordUpdateRecoveryNativeIntent(
-        recovery.getRecord(),
-        { effectId: randomUUID(), action, target, observe },
-        fence,
-        recovery.options,
-      );
+      const expected = recovery.getRecord();
+      let intent: Awaited<ReturnType<typeof recordUpdateRecoveryNativeIntent>>;
+      try {
+        intent = await recordUpdateRecoveryNativeIntent(
+          expected,
+          { effectId: randomUUID(), action, target, observe },
+          fence,
+          recovery.options,
+        );
+      } catch (error) {
+        // No effect was dispatched. Reconcile only an unchanged failed-start
+        // row whose complete native read now proves spontaneous Linux drainage.
+        // Other conflicts retain the original refusal; this cannot loop because
+        // the stop edge removes the running-to-stopped discrepancy.
+        if (
+          !(error instanceof UpdateRecoveryConflictError) ||
+          action !== "suppress" ||
+          expected.nativeManager!.identity.platform !== "linux"
+        ) {
+          throw error;
+        }
+        assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
+        const actual = await observe();
+        assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
+        const before = currentUpdateRecoveryNativeFacts(expected.nativeManager!);
+        if (before.stopped || !isDeepStrictEqual(actual.facts, { ...before, stopped: true })) {
+          throw error;
+        }
+        await apply("stop", actual.facts, () =>
+          resolveGatewayService().stop({ env, stdout: params.stdout, assertCurrent }),
+        );
+        await apply(
+          "suppress",
+          {
+            ...currentUpdateRecoveryNativeFacts(recovery.getRecord().nativeManager!),
+            enabled: false,
+          },
+          dispatch,
+        );
+        return;
+      }
       recovery.onRecord(intent.record);
       let failure: unknown;
       if (intent.status === "before") {

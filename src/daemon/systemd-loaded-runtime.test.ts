@@ -469,3 +469,85 @@ describe("owned inspection refuses foreign or unverified collected units", () =>
     ).toBe(true);
   });
 });
+
+describe("bounded owned runtime inspection", () => {
+  it.each([
+    "current",
+    "revoked-before",
+    "revoked-load",
+    "revoked-read",
+    "claim-revoked",
+    "claim-deadline",
+  ] as const)(
+    "keeps %s authority while collecting a failed unit within the remaining budget",
+    async (mode) => {
+      let now = 0;
+      let active = mode !== "revoked-before";
+      let loaded = false;
+      let claimReads = 0;
+      let claimChanged = false;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      const live = () => {
+        if (!active) {
+          throw new Error("source/executor revoked");
+        }
+      };
+      const inspection = {
+        managerUid: 2001,
+        assertCurrent() {
+          // Installed artifact-preserving snapshots take about 100ms; native
+          // queries take a few ms. Exact claims authorize loading, not reads.
+          now += mode === "claim-deadline" ? 1600 : 100;
+          claimReads++;
+          live();
+          if (claimChanged) {
+            throw new Error("exact claim changed");
+          }
+        },
+        assertReadCurrent: live,
+      };
+      busctl.mockImplementation(async (_env, args) => {
+        now += 5;
+        if (mode === "claim-revoked" && args.includes("GetConnectionUnixUser")) {
+          claimChanged = true;
+        }
+        if (args.includes("LoadUnit")) {
+          loaded = true;
+          if (mode === "revoked-load") {
+            active = false;
+          }
+          return success(JSON.stringify({ type: "o", data: [unitPath] }));
+        }
+        if (mode === "revoked-read" && loaded && args.includes("get-property")) {
+          active = false;
+        }
+        if (args.includes("GetProcesses")) {
+          return success(JSON.stringify({ type: "a(sus)", data: [[]] }));
+        }
+        return managerReply(args, {
+          ActiveState: { type: "s", data: "failed" },
+          SubState: { type: "s", data: "failed" },
+          MainPID: { type: "u", data: 0 },
+          TasksCurrent: { type: "t", data: Number("18446744073709551615") },
+        });
+      });
+      try {
+        const runtime = await readSystemdServiceRuntime(env, {
+          requireLoaded: true,
+          timeoutMs: 1500,
+          loadForInspection: inspection,
+        });
+        expect(runtime.status).toBe(mode === "current" ? "stopped" : "unknown");
+        expect(loaded).toBe(!["revoked-before", "claim-revoked", "claim-deadline"].includes(mode));
+        if (mode === "current") {
+          expect(claimReads).toBeGreaterThan(0);
+          expect(now).toBeLessThan(1500);
+          expect(runtime.systemd).toMatchObject({ unit: unitName, managerUid: 2001 });
+        }
+        expect(systemctl).not.toHaveBeenCalled();
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+});

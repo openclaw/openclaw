@@ -109,12 +109,16 @@ export function parseSystemdExecStart(value: string): string[] {
   return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
 }
 
-export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; value: string }> {
-  return splitArgsPreservingQuotes(raw, {
+export function splitSystemdEnvironmentWords(value: string): string[] {
+  return splitArgsPreservingQuotes(value, {
     escapeMode: "backslash",
     quoteChars: ['"', "'"],
     quoteStart: "item-start",
-  }).flatMap((entry) => {
+  });
+}
+
+export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; value: string }> {
+  return splitSystemdEnvironmentWords(raw).flatMap((entry) => {
     // The splitter has already removed quotes and consumed escapes.
     const assignment = entry.trim();
     const separator = assignment.indexOf("=");

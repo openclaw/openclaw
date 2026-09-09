@@ -145,6 +145,9 @@ export async function withUpdateCommandExecutor<T>(
   };
   const assertCurrent = () => {
     assertBase();
+    if (lease?.version === 3) {
+      throw new UpdateCommandRecoveryPendingError("Parent executor has unresolved native custody.");
+    }
     if (delegating) {
       throw new UpdateCommandRecoveryPendingError(
         "Parent executor is suspended for its candidate.",
@@ -355,7 +358,7 @@ export async function withUpdateCommandExecutor<T>(
   preflightReleases.delete(fence);
   childOwners.delete(fence);
   try {
-    if (lease && store && !borrowed && !store.release(lease)) {
+    if (lease && store && (lease.version === 3 || (!borrowed && !store.release(lease)))) {
       throw new UpdateCommandRecoveryPendingError(
         "Update executor release could not be confirmed.",
       );

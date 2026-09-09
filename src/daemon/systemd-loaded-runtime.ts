@@ -36,17 +36,22 @@ export async function readLoadedSystemdServiceRuntime(
   const unavailable = () =>
     new Error("Loaded systemd runtime could not be inspected without activation.");
   const query = async (args: string[], signatures: string[]): Promise<unknown[]> => {
+    const assertCurrent =
+      args[0] === "call" && args[4] === "LoadUnit"
+        ? inspection?.assertCurrent
+        : (inspection?.assertReadCurrent ?? inspection?.assertCurrent);
+    assertCurrent?.();
     const remaining = deadline - performance.now();
     if (remaining <= 0 || remainingQueries <= 0) {
       throw unavailable();
     }
-    inspection?.assertCurrent();
     const result = await execBusctlUser(
       env,
       ["--auto-start=no", "--json=short", ...args],
       Math.max(1, Math.floor(remaining / remainingQueries--)),
+      assertCurrent,
     );
-    inspection?.assertCurrent();
+    assertCurrent?.();
     if (result.code !== 0 || result.termination !== "exit" || performance.now() >= deadline) {
       throw unavailable();
     }

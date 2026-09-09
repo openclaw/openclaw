@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { expect } from "vitest";
+import { closeAuthProfileReadPool } from "../../agents/auth-profiles/sqlite.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -11,6 +12,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { openCandidateAuthReaders } from "./update-command-candidate-process.test-support.js";
 import { UpdateCommandFinalizedRecoveryFailure } from "./update-command-result.js";
 
 export async function seedReplayAgentDatabase(env: NodeJS.ProcessEnv) {
@@ -84,7 +86,24 @@ export async function interruptReplayAgentFamily(params: {
       reader.close();
     }
   }
-  const outcome = await params.invoke();
+  const authReaders =
+    params.mode === "replay-package-gap-agent-auth-reader"
+      ? openCandidateAuthReaders([file])
+      : undefined;
+  let outcome: unknown;
+  try {
+    outcome = await params.invoke();
+    if (authReaders) {
+      expect(outcome, formatErrorMessage(outcome)).toBeInstanceOf(
+        UpdateCommandFinalizedRecoveryFailure,
+      );
+      expect(authReaders[0]!.isOpen).toBe(false);
+    }
+  } finally {
+    if (authReaders) {
+      closeAuthProfileReadPool({ kind: "database", databasePath: file });
+    }
+  }
   const verify = openNodeSqliteDatabase(file, { readOnly: true });
   try {
     expect(

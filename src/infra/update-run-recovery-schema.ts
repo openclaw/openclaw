@@ -712,10 +712,19 @@ export function encodeUpdateRecovery(record: UpdateRecoveryRecord): string {
 export function isUpdateRecoveryPending(record: {
   terminal?: unknown;
   preparationAborted?: unknown;
-  effects: readonly { state: string }[];
+  retainedPair?: { state: string };
+  effects: readonly { state: string; kind?: string; package?: { outcome?: string } }[];
 }): boolean {
   return (
     !record.preparationAborted &&
-    (!record.terminal || record.effects.some((effect) => effect.state === "intent"))
+    (!record.terminal ||
+      record.effects.some((effect) => effect.state === "intent") ||
+      (record.retainedPair?.state === "superseded" &&
+        !record.effects.some(
+          (effect) =>
+            effect.kind === "retirement" &&
+            effect.state === "observed" &&
+            effect.package?.outcome === "completed",
+        )))
   );
 }

@@ -172,6 +172,9 @@ export function beginUpdateRecovery(
       return decodeUpdateRecovery(raw, input.runId);
     },
     options,
+    // The initial claim precedes managed shutdown. Admission already established
+    // the stable ledger tables; never migrate the serving Gateway's schema here.
+    "existing-schema",
   );
 }
 /**
@@ -243,23 +246,6 @@ export function claimUpdateRecovery(
     true,
     true,
   );
-}
-
-/** Recheck this together with live exclusion immediately before an external effect. */
-function assertUpdateRecoveryClaim(
-  expected: UpdateRecoveryRevision,
-  fence: UpdateRecoveryFence,
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  fence.assertCurrent();
-  const checked = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
-    assertExecutingClaim(requireRevision(db, expected).record);
-    return true;
-  }, options);
-  if (!checked) {
-    throw new UpdateRecoveryConflictError();
-  }
-  fence.assertCurrent();
 }
 
 /**
@@ -721,8 +707,11 @@ export function assertExactUpdateRecoveryClaim(
   fence: UpdateRecoveryFence,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  assertUpdateRecoveryClaim(expected, fence, options);
+  fence.assertCurrent();
+  // Validate execution and exact contents in the same preserved snapshot. Native
+  // inspection repeats this assertion; a second snapshot adds no claim proof.
   const found = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+    assertExecutingClaim(requireRevision(db, expected).record);
     assertExactRecovery(db, expected);
     return true;
   }, options);

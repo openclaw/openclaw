@@ -32,18 +32,25 @@ type SourceOwnership = {
  * No late snapshot can replace an original preimage. Callers must join admitted
  * effects before returning; assertions cannot escape this lexical interval.
  */
+type SourceOwnershipParams = {
+  recovery: UpdateCommandRecovery;
+  env: NodeJS.ProcessEnv;
+  mutation?: true;
+  restored?: true;
+  replay?: true;
+};
+
 export async function withUpdateCommandSourceOwnership<T>(
-  params: {
-    recovery: UpdateCommandRecovery;
-    env: NodeJS.ProcessEnv;
-    mutation?: true;
-    restored?: true;
-    replay?: true;
-  },
+  params: SourceOwnershipParams,
   operation: (source: SourceOwnership) => Promise<T>,
 ): Promise<T> {
-  const { recovery, env } = params;
-  const initial = recovery.getRecord();
+  const { recovery, mutation, restored, replay } = params;
+  const env = { ...params.env };
+  const initial = structuredClone(recovery.getRecord());
+  const claimOptions = {
+    ...recovery.options,
+    env: { ...(recovery.options?.env ?? process.env) },
+  };
   const { source, preimages } = initial;
   if (!source || !preimages) {
     throw new UpdateCommandRecoveryPendingError("Original source binding is missing.");
@@ -65,10 +72,10 @@ export async function withUpdateCommandSourceOwnership<T>(
       const fence = { assertCurrent };
       const verifyRecord = async () => {
         assertCurrent();
-        if (params.replay) {
+        if (replay) {
           await inspectUpdateCommandSealedReplay(initial, env);
         } else {
-          assertExactUpdateRecoveryClaim(initial, fence, recovery.options);
+          assertExactUpdateRecoveryClaim(initial, fence, claimOptions);
         }
         assertCurrent();
       };
@@ -82,7 +89,7 @@ export async function withUpdateCommandSourceOwnership<T>(
         (effect) => effect.kind === "checkpoint-restore",
       );
       if (
-        params.restored &&
+        restored &&
         (!initial.primaryFailure ||
           !initial.checkpoint ||
           progress?.phase !== "observed" ||
@@ -95,16 +102,16 @@ export async function withUpdateCommandSourceOwnership<T>(
         );
       }
       const latest =
-        params.restored || params.replay
+        restored || replay
           ? initial.checkpoint
-          : params.mutation
+          : mutation
             ? (initial.afterImages?.at(-1)?.afterUpdate ?? initial.checkpoint)
             : undefined;
       const current = latest
         ? await reopenUpdateCheckpoint(latest.ref, { artifactRoot, binding: latest.binding })
         : original;
       const published =
-        params.restored && progress?.planSha256 && initial.checkpoint
+        restored && progress?.planSha256 && initial.checkpoint
           ? await reopenUpdateCheckpointRestorePlan(
               {
                 restoreId: progress.restoreId,
@@ -132,8 +139,9 @@ export async function withUpdateCommandSourceOwnership<T>(
       const definitionPaths = current.manifest.resources
         .filter((r) => r.kind === "service")
         .map((r) => r.sourcePath);
-      const verifySources = async () => {
-        if (params.replay) {
+      const verifySources = async (assertSource = assertCurrent) => {
+        assertSource();
+        if (replay) {
           await verifyRecord();
           return;
         }
@@ -142,16 +150,16 @@ export async function withUpdateCommandSourceOwnership<T>(
             continue;
           }
           const observed = await inspectCheckpointFile(resource.sourcePath);
-          assertCurrent();
-          const restored = published?.plan.resources.find(
+          assertSource();
+          const restoredResource = published?.plan.resources.find(
             (entry) => entry.sourcePath === resource.sourcePath,
           );
           // Publication renames the sealed replacement: only root ctime changes.
           // Require its exact inode, content, mode and descendants, not the old
           // captured inode and not a new snapshot of whatever happens to be live.
-          const expected = restored?.after;
+          const expected = restoredResource?.after;
           const matches = published
-            ? restored !== undefined &&
+            ? restoredResource !== undefined &&
               checkpointContentMatches(observed, expected ?? null) &&
               (observed === null ||
                 (expected !== null &&
@@ -182,7 +190,7 @@ export async function withUpdateCommandSourceOwnership<T>(
           current,
           definitionPaths,
           assertCurrent,
-          verifySources,
+          verifySources: () => verifySources(),
         });
         assertCurrent();
         return result;

@@ -7,6 +7,7 @@ import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   assertSqliteSchemaContains,
+  getCanonicalSqliteTableNames,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
@@ -55,13 +56,20 @@ export function assertExistingOpenClawStateSchema(
 }
 
 /** A synchronous write to an already-compatible, caller-owned schema subset.
- * No bootstrap, schema repair, journal-mode setup, cached publication or WAL timer.
+ * No database bootstrap, schema repair, journal-mode setup, cached publication or WAL timer.
+ * First-use owners may install their declared additive tables; existing objects
+ * must already match. This never opens or migrates the full runtime schema.
  * The real handle and write coordinators cover open, transaction, and close.
  */
 export function runExistingOpenClawStateWriteTransaction<T>(
   operation: (database: { db: DatabaseSync; path: string }) => T,
   options: OpenClawStateDatabaseOptions,
-  contract: { schemaSql: string; operationLabel: string; busyTimeoutMs?: number },
+  contract: {
+    schemaSql: string;
+    operationLabel: string;
+    busyTimeoutMs?: number;
+    initializeAdditiveSchema?: boolean;
+  },
 ): T {
   if (options.database || options.readOnly) {
     throw new Error("Existing-state writes require their own tracked writable connection.");
@@ -94,7 +102,20 @@ export function runExistingOpenClawStateWriteTransaction<T>(
             () => {
               assertSameFile();
               assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
-              const version = assertExistingOpenClawStateSchema(db, pathname, contract.schemaSql);
+              const version = assertExistingOpenClawStateSchema(
+                db,
+                pathname,
+                contract.initializeAdditiveSchema ? "" : contract.schemaSql,
+              );
+              if (contract.initializeAdditiveSchema) {
+                // Validate present objects before first use: CREATE IF NOT EXISTS
+                // must not hide drift or repair an incomplete existing table.
+                assertSqliteSchemaContains(db, pathname, contract.schemaSql, {
+                  allowedMissingTables: getCanonicalSqliteTableNames(contract.schemaSql),
+                });
+                db.exec(contract.schemaSql); // sqlite-allow-raw -- Declared canonical feature-local additive DDL only.
+                assertSqliteSchemaContains(db, pathname, contract.schemaSql);
+              }
               const schemaVersion = readSqliteSchemaCookie(db);
               const result = operation({ db, path: pathname });
               assertSameFile();

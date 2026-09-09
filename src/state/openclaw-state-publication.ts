@@ -22,6 +22,21 @@ import type {
   OpenClawStatePublicationWrite,
 } from "./openclaw-state-publication-types.js";
 
+let checkpointPublicationModule:
+  | Promise<typeof import("../infra/update-checkpoint-restore.js")>
+  | undefined;
+
+function loadCheckpointPublicationModule() {
+  // Keep the loaded candidate code across replacement of its package directory.
+  // The deferred import still avoids a runtime cycle during ordinary startup.
+  return (checkpointPublicationModule ??= import("../infra/update-checkpoint-restore.js"));
+}
+
+/** Load code needed after an owned package rollback, without acquiring authority. */
+export async function prepareOpenClawStateReplayPublication(): Promise<void> {
+  await loadCheckpointPublicationModule();
+}
+
 function fail(errors: unknown[]): never {
   if (errors.length === 1) {
     throw errors[0];
@@ -99,9 +114,7 @@ export async function performOpenClawStatePublication<T>(
       timer.unref();
     }
     await held.runWithSourceReads(async () => {
-      // Lazy import preserves ordinary lease startup and avoids a runtime cycle.
-      const { verifyUpdateCheckpointSharedPublication } =
-        await import("../infra/update-checkpoint-restore.js");
+      const { verifyUpdateCheckpointSharedPublication } = await loadCheckpointPublicationModule();
       assertCurrent();
       await external?.beforePublication();
       assertCurrent();

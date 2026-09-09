@@ -189,7 +189,9 @@ export async function retireSupersededUpdateCommandPair(
     });
     assertCurrent();
     if (opened.status !== "ready") {
-      throw new UpdateCommandRecoveryPendingError("Superseded package custody is unavailable.");
+      throw new UpdateCommandRecoveryPendingError(
+        `Superseded package custody is ${opened.status}: ${opened.reason}`,
+      );
     }
     const retired = await opened.transaction.retire(decision);
     assertCurrent();

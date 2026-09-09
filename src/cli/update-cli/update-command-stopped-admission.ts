@@ -17,6 +17,36 @@ import {
 import { isGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import { withUpdateCommandSourceOwnership } from "./update-command-source-ownership.js";
 
+/** A durable checkpoint intent follows observed package restoration. Preparation
+ * may have failed before publishing any plan; that is not a candidate-live phase.
+ * These records select evidence only, never substitute for current custody. */
+function isPendingCheckpointRestore(record: UpdateRecoveryRecord): boolean {
+  const { nativeManager } = record;
+  const stop = nativeManager?.effects.at(-1);
+  const restart = record.effects.at(-1);
+  return Boolean(
+    (!record.restore ||
+      (record.restore.planSha256 &&
+        record.restore.phase !== "preparing" &&
+        record.restore.checkpointId === record.checkpoint?.ref.checkpointId)) &&
+    restart?.kind === "checkpoint-restore" &&
+    restart.state === "intent" &&
+    restart.runtime === "previous" &&
+    restart.resourceId === record.checkpoint?.ref.checkpointId &&
+    record.effects.every((effect) => effect === restart || effect.state !== "intent") &&
+    record.effects.some(
+      (effect) =>
+        effect.kind === "package-restore" &&
+        effect.state === "observed" &&
+        effect.runtime === "previous" &&
+        effect.resourceId === record.from.root,
+    ) &&
+    nativeManager?.effects.every((effect) => effect.state !== "intent") &&
+    stop?.action === "stop" &&
+    stop.state === "observed",
+  );
+}
+
 /** Select evidence only. A journaled stop is not proof that the service stopped.
  * The caller must acquire the original installation executor, then validate the
  * sources, package and effective native owner before reclaiming this record.
@@ -29,22 +59,6 @@ export function isPendingStoppedServiceReplay(
   const stop = nativeManager?.effects.at(-1);
   const suppress = nativeManager?.effects.at(-2);
   const restart = record.effects.at(-1);
-  const sealed = Boolean(
-    record.restore?.planSha256 &&
-    record.restore.phase !== "preparing" &&
-    record.restore.checkpointId === record.checkpoint?.ref.checkpointId &&
-    restart?.kind === "checkpoint-restore" &&
-    restart.state === "intent" &&
-    restart.runtime === "previous" &&
-    restart.resourceId === record.checkpoint?.ref.checkpointId &&
-    record.effects.every((effect) => effect === restart || effect.state !== "intent") &&
-    record.effects.some(
-      (effect) => effect.kind === "package-restore" && effect.state === "observed",
-    ) &&
-    nativeManager?.effects.every((effect) => effect.state !== "intent") &&
-    stop?.action === "stop" &&
-    stop.state === "observed",
-  );
   return Boolean(
     platform() === "linux" &&
     isGatewayServiceManagementAllowedForUpdate(env) &&
@@ -70,7 +84,7 @@ export function isPendingStoppedServiceReplay(
     pkg.descriptor.liveRoot === record.from.root &&
     pkg.descriptor.previous.version === record.from.version &&
     pkg.descriptor.transactionId === record.transactionId &&
-    (sealed ||
+    (isPendingCheckpointRestore(record) ||
       (!record.restore &&
         restart?.kind === "service-restart" &&
         restart.runtime === "candidate" &&
@@ -93,6 +107,7 @@ export async function verifyStoppedServiceReplayPackage(
   timeoutMs?: number,
 ): Promise<void> {
   const descriptor = record.package!.descriptor;
+  const restoredPackage = isPendingCheckpointRestore(record);
   const refuse = () =>
     new UpdateCommandRecoveryPendingError(
       "Retained stopped service package does not match its original transaction.",
@@ -115,9 +130,9 @@ export async function verifyStoppedServiceReplayPackage(
   });
   if (
     opened.status !== "ready" ||
-    opened.observed.observation.previous !== (record.restore ? "live" : "retained") ||
-    opened.observed.observation.candidate !== (record.restore ? "displaced" : "live") ||
-    ![record.restore ? "previous" : "candidate", "both"].includes(
+    opened.observed.observation.previous !== (restoredPackage ? "live" : "retained") ||
+    opened.observed.observation.candidate !== (restoredPackage ? "displaced" : "live") ||
+    ![restoredPackage ? "previous" : "candidate", "both"].includes(
       opened.observed.observation.launchers,
     )
   ) {

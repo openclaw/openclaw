@@ -91,7 +91,10 @@ export type GatewayServiceEnvArgs = {
  * permits native definition inspection, not enablement, start, or readiness. */
 export type GatewayServiceUnitInspection = {
   managerUid: number;
+  /** Full current-claim authority immediately around a possible LoadUnit. */
   assertCurrent: () => void;
+  /** Live exclusion for passive queries; omitted callers retain the full check. */
+  assertReadCurrent?: () => void;
 };
 
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */

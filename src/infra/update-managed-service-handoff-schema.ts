@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 
 const text = z.string().min(1).max(4096);
@@ -45,12 +46,39 @@ const actionSchema = z.discriminatedUnion("kind", [
         action.lifetime.placement.kind === "attached",
     ),
 ]);
-const payloadSchema = z.strictObject({
-  version: z.literal(2),
+const sourcePath = text.refine(path.isAbsolute, "Native source path must be absolute");
+const digest = z.string().regex(/^[a-f0-9]{64}$/);
+const nativeBorrowerSourceSchema = z.strictObject({
+  runId: text,
+  transactionId: text,
+  claimId: text,
+  revision: z.number().int().nonnegative(),
+  recordSha256: digest,
+  serviceKey: sourcePath,
+  configPaths: z.array(sourcePath).min(1).max(512),
+  lifetimeId: text,
+});
+const nativeBorrowerSchema = z.strictObject({
+  id: z.string().uuid(),
+  phase: z.enum(["reserved", "admitted"]),
+  source: nativeBorrowerSourceSchema,
+});
+const commonPayload = {
   executor: processIdentitySchema,
   helper: processIdentitySchema,
   action: actionSchema,
-});
+};
+// Preserve v3 decoding solely to refuse retained custody. No current producer
+// creates or upgrades these records, and process death never reclaims them.
+const payloadSchema = z.discriminatedUnion("version", [
+  z.strictObject({ version: z.literal(2), ...commonPayload }),
+  z.strictObject({
+    version: z.literal(3),
+    ...commonPayload,
+    action: z.strictObject({ kind: z.literal("update") }),
+    nativeBorrower: nativeBorrowerSchema,
+  }),
+]);
 
 export type HandoffProcessIdentity = z.infer<typeof processIdentitySchema>;
 export type HandoffNativeLifetime = z.infer<typeof nativeLifetimeSchema>;

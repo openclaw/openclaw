@@ -24,6 +24,7 @@ export const successfulPackageGapReplayModes: readonly string[] = [
   "replay-package-gap-agent-empty-wal",
   "replay-package-gap-agent-writer",
   "replay-package-gap-agent-reader",
+  "replay-package-gap-agent-auth-reader",
   "replay-package-gap",
   "replay-package-gap-slow-checkpoint",
   "replay-package-gap-checkpoint-intent",

@@ -23,7 +23,7 @@ import { updateCommand } from "./update-command.js";
  * Ordinary CLI re-entry must keep the sealed plan and finish the original run. */
 export async function interruptPartialPublicationReplay(
   params: FinishUpdateParams,
-  options: { refusalsOnly?: boolean; custodyOnly?: boolean } = {},
+  options: { refusalsOnly?: boolean; custodyOnly?: boolean; unsealed?: boolean } = {},
 ) {
   const recovery = params.opts.recovery!;
   const env = params.opts.run!.env;
@@ -33,6 +33,12 @@ export async function interruptPartialPublicationReplay(
     .spyOn(checkpoint, "createUpdateRecoveryCheckpointAdapter")
     .mockImplementation((input) => {
       const adapter = create(input);
+      if (options.unsealed) {
+        adapter.prepare = async () => {
+          interrupted = true;
+          throw new Error("fixture interruption before checkpoint preparation");
+        };
+      }
       const next = adapter.next;
       adapter.next = async () => {
         if (
@@ -51,7 +57,11 @@ export async function interruptPartialPublicationReplay(
   expect(interrupted, inspect(failure, { depth: 8 })).toBe(true);
   const record = recovery.getRecord();
   expect(record.terminal).toBeUndefined();
-  expect(record.restore).toMatchObject({ resourceCursor: 3, phase: "observed" });
+  if (options.unsealed) {
+    expect(record.restore).toBeNull();
+  } else {
+    expect(record.restore).toMatchObject({ resourceCursor: 3, phase: "observed" });
+  }
   expect(record.effects.at(-1)).toMatchObject({ kind: "checkpoint-restore", state: "intent" });
   expect(record.effects).toEqual(
     expect.arrayContaining([
@@ -65,9 +75,10 @@ export async function interruptPartialPublicationReplay(
   );
   expect(record.nativeManager!.effects.at(-1)).toMatchObject({ action: "stop", state: "observed" });
   expect(record.afterImages).toHaveLength(3);
-  const planBytes = await fs.readFile(record.restore!.planPath);
-  const plan = JSON.parse(planBytes.toString());
-  expect(plan.resources).toHaveLength(5);
+  const planBytes = record.restore ? await fs.readFile(record.restore.planPath) : undefined;
+  if (planBytes) {
+    expect(JSON.parse(planBytes.toString()).resources).toHaveLength(5);
+  }
   expect(await discoverUpdateCommandRecovery(env)).toEqual(record);
   await expect(
     withUpdateCommandExecutor(record.runId, async (executor) => {
@@ -107,6 +118,9 @@ export async function interruptPartialPublicationReplay(
         ? (["late-candidate", "late-launcher"] as const)
         : (["profile", "manager", "running", "enabled", "package", "source", "plan"] as const);
       for (const fault of faults) {
+        if (options.unsealed && fault === "plan") {
+          continue;
+        }
         let faultOutcome: unknown;
         let undo: (() => void | Promise<void>) | undefined;
         if (fault === "late-candidate") {
@@ -199,7 +213,9 @@ export async function interruptPartialPublicationReplay(
         } finally {
           await undo?.();
         }
-        expect(await fs.readFile(record.restore!.planPath), fault).toEqual(planBytes);
+        if (record.restore) {
+          expect(await fs.readFile(record.restore.planPath), fault).toEqual(planBytes);
+        }
         expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!), fault).toEqual(config);
         expect(await fs.readFile(launcherPath), fault).toEqual(launcherBytes);
       }
@@ -217,13 +233,14 @@ export async function interruptPartialPublicationReplay(
       status: "rolled-back",
       receipt: { runtime: "previous" },
     });
-    expect(current.restore).toMatchObject({
-      restoreId: record.restore!.restoreId,
-      planSha256: record.restore!.planSha256,
-      resourceCursor: 4,
-      phase: "observed",
-    });
-    expect(await fs.readFile(record.restore!.planPath)).toEqual(planBytes);
+    expect(current.restore).toMatchObject({ resourceCursor: 4, phase: "observed" });
+    if (record.restore) {
+      expect(current.restore).toMatchObject({
+        restoreId: record.restore.restoreId,
+        planSha256: record.restore.planSha256,
+      });
+      expect(await fs.readFile(record.restore.planPath)).toEqual(planBytes);
+    }
     const canonical = openNodeSqliteDatabase(file, { readOnly: true });
     expect(canonical.prepare("SELECT COUNT(*) AS n FROM update_runs").get()?.n).toBe(1);
     canonical.close();

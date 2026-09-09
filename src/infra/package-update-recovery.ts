@@ -96,18 +96,33 @@ export function createPackageRecoveryTransaction(
         [next.stageRoot, null, "staged"],
         [displacedRoot, null, "displaced"],
       ] as const;
+      const replacement =
+        next.retention?.state === "superseded" ? next.retention.replacement : null;
+      if (
+        replacement &&
+        (replacement.retainedRoot === next.liveRoot ||
+          replacement.retainedRoot === next.backupRoot ||
+          replacement.retainedRoot === displacedRoot ||
+          path.dirname(replacement.retainedRoot) !== path.dirname(next.backupRoot) ||
+          !path.basename(replacement.retainedRoot).startsWith(".openclaw.package-backup-") ||
+          replacement.retained.identity === replacement.live.identity)
+      ) {
+        conflict("Superseding live/retained package pair is not verified");
+      }
       // The fixed role set shares one unchanged deadline. Join every observation
       // before interpreting it or calling a durable/effect hook; a slow live tree
       // must not consume the candidate tree's whole opportunity to be inspected.
       const roots = await Promise.allSettled(
-        roles.map(async ([root]) => {
-          if (!(await reader.exists(root))) {
-            return null;
-          }
-          const identity = await reader.directoryIdentity(root);
-          const tree = await reader.tree(root, next.liveRoot);
-          return { identity, tree };
-        }),
+        [...roles.map(([root]) => root), ...(replacement ? [replacement.retainedRoot] : [])].map(
+          async (root) => {
+            if (!(await reader.exists(root))) {
+              return null;
+            }
+            const identity = await reader.directoryIdentity(root);
+            const tree = await reader.tree(root, next.liveRoot);
+            return { identity, tree };
+          },
+        ),
       );
       for (const [index, [root, previousRole, candidateRole]] of roles.entries()) {
         const fact: PackageRecoveryFacts["roots"][number] = {
@@ -235,33 +250,29 @@ export function createPackageRecoveryTransaction(
               ? "candidate"
               : "mixed";
       if (next.retention?.state === "superseded") {
-        const replacement = next.retention.replacement;
+        const successor = next.retention.replacement;
         if (
-          new Set(replacement.launchers.map((entry) => entry.name)).size !==
-            replacement.launchers.length ||
+          new Set(successor.launchers.map((entry) => entry.name)).size !==
+            successor.launchers.length ||
           next.launchers.some(
-            (entry) => !replacement.launchers.some((live) => live.name === entry.name),
+            (entry) => !successor.launchers.some((live) => live.name === entry.name),
           )
         ) {
           conflict("Superseding launcher inventory is incomplete");
         }
-        for (const entry of replacement.launchers) {
+        for (const entry of successor.launchers) {
           if ((await reader.launcher(launcherPath(entry.name))) !== entry.fingerprint) {
             conflict("Superseding launcher identity changed");
           }
         }
+        const retained = roots[roles.length]!;
+        if (retained.status === "rejected") {
+          throw retained.reason;
+        }
         if (
           !observation.successorLive ||
-          replacement.retainedRoot === next.liveRoot ||
-          replacement.retainedRoot === next.backupRoot ||
-          replacement.retainedRoot === displacedRoot ||
-          path.dirname(replacement.retainedRoot) !== path.dirname(next.backupRoot) ||
-          !path.basename(replacement.retainedRoot).startsWith(".openclaw.package-backup-") ||
-          replacement.retained.identity === replacement.live.identity ||
-          !isDeepStrictEqual(
-            await reader.tree(replacement.retainedRoot, next.liveRoot),
-            replacement.retained,
-          )
+          !retained.value ||
+          !isDeepStrictEqual(retained.value.tree, successor.retained)
         ) {
           conflict("Superseding live/retained package pair is not verified");
         }

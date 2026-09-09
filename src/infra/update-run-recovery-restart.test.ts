@@ -708,3 +708,114 @@ it.each([
     expect(loadUpdateRecovery(record.runId, f.options)).toEqual(record);
   },
 );
+
+it.each(["settled", "resumed", "policy", "unloaded", "identity", "revoked", "healthy", "suppress"])(
+  "records a naturally settled failed start only as a fresh stop intent (%s)",
+  async (mode) => {
+    const f = await stopped("linux");
+    const startId = randomUUID();
+    let record = (
+      await recordUpdateRecoveryNativeIntent(
+        f.record,
+        {
+          effectId: startId,
+          action: "restore",
+          target: f.original,
+          observe: f.observe,
+          restart: { runtime: "candidate", resourceId: "gateway" },
+        },
+        f.fence,
+        f.options,
+      )
+    ).record;
+    f.setFacts(f.original);
+    record = (
+      await recordUpdateRecoveryNativeObservation(record, startId, f.observe, f.fence, f.options)
+    ).record;
+    if (mode !== "healthy") {
+      record = recordUpdateRecoveryFailure(
+        record,
+        { code: "candidate-start-failed", effectId: startId },
+        f.fence,
+        f.options,
+      );
+    }
+    const originalRecord = structuredClone(record);
+    const target = { ...f.original, stopped: true };
+    f.setFacts(
+      mode === "resumed"
+        ? f.original
+        : {
+            ...target,
+            ...(mode === "policy" ? { enabled: false } : {}),
+            ...(mode === "unloaded" ? { loaded: false } : {}),
+          },
+    );
+    let active = true;
+    const fence = {
+      assertCurrent() {
+        if (!active) {
+          throw new Error("revoked");
+        }
+        f.fence.assertCurrent();
+      },
+    };
+    const observe = async () => {
+      const actual = await f.observe();
+      if (mode === "revoked") {
+        active = false;
+      }
+      return mode === "identity"
+        ? { ...actual, identity: { ...actual.identity, runId: randomUUID() } }
+        : actual;
+    };
+    const intent = recordUpdateRecoveryNativeIntent(
+      record,
+      {
+        effectId: randomUUID(),
+        action: mode === "suppress" ? "suppress" : "stop",
+        target: mode === "suppress" ? { ...target, enabled: false } : target,
+        observe,
+      },
+      fence,
+      f.options,
+    );
+    if (mode !== "settled" && mode !== "resumed") {
+      await expect(intent).rejects.toThrow();
+      expect(loadUpdateRecovery(record.runId, f.options)).toEqual(originalRecord);
+      return;
+    }
+    const prepared = await intent;
+    expect(prepared.status).toBe(mode === "settled" ? "after" : "before");
+    record = prepared.record;
+    expect(record.nativeManager!.effects.slice(0, -1)).toEqual(
+      originalRecord.nativeManager!.effects,
+    );
+    expect(record.nativeManager!.effects.at(-1)).toMatchObject({
+      action: "stop",
+      state: "intent",
+      before: f.original,
+      after: target,
+    });
+    expect(record.effects).toEqual(originalRecord.effects);
+    await expect(
+      cancelUpdateRecoveryRestart(record, f.observe, f.fence, f.options),
+    ).rejects.toThrow();
+    f.setFacts(target);
+    record = (
+      await recordUpdateRecoveryNativeObservation(
+        record,
+        record.nativeManager!.effects.at(-1)!.effectId,
+        f.observe,
+        f.fence,
+        f.options,
+      )
+    ).record;
+    record = await cancelUpdateRecoveryRestart(record, f.observe, f.fence, f.options);
+    expect(record.effects.at(-1)).toMatchObject({ state: "cancelled", observedIdentity: null });
+    expect(record.primaryFailure).toEqual(originalRecord.primaryFailure);
+    expect(record.verification).toBeNull();
+    expect(record.terminal).toBeUndefined();
+    expect(UpdateRecoveryRecordSchema.safeParse(record).success).toBe(true);
+  },
+);

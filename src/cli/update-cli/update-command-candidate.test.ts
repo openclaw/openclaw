@@ -4,6 +4,7 @@ import { inspect } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  closeAuthProfileReadPool,
   writePersistedAuthProfileStoreRaw,
   readPersistedSharedAuthProfileStoreRaw,
 } from "../../agents/auth-profiles/sqlite.js";
@@ -12,6 +13,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import * as services from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { inspectCheckpointFile } from "../../infra/update-checkpoint-files.js";
 import { captureUpdateCheckpoint, reopenUpdateCheckpoint } from "../../infra/update-checkpoint.js";
@@ -23,13 +25,23 @@ import {
   loadUpdateRecovery,
   prepareUpdateRecoveryHandoff,
 } from "../../infra/update-run-recovery.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import * as processExecution from "../../process/exec.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { readPackageVersion } from "./shared.js";
+import { continueDurableUpdateInFreshProcess } from "./update-command-candidate-process.js";
+import {
+  candidateCustodyProbe,
+  holdForeignAgentReader,
+  openCandidateAuthReaders,
+} from "./update-command-candidate-process.test-support.js";
 import {
   acceptUpdateCommandCandidate,
   runUpdateCommandCandidateMutations,
@@ -390,6 +402,93 @@ it.each([false, true])(
       },
       false,
       legacyAuth,
+    );
+  },
+);
+
+it.each(["shared-cache", "agent-cache", "auth-cache", "foreign-reader"] as const)(
+  "hands the candidate a database family free of its parent readers (%s)",
+  async (mode) => {
+    await fixture(
+      async ({ params, handoff, fence }) => {
+        await acceptUpdateCommandCandidate({
+          handoff,
+          finalization: params,
+          fence,
+          moduleUrl: import.meta.url,
+        });
+        const env = params.opts.run!.env;
+        const shared = openOpenClawStateDatabase({ env });
+        shared.db.prepare("SELECT count(*) FROM config_machine_state").get();
+        if (mode !== "shared-cache") {
+          openOpenClawAgentDatabase({ agentId: "main", env })
+            .db.prepare("SELECT count(*) FROM cache_entries")
+            .get();
+        }
+        const outsideEnv = { ...env, OPENCLAW_STATE_DIR: dirs.make("other-parent-state-") };
+        const outside = openOpenClawStateDatabase({ env: outsideEnv });
+        const outsideAgent = openOpenClawAgentDatabase({ agentId: "main", env: outsideEnv });
+        const agentPath = path.join(
+          env.OPENCLAW_STATE_DIR!,
+          "agents/main/agent/openclaw-agent.sqlite",
+        );
+        const authReaders =
+          mode === "auth-cache"
+            ? openCandidateAuthReaders([agentPath, outsideAgent.path])
+            : undefined;
+        const reader =
+          mode === "foreign-reader" ? await holdForeignAgentReader(agentPath) : undefined;
+        const probe = path.join(dirs.make("candidate-physical-reader-"), "probe.mjs");
+        await fs.writeFile(probe, candidateCustodyProbe(mode !== "shared-cache"));
+        const run = processExecution.runUtf8CommandWithTimeout;
+        let inspected: Awaited<ReturnType<typeof run>> | undefined;
+        const worker = path.join(
+          params.root,
+          "dist",
+          runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+        );
+        vi.spyOn(processExecution, "runUtf8CommandWithTimeout").mockImplementation(
+          async (argv, options) => {
+            if (argv[1] !== worker) {
+              return run(argv, options);
+            }
+            const checked = argv.includes("--check");
+            const result = await run([argv[0]!, probe, ...(checked ? ["--check"] : [])], options);
+            if (!checked) {
+              inspected = result;
+            }
+            return result;
+          },
+        );
+        try {
+          await expect(continueDurableUpdateInFreshProcess(params, [])).rejects.toThrow(
+            "Candidate did not settle its durable continuation",
+          );
+          expect(outside.db.isOpen).toBe(true);
+          expect(outsideAgent.db.isOpen).toBe(true);
+          if (authReaders) {
+            expect(authReaders.map((db) => db.isOpen)).toEqual([false, true]);
+          }
+          expect(inspected?.code).toBe(37);
+          const observations = JSON.parse(inspected!.stdout);
+          expect(observations).toHaveLength(mode !== "shared-cache" ? 2 : 1);
+          if (mode === "foreign-reader") {
+            expect(observations[1]).toMatchObject({
+              exclusive: false,
+              error: "Error: database is locked",
+            });
+            expect(reader?.child.exitCode).toBeNull();
+          } else {
+            expect(observations.every((o: { exclusive: boolean }) => o.exclusive)).toBe(true);
+          }
+        } finally {
+          await reader?.close();
+          closeAuthProfileReadPool();
+          await closeOpenClawAgentDatabasesAsync();
+        }
+      },
+      false,
+      mode !== "shared-cache",
     );
   },
 );

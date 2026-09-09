@@ -339,8 +339,9 @@ describe("candidate executor delegation", () => {
             throw new Error("missing primary owner");
           }
           expect(store.release(primary.lease)).toBe(false);
+          expect(store.bind(primary.lease, process.pid)).toBeNull();
           if (revoked) {
-            expect(store.bind(primary.lease, process.pid)).not.toBeNull();
+            replaceOwner();
           }
         } finally {
           fs.writeFileSync(proceed, "continue");

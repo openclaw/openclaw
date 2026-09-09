@@ -268,9 +268,11 @@ export async function prepareUpdateCheckpointRestore(
                 return;
               }
               const checkpointDb = openNodeSqliteDatabase(source, { readOnly: true });
+              const currentDb = openNodeSqliteDatabase(currentCopy, { readOnly: true });
               try {
-                assertUpdateCheckpointSqliteSchema(checkpointDb, stagedDb);
+                assertUpdateCheckpointSqliteSchema(checkpointDb, stagedDb, currentDb);
               } finally {
+                currentDb.close();
                 checkpointDb.close();
               }
             },
@@ -336,6 +338,9 @@ export async function prepareUpdateCheckpointRestore(
       path.join(path.dirname(params.checkpointRef.manifestPath), captured.artifact),
       { readOnly: true },
     );
+    const currentDb = openNodeSqliteDatabase(path.join(shared.stageDirectory, "current.sqlite"), {
+      readOnly: true,
+    });
     try {
       const prepared = params.prepareSharedDatabase({
         sourceDb,
@@ -343,7 +348,7 @@ export async function prepareUpdateCheckpointRestore(
         restoreId,
         planIdentity,
       });
-      assertUpdateCheckpointSqliteSchema(checkpointDb, stagedDb);
+      assertUpdateCheckpointSqliteSchema(checkpointDb, stagedDb, currentDb);
       if (prepared) {
         shared.recovery = sharedBindingSchema.parse({
           sourceBinding: prepared.sourceBinding,
@@ -359,6 +364,7 @@ export async function prepareUpdateCheckpointRestore(
         }
       }
     } finally {
+      currentDb.close();
       checkpointDb.close();
       sourceDb.close();
       stagedDb.close();

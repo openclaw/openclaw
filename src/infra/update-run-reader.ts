@@ -6,9 +6,13 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "./kysely-sync.js";
 import { decodeRun } from "./update-run-codec.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateFetchFailure, UpdateRunRecord } from "./update-run-record.js";
 
 type ListInput = { limit?: number; active?: boolean };
 
@@ -54,4 +58,69 @@ export async function listUpdateRunsAsync(
       options,
     )) ?? []
   );
+}
+
+/** Only a later recorded fetch completion clears an updater fetch failure. */
+export function getLatestUpdateFetchFailure(
+  options: OpenClawStateDatabaseOptions = {},
+): UpdateFetchFailure | undefined {
+  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+    if (!tableExists(db, "update_runs")) {
+      return undefined;
+    }
+    const query = getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
+      .selectFrom("update_runs")
+      .selectAll()
+      .orderBy("created_at_ms", "desc")
+      .orderBy("run_id", "desc");
+    let latestAtMs = -Infinity;
+    let latestFailure: UpdateFetchFailure | undefined;
+    // Runs can overlap: creation, heartbeats, and finalization do not order fetch outcomes.
+    for (const row of iterateSqliteQuerySync(db, query)) {
+      const run = decodeRun(row);
+      const fetchSteps = run.steps.filter(
+        ({ step }) =>
+          /^git (?:fetch(?:\s|$)|target inspection fetch$)/u.test(step) ||
+          step === "git import admitted target",
+      );
+      const failed = fetchSteps.findLast((step) => step.status === "failed");
+      // A run can complete its branch fetch and then fail fetching tags.
+      if (run.reason === "fetch-failed" || failed) {
+        const failedAtMs = failed?.endedAtMs ?? run.finishedAtMs ?? run.updatedAtMs;
+        if (failedAtMs < latestAtMs) {
+          continue;
+        }
+        const detail = failed?.detail ?? "";
+        latestAtMs = failedAtMs;
+        latestFailure = {
+          reason: "fetch-failed",
+          failedAtMs,
+          detail: /would clobber existing tag/iu.test(detail)
+            ? "tag conflict"
+            : /authentication|permission denied|could not read Username|access denied/iu.test(
+                  detail,
+                )
+              ? "authentication failed"
+              : /resolve host|network|timed? out|timeout|unreachable/iu.test(detail)
+                ? "network error"
+                : "fetch-failed",
+          runId: run.runId,
+        };
+      } else {
+        for (const step of fetchSteps) {
+          // Untimed fetches cannot borrow a timestamp from later build/heartbeat activity.
+          if (step.status !== "completed" || step.endedAtMs === undefined) {
+            continue;
+          }
+          const completedAtMs = step.endedAtMs;
+          // A same-time completion is not evidence that the failure was superseded.
+          if (completedAtMs > latestAtMs) {
+            latestAtMs = completedAtMs;
+            latestFailure = undefined;
+          }
+        }
+      }
+    }
+    return latestFailure;
+  }, options);
 }

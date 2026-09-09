@@ -15,6 +15,7 @@ import type {
 } from "../cli/update-cli/update-command-migrated.js";
 import { finishUpdate } from "../cli/update-cli/update-command-post-update.js";
 import {
+  formatUpdateFinalizationError,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
 } from "../cli/update-cli/update-command-result.js";
@@ -23,7 +24,6 @@ import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-com
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
 import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
@@ -225,7 +225,7 @@ async function finalizeInput(
 
 void finalizeMigratedUpdate()
   .catch((error: unknown) => {
-    process.stderr.write(`${formatErrorMessage(error)}\n`);
+    process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);
     process.exitCode = 1;
   })
   .finally(() => closeOpenClawStateDatabase());

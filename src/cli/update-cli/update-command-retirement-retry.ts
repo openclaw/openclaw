@@ -2,7 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { currentUpdateRecoveryNativeFacts } from "../../infra/update-run-recovery-native-schema.js";
-import { UpdateRecoveryRecordSchema } from "../../infra/update-run-recovery-schema.js";
+import {
+  UpdateRecoveryRecordSchema,
+  isUpdateRecoveryPending,
+} from "../../infra/update-run-recovery-schema.js";
 import {
   inspectUpdateRecoveries,
   type UpdateRecoveryRecord,
@@ -43,11 +46,12 @@ export async function resumeTerminalUpdateRetirement(params: {
   if (
     !pending.terminal ||
     pending.retainedPair?.state !== "superseded" ||
-    pending.effects.at(-1)?.state !== "intent" ||
-    pending.effects.at(-1)?.package?.intent.action !== "retire"
+    !isUpdateRecoveryPending(pending) ||
+    (pending.effects.at(-1)?.state === "intent" &&
+      pending.effects.at(-1)?.package?.intent.action !== "retire")
   ) {
     throw new UpdateCommandRecoveryPendingError(
-      "Terminal history has no recoverable retirement intent.",
+      "Terminal history has no unfinished superseded-pair retirement.",
     );
   }
   const entry = inspectUpdateRecoveries({ env }).find(

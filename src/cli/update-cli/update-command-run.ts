@@ -34,7 +34,7 @@ import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
-  finishInterruptedUpdatePreviewInTransaction,
+  finishInterruptedUpdatePreview,
   finishUpdateRun,
   getUpdateRun,
   heartbeatUpdateRun,
@@ -47,12 +47,9 @@ import {
   type UpdateRunStep,
 } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
-import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
-import { readRecoveries } from "../../infra/update-run-recovery-store.js";
 import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
@@ -203,20 +200,7 @@ export async function withUpdatePreviewSignals<T>(
     if (!isDeepStrictEqual(getUpdateRun(expected.runId, { env }), expected)) {
       return;
     }
-    runOpenClawStateWriteTransaction(
-      (database) => {
-        const options = { env, database };
-        if (
-          readRecoveries(database.db).some(
-            (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
-          )
-        ) {
-          return;
-        }
-        finishInterruptedUpdatePreviewInTransaction(database.db, expected, options);
-      },
-      { env },
-    );
+    finishInterruptedUpdatePreview(expected, { env });
   });
   const onSignal = (code: number) => {
     interrupted = true;

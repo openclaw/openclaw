@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { closeAuthProfileReadPool } from "../../agents/auth-profiles/sqlite.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
@@ -113,6 +114,10 @@ export async function withUpdateCommandAgentPublication<T>(
         assertCurrent();
         held.assertCurrent();
       };
+      // Auth inspections have a separate process-local read pool. Drain only this
+      // owned database; foreign readers must still fail SQLite exclusive custody.
+      current();
+      closeAuthProfileReadPool({ kind: "database", databasePath: file });
       closeRetainedAgentFamily(file, current);
       completed = { result: await held.runWithSourceReads(() => visit(index + 1)) };
       current();

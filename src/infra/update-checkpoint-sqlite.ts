@@ -88,6 +88,74 @@ function rowsMatch(left: DatabaseSync, right: DatabaseSync, table: string): bool
   return rowsEqual(readRows(left, table), readRows(right, table));
 }
 
+// These are completion checkpoints, not database schema identity. Startup writes
+// them after the update-owned afterimage. Preserve them only in an unchanged
+// schema; unknown formats and all other metadata retain the strict reversal rule.
+function isStartupCheckpoint(row: Row): boolean {
+  const parts = typeof row.app_version === "string" ? row.app_version.split("\n") : [];
+  return (
+    (row.meta_key === "state-migrations" || row.meta_key === "startup-migrations") &&
+    row.role === "global" &&
+    row.agent_id === null &&
+    row.schema_version === 3n &&
+    parts.length === 6 &&
+    parts[1] === "3" &&
+    parts.every((part) => part.trim().length > 0)
+  );
+}
+function isKnownStartupCheckpoint(row: Row): boolean {
+  // Format 2 is the supported legacy build-only checkpoint. Its writer upgrades
+  // the same declared key; unknown future formats are not ours to reconcile.
+  const parts = typeof row.app_version === "string" ? row.app_version.split("\n") : [];
+  return (
+    isStartupCheckpoint(row) ||
+    ((row.meta_key === "state-migrations" || row.meta_key === "startup-migrations") &&
+      row.role === "global" &&
+      row.agent_id === null &&
+      row.schema_version === 2n &&
+      parts.length === 2 &&
+      parts.every((part) => part.trim().length > 0))
+  );
+}
+function sameSqliteSchema(left: DatabaseSync, right: DatabaseSync): boolean {
+  return (
+    JSON.stringify(readSqliteSnapshotHeader(left)) ===
+      JSON.stringify(readSqliteSnapshotHeader(right)) &&
+    JSON.stringify(schemaObjects(left)) === JSON.stringify(schemaObjects(right))
+  );
+}
+function restoredMetadata(checkpoint: DatabaseSync, current: DatabaseSync): Row[] {
+  const before = readRows(checkpoint, "schema_meta");
+  if (!sameSqliteSchema(checkpoint, current)) {
+    return before;
+  }
+  const completed = readRows(current, "schema_meta").filter(isStartupCheckpoint);
+  if (completed.length === 0) {
+    return before;
+  }
+  const keys = new Set(completed.map((row) => row.meta_key));
+  const merged = [
+    ...before.filter((row) => !isKnownStartupCheckpoint(row) || !keys.has(row.meta_key)),
+    ...completed,
+  ];
+  const identities = new Set<SQLOutputValue>(),
+    names = new Set<SQLOutputValue>();
+  for (const row of merged) {
+    if (
+      names.has(row.meta_key!) ||
+      (row.checkpoint_rowid !== undefined && identities.has(row.checkpoint_rowid))
+    ) {
+      // Neither a new row identity nor loss of a retained row is authorized.
+      throw new UpdateCheckpointPreservationUnavailable("schema_meta");
+    }
+    names.add(row.meta_key!);
+    if (row.checkpoint_rowid !== undefined) {
+      identities.add(row.checkpoint_rowid);
+    }
+  }
+  return merged;
+}
+
 /** Shape-compatible rows stay current; only the exactly bound plugin row may rewind. */
 function mergeRows(
   checkpoint: DatabaseSync,
@@ -125,6 +193,7 @@ export class UpdateCheckpointPreservationUnavailable extends Error {
 export function assertUpdateCheckpointSqliteSchema(
   checkpoint: DatabaseSync,
   staged: DatabaseSync,
+  preservedCurrent: DatabaseSync = checkpoint,
 ): void {
   if (
     JSON.stringify(readSqliteSnapshotHeader(checkpoint)) !==
@@ -139,7 +208,7 @@ export function assertUpdateCheckpointSqliteSchema(
     schemaObjects(checkpoint).some(
       (entry) => entry.type === "table" && entry.name === "schema_meta",
     ) &&
-    !rowsMatch(checkpoint, staged, "schema_meta")
+    !rowsEqual(restoredMetadata(checkpoint, preservedCurrent), readRows(staged, "schema_meta"))
   ) {
     throw new Error("Checkpoint SQLite schema metadata mismatch");
   }
@@ -221,10 +290,28 @@ export function carryForwardUpdateCheckpointSqlite(params: {
       continue;
     }
     if (table === "schema_meta") {
-      if (!rowsMatch(params.afterUpdate, params.current, table)) {
+      const preserveStartup =
+        sameSqliteSchema(params.checkpoint, params.afterUpdate) &&
+        sameSqliteSchema(params.checkpoint, params.current);
+      const currentKeys = new Set(
+        readRows(params.current, table)
+          .filter(isStartupCheckpoint)
+          .map((row) => row.meta_key),
+      );
+      const strictRows = (db: DatabaseSync) =>
+        readRows(db, table).filter(
+          (row) =>
+            !preserveStartup || !isKnownStartupCheckpoint(row) || !currentKeys.has(row.meta_key),
+        );
+      if (!rowsEqual(strictRows(params.afterUpdate), strictRows(params.current))) {
         throw new UpdateCheckpointPreservationUnavailable(table);
       }
-      copyRows.set(table, readRows(params.checkpoint, table));
+      copyRows.set(
+        table,
+        preserveStartup
+          ? restoredMetadata(params.checkpoint, params.current)
+          : readRows(params.checkpoint, table),
+      );
       restoredTables.push(table);
       continue;
     }
@@ -345,7 +432,7 @@ export function carryForwardUpdateCheckpointSqlite(params: {
     }
     const version = Number(params.checkpoint.prepare("PRAGMA user_version").get()?.user_version);
     params.staged.exec(`PRAGMA user_version = ${version}`);
-    assertUpdateCheckpointSqliteSchema(params.checkpoint, params.staged);
+    assertUpdateCheckpointSqliteSchema(params.checkpoint, params.staged, params.current);
     params.staged.exec("COMMIT");
   } catch (error) {
     params.staged.exec("ROLLBACK");

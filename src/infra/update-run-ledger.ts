@@ -16,7 +16,6 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  iterateSqliteQuerySync,
 } from "./kysely-sync.js";
 import {
   inspectUpdateRunAbandonment,
@@ -39,16 +38,18 @@ import { listUpdateRuns } from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
   type FinishUpdateRunResult,
-  type UpdateFetchFailure,
   type UpdateRunRecord,
   type UpdateRunPhase,
   type UpdateRunStep,
 } from "./update-run-record.js";
-import type { UpdateRecoveryReadinessReceipt } from "./update-run-recovery-schema.js";
-import { hasStoredUpdateRecovery } from "./update-run-recovery-store.js";
+import {
+  isUpdateRecoveryPending,
+  type UpdateRecoveryReadinessReceipt,
+} from "./update-run-recovery-schema.js";
+import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
-export { listUpdateRuns } from "./update-run-reader.js";
+export { getLatestUpdateFetchFailure, listUpdateRuns } from "./update-run-reader.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
@@ -79,6 +80,19 @@ function readRun(db: DatabaseSync, runId: string): UpdateRunRecord | undefined {
 }
 
 function writeRun<T>(operation: (db: DatabaseSync) => T, options: OpenClawStateDatabaseOptions): T {
+  if (options.database) {
+    throw new Error("Update run admission requires its own writable connection");
+  }
+  // Admission precedes managed shutdown. An older serving Gateway must not
+  // force diagnostic writes through this candidate's runtime migrations.
+  // Once a file exists, failures remain failures; never retry via bootstrap.
+  if (withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(() => true, options)) {
+    return runExistingOpenClawStateWriteTransaction(({ db }) => operation(db), options, {
+      schemaSql: schema,
+      operationLabel: "update.run",
+      initializeAdditiveSchema: true,
+    });
+  }
   let committedDatabase: DatabaseSync | undefined;
   const result = runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -522,24 +536,36 @@ export function finishUpdateRun(
   return mutateRun(runId, (record) => finishUpdateRunRecord(record, result), options);
 }
 
-/** Caller owns preview admission and excludes recovery under this same transaction. */
-export function finishInterruptedUpdatePreviewInTransaction(
-  db: DatabaseSync,
+/** Close only this local preview, excluding recovery in the same stable-schema transaction. */
+export function finishInterruptedUpdatePreview(
   expected: UpdateRunRecord,
   options: LedgerOptions,
 ): void {
-  if (!db.isTransaction || expected.status !== "running" || expected.phase !== "requested") {
-    throw new Error("Preview interruption requires an active admission and transaction");
+  if (expected.status !== "running" || expected.phase !== "requested") {
+    throw new Error("Preview interruption requires an active admission");
   }
-  mutateRunInTransaction(
-    db,
-    expected.runId,
-    (record) => {
-      if (isDeepStrictEqual(record, expected)) {
-        finishUpdateRunRecord(record, { status: "skipped", reason: "interrupted" });
+  runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      if (
+        readRecoveries(db).some(
+          (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+        )
+      ) {
+        return;
       }
+      mutateRunInTransaction(
+        db,
+        expected.runId,
+        (record) => {
+          if (isDeepStrictEqual(record, expected)) {
+            finishUpdateRunRecord(record, { status: "skipped", reason: "interrupted" });
+          }
+        },
+        options,
+      );
     },
     options,
+    { schemaSql: schema, operationLabel: "update.preview.interrupted" },
   );
 }
 
@@ -599,11 +625,16 @@ export function finishAbortedUpdatePreparationInTransaction(
 export function recordUpdateRunVerification(
   runId: string,
   verification: UpdateRunRecord["verification"],
-  options: LedgerOptions = {},
+  options: LedgerOptions & { onlyIfRunning?: true } = {},
 ): UpdateRunRecord {
   return mutateRun(
     runId,
     (record) => {
+      // Startup observations cannot revise a terminal result, including one
+      // committed after the Gateway read the run but before this transaction.
+      if (options.onlyIfRunning && record.status !== "running") {
+        return;
+      }
       record.verification = {
         ...record.verification,
         ...verification,
@@ -717,51 +748,4 @@ export function finishVerifiedUpdateRunInTransaction(
     },
     options,
   );
-}
-
-/** Only a later recorded fetch completion clears an updater fetch failure. */
-export function getLatestUpdateFetchFailure(
-  options: OpenClawStateDatabaseOptions = {},
-): UpdateFetchFailure | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
-    if (!tableExists(db, "update_runs")) {
-      return undefined;
-    }
-    const query = getNodeSqliteKysely<LedgerDatabase>(db)
-      .selectFrom("update_runs")
-      .selectAll()
-      .orderBy("created_at_ms", "desc")
-      .orderBy("run_id", "desc");
-    for (const row of iterateSqliteQuerySync(db, query)) {
-      const run = decodeRun(row);
-      const fetchSteps = run.steps.filter(
-        ({ step }) =>
-          /^git (?:fetch(?:\s|$)|target inspection fetch$)/u.test(step) ||
-          step === "git import admitted target",
-      );
-      const failed = fetchSteps.findLast((step) => step.status === "failed");
-      // A run can complete its branch fetch and then fail fetching tags.
-      if (run.reason === "fetch-failed" || failed) {
-        const detail = failed?.detail ?? "";
-        return {
-          reason: "fetch-failed",
-          failedAtMs: failed?.endedAtMs ?? run.finishedAtMs ?? run.updatedAtMs,
-          detail: /would clobber existing tag/iu.test(detail)
-            ? "tag conflict"
-            : /authentication|permission denied|could not read Username|access denied/iu.test(
-                  detail,
-                )
-              ? "authentication failed"
-              : /resolve host|network|timed? out|timeout|unreachable/iu.test(detail)
-                ? "network error"
-                : "fetch-failed",
-          runId: run.runId,
-        };
-      }
-      if (fetchSteps.some((step) => step.status === "completed")) {
-        return undefined;
-      }
-    }
-    return undefined;
-  }, options);
 }

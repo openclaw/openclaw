@@ -551,6 +551,9 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
       path.join(path.dirname(reopened.plan.checkpointRef.manifestPath), captured.artifact),
       { readOnly: true },
     );
+    const currentDb = openNodeSqliteDatabase(path.join(resource.stageDirectory, "current.sqlite"), {
+      readOnly: true,
+    });
     try {
       const result = prepareUpdateRecoveryCarryForward({
         sourceDb,
@@ -559,7 +562,7 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
         nextProgress: { ...params.planRef, resourceCursor: 0, phase: "intent" },
         fence: { assertCurrent },
         validateStagedDatabase(db) {
-          assertUpdateCheckpointSqliteSchema(checkpointDb, db);
+          assertUpdateCheckpointSqliteSchema(checkpointDb, db, currentDb);
           const validation: unknown = params.validateStagedDatabase(db);
           if (validation !== undefined) {
             if (isPromiseLike(validation)) {
@@ -573,6 +576,7 @@ export async function sealUpdateCheckpointRestoreSharedDatabase(
       validateUpdateRecoveryDatabaseBinding(sourceDb, sealed, resource.recovery.sourceBinding);
       validateUpdateRecoveryDatabaseBinding(stagedDb, sealed, resource.recovery.stagedBinding);
     } finally {
+      currentDb.close();
       checkpointDb.close();
     }
     // The retained release runs in another process. It must see the FINAL

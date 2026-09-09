@@ -303,8 +303,26 @@ export async function recordUpdateRecoveryNativeIntent(
     }
     return { record, status };
   }
+  const recordedBefore = currentUpdateRecoveryNativeFacts(manager);
+  // A positively observed failed Linux start may stop by itself before the
+  // owner's next intent. Record the ordinary stop edge from the retained facts;
+  // the independently observed target means no stop dispatch is needed. This
+  // preserves history and still requires another read before restart cancellation.
+  const settledCandidateStop =
+    quiescingUnverifiedStart &&
+    pendingRestart?.state === "intent" &&
+    pendingRestart.runtime === "candidate" &&
+    !record.restore &&
+    manager.identity.platform === "linux" &&
+    manager.identity.scope === "user" &&
+    action === "stop" &&
+    prior === dispatched &&
+    !recordedBefore.stopped &&
+    isDeepStrictEqual(observation.facts, { ...recordedBefore, stopped: true }) &&
+    isDeepStrictEqual(target, observation.facts);
+  const before = settledCandidateStop ? recordedBefore : observation.facts;
   if (
-    !isDeepStrictEqual(observation.facts, currentUpdateRecoveryNativeFacts(manager)) ||
+    (!isDeepStrictEqual(observation.facts, recordedBefore) && !settledCandidateStop) ||
     prior?.state === "intent" ||
     manager.effects.some((effect) => effect.effectId === effectId) ||
     (action === "enable-for-start" && !record.checkpoint) ||
@@ -312,13 +330,7 @@ export async function recordUpdateRecoveryNativeIntent(
       action !== "enable-for-start" &&
       !failureQuiescence &&
       (record.checkpoint || record.effects.length || record.restore || record.primaryFailure)) ||
-    !validNativeTransition(
-      action,
-      observation.facts,
-      target,
-      manager.original,
-      manager.identity.platform,
-    )
+    !validNativeTransition(action, before, target, manager.original, manager.identity.platform)
   ) {
     throw new UpdateRecoveryConflictError();
   }
@@ -336,7 +348,7 @@ export async function recordUpdateRecoveryNativeIntent(
     current.nativeManager!.effects.push({
       effectId,
       action,
-      before: observation.facts,
+      before,
       after: target,
       state: "intent",
       intentRevision: current.revision + 1,

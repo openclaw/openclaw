@@ -12,6 +12,7 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { prepareOpenClawStateReplayPublication } from "../../state/openclaw-state-publication.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { readUpdateCommandNativeObservation } from "./update-command-native-observation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
@@ -141,6 +142,8 @@ export async function restoreUpdateCommandFailure(
                 );
               }
             }
+            await prepareOpenClawStateReplayPublication();
+            assertCurrent();
             const packageResult = await opened.transaction.rollback();
             assertCurrent();
             if (

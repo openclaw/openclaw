@@ -4,8 +4,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage, isErrno } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
+import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
-import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
+import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 
 const CONFIG_MUTATION_LOCK_OPTIONS = {
   retries: { retries: 80, factor: 1.2, minTimeout: 25, maxTimeout: 250, randomize: true },
@@ -55,17 +56,36 @@ async function runConfigLockScope<T>(
   paths.set(configPath, scope);
   try {
     return await activeConfigMutationLocks.run({ paths, current: scope }, async () => {
+      let outcome: { value: T } | { error: unknown };
       try {
         assertCurrent?.();
-        return await fn();
+        outcome = { value: await fn() };
+      } catch (error) {
+        outcome = { error };
       } finally {
         scope.accepting = false;
-        // Admitted writes retain their source lock until settlement, including
-        // detached children. The captured guard still checks the real executor.
-        while (scope.pending.size > 0) {
-          await Promise.allSettled(scope.pending);
+      }
+      const failures: unknown[] = [];
+      // Join work still pending when the callback settles. Earlier, reconciled
+      // failures belong to the caller; drainage failures must not become success.
+      // The source lock and captured executor guard remain live through this join.
+      while (scope.pending.size > 0) {
+        for (const result of await Promise.allSettled(scope.pending)) {
+          if (result.status === "rejected") {
+            failures.push(result.reason);
+          }
         }
       }
+      if (failures.length) {
+        throw new AggregateError(
+          "error" in outcome ? [outcome.error, ...failures] : failures,
+          "Config write operation did not settle successfully.",
+        );
+      }
+      if ("error" in outcome) {
+        throw outcome.error;
+      }
+      return outcome.value;
     });
   } finally {
     scope.active = false;
@@ -80,6 +100,9 @@ export async function withConfigWriteLock<T>(
 ): Promise<T> {
   const configPath = path.resolve(pathname);
   assertConfigWriteAllowedInCurrentMode({ configPath, env });
+  const assertResourceUnborrowed = (targetPath: string) =>
+    createManagedHandoffLeaseStore().assertSourceUnborrowed(targetPath);
+  assertResourceUnborrowed(configPath);
   const inherited = activeConfigMutationLocks.getStore();
   const guardedParent = [...(inherited?.paths.entries() ?? [])].find(
     ([, scope]) => scope.assertCurrent,
@@ -98,6 +121,9 @@ export async function withConfigWriteLock<T>(
   const inheritedScope = inherited?.paths.get(configPath);
   if (inheritedScope?.active) {
     const running = Promise.resolve().then(() => {
+      // Borrower custody may have changed since this nested call was queued,
+      // including for ordinary config writers without an explicit source guard.
+      assertResourceUnborrowed(configPath);
       captureConfigWriteLockGuard(configPath)?.();
       return guard ? runConfigLockScope(configPath, fn, guard) : fn();
     });
@@ -112,8 +138,10 @@ export async function withConfigWriteLock<T>(
   await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
   return await configMutationQueue
     .enqueue(configPath, async () => {
-      return await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, () =>
-        runConfigLockScope(configPath, fn, guard),
+      return await withFileLock(
+        configPath,
+        { ...CONFIG_MUTATION_LOCK_OPTIONS, assertResourceUnborrowed },
+        () => runConfigLockScope(configPath, fn, guard),
       );
     })
     .catch(async (error: unknown) => {

@@ -26,6 +26,7 @@ import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
   splitSystemdLogicalLines,
+  splitSystemdEnvironmentWords,
 } from "./systemd-unit.js";
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
@@ -99,7 +100,9 @@ async function readSystemdManagerCommand(
   let remainingCalls = inspection ? 6 : 3;
   // All manager D-Bus calls share one deadline so wedged reads reach local fallback promptly.
   const query = async (args: string[], signatures: string[]): Promise<unknown[] | null> => {
-    inspection?.assertCurrent();
+    const assertCurrent =
+      (args[0] === "call" && args[4] === "LoadUnit" ? undefined : inspection?.assertReadCurrent) ??
+      inspection?.assertCurrent;
     if (inspection && (performance.now() >= deadlineAt || remainingCalls <= 0)) {
       throw unavailable();
     }
@@ -107,8 +110,9 @@ async function readSystemdManagerCommand(
       env,
       ["--json=short", ...(opts?.requireLoaded ? ["--auto-start=no"] : []), ...args],
       Math.max(1, Math.floor((deadlineAt - performance.now()) / remainingCalls--)),
+      assertCurrent,
     );
-    inspection?.assertCurrent();
+    assertCurrent?.();
     if (inspection && (result.termination !== "exit" || performance.now() >= deadlineAt)) {
       throw unavailable();
     }
@@ -144,8 +148,7 @@ async function readSystemdManagerCommand(
     : undefined;
   const destination = binding?.destination ?? manager;
   const assertAbsentWithoutLoading = async (): Promise<null> => {
-    // GetUnit only proves that a unit is not currently loaded. An existing
-    // authored or native unit file must not be mistaken for service absence.
+    // Missing loaded objects do not prove an authored/native unit definition is absent.
     if (localDefinition) {
       throw unavailable();
     }
@@ -391,14 +394,6 @@ async function readSystemdDropInOverrides(
   return Object.keys(overrides).length ? overrides : undefined;
 }
 
-function splitSystemdEnvironmentWords(value: string): string[] {
-  return splitArgsPreservingQuotes(value, {
-    escapeMode: "backslash",
-    quoteChars: ['"', "'"],
-    quoteStart: "item-start",
-  });
-}
-
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
@@ -534,8 +529,7 @@ function decodeSystemdEnvironmentFileValue(rawValue: string): {
     | "double-quoted"
     | "double-quoted-escape";
 
-  // Mirror systemd's parse_env_file_internal state transitions. In particular,
-  // a closing quoted segment returns to `pre`, so `"foo"bar` decodes to `foobar`.
+  // Match systemd parse_env_file_internal: closing quotes return to pre ("foo"bar -> foobar).
   let state: ParseState = "pre";
   let decoded = "";
   let literalDollar = false;
@@ -640,8 +634,7 @@ function parseEnvironmentFileLine(
 }
 
 function serializeSystemdEnvironmentFileValue(value: string): string {
-  // EnvironmentFile double quotes only unescape \", \\, \`, and \$. Escape
-  // exactly that set so credentials survive systemd parsing byte-for-byte.
+  // Quote only systemd's supported escapes so credential bytes survive EnvironmentFile parsing.
   if (!/[\s\\'"`$]/u.test(value)) {
     return value;
   }

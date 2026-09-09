@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { closeAuthProfileReadPool } from "../../agents/auth-profiles/sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import {
@@ -11,6 +12,7 @@ import {
   type UpdateRecoveryHandoff,
 } from "../../infra/update-run-recovery.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type {
   MigratedUpdateFinalizationInput,
@@ -101,6 +103,12 @@ export async function continueDurableUpdateInFreshProcess(
       "Candidate lacks checkpoint-owned continuation; no handoff was prepared.",
     );
   }
+  // The waiting parent must not retain agent readers that prevent the child's
+  // physical restore. Drain only this checkpoint's state, before giving up its claim.
+  await closeOpenClawAgentDatabasesAsync(original.checkpoint.binding.stateDir);
+  fence.assertCurrent();
+  closeAuthProfileReadPool({ kind: "root", rootPath: original.checkpoint.binding.stateDir });
+  fence.assertCurrent();
   const prepared = prepareUpdateRecoveryHandoff(original, recovery.fence, recovery.options);
   recovery.onRecord(prepared.record);
   const {

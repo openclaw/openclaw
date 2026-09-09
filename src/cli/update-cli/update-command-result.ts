@@ -2,8 +2,14 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  attachErrorDiagnostic,
+  formatErrorMessageForDisplay,
+} from "../../infra/error-diagnostics.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import type { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
@@ -25,6 +31,20 @@ import type { OwnedManagedUpdateContext } from "./update-command-managed-context
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+
+/** Terminal worker diagnostics do not participate in recovery decisions. */
+export function formatUpdateFinalizationError(error: unknown): string {
+  const contention = collectNestedErrorCandidates(error).find(isSqliteLockError);
+  if (error && typeof error === "object" && contention instanceof Error) {
+    // The worker has already unwound ownership. Retain the actual causal site
+    // through aggregate wrappers without changing policy-bearing error fields.
+    attachErrorDiagnostic(
+      error,
+      `SQLite contention call site:\n${formatUncaughtError(contention)}`,
+    );
+  }
+  return formatErrorMessageForDisplay(error);
+}
 
 export type MutableUpdateExecutionResult = {
   mutationStarted: boolean;

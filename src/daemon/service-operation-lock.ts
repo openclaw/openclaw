@@ -3,6 +3,7 @@ import path from "node:path";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { resolveTaskName } from "./schtasks-layout.js";
@@ -20,33 +21,31 @@ export async function withGatewayServiceOperationLock<T>(
   env: GatewayServiceEnv,
   operation: (assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
-  const identity =
-    process.platform === "darwin"
-      ? `launchd:${resolveLaunchAgentGuiDomain()}/${resolveLaunchAgentLabel(env)}`
-      : process.platform === "win32"
-        ? `schtasks:${resolveTaskName(env).toLowerCase()}`
-        : `systemd:${resolveSystemdServiceName(env)}`;
-  const file = path.join(
-    resolvePreferredOpenClawTmpDir(),
-    `service-lifecycle-${sha256Hex(identity)}`,
-  );
+  const file = resolveGatewayServiceOperationLockPath(env);
+  const assertResourceUnborrowed = (targetPath: string) =>
+    createManagedHandoffLeaseStore().assertSourceUnborrowed(targetPath);
+  assertResourceUnborrowed(file);
   const inherited = scopes.getStore();
   const parent = inherited?.get(file);
   const assertScope = (scope: Scope) => {
     if (!scope.active) {
       throw new Error("Native service operation ownership has closed.");
     }
+    // A reservation can arise inside this interval. Holding the file lock
+    // remains exclusion, not permission for ordinary service mutations.
+    assertResourceUnborrowed(file);
   };
   if (parent?.active) {
     let active = true;
-    const work = Promise.resolve().then(() =>
-      operation(() => {
+    const work = Promise.resolve().then(() => {
+      assertScope(parent);
+      return operation(() => {
         assertScope(parent);
         if (!active) {
           throw new Error("Native service operation ownership has closed.");
         }
-      }),
-    );
+      });
+    });
     parent.pending.add(work);
     try {
       return await work;
@@ -63,13 +62,20 @@ export async function withGatewayServiceOperationLock<T>(
     {
       retries: { retries: 120, factor: 1.1, minTimeout: 25, maxTimeout: 250 },
       stale: 30_000,
-      staleRecovery: "fail-closed",
+      // Reacquire only a definitely retired process, never from age alone. The
+      // provider pins the stale bytes/inode and rechecks custody before unlink.
+      // This restores client exclusion, not evidence that native work completed.
+      staleRecovery: "remove-if-definitely-stale",
+      assertResourceUnborrowed,
     },
     async () =>
       scopes.run(next, async () => {
         scope.active = true;
         const [outcome] = await Promise.allSettled([
-          Promise.resolve().then(() => operation(() => assertScope(scope))),
+          Promise.resolve().then(() => {
+            assertScope(scope);
+            return operation(() => assertScope(scope));
+          }),
         ]);
         const failures: unknown[] = [];
         // Only admitted work still pending when the outer callback settles is
@@ -98,4 +104,14 @@ export async function withGatewayServiceOperationLock<T>(
         return outcome.value;
       }),
   );
+}
+
+function resolveGatewayServiceOperationLockPath(env: GatewayServiceEnv): string {
+  const identity =
+    process.platform === "darwin"
+      ? `launchd:${resolveLaunchAgentGuiDomain()}/${resolveLaunchAgentLabel(env)}`
+      : process.platform === "win32"
+        ? `schtasks:${resolveTaskName(env).toLowerCase()}`
+        : `systemd:${resolveSystemdServiceName(env)}`;
+  return path.join(resolvePreferredOpenClawTmpDir(), `service-lifecycle-${sha256Hex(identity)}`);
 }

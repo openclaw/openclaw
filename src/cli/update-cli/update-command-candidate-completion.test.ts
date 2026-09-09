@@ -45,6 +45,11 @@ import { captureStoppedState } from "./update-command-checkpoint.js";
 import { useCollectedServiceRuntime } from "./update-command-collected-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { runUpdateCommandMutation } from "./update-command-mutation.js";
+import {
+  nativeAutoRestartModes,
+  createNativeQuiescenceFixture,
+  createNativeRestartCounterFixture,
+} from "./update-command-native-generation.test-support.js";
 import { withUpdateCommandNativePreparation } from "./update-command-native-preparation.js";
 import { interruptNativeSuppressionReplay } from "./update-command-native-suppression.test-support.js";
 import {
@@ -89,20 +94,7 @@ it.each([
   "health-rollback",
   "start-rollback",
   "unapplied-start-rollback",
-  "auto-restart-rollback",
-  "auto-restart-after-start-rollback",
-  "auto-restart-stopped-rollback",
-  "auto-restart-observed-stop-rollback",
-  "auto-restart-retained-rollback",
-  "auto-restart-collected-stop-rollback",
-  "auto-restart-collected-retained-rollback",
-  "auto-restart-collected-native-entry-rollback",
-  "auto-restart-collected-partial-rollback",
-  "auto-restart-collected-partial-refusals-rollback",
-  "auto-restart-collected-partial-custody-rollback",
-  "auto-restart-foreign-manager",
-  "auto-restart-counter-drift",
-  "auto-restart-unverified",
+  ...nativeAutoRestartModes,
   "readiness-rollback",
   "readiness-failed",
   "boot-switched",
@@ -128,8 +120,9 @@ it.each([
     const nativeEntry = mode === "auto-restart-collected-native-entry-rollback";
     const partialCustody = mode === "auto-restart-collected-partial-custody-rollback";
     const partialRefusals =
-      mode === "auto-restart-collected-partial-refusals-rollback" || partialCustody;
-    const partialReplay = mode === "auto-restart-collected-partial-rollback" || partialRefusals;
+      (mode.startsWith("auto-restart-collected-partial-") && mode.includes("-refusals-")) ||
+      partialCustody;
+    const partialReplay = mode.startsWith("auto-restart-collected-partial-");
     const collectedStop =
       mode === "auto-restart-collected-stop-rollback" ||
       mode === "auto-restart-collected-retained-rollback" ||
@@ -172,6 +165,11 @@ it.each([
         preWorkshop: older,
       });
     }
+    let settledRestartCounter: number | undefined;
+    const readRestartCounter = createNativeRestartCounterFixture(mode);
+    const readQuiescenceTransition = createNativeQuiescenceFixture(mode);
+    let deadlineAdvanced = false;
+    const originalPerformanceNow = performance.now.bind(performance);
     let servingVersion = rollback ? "1.0.0" : "2.0.0";
     let servingBoot = rollback ? "previous-boot" : "candidate-boot";
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -271,7 +269,6 @@ it.each([
           let recovery: UpdateCommandRecovery;
           const events: string[] = [];
           let autoRestarting = false;
-          let restartCount = 1;
           let inspectionUnavailable = false;
           const start = vi.fn(
             async (
@@ -356,6 +353,32 @@ it.each([
                   throw new Error("fixture interrupted after suppression dispatch");
                 }
                 if (
+                  mode === "auto-restart-overdeadline" &&
+                  autoRestarting &&
+                  recovery?.getRecord().primaryFailure &&
+                  !deadlineAdvanced
+                ) {
+                  deadlineAdvanced = true;
+                  // Model a native query that returned coherent facts too late.
+                  vi.spyOn(performance, "now").mockImplementation(
+                    () => originalPerformanceNow() + 31_000,
+                  );
+                }
+                const transition = autoRestarting
+                  ? readQuiescenceTransition(
+                      Boolean(recovery?.getRecord().primaryFailure),
+                      process.pid,
+                      last?.action === "restore" && last.state === "observed",
+                    )
+                  : undefined;
+                if (transition?.settled) {
+                  autoRestarting = false;
+                  settledRestartCounter = transition.runtime?.systemd?.nRestarts;
+                }
+                if (transition?.runtime) {
+                  return transition.runtime;
+                }
+                if (
                   collectedRuntime &&
                   recovery?.getRecord().primaryFailure &&
                   !enabled &&
@@ -380,9 +403,9 @@ it.each([
                     unit: "openclaw-gateway.service",
                     managerUid:
                       autoRestarting && mode === "auto-restart-foreign-manager" ? 2002 : 2001,
-                    ...(autoRestarting
-                      ? { nRestarts: mode === "auto-restart-counter-drift" ? restartCount++ : 1 }
-                      : {}),
+                    nRestarts: autoRestarting
+                      ? readRestartCounter(Boolean(recovery?.getRecord().primaryFailure))
+                      : settledRestartCounter,
                   },
                 };
               },
@@ -765,6 +788,7 @@ it.each([
               resume = await interruptPartialPublicationReplay(params, {
                 refusalsOnly: partialRefusals,
                 custodyOnly: partialCustody,
+                unsealed: mode.includes("-unsealed-"),
               });
               return;
             }
@@ -898,7 +922,11 @@ it.each([
               expect(start).toHaveBeenCalledOnce();
             } else if (lateRollback) {
               expect(events).toEqual(
-                mode === "unapplied-start-rollback" || nativeStopped
+                mode === "auto-restart-after-observed-start-stopped-rollback" ||
+                  mode === "unapplied-start-rollback" ||
+                  mode === "auto-restart-between-inspections-settled-rollback" ||
+                  nativeStopped ||
+                  mode.includes("-transition-settled-")
                   ? ["enable", "start", "disable", "enable", "start"]
                   : ["enable", "start", "disable", "stop", "enable", "start"],
               );

@@ -254,3 +254,103 @@ it.each([false, true])(
     });
   },
 );
+
+it.each([false, true])(
+  "joins all superseded roots under the same deadline (stall=%s)",
+  async (stall) => {
+    await withTestDir({ prefix: "package-superseded-observation-" }, async (base) => {
+      const hooks: PackageRecoveryHooks = {
+        transactionId: randomUUID(),
+        persistDescriptor: async () => ({ assertCurrent() {} }),
+        beforeEffect: vi.fn(async () => ({ assertCurrent() {}, afterEffect: async () => {} })),
+      };
+      const first = await createRetainedPackageSwap(path.join(base, "first"), hooks);
+      const original = first.transaction.recovery!.descriptor();
+      const second = await createPackageSwapFixture(path.join(base, "second"));
+      await writePackageRoot(second.params.stage.packageRoot, "3.0.0");
+      let replacement: PackageTransactionDescriptor | undefined;
+      expect(
+        (
+          await swapStagedPackageInstall({
+            ...second.params,
+            installTarget: first.params.installTarget,
+            recovery: { ...hooks, transactionId: randomUUID() },
+            onTransaction(transaction) {
+              replacement = transaction.recovery!.descriptor();
+            },
+          })
+        ).status,
+      ).toBe("committed");
+      if (!replacement?.previous) {
+        throw new Error("No replacement retained root");
+      }
+      const descriptor: PackageTransactionDescriptor = {
+        ...original,
+        retention: {
+          state: "superseded",
+          pairId: randomUUID(),
+          ownerRevision: 3,
+          replacement: {
+            pairId: randomUUID(),
+            transactionId: replacement.transactionId,
+            live: replacement.candidate,
+            retainedRoot: replacement.backupRoot,
+            retained: replacement.previous,
+            launchers: replacement.launchers.map((entry) => ({
+              name: entry.name,
+              fingerprint: entry.candidate,
+            })),
+          },
+        },
+      };
+      const targets = new Set(
+        [descriptor.liveRoot, descriptor.backupRoot, replacement.backupRoot].map((root) =>
+          path.join(root, "package.json"),
+        ),
+      );
+      const entered = new Set<string>();
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const open = fs.open.bind(fs);
+      const opens: ReturnType<typeof fs.open>[] = [];
+      const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const file = String(args[0]);
+        if (targets.has(file) && !entered.has(file)) {
+          entered.add(file);
+          if (entered.size === targets.size && !stall) {
+            release();
+          }
+          await barrier;
+        }
+        const opening = open(...args);
+        opens.push(opening);
+        return opening;
+      });
+      vi.mocked(hooks.beforeEffect).mockClear();
+      try {
+        const observed = await createPackageRecoveryTransaction(descriptor, hooks, 500).observe();
+        expect(entered.size).toBe(3);
+        expect(observed).toMatchObject(
+          stall
+            ? { status: "unavailable", reason: "Package rollback verification timed out" }
+            : {
+                status: "verified",
+                observation: { previous: "retained", candidate: "absent", successorLive: true },
+              },
+        );
+        expect(hooks.beforeEffect).not.toHaveBeenCalled();
+      } finally {
+        release();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        for (const handle of await Promise.all(opens)) {
+          await expect.poll(() => handle.fd).toBe(-1);
+        }
+        spy.mockRestore();
+      }
+    });
+  },
+);
