@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import {
   disconnectGatewayClient,
@@ -68,11 +68,19 @@ describe("plugin Gateway returned values", () => {
         source: "typescript",
       });
     } finally {
-      if (gateway) await disconnectGatewayClient(gateway.client);
-      if (previous.HOME === undefined) delete process.env.HOME;
-      else process.env.HOME = previous.HOME;
-      if (previous.OPENCLAW_STATE_DIR === undefined) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = previous.OPENCLAW_STATE_DIR;
+      if (gateway) {
+        await disconnectGatewayClient(gateway.client);
+      }
+      if (previous.HOME === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previous.HOME;
+      }
+      if (previous.OPENCLAW_STATE_DIR === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previous.OPENCLAW_STATE_DIR;
+      }
     }
   }, 120_000);
 });

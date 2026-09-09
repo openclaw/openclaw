@@ -59,7 +59,7 @@ export function registerWorkboardGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "workboard.cards.start",
-    async (context) => await dispatchCards(context, { supportsMaxStarts: false, directCard: true }),
+    (context) => dispatchCards(context, { supportsMaxStarts: false, directCard: true }),
     { scope: WRITE_SCOPE },
   );
 
@@ -187,13 +187,13 @@ export function registerWorkboardGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "workboard.cards.dispatch",
-    async (context) => await dispatchCards(context, { supportsMaxStarts: false }),
+    (context) => dispatchCards(context, { supportsMaxStarts: false }),
     { scope: WRITE_SCOPE },
   );
 
   api.registerGatewayMethod(
     "workboard.cards.dispatchWithOptions",
-    async (context) => await dispatchCards(context, { supportsMaxStarts: true }),
+    (context) => dispatchCards(context, { supportsMaxStarts: true }),
     { scope: WRITE_SCOPE },
   );
 

@@ -40,14 +40,11 @@ export function registerWorkboardResultMethods(
   for (const [method, scope, handler] of methods) {
     api.registerGatewayMethod(
       method,
-      async (context) => {
-        try {
-          context.respond(true, await handler(context));
-          return;
-        } catch (error) {
-          respondError(context.respond, error);
-        }
-      },
+      (context) =>
+        Promise.resolve(handler(context)).then(
+          (result) => context.respond(true, result),
+          (error: unknown) => respondError(context.respond, error),
+        ),
       { scope },
     );
   }
