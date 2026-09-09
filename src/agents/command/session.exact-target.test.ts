@@ -94,7 +94,7 @@ it("reuses the persisted session when an explicit key's opaque tail is uppercase
     expect(first.sessionEntry).toBeUndefined();
     expect(first.isNewSession).toBe(true);
     await sessionAccessor.replaceSessionEntry(
-      { sessionKey: first.sessionKey, storePath },
+      { sessionKey, storePath },
       { sessionId: first.sessionId, updatedAt: Date.now(), sessionStartedAt: Date.now() },
     );
 
