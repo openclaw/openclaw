@@ -6,7 +6,7 @@ import {
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
 // Read-only clients need schema admission without loading updater publication policy.
@@ -55,21 +55,9 @@ export function readStateSchemaMigrationVersion(db: DatabaseSync): number {
   if (version !== 16) {
     return version;
   }
-  const reviews = new Set(
-    db
-      .prepare("PRAGMA table_xinfo(skill_workshop_collection_reviews)")
-      .all()
-      .map((row) => row.name),
-  );
-  const proposals = new Set(
-    db
-      .prepare("PRAGMA table_xinfo(skill_workshop_proposals)")
-      .all()
-      .map((row) => row.name),
-  );
-  const reviewWorkspace = reviews.has("workspace_dir");
-  const proposalWorkspace = proposals.has("workspace_dir");
-  const releasedClaim = proposals.has("claim_released_time");
+  const reviewWorkspace = tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir");
+  const proposalWorkspace = tableHasColumn(db, "skill_workshop_proposals", "workspace_dir");
+  const releasedClaim = tableHasColumn(db, "skill_workshop_proposals", "claim_released_time");
   if (!reviewWorkspace && !proposalWorkspace && !releasedClaim) {
     return version;
   }
