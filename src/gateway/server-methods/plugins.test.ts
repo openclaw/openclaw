@@ -508,6 +508,7 @@ describe("plugin management Gateway handlers", () => {
             id: "ch_bWVtb3J5LXBsdXM",
             catalog: {
               name: "Memory Plus",
+              packageName: "memory-plus",
               summary: "Long-term memory",
               family: "code-plugin",
               author: "alice",
