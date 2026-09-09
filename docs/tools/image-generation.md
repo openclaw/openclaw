@@ -365,7 +365,7 @@ and ComfyUI support 1.
     `openai.outputCompression` applies to JPEG/WebP outputs and is ignored
     for PNG outputs.
 
-    The top-level `background` hint is provider-neutral and currently maps
+    The top-level `background` hint is provider-neutral and maps
     to the same OpenAI `background` request field when the OpenAI provider
     is selected. Providers that do not declare background support return
     it in `ignoredOverrides` instead of receiving the unsupported parameter.
@@ -472,7 +472,7 @@ and ComfyUI support 1.
     }
     ```
 
-    Krea 2 currently returns one image per request. Prefer `aspectRatio` for
+    Krea 2 returns one image per request. Prefer `aspectRatio` for
     Krea; OpenClaw maps `size` to the closest supported Krea aspect ratio and
     rejects `resolution` for Krea rather than dropping it. Use `fal.creativity`
     when you want a native Krea creativity level:
@@ -586,7 +586,7 @@ OpenAI-specific alias. Use `--openai-moderation low|auto` with both OpenAI image
 generation and reference-image edits. The direct OpenAI Images API and the
 ChatGPT/Codex OAuth Responses backend both support the moderation hint.
 Bundled providers other than OpenAI do not declare
-explicit background control today, so `background: "transparent"` is reported
+explicit background control, so `background: "transparent"` is reported
 as ignored for them.
 
 ## Related
