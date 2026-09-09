@@ -5997,7 +5997,8 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     const updateRunner = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
     expect(updateRunner).toContain('assert-dirty-update "$git_root" "$fixture_sha"');
     expect(updateRunner).toContain('[ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]');
-    expect(updateRunner).toContain('[ "$dirty_status" -ne 1 ]');
+    expect(updateRunner).toContain("assert-dirty-exit \\");
+    expect(updateRunner).toContain('"$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"');
   });
 
   it("serves the version-matched Codex candidate during package onboarding", () => {

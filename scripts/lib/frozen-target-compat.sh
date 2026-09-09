@@ -110,7 +110,8 @@ openclaw_resolve_frozen_live_cli_backend_package_mode() {
 openclaw_resolve_frozen_update_channel_dry_run_mode() {
   local source_root="${1:?missing selected source root}" authorization_status=0
 
-  export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="0"
+  export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="0" \
+    OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="0"
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
   [ "$authorization_status" -eq 1 ] && return 0
   [ "$authorization_status" -eq 0 ] || return "$authorization_status"
@@ -123,7 +124,8 @@ openclaw_resolve_frozen_update_channel_dry_run_mode() {
     ! openclaw_frozen_target_source_contains \
       "$source_root" src/cli/update-cli/update-command.ts \
       'selectedChannel === "dev" && explicitTag === null'; then
-    export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="1"
+    export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="1" \
+      OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="1"
   fi
 }
 

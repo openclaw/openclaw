@@ -471,7 +471,7 @@ export function parseRegistryNpmSpec(spec: string) {
         "bash",
         [
           "-c",
-          'set -euo pipefail; source "$1"; openclaw_resolve_frozen_update_channel_dry_run_mode "$2"; printf "%s\\n" "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT"',
+          'set -euo pipefail; source "$1"; openclaw_resolve_frozen_update_channel_dry_run_mode "$2"; printf "%s:%s\\n" "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" "$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"',
           "test",
           stageScriptPath,
           root,
@@ -488,9 +488,9 @@ export function parseRegistryNpmSpec(spec: string) {
       );
     };
 
-    expect(run(legacySha).stdout).toBe("1\n");
-    expect(run(currentSha).stdout).toBe("0\n");
-    expect(run(legacySha, false).stdout).toBe("0\n");
+    expect(run(legacySha).stdout).toBe("1:1\n");
+    expect(run(currentSha).stdout).toBe("0:0\n");
+    expect(run(legacySha, false).stdout).toBe("0:0\n");
   });
 
   it("derives frozen harness capabilities only from an authorized selected source", () => {

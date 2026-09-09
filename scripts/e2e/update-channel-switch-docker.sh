@@ -38,6 +38,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
   -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
   -e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \
+  -e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -110,6 +111,8 @@ OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"
 export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
+OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT:-0}"
+export OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
 
@@ -211,11 +214,13 @@ dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart
 dirty_status=$?
 set -e
 # Historical update CLIs can report a blocked structured result with exit zero.
-# The assertion proves the update was rejected and no checkout state changed.
-if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ] && [ "$dirty_status" -ne 1 ]; then
-  echo "expected current dirty-worktree update to exit 1, got $dirty_status" >&2
-  exit 1
-fi
+# Admit only that exact legacy status; timeouts, signals, and other failures stay fatal.
+node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+  assert-dirty-exit \
+  "$dirty_status" \
+  "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" \
+  "$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"
+# The payload assertion proves the update was rejected and no checkout state changed.
 UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
   assert-dirty-update "$git_root" "$fixture_sha"
 node -e "require(\"node:fs\").unlinkSync(process.argv[1])" "$git_root/operator-update-notes.tmp"
