@@ -54,6 +54,23 @@ afterEach(() => {
 });
 
 describe("spawnSignalDaemon", () => {
+  it("starts the opt-in socket daemon without exposing an HTTP listener", () => {
+    spawnSignalDaemon({
+      cliPath: "signal-cli",
+      socketPath: "/private/signal/rpc",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+    const args = spawnMock.mock.calls[0]?.[1] as string[];
+    expect(args).toContain("--socket");
+    expect(args).toContain("/private/signal/rpc");
+    expect(args).not.toContain("--http");
+    expect(args).not.toContain("--tcp");
+    expect(args.slice(args.indexOf("--receive-mode"), args.indexOf("--receive-mode") + 2)).toEqual([
+      "--receive-mode",
+      "manual",
+    ]);
+  });
   it("rejects an occupied managed endpoint with actionable port guidance", async () => {
     const listener = createServer();
     await new Promise<void>((resolve, reject) => {

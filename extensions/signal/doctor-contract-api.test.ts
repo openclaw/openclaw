@@ -621,6 +621,34 @@ describe("signal transport compatibility", () => {
     });
   });
 
+  it("does not turn an invalid socket opt-in into HTTP during legacy repair", async () => {
+    const cfg = signalConfig({
+      account: "+15555550123",
+      cliPath: "signal-cli",
+      transport: { kind: "managed-native", socketPath: "relative.sock" },
+    });
+    const result = await migrateLegacySignalTransportConfig({ cfg });
+    expect(result.config).toEqual(cfg);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings?.join(" ")).toContain("invalid transport.socketPath");
+  });
+
+  it("preserves canonical sockets while allocating a legacy sibling's HTTP port", async () => {
+    const transport = { kind: "managed-native", socketPath: "/tmp/signal-private/daemon.sock" };
+    const result = await migrateLegacySignalTransportConfig({
+      cfg: signalConfig({
+        account: "+15555550123",
+        transport,
+        accounts: { http: { account: "+15555550124", autoStart: true, cliPath: "signal-cli" } },
+      }),
+    });
+    expect(result.config.channels?.signal?.transport).toEqual(transport);
+    expect(result.config.channels?.signal?.accounts?.http?.transport).toMatchObject({
+      kind: "managed-native",
+      httpPort: 8080,
+    });
+  });
+
   it("ignores legacy native URL paths when the daemon bind matches", async () => {
     const result = await migrateLegacySignalTransportConfig({
       cfg: signalConfig({

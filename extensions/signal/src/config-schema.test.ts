@@ -208,6 +208,33 @@ describe("signal groups schema", () => {
     });
   });
 
+  it("accepts the opt-in managed socket transport", () => {
+    expectValidSignalConfig({
+      transport: { kind: "managed-native", socketPath: "/run/user/1000/signal/daemon.sock" },
+    });
+  });
+
+  it.each([
+    { socketPath: "relative.sock" },
+    { socketPath: "/tmp/../signal.sock" },
+    { socketPath: `/tmp/${"a".repeat(100)}.sock` },
+    { socketPath: "/" },
+    { socketPath: "/tmp/signal/" },
+    { socketPath: "/tmp/signal.sock", url: "http://127.0.0.1:8080" },
+    { socketPath: "/tmp/signal.sock", httpHost: "127.0.0.1" },
+    { socketPath: "/tmp/signal.sock", httpPort: 8080 },
+    { socketPath: "/tmp/signal.sock", receiveMode: "on-start" },
+  ])("rejects invalid or ambiguous socket transport %j", (options) => {
+    expectInvalidSignalConfig({ transport: { kind: "managed-native", ...options } });
+  });
+
+  it.each(["external-native", "container"])("rejects socketPath on %s transport", (kind) => {
+    expectInvalidSignalConfig({
+      account: "+15555550123",
+      transport: { kind, url: "http://127.0.0.1:8080", socketPath: "/tmp/signal.sock" },
+    });
+  });
+
   it("rejects managed transport ports outside the TCP range", () => {
     expectInvalidSignalConfig({
       transport: {

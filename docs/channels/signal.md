@@ -246,6 +246,46 @@ Operational notes:
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 
+## Opt-in private UNIX socket
+
+On POSIX systems, a managed native daemon can use a UNIX socket instead of an
+HTTP listener. This is useful on shared hosts where other OS users must not
+control the Signal daemon. Configure `transport.socketPath` with an absolute
+path (at most 103 UTF-8 bytes, without `.` or `..` path segments):
+
+```json5
+{
+  channels: {
+    signal: {
+      enabled: true,
+      account: "+15555550123",
+      transport: {
+        kind: "managed-native",
+        socketPath: "/home/user/.local/state/signal-private/daemon.sock",
+      },
+    },
+  },
+}
+```
+
+The socket's immediate directory must belong to the Gateway OS user and have
+mode `0700` (no group or other access). OpenClaw creates that directory if it
+is missing and its parent already exists; it does not repair permissions on
+existing directories. Symlink paths are rejected. Use a distinct socket path
+for each account. Windows is not supported for this opt-in.
+
+`socketPath` is only valid with `kind: "managed-native"` and cannot be combined
+with `url`, `httpHost`, or `httpPort`. Omit `receiveMode` or set it to `"manual"`;
+OpenClaw manages receive subscriptions over the socket. Socket connection or
+permission failures stop this transport; there is no HTTP fallback.
+
+Existing managed HTTP defaults, external native daemons, and container setups
+are unchanged. **Opting out leaves the existing HTTP exposure unchanged:** a
+loopback bind does not prevent another local OS user from reaching an
+unauthenticated daemon. The private directory separates OS users, not processes
+running as the same user or administrators. Signal sender pairing and allowlists
+remain separate message-access controls.
+
 ## Access control (DMs + groups)
 
 DMs:

@@ -141,6 +141,19 @@ describe("signalSetupAdapter", () => {
     },
   );
 
+  it("preserves an opted-in socket when editing account setup", () => {
+    const transport = {
+      kind: "managed-native",
+      socketPath: "/tmp/signal-private/daemon.sock",
+    } as const;
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: { channels: { signal: { account: "+15555550123", transport } } },
+      accountId: "default",
+      input: { signalNumber: "+15555550124", cliPath: "/opt/signal-cli" },
+    });
+    expect(next?.channels?.signal?.transport).toEqual({ ...transport, cliPath: "/opt/signal-cli" });
+  });
+
   it("restores a generically promoted default account before writing a named account", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {

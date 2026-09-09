@@ -38,6 +38,10 @@ export const signalChannelConfigUiHints = {
     label: "Signal CLI Config Path",
     help: "Optional directory passed to signal-cli via --config when the service needs a non-default signal-cli data path.",
   },
+  "transport.socketPath": {
+    label: "Signal UNIX Socket Path",
+    help: "Opt-in managed-native transport on POSIX. Use an absolute socket path in a private directory owned by the Gateway user (mode 0700). Excludes url, httpHost, httpPort, and receiveMode on-start. HTTP remains the default; socket failures never fall back to HTTP.",
+  },
   "transport.url": {
     label: "Signal Transport URL",
     help: "Base URL for an external-native or container transport, or the connection endpoint for a managed-native daemon when it differs from the bind address.",

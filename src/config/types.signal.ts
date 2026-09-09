@@ -14,6 +14,8 @@ export type SignalTransportConfig =
       kind: "managed-native";
       /** Optional signal-cli config directory path (passed as --config). */
       configPath?: string;
+      /** Opt-in absolute POSIX UNIX socket path; excludes HTTP options. */
+      socketPath?: string;
       /** Native daemon connection URL when it differs from the managed bind endpoint. */
       url?: string;
       /** HTTP host for the managed signal-cli daemon (default 127.0.0.1). */

@@ -18,6 +18,7 @@ import {
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { signalChannelConfigUiHints } from "./config-ui-hints.js";
+import { assertSignalSocketTransport } from "./transport-url.js";
 
 const SIGNAL_RETIRED_TRANSPORT_KEYS = [
   "apiMode",
@@ -73,6 +74,10 @@ const SignalTransportSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("managed-native"),
       configPath: z.string().optional(),
+      socketPath: z
+        .string()
+        .regex(/^\/(?!\/)[^\0]*[^/\0]$/, "Expected an absolute POSIX socket file path")
+        .optional(),
       url: SignalTransportUrlSchema.optional(),
       httpHost: z.string().optional(),
       httpPort: z.number().int().min(1).max(65_535).optional(),
@@ -81,7 +86,18 @@ const SignalTransportSchema = z.discriminatedUnion("kind", [
       receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
       ignoreStories: z.boolean().optional(),
     })
-    .strict(),
+    .strict()
+    .superRefine((transport, ctx) => {
+      try {
+        assertSignalSocketTransport(transport);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["socketPath"],
+          message: String(error instanceof Error ? error.message : error),
+        });
+      }
+    }),
   z
     .object({
       kind: z.literal("external-native"),

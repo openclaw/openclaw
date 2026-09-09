@@ -8,6 +8,25 @@ import {
   writeSignalAccountTransport,
 } from "./setup-transport.js";
 
+describe("socket transport setup", () => {
+  it("preserves sockets and does not reserve HTTP ports during setup", () => {
+    const transport = {
+      kind: "managed-native",
+      socketPath: "/tmp/signal-private/daemon.sock",
+    } as const;
+    const cfg = { channels: { signal: { transport } } };
+    expect(prepareSignalManagedNativeTransport({ cfg, accountId: "default" })).toEqual(transport);
+    expect(prepareSignalManagedNativeTransport({ cfg, accountId: "work" }).httpPort).toBe(8080);
+    expect(
+      writeSignalAccountTransport({
+        cfg,
+        accountId: "http",
+        transport: { kind: "external-native", url: "http://127.0.0.1:8080" },
+      }).channels?.signal?.accounts?.http?.transport,
+    ).toEqual({ kind: "external-native", url: "http://127.0.0.1:8080" });
+  });
+});
+
 describe("detectSignalTransport", () => {
   it("prefers native deterministically when both endpoints are healthy", async () => {
     const transport = await detectSignalTransport({
