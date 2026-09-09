@@ -295,17 +295,29 @@ describe("openclaw launcher", () => {
     );
 
     it.each([
-      { label: "non-TTY", tty: false, args: ["status"], env: {} },
-      { label: "CI", tty: true, args: ["status"], env: { CI: "1" } },
-      { label: "JSON", tty: true, args: ["status", "--json"], env: {} },
-      { label: "non-interactive", tty: true, args: ["onboard", "--non-interactive"], env: {} },
-      { label: "yes flag", tty: true, args: ["update", "--yes"], env: {} },
-      { label: "hook relay", tty: true, args: ["hooks", "relay"], env: {} },
-      { label: "Gmail foreground", tty: true, args: ["webhooks", "gmail", "run"], env: {} },
-    ])("does not prompt or install for $label", async ({ tty, args, env }) => {
+      { label: "non-TTY", tty: false, args: ["status"], env: {}, exitCode: 1 },
+      { label: "CI", tty: true, args: ["status"], env: { CI: "1" }, exitCode: 1 },
+      { label: "JSON", tty: true, args: ["status", "--json"], env: {}, exitCode: 1 },
+      {
+        label: "non-interactive",
+        tty: true,
+        args: ["onboard", "--non-interactive"],
+        env: {},
+        exitCode: 1,
+      },
+      { label: "yes flag", tty: true, args: ["update", "--yes"], env: {}, exitCode: 17 },
+      { label: "hook relay", tty: true, args: ["hooks", "relay"], env: {}, exitCode: 1 },
+      {
+        label: "Gmail foreground",
+        tty: true,
+        args: ["webhooks", "gmail", "run"],
+        env: {},
+        exitCode: 1,
+      },
+    ])("does not prompt or install for $label", async ({ tty, args, env, exitCode }) => {
       const fixture = await prepareRecovery({ tty });
       const result = fixture.run("y\n", args, env);
-      expect(result.status, result.stderr).toBe(1);
+      expect(result.status, result.stderr).toBe(exitCode);
       expect(result.stderr).not.toContain("Update NodeJS:");
       await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
     });
@@ -404,7 +416,7 @@ describe("openclaw launcher", () => {
       ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs"), ...args],
       {
         cwd: root,
-        env: launcherEnv({ NODE_DISABLE_COMPILE_CACHE: "1" }),
+        env: launcherEnv({ HOME: root, OPENCLAW_HOME: root, NODE_DISABLE_COMPILE_CACHE: "1" }),
         encoding: "utf8",
       },
     );
