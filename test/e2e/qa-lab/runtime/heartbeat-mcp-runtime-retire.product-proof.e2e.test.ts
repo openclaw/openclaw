@@ -85,6 +85,15 @@ function writeTextResponse(response: ServerResponse, text: string): void {
 
 async function startMockProvider() {
   let responsesRequests = 0;
+  // Each model request waits here until the test releases it, so the run stays
+  // live while the fixture child is observed; a later zero then means retired.
+  let releaseResponse: () => void = () => {};
+  let responseGate = Promise.resolve();
+  const holdNextResponse = () => {
+    responseGate = new Promise<void>((resolve) => {
+      releaseResponse = resolve;
+    });
+  };
   const server = createServer((request, response) => {
     void (async () => {
       let body = "";
@@ -121,6 +130,7 @@ async function startMockProvider() {
         return;
       }
       responsesRequests += 1;
+      await responseGate;
       writeTextResponse(response, RESPONSE_TEXT);
     })().catch((error: unknown) => {
       if (!response.headersSent) {
@@ -142,7 +152,10 @@ async function startMockProvider() {
     get responsesRequests() {
       return responsesRequests;
     },
+    holdNextResponse,
+    releaseResponse: () => releaseResponse(),
     stop: async () => {
+      releaseResponse();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -218,9 +231,11 @@ function redact(text: string, replacements: Array<[string, string]>): string {
       out = out.replaceAll(needle, label);
     }
   }
+  // Bearer credentials first: the generic key/value pass would otherwise
+  // consume the scheme word and leave the token behind it intact.
   return out
-    .replace(/(token|secret|apiKey|api_key|authorization)(["'=: ]+)[^\s"',}]+/gi, "$1$2<redacted>")
     .replace(/Bearer\s+\S+/g, "Bearer <redacted>")
+    .replace(/(token|secret|apiKey|api_key|authorization)(["'=: ]+)[^\s"',}]+/gi, "$1$2<redacted>")
     .replace(/\/(?:home|Users)\/[^/\s"'│]+/g, "<home>")
     .replaceAll(os.hostname(), "<host>");
 }
@@ -336,18 +351,33 @@ describe.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         }> = [];
         for (let run = 1; run <= HEARTBEAT_RUNS; run += 1) {
           const requestsBefore = provider.responsesRequests;
+          provider.holdNextResponse();
           const forced = (await gateway.call(
             "cron.run",
             { id: monitor.id, mode: "force" },
             { timeoutMs: 15_000 },
           )) as { ok: boolean; enqueued: boolean; runId: string };
           expect(forced).toMatchObject({ ok: true, runId: expect.any(String) });
-          let entry: CronRunEntry | undefined;
+          // The model request is held open until the fixture child is observed,
+          // so the run cannot start and retire between two samples. The child
+          // must exist mid-run for a later zero to mean "retired" rather than
+          // "never spawned".
           let peak = { count: 0, pids: [] as number[] };
+          const observeDeadline = Date.now() + 60_000;
+          while (
+            Date.now() < observeDeadline &&
+            (peak.count === 0 || provider.responsesRequests === requestsBefore)
+          ) {
+            const live = await countProbeProcesses(marker);
+            if (live.count > peak.count) {
+              peak = live;
+            }
+            await sleep(100);
+          }
+          provider.releaseResponse();
+          let entry: CronRunEntry | undefined;
           const runDeadline = Date.now() + 120_000;
           while (!entry && Date.now() < runDeadline) {
-            // Sample while the run is live: the child must exist mid-run for a
-            // later zero to mean "retired" rather than "never spawned".
             const live = await countProbeProcesses(marker);
             if (live.count > peak.count) {
               peak = live;
