@@ -55,6 +55,7 @@
 /docs/gateway/sandboxing.md @openclaw/openclaw-secops
 /docs/gateway/secrets-plan-contract.md @openclaw/openclaw-secops
 /docs/gateway/secrets.md @openclaw/openclaw-secops
+/docs/gateway/secrets/ @openclaw/openclaw-secops
 /docs/gateway/security/ @openclaw/openclaw-secops
 /docs/cli/approvals.md @openclaw/openclaw-secops
 /docs/cli/sandbox.md @openclaw/openclaw-secops

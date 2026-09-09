@@ -52,6 +52,26 @@
     "target": "密钥管理"
   },
   {
+    "source": "Secrets runtime model",
+    "target": "密钥运行时模型"
+  },
+  {
+    "source": "SecretRef contract and provider config",
+    "target": "SecretRef 契约与提供商配置"
+  },
+  {
+    "source": "Shared secret store and egress proxy",
+    "target": "共享密钥存储与出口代理"
+  },
+  {
+    "source": "Secrets integration examples",
+    "target": "密钥集成示例"
+  },
+  {
+    "source": "Secrets operations and behavior",
+    "target": "密钥运维与行为"
+  },
+  {
     "source": "1Password",
     "target": "1Password"
   },

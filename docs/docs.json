@@ -2450,6 +2450,16 @@
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
+                      {
+                        "group": "Secrets management",
+                        "pages": [
+                          "gateway/secrets/runtime-model",
+                          "gateway/secrets/secretref-contract",
+                          "gateway/secrets/secret-store-and-egress",
+                          "gateway/secrets/integration-examples",
+                          "gateway/secrets/operations"
+                        ]
+                      },
                       "gateway/1password",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth"
