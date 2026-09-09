@@ -87,6 +87,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -194,6 +195,11 @@ fun ShellScreen(
         }
         closeSidebar()
         viewModel.clearRequestedHomeDestination()
+      }
+
+      DisposableEffect(nav.activeTab, runtimeInitialized) {
+        if (runtimeInitialized) viewModel.setChatScreenActive(nav.activeTab == Tab.Chat)
+        onDispose { if (runtimeInitialized) viewModel.setChatScreenActive(false) }
       }
 
       LaunchedEffect(nav.activeTab, runtimeInitialized) {

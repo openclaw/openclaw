@@ -1,12 +1,23 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.chatTerminalPayload
+import ai.openclaw.app.gateway.GatewayEndpoint
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import androidx.core.app.NotificationCompat
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -21,6 +32,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -213,6 +225,121 @@ class ConversationNotificationsTest {
     assertEquals(1, notification.actions.size)
     assertEquals("Reply", action.title.toString())
     assertEquals(1, action.remoteInputs.size)
+  }
+
+  @Test
+  fun notificationUsesConfiguredAgentNameAndSessionWithoutLeakingOnLockscreen() {
+    val names =
+      listOf(
+        Triple("main", "Assistant", "Assistant"),
+        Triple("reviewer", "Review agent", "Review agent"),
+        Triple("research", " Researcher ", "Researcher"),
+        Triple("unnamed", null, "unnamed"),
+        Triple("blank-name", "  ", "blank-name"),
+      )
+    for ((agentId, configuredName, name) in names) {
+      val notification =
+        ConversationReplyNotifier(context).buildAssistantReplyNotification(
+          target.copy(agentId = agentId, sessionKey = "agent:$agentId:review"),
+          "Done",
+          configuredName,
+          "Review",
+        )
+      val style = requireNotNull(NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification))
+      assertEquals("$name · Review", style.conversationTitle.toString())
+      assertEquals(
+        name,
+        style.messages
+          .single()
+          .person
+          ?.name
+          .toString(),
+      )
+      assertEquals(
+        "OpenClaw",
+        notification.publicVersion.extras
+          .getCharSequence(Notification.EXTRA_TITLE)
+          .toString(),
+      )
+      assertFalse(
+        notification.publicVersion.extras
+          .toString()
+          .contains("Review"),
+      )
+    }
+  }
+
+  @Test
+  fun finalGatewayEventsNotifyOtherSessionsWhileForegroundButSuppressVisibleChat() {
+    shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+    val prefs = SecurePrefs(context, securePrefsOverride = context.getSharedPreferences("notification-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    val runtime = NodeRuntime(context, prefs)
+    val manager = context.getSystemService(NotificationManager::class.java)
+    try {
+      ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
+      val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
+      chat.prepareMainSessionKey("agent:main:visible")
+      ChatController::class.java.getDeclaredMethod("publishSessions", List::class.java).apply { isAccessible = true }.invoke(
+        chat,
+        listOf(ChatSessionEntry(key = "agent:reviewer:background", updatedAtMs = null, label = "Troubleshooting")),
+      )
+      ReflectionHelpers.getField<MutableStateFlow<List<GatewayAgentSummary>>>(runtime, "_gatewayAgents").value =
+        listOf(GatewayAgentSummary(id = "reviewer", name = "Review agent", emoji = null))
+      runtime.setChatScreenActive(true)
+      val handler = NodeRuntime::class.java.getDeclaredMethod("handleGatewayEvent", String::class.java, String::class.java).apply { isAccessible = true }
+
+      fun finish(
+        session: String,
+        run: String,
+        suppressNotification: Boolean? = null,
+      ) {
+        val original = Json.parseToJsonElement(chatTerminalPayload(session, run, 1, assistantText = "Done")).jsonObject
+        val payload = JsonObject(original + (suppressNotification?.let { mapOf("suppressNotification" to JsonPrimitive(it)) } ?: emptyMap()))
+        handler.invoke(runtime, "chat", payload.toString())
+      }
+
+      finish("agent:reviewer:background", "laptop-viewed-run", suppressNotification = true)
+      assertTrue(manager.activeNotifications.isEmpty())
+
+      finish("agent:reviewer:background", "background-run")
+      val posted = manager.activeNotifications.single()
+      val style = requireNotNull(NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(posted.notification))
+      assertEquals("Review agent · Troubleshooting", style.conversationTitle.toString())
+      manager.cancelAll()
+
+      finish("agent:main:visible", "visible-run")
+      assertTrue(manager.activeNotifications.isEmpty())
+
+      runtime.setChatScreenActive(false)
+      finish("agent:main:visible", "settings-run")
+      assertEquals(1, manager.activeNotifications.size)
+      manager.cancelAll()
+
+      runtime.setChatScreenActive(true)
+      ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_isForeground").value = false
+      finish("agent:main:visible", "app-background-run")
+      assertEquals(1, manager.activeNotifications.size)
+      manager.cancelAll()
+
+      finish("agent:reviewer:background", "laptop-left-run", suppressNotification = false)
+      assertEquals(1, manager.activeNotifications.size)
+      manager.cancelAll()
+
+      finish("agent:main:dreaming-narrative-proof", "dream-run")
+      finish("agent:main:background", "dreaming-narrative-proof")
+      assertTrue(manager.activeNotifications.isEmpty())
+
+      finish("agent:main:custom:dreaming-narrative-note", "ordinary-run")
+      assertEquals(1, manager.activeNotifications.size)
+      manager.cancelAll()
+
+      shadowOf(RuntimeEnvironment.getApplication()).denyPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+      finish("agent:reviewer:background", "permission-denied-run")
+      assertTrue(manager.activeNotifications.isEmpty())
+    } finally {
+      manager.cancelAll()
+      closeNodeRuntimeTestFixture(runtime)
+    }
   }
 
   @Test

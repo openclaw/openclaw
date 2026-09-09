@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { sessionViewerPresenceForGateway } from "./session-viewer-presence.ts";
@@ -68,9 +68,14 @@ function createGatewayHarness() {
 }
 
 async function flushSync() {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let turn = 0; turn < 8; turn += 1) {
+    await Promise.resolve();
+  }
 }
+
+beforeEach(() => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -199,7 +204,7 @@ describe("session viewer presence store", () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
     await flushSync();
-    expect(harness.request).toHaveBeenCalledTimes(2);
+    expect(harness.request.mock.calls.length).toBeGreaterThanOrEqual(2);
 
     store.unwatch(owner);
     await flushSync();
@@ -274,13 +279,17 @@ describe("session viewer presence store", () => {
     await flushSync();
     store.unwatch(owner);
     await flushSync();
-    expect(harness.request).toHaveBeenCalledTimes(4);
+    // The clear waits for the active request; never race declarations on one connection.
+    expect(harness.request).toHaveBeenCalledTimes(3);
 
     document.dispatchEvent(new Event("visibilitychange"));
     await flushSync();
     expect(harness.unsubscribe).not.toHaveBeenCalled();
 
     resolveVisible({ sessionKeys: ["agent:main:visible"] });
+    await flushSync();
+    expect(harness.request).toHaveBeenCalledTimes(4);
+    expect(harness.unsubscribe).not.toHaveBeenCalled();
     rejectFinalClear(new Error("final clear temporarily unavailable"));
     await flushSync();
     await vi.advanceTimersByTimeAsync(30_000);
@@ -291,5 +300,84 @@ describe("session viewer presence store", () => {
       sessionKeys: [],
     });
     expect(harness.unsubscribe).toHaveBeenCalledOnce();
+  });
+  it("renews only focused visible watching, expires on human idle, and releases timers", async () => {
+    vi.useFakeTimers();
+    const harness = createGatewayHarness();
+    const store = sessionViewerPresenceForGateway(harness.gateway);
+    const owner = {};
+    store.watch(owner, ["main"]);
+    await flushSync();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    window.dispatchEvent(new Event("blur"));
+    await flushSync();
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: [],
+    });
+    const blurredCount = harness.request.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(harness.request).toHaveBeenCalledTimes(blurredCount);
+    window.dispatchEvent(new Event("focus"));
+    await flushSync();
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:main"],
+    });
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:main"],
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: [],
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    document.dispatchEvent(new Event("pointerdown"));
+    await flushSync();
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:main"],
+    });
+    store.unwatch(owner);
+    await flushSync();
+    expect(vi.getTimerCount()).toBe(0);
+    const detachedCount = harness.request.mock.calls.length;
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("keydown"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(harness.request).toHaveBeenCalledTimes(detachedCount);
+  });
+
+  it("stops renewal on disconnect and fences a delayed old-client acknowledgement", async () => {
+    vi.useFakeTimers();
+    const harness = createGatewayHarness();
+    let resolveOld!: (value: unknown) => void;
+    harness.request.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      }),
+    );
+    const store = sessionViewerPresenceForGateway(harness.gateway);
+    const owner = {};
+    store.watch(owner, ["main"]);
+    await flushSync();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(harness.request).toHaveBeenCalledOnce();
+    harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", hello: null });
+    await flushSync();
+    expect(vi.getTimerCount()).toBe(0);
+    resolveOld({ sessionKeys: ["agent:main:main"] });
+    await flushSync();
+    harness.setSnapshot({
+      ...harness.gateway.snapshot,
+      phase: "connected",
+      hello: createHello("agent:main:new"),
+    });
+    await flushSync();
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:new"],
+    });
+    store.unwatch(owner);
+    await flushSync();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

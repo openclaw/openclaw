@@ -2,6 +2,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 // Gateway WebSocket broadcaster.
@@ -36,6 +37,7 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { shouldSuppressAndroidChatNotification } from "./session-viewer-presence.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 // Pairing scope is for device-pairing handshakes only; chat transcript events
@@ -587,6 +589,19 @@ export function createGatewayBroadcaster(params: {
             ...presencePayload,
             presence: projectPresence(c),
           });
+        }
+        if (event === "chat" && isRecord(payload)) {
+          const chatPayload = payload;
+          if (chatPayload.state === "final") {
+            // Derive this per recipient after delivery gates; never trust a producer's hint.
+            const { suppressNotification: _untrustedHint, ...messagePayload } = chatPayload;
+            payloadFragment = serializeFrameField("payload", {
+              ...messagePayload,
+              ...(shouldSuppressAndroidChatNotification(params.clients, c, chatPayload.sessionKey)
+                ? { suppressNotification: true }
+                : {}),
+            });
+          }
         }
         frame = frameWithSequence(base, nextSeq, payloadFragment);
       } catch (err) {
