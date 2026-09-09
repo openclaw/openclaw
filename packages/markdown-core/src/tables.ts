@@ -37,6 +37,13 @@ function literalTextRanges(markdown: string): Array<[number, number]> {
   const visit = (node: PositionedNode): void => {
     const start = node.position?.start?.offset;
     const end = node.position?.end?.offset;
+    // An autolink's text child carries the destination itself, so escaping a
+    // delimiter there rewrites the URL or email the renderer matches against.
+    // Autolinks are the only link form whose source starts with `<`; inline
+    // and reference links keep prose text and stay escapable.
+    if (node.type === "link" && start !== undefined && markdown[start] === "<") {
+      return;
+    }
     if (node.type === "text" && start !== undefined && end !== undefined) {
       ranges.push([start, end]);
       return;

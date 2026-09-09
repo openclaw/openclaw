@@ -315,6 +315,21 @@ describe("convertMarkdownTables", () => {
     expect(rendered).not.toContain("\\*");
   });
 
+  it("preserves angle-bracket autolink destinations in bullet cells", () => {
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | <first_last@example.com> |\n| Other | <https://example.com/a_b> |",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    // The autolink text is the destination; escaping its underscore breaks
+    // markdown-it's autolink grammar and kills the link.
+    expect(rendered).toContain("<first_last@example.com>");
+    expect(rendered).toContain("<https://example.com/a_b>");
+    expect(parsed).toContain('<a href="mailto:first_last@example.com">');
+    expect(parsed).toContain('<a href="https://example.com/a_b">');
+  });
+
   it("preserves CRLF source around a table", () => {
     const before = "Keep \\*literal\\*.\r\n\r\n";
     const after = "\r\n\r\nAfter.\r\n";
