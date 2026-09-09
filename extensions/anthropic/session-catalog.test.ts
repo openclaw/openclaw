@@ -1723,10 +1723,18 @@ describe("Claude session catalog", () => {
             isSidechain: true,
           },
         ],
+        "sdk-ts-session": [
+          {
+            ...message("sdk-ts-session", "user", "Bidirectional stream-json prompt", 1),
+            entrypoint: "sdk-ts",
+            cwd: "/work/sdk-ts",
+            version: "2.1.263",
+          },
+        ],
         "foreign-entrypoint-session": [
           {
-            ...message("foreign-entrypoint-session", "user", "SDK session", 1),
-            entrypoint: "sdk-ts",
+            ...message("foreign-entrypoint-session", "user", "Unrelated tool session", 1),
+            entrypoint: "some-other-tool",
           },
         ],
       },
@@ -1756,6 +1764,7 @@ describe("Claude session catalog", () => {
     expect(sessions.map((session) => session.threadId).toSorted()).toEqual([
       "cli-session",
       "sdk-cli-session",
+      "sdk-ts-session",
     ]);
     expect(sessions).toEqual(
       expect.arrayContaining([
@@ -1769,11 +1778,17 @@ describe("Claude session catalog", () => {
           name: "Headless CLI prompt",
           source: "claude-cli",
         }),
+        expect.objectContaining({
+          threadId: "sdk-ts-session",
+          name: "Bidirectional stream-json prompt",
+          source: "claude-cli",
+        }),
       ]),
     );
     for (const [threadId, text] of [
       ["cli-session", "Interactive CLI prompt"],
       ["sdk-cli-session", "Headless CLI prompt"],
+      ["sdk-ts-session", "Bidirectional stream-json prompt"],
     ] as const) {
       await expect(readLocalClaudeTranscriptPage({ threadId, limit: 1 }, home)).resolves.toEqual(
         expect.objectContaining({ items: [expect.objectContaining({ text })] }),
