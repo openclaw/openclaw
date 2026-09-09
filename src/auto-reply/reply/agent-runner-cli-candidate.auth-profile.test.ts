@@ -1,25 +1,42 @@
 // Tests the CLI dispatch boundary's auth identity conversion: a session pin
 // resolved for the model provider must not leak into a claude-cli child as a
-// forwarded API key when auth.order names the backend's native login.
+// forwarded API key when auth.order names the backend's native login. The
+// helper-level cases pin the conversion contract; the executeAgentTurn cases
+// observe the credential that actually reaches the CLI runner through the
+// reply dispatch, so restoring the raw session pin at the dispatch site fails.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import {
   resolveCliForwardedAuthProfileId,
   resolveRunAuthProfile,
 } from "./agent-runner-auth-profile.js";
+import {
+  setupAgentRunnerExecutionTestState,
+  getExecuteAgentTurnForTest,
+  createFollowupRun,
+  createMinimalRunAgentTurnParams,
+  initialFallbackAttemptOptions,
+  requireMockCall,
+} from "./agent-runner-execution.test-support.js";
+import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 import type { FollowupRun } from "./queue.js";
+
+const state = await setupAgentRunnerExecutionTestState();
 
 const mocks = vi.hoisted(() => ({
   order: [] as string[],
   profiles: {} as Record<string, AuthProfileCredential>,
 }));
 
-vi.mock("../../agents/auth-profiles/store-runtime.js", () => ({
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: mocks.profiles }),
 }));
 
-vi.mock("../../agents/auth-profiles/order.js", () => ({
+vi.mock("../../agents/auth-profiles/order.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/order.js")>()),
   resolveAuthProfileOrder: () => mocks.order,
 }));
 
@@ -116,5 +133,75 @@ describe("reply CLI dispatch auth identity", () => {
         agentDir: "/tmp/unused-agent",
       }),
     ).toBeUndefined();
+  });
+
+  it("forwards no auth profile through the reply dispatch when the session auto-pins a model-provider key", async () => {
+    mocks.profiles["anthropic:default"] = {
+      type: "api_key",
+      provider: "anthropic",
+      key: "test-anthropic-key",
+    };
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run(
+        "claude-cli",
+        "claude-sonnet-4-6",
+        initialFallbackAttemptOptions(params),
+      ),
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.authProfileId = "anthropic:default";
+    followupRun.run.authProfileIdSource = "auto";
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("success");
+    const forwarded = requireMockCall(
+      state.runCliAgentMock,
+      0,
+      "CLI run params",
+    )[0] as RunCliAgentParams;
+    expect(forwarded.authProfileId).toBeUndefined();
+  });
+
+  it("forwards a backend-owned profile through the reply dispatch", async () => {
+    mocks.profiles["claude-cli:work"] = {
+      type: "api_key",
+      provider: "claude-cli",
+      key: "test-claude-key",
+    };
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run(
+        "claude-cli",
+        "claude-sonnet-4-6",
+        initialFallbackAttemptOptions(params),
+      ),
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.authProfileId = "claude-cli:work";
+    followupRun.run.authProfileIdSource = "auto";
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("success");
+    const forwarded = requireMockCall(
+      state.runCliAgentMock,
+      0,
+      "CLI run params",
+    )[0] as RunCliAgentParams;
+    expect(forwarded.authProfileId).toBe("claude-cli:work");
   });
 });
