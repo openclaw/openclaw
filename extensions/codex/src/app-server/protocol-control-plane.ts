@@ -187,11 +187,6 @@ export type CodexAppsReadResponse = {
   missingAppIds: string[];
 };
 
-export type CodexExperimentalFeatureListResponse = {
-  data: { name: string; enabled: boolean }[];
-  nextCursor: string | null;
-};
-
 export type CodexSkillsListParams = {
   cwds: string[];
   forceReload?: boolean;

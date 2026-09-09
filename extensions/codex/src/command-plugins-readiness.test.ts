@@ -233,7 +233,7 @@ describe("Codex plugin status command", () => {
       test.io,
       test.runtime,
     );
-    expect(result.text).toContain("disabled for new conversations");
+    expect(result.text).toContain("OpenClaw app access: disabled");
     expect(result.text).toContain("enabled: true; callable: true");
     expect(result.text).toContain("https://chatgpt.com/apps/app-0");
     expect(test.io.mutate).not.toHaveBeenCalled();
@@ -354,7 +354,7 @@ describe("Codex plugin status command", () => {
   it.each([
     {
       options: { disabled: true },
-      expected: "disabled for new conversations",
+      expected: "OpenClaw app access: disabled",
       next: "/codex plugins enable notes@company-tools",
     },
     {

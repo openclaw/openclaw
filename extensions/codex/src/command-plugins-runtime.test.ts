@@ -62,7 +62,7 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-function fixture(stableAccount = true) {
+async function fixture(stableAccount = true) {
   const agentDir = path.join(root, "agents", "second", "agent");
   const workspaceDir = path.join(root, "second-workspace");
   replaceRuntimeAuthProfileStoreSnapshots([
@@ -120,6 +120,11 @@ function fixture(stableAccount = true) {
     requestConversationBinding: async () => ({ status: "error", message: "unused" }),
     detachConversationBinding: async () => ({ removed: false }),
   };
+  await upsertSessionEntry({
+    agentId: "second",
+    sessionKey: ctx.sessionKey!,
+    entry: { sessionId: ctx.sessionId!, updatedAt: Date.now() },
+  });
   const harness = createClientHarness();
   clients.push(harness);
   const acquire = vi
@@ -136,7 +141,7 @@ describe("Codex plugin command context", () => {
   it.each([true, false])(
     "rejects an account replaced during preparation (stored account %s)",
     async (stableAccount) => {
-      const test = fixture(stableAccount);
+      const test = await fixture(stableAccount);
       const prepare = commandRpc.prepareCodexControlSessionAuth;
       vi.spyOn(commandRpc, "prepareCodexControlSessionAuth").mockImplementation(async (...args) => {
         const auth = await prepare(...args);
@@ -168,7 +173,7 @@ describe("Codex plugin command context", () => {
   );
 
   it("accepts delayed startup notifications for the unchanged managed account", async () => {
-    const test = fixture();
+    const test = await fixture();
     let pendingStartupNotification = true;
     test.acquire.mockImplementation(async () => {
       await applyCodexAppServerAuthProfile({
@@ -210,7 +215,7 @@ describe("Codex plugin command context", () => {
   });
 
   it("releases the lease when the startup account barrier fails", async () => {
-    const test = fixture();
+    const test = await fixture();
     test.request.mockRejectedValue(new Error("private provider failure"));
     await expect(
       withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async () => "unused"),
@@ -228,7 +233,7 @@ describe("Codex plugin command context", () => {
   ])(
     "bounds an unanswered $unansweredMethod RPC by the $timeoutMs ms operation deadline and releases its lease",
     async ({ unansweredMethod, pluginConfig, timeoutMs }) => {
-      const test = fixture();
+      const test = await fixture();
       test.request.mockRestore();
       // Install the clock before acquisition can create a deadline; leave filesystem work real.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -259,7 +264,7 @@ describe("Codex plugin command context", () => {
   );
 
   it("releases a lease acquired after the deadline without sending a startup RPC", async () => {
-    const test = fixture();
+    const test = await fixture();
     test.request.mockRestore();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     let finishAcquisition!: (client: typeof test.harness.client) => void;
@@ -305,7 +310,7 @@ describe("Codex plugin command context", () => {
   ])(
     "cancels a refresh with $response response after the $change changes without further writes",
     async ({ change, response }) => {
-      const test = fixture();
+      const test = await fixture();
       test.request.mockRestore();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       let failure: unknown;
@@ -341,7 +346,11 @@ describe("Codex plugin command context", () => {
         }
         await vi.advanceTimersByTimeAsync(response === "overload" ? 1_000 : 0);
         expect(test.harness.writes).toHaveLength(2);
-        expect(String(failure)).toContain("Codex account, conversation, or plugin policy changed");
+        expect(String(failure)).toContain(
+          change === "session"
+            ? "Codex session generation is no longer current"
+            : "Codex account, conversation, or plugin policy changed",
+        );
         expect(test.release).toHaveBeenCalledOnce();
       } finally {
         test.harness.client.close();
@@ -353,7 +362,7 @@ describe("Codex plugin command context", () => {
   it.each([true, false])(
     "uses the selected profile partition with stable account %s",
     async (stableAccount) => {
-      const test = fixture(stableAccount);
+      const test = await fixture(stableAccount);
       await withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
         expect(context.agentId).toBe("second");
         expect(context.profileId).toBe("openai:second");
@@ -383,7 +392,7 @@ describe("Codex plugin command context", () => {
   it.each([true, false])(
     "only exposes a thread owned by this physical client (%s)",
     async (sameClient) => {
-      const test = fixture();
+      const test = await fixture();
       await test.deps.bindingStore.mutate(
         {
           kind: "session",
@@ -409,10 +418,44 @@ describe("Codex plugin command context", () => {
     },
   );
 
-  it.each(["policy", "account", "session"] as const)(
+  it.each(["policy", "account", "session", "conversation session"] as const)(
     "rejects a delayed response after %s changes and releases the client",
     async (change) => {
-      const test = fixture();
+      const test = await fixture();
+      const storePath =
+        change === "conversation session"
+          ? path.join(root, "explicit", "sessions.json")
+          : resolveStorePath(test.ctx.config.session?.store, { agentId: "second" });
+      if (change === "conversation session") {
+        await upsertSessionEntry({
+          agentId: "second",
+          storePath,
+          sessionKey: test.ctx.sessionKey!,
+          entry: { sessionId: test.ctx.sessionId!, updatedAt: Date.now() },
+        });
+        test.ctx.sessionTarget = {
+          agentId: "second",
+          sessionId: test.ctx.sessionId!,
+          sessionKey: test.ctx.sessionKey!,
+          storePath,
+        };
+        test.ctx.getCurrentConversationBinding = async () => ({
+          bindingId: "conversation-binding",
+          pluginId: "codex",
+          pluginRoot: root,
+          channel: "test",
+          accountId: "test-account",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 2,
+            bindingId: "conversation-binding",
+            workspaceDir: test.workspaceDir,
+            agentId: "second",
+          },
+        });
+      }
       test.request.mockImplementation(async (method) => {
         if (method !== "app/installed") {
           return {};
@@ -426,9 +469,10 @@ describe("Codex plugin command context", () => {
             params: { authMode: "chatgptAuthTokens", planType: "team" },
           });
         }
-        if (change === "session") {
+        if (change === "session" || change === "conversation session") {
           await upsertSessionEntry({
-            storePath: resolveStorePath(test.ctx.config.session?.store, { agentId: "second" }),
+            agentId: "second",
+            storePath,
             sessionKey: test.ctx.sessionKey!,
             entry: { sessionId: "session-after-reset", updatedAt: 1 },
           });
@@ -439,7 +483,11 @@ describe("Codex plugin command context", () => {
         withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) =>
           context.request("app/installed", { forceRefresh: false }),
         ),
-      ).rejects.toThrow("Codex account, conversation, or plugin policy changed");
+      ).rejects.toThrow(
+        change === "session" || change === "conversation session"
+          ? "Codex session generation is no longer current"
+          : "Codex account, conversation, or plugin policy changed",
+      );
       expect(test.release).toHaveBeenCalledOnce();
     },
   );

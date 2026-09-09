@@ -2,16 +2,15 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { fingerprintCodexAppServerAuthBinding } from "./app-server/auth-binding.js";
+import { resolveCodexAppServerAuthAccountCacheKey } from "./app-server/auth-bridge.js";
 import {
-  resolveCodexAppServerAuthAccountCacheKey,
-  resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
-} from "./app-server/auth-bridge.js";
+} from "./app-server/auth-cache-key.js";
+import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.js";
 import { withCodexAppServerJsonClient } from "./app-server/request.js";
-import { resolveCodexRunSessionBindingAuthority } from "./app-server/session-binding.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveCommandAppServerContext, resolveControlTarget } from "./command-handler-scope.js";
 import type { CodexPluginsConfigBlock } from "./command-plugin-config.js";
@@ -21,7 +20,7 @@ import { readCodexConversationBindingData } from "./conversation-binding-data.js
 const SCOPE_CHANGED_MESSAGE =
   "Codex account, conversation, or plugin policy changed. Run the command again.";
 
-/** One account and physical connection for an operator's plugin inspection or recheck. */
+/** One account and physical connection for an operator's plugin inspection or refresh. */
 export type CodexPluginCommandContext = {
   request: <T>(method: string, params?: unknown) => Promise<T>;
   workspaceDir: string;
@@ -101,28 +100,19 @@ export async function withCodexPluginCommandContext<T>(
       sessionKey: ctx.sessionKey,
       timeoutMs: appServer.requestTimeoutMs,
       timeoutMessage: "Codex plugin request timed out. Check the Codex connection and retry.",
+      assertCurrent: scope.assertCurrent,
       ...auth.clientOptions,
     },
     async (request, client, requestScope) => {
       const assertCurrent = () => {
         requestScope.assertCurrent();
-        if (
-          client.getCloseError() ||
-          (target?.identity.kind === "session" &&
-            resolveCodexRunSessionBindingAuthority({
-              identity: target.identity,
-              config: ctx.config,
-            }) === "superseded")
-        ) {
+        if (client.getCloseError()) {
           throw new Error(SCOPE_CHANGED_MESSAGE);
         }
       };
       const validateCurrent = async () => {
         assertCurrent();
         const currentTarget = await resolveControlTarget(ctx);
-        const currentBinding = currentTarget
-          ? await deps.bindingStore.read(currentTarget.identity)
-          : undefined;
         const currentConversation = readCodexConversationBindingData(
           await ctx.getCurrentConversationBinding(),
         );
@@ -133,12 +123,6 @@ export async function withCodexPluginCommandContext<T>(
         if (
           !isDeepStrictEqual(currentTarget, target) ||
           !isDeepStrictEqual(currentConversation, conversation) ||
-          currentBinding?.threadId !== binding?.threadId ||
-          currentBinding?.clientId !== binding?.clientId ||
-          currentBinding?.cwd !== binding?.cwd ||
-          currentBinding?.authProfileId !== binding?.authProfileId ||
-          currentBinding?.conversationStartId !== binding?.conversationStartId ||
-          currentBinding?.pluginAppsFingerprint !== binding?.pluginAppsFingerprint ||
           currentPolicy !== initialPolicy ||
           currentAuthBinding !== authBinding
         ) {

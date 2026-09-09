@@ -234,8 +234,8 @@ requires an owner or `operator.admin`. The qualified identity is required;
 bare `status` or an unqualified name returns usage guidance pointing to `list`.
 
 Status shows bundle installation, marketplace restrictions, Codex enablement, and
-shared OpenClaw app access separately. The OpenClaw setting controls app access
-for new conversations; it does not install or enable the Codex bundle.
+shared OpenClaw app access separately. Changes to OpenClaw app access take effect
+on the next message; they do not install or enable the Codex bundle.
 
 App results show at most five apps per page. A ChatGPT app-page link requires
 confirmed hosted-app runtime support, an available plugin under its catalog
@@ -261,8 +261,8 @@ flags.
 
 Status does not force a hosted-tool refresh, change configuration, or replace a
 conversation. After completing hosted setup, refresh in Codex, then use `/new`
-or `/reset` and inspect status again. Existing conversations keep their admitted
-app policy after browser setup or OpenClaw app-access changes. Unsupported
+or `/reset` and inspect status again. Browser setup does not change OpenClaw
+app access; local app-access changes take effect on the next message. Unsupported
 methods, restrictions, and failed reads show a recovery action.
 
 `install`, `enable`, and `disable` require the owner or a gateway client with

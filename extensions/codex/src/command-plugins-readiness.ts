@@ -310,7 +310,7 @@ export function formatCodexPluginReadiness(
     `Catalog: ${catalog === "blocked" ? "blocked by marketplace policy" : catalog}`,
     `Bundle: ${summary ? (summary.installed ? "installed" : "not installed") : "unknown"}`,
     `Codex plugin: ${summary ? (summary.enabled ? "enabled" : "disabled") : "unknown"}`,
-    `OpenClaw app access: ${readiness.openClawEnabled ? "enabled for new conversations" : "disabled for new conversations"} (shared Codex plugin configuration).`,
+    `OpenClaw app access: ${readiness.openClawEnabled ? "enabled" : "disabled"} (shared Codex plugin configuration; takes effect on your next message).`,
     ...(hasApps ? [describeCodexHostedAppsSupport(readiness.hostedSupport)] : []),
   ];
   if (catalog === "blocked") {
@@ -325,9 +325,13 @@ export function formatCodexPluginReadiness(
             : "Next: check the plugin's marketplace requirements; its policy does not permit installation.",
     );
   } else if (!readiness.openClawEnabled) {
-    lines.push(`Next: /codex plugins enable ${readiness.commandId}, then /new or /reset.`);
+    lines.push(
+      `Next: /codex plugins enable ${readiness.commandId}. Takes effect on your next message.`,
+    );
   } else if (summary && (!summary.installed || !summary.enabled)) {
-    lines.push(`Next: /codex plugins install ${readiness.commandId}, then /new or /reset.`);
+    lines.push(
+      `Next: /codex plugins install ${readiness.commandId}. Takes effect on your next message.`,
+    );
   }
   const blocks: MessagePresentationBlock[] = [{ type: "text", text: lines.join("\n") }];
   if (readiness.diagnostic) {
@@ -399,7 +403,7 @@ export function formatCodexPluginReadiness(
       }
       blocks.push({
         type: "text",
-        text: "Flags reflect Codex's runtime snapshot; status does not refresh hosted tools. Browser setup does not change OpenClaw app access. Use /new or /reset after setup or local permission changes; existing conversations keep their admitted app policy.",
+        text: "Flags reflect Codex's runtime snapshot; status does not refresh hosted tools. Browser setup does not change OpenClaw app access. OpenClaw app-access changes take effect on your next message. After browser setup, refresh hosted tools in Codex and use /new or /reset.",
       });
     }
   }
