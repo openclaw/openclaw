@@ -41,6 +41,8 @@ export type ClawHubSkillSearchResult = {
   trustState?: ClawHubSkillsShTrustState;
   // Search may return the same slug for multiple publishers; exact install refs need this handle.
   ownerHandle?: string | null;
+  /** Official status comes from ClawHub's canonical search result, never the handle. */
+  official?: boolean;
   displayName: string;
   summary?: string;
   icon?: string | null;
