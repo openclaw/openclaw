@@ -229,6 +229,7 @@ const rootEntries = [
   // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
   "scripts/bench-task-registry-sqlite-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
+  "scripts/bench-cron-session-reaper.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
