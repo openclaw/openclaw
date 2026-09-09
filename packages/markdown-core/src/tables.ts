@@ -12,8 +12,9 @@ import type { MarkdownTableMode } from "./types.js";
 // and links keep their delimiters (their syntax lives in non-text nodes), while text
 // nodes own the literal `*`/`_`/`` ` `` runs. Escaping only those keeps authored markup
 // rendering while strays stay confined to their own cell. Reference links keep their
-// source too: cells parse without the document's definitions, so a reference label
-// looks like text unless it is matched against the definitions collected up front.
+// source too: cells parse in isolation, so the document's reference definitions are
+// appended to the parse input and the parser itself resolves each reference into a
+// link node whose delimiters live outside text ranges.
 const CELL_DELIMITER_CANDIDATES = /[*_`]/u;
 
 type PositionedNode = {
@@ -27,10 +28,26 @@ type PositionedNode = {
  * Ranges of cell source that the inline parser owns as literal text. Delimiters inside
  * them are orphans on this embedded surface; delimiters outside them belong to parsed
  * emphasis, code spans, or links and must survive rendering.
+ *
+ * `definitionSuffix` carries the document's reference definitions (whitespace-flattened,
+ * joined by newlines) so references resolve exactly as the channel renderer resolves
+ * them — multiline labels, padded labels, and Unicode-whitespace variants included —
+ * instead of approximating the parser's reference grammar with a local scanner.
+ * Whitespace is flattened to ordinary spaces in the parse copy only; the substitution
+ * preserves UTF-16 offsets 1:1, keeps whitespace semantics for emphasis flanking, and
+ * matches markdown-it's `\s`-based identifier folding. Classification always applies
+ * to the original cell bytes.
  */
-function literalTextRanges(markdown: string): Array<[number, number]> {
+function literalTextRanges(markdown: string, definitionSuffix: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   const visit = (node: PositionedNode): void => {
+    // Reference labels must keep their exact source bytes: the renderer matches
+    // them against definition identifiers, and an escaped delimiter inside the
+    // label text breaks that match. Inline links/images stay escapable — their
+    // label text renders identically whether or not a delimiter is escaped.
+    if (node.type === "linkReference" || node.type === "imageReference") {
+      return;
+    }
     const start = node.position?.start?.offset;
     const end = node.position?.end?.offset;
     if (node.type === "text" && start !== undefined && end !== undefined) {
@@ -41,33 +58,30 @@ function literalTextRanges(markdown: string): Array<[number, number]> {
       visit(child);
     }
   };
+  const source = markdown.replace(/\s/gu, " ");
+  const input = definitionSuffix === "" ? source : `${source}\n\n${definitionSuffix}`;
   // SAFETY: fromMarkdown returns the mdast Root; nodes structurally match PositionedNode.
-  visit(fromMarkdown(markdown) as PositionedNode);
-  return ranges;
+  visit(fromMarkdown(input) as PositionedNode);
+  // The appended definitions start beyond the cell source; their ranges never apply.
+  return ranges.filter(([, to]) => to <= markdown.length);
 }
 
 /**
- * Canonical form for reference identifiers, mirroring micromark's
- * `normalizeIdentifier` (which markdown-it's normalizeReference matches):
- * collapse Markdown whitespace, trim, then lower- AND uppercase. The double
- * case fold is required — `ß`.toLowerCase() stays `ß` while its definition
- * identifier was already folded to `SS`, so lowercasing alone misses valid
- * references.
+ * Source slices of every reference definition in the document. Definitions may nest
+ * in block quotes or list items and their labels may span lines, so the mdast parse —
+ * not a line-anchored precheck — decides what is a definition; keeping the exact
+ * source lets the cell parse re-resolve references with the parser's own grammar.
  */
-function normalizeReferenceIdentifier(value: string): string {
-  return value
-    .replace(/[\t\n\r ]+/gu, " ")
-    .replace(/^ | $/gu, "")
-    .toLowerCase()
-    .toUpperCase();
-}
-
-/** Collects the identifiers of reference definitions declared anywhere in the document. */
-function collectReferenceIdentifiers(markdown: string): Set<string> {
-  const identifiers = new Set<string>();
+function collectReferenceDefinitions(markdown: string): string[] {
+  const definitions: string[] = [];
   const visit = (node: PositionedNode): void => {
-    if (node.type === "definition" && typeof node.identifier === "string") {
-      identifiers.add(normalizeReferenceIdentifier(node.identifier));
+    if (node.type === "definition") {
+      const start = node.position?.start?.offset;
+      const end = node.position?.end?.offset;
+      if (start !== undefined && end !== undefined) {
+        definitions.push(markdown.slice(start, end));
+      }
+      return;
     }
     for (const child of node.children ?? []) {
       visit(child);
@@ -75,46 +89,16 @@ function collectReferenceIdentifiers(markdown: string): Set<string> {
   };
   // SAFETY: fromMarkdown returns the mdast Root; nodes structurally match PositionedNode.
   visit(fromMarkdown(markdown) as PositionedNode);
-  return identifiers;
+  return definitions;
 }
 
-type ReferenceSpan = { end: number; label: string; start: number };
-
-/**
- * Scans cell source for reference-link syntax: `full` `[label][ref]`, `collapsed`
- * `[ref][]`, and `shortcut` `[ref]`. Only spans whose identifier matches a document
- * definition are returned so literal bracket text is never mistaken for a reference.
- */
-function referenceSpans(markdown: string, identifiers: Set<string>): ReferenceSpan[] {
-  if (identifiers.size === 0) {
-    return [];
-  }
-  const spans: ReferenceSpan[] = [];
-  const reference = /\[([^\][\s](?:[^\][]*?)?)\](?:\[([^\][]*)\])?/gu;
-  for (const match of markdown.matchAll(reference)) {
-    const start = match.index ?? 0;
-    const [source, label = "", ref = ""] = match;
-    const identifier = normalizeReferenceIdentifier(ref === "" ? label : ref);
-    if (!identifiers.has(identifier)) {
-      continue;
-    }
-    spans.push({ start, end: start + source.length, label });
-  }
-  return spans;
-}
-
-function ownCellDelimiters(markdown: string, identifiers: Set<string>): string {
+function ownCellDelimiters(markdown: string, definitionSuffix: string): string {
   if (!CELL_DELIMITER_CANDIDATES.test(markdown)) {
     return markdown;
   }
-  const ranges = literalTextRanges(markdown);
-  const references = referenceSpans(markdown, identifiers);
-  const isLiteral = (offset: number): boolean => {
-    if (references.some(({ start, end }) => offset >= start && offset < end)) {
-      return false;
-    }
-    return ranges.some(([from, to]) => offset >= from && offset < to);
-  };
+  const ranges = literalTextRanges(markdown, definitionSuffix);
+  const isLiteral = (offset: number): boolean =>
+    ranges.some(([from, to]) => offset >= from && offset < to);
   let owned = "";
   let offset = 0;
   while (offset < markdown.length) {
@@ -136,7 +120,7 @@ function ownCellDelimiters(markdown: string, identifiers: Set<string>): string {
 function renderTableSource(
   table: MarkdownTableMeta,
   mode: Exclude<MarkdownTableMode, "off">,
-  identifiers: Set<string>,
+  definitionSuffix: string,
 ): string {
   if (mode !== "bullets") {
     const text = renderMarkdownCodeTable(table.headers, table.rows);
@@ -150,12 +134,12 @@ function renderTableSource(
   const source = expectDefined(getMarkdownTableSource(table), "Markdown table source");
   const headers = table.headers.map((text, column) => ({
     text,
-    markdown: ownCellDelimiters(source.headers[column] ?? "", identifiers),
+    markdown: ownCellDelimiters(source.headers[column] ?? "", definitionSuffix),
   }));
   const rows = table.rows.map((row, index) =>
     row.map((text, column) => ({
       text,
-      markdown: ownCellDelimiters(source.rows[index]?.[column] ?? "", identifiers),
+      markdown: ownCellDelimiters(source.rows[index]?.[column] ?? "", definitionSuffix),
     })),
   );
   let rendered = "";
@@ -182,17 +166,20 @@ export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode)
     autolink: false,
     tableMode: "block",
   });
-  // Gate the definition-collecting parse on any `[…]:` shape: definitions may be
-  // nested in block quotes or list items, so a line-anchored precheck would miss
-  // documents whose only definitions live inside a container.
-  const referenceIdentifiers = /\[[^\]\n]+\]:/u.test(markdown)
-    ? collectReferenceIdentifiers(markdown)
-    : new Set<string>();
+  // Gate the definition-collecting parse on any `[…]:` shape: labels may span lines
+  // (so the brackets may contain newlines) and definitions may nest in block quotes
+  // or list items (so no line anchoring). A false positive only costs one parse.
+  // The suffix is prepared once and reused for every cell parse on this document.
+  const definitionSuffix = /\[[^\]]+\]:/u.test(markdown)
+    ? collectReferenceDefinitions(markdown)
+        .map((definition) => definition.replace(/\s/gu, " "))
+        .join("\n")
+    : "";
   let cursor = 0;
   let result = "";
   for (const table of tables) {
     const source = expectDefined(getMarkdownTableSource(table), "Markdown table source");
-    const rendered = renderTableSource(table, mode, referenceIdentifiers).replaceAll(
+    const rendered = renderTableSource(table, mode, definitionSuffix).replaceAll(
       "\n",
       "\n" + source.prefix,
     );

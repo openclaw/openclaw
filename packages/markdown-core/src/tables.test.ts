@@ -235,6 +235,47 @@ describe("convertMarkdownTables", () => {
     expect(parsed).toContain('<a href="https://example.com">manual</a>');
   });
 
+  it("preserves references whose definition label spans lines", () => {
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | [manual][api_ v1] |\n\n[api_\nv1]: https://example.com",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    // The renderer folds the definition's newline to a space, so the reference
+    // resolves; the label must keep its underscore for the link to survive.
+    expect(rendered).toContain("[manual][api_ v1]");
+    expect(parsed).toContain('<a href="https://example.com">manual</a>');
+  });
+
+  it("preserves shortcut references with whitespace-padded labels", () => {
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | [ api_v1 ] |\n\n[api_v1]: https://example.com",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    // The renderer trims labels during lookup, so the padded shortcut is a
+    // valid reference and its underscore must not be escaped.
+    expect(rendered).toContain("[ api_v1 ]");
+    expect(parsed).toContain('<a href="https://example.com">');
+  });
+
+  it("preserves references that differ from definitions by Unicode whitespace", () => {
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | [manual][api_ v1] |\n| Other | [guide][docs_\u00a0v2] |\n\n[api_\u00a0v1]: https://example.com/api\n\n[docs_ v2]: https://example.com/docs",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    // markdown-it folds identifiers with Unicode `\s`, so a nonbreaking space in
+    // either the reference or the definition still matches an ordinary space.
+    expect(rendered).toContain("[manual][api_ v1]");
+    expect(rendered).toContain("[guide][docs_\u00a0v2]");
+    expect(parsed).toContain('<a href="https://example.com/api">manual</a>');
+    expect(parsed).toContain('<a href="https://example.com/docs">guide</a>');
+  });
+
   it("preserves CRLF source around a table", () => {
     const before = "Keep \\*literal\\*.\r\n\r\n";
     const after = "\r\n\r\nAfter.\r\n";
