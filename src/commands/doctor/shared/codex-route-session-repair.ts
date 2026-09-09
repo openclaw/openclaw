@@ -286,10 +286,17 @@ function repairCodexSessionStoreRoutes(params: {
   const now = params.now ?? Date.now();
   const sessionKeys: string[] = [];
   for (const [sessionKey, entry] of Object.entries(params.store)) {
-    if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
+    if (!entry) {
       continue;
     }
     const changedCliBinding = migrateLegacyClaudeSessionField(entry, sessionKey, params.warnings);
+    if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
+      // Only the binding representation changes; locked identity, route and recency stay owned.
+      if (changedCliBinding) {
+        sessionKeys.push(sessionKey);
+      }
+      continue;
+    }
     const legacyCodexHarness = normalizeRuntimeString(entry.agentHarnessId) === "codex-cli";
     const wasCodexRoute = isCodexSessionRoute(entry);
     const hasSelectedOverride = Boolean(entry.modelOverride?.trim());

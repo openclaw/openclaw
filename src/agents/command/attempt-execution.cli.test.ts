@@ -1445,11 +1445,17 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cliSessionId).toBe("stale-cli-session");
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "session-cli",
+    );
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "session-cli",
+    );
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("preserves and resumes a valid Claude CLI binding after format failover", async () => {
@@ -1659,7 +1665,7 @@ describe("CLI attempt execution", () => {
       forkedCliSessionId,
     );
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(forkedCliSessionId);
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(forkedCliSessionId);
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
@@ -2024,14 +2030,14 @@ describe("CLI attempt execution", () => {
       sessionId: "session-cli",
     });
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "session-cli",
     });
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("keeps the bound claude-cli session id as the reuse candidate when the native transcript is missing (so reseed can recover)", async () => {

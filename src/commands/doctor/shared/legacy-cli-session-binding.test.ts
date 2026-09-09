@@ -139,11 +139,13 @@ describe("legacy CLI session binding migration", () => {
     expect(savedMap).not.toHaveProperty("claudeCliSessionId");
   });
 
-  it("migrates safe rows while preserving unresolved bindings and locked harness rows", async () => {
+  it("migrates safe rows while preserving unresolved bindings and locked ownership", async () => {
     const state = await createOpenClawTestState({ layout: "home", prefix: "binding-mixed-" });
     states.push(state);
     const cfg: OpenClawConfig = { plugins: { enabled: false } };
     const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const malformed: SessionEntry = { sessionId: "malformed-local", updatedAt: 4 };
+    Object.assign(malformed, { claudeCliSessionId: 17 });
     const rows: Record<string, SessionEntry> = {
       safe: {
         sessionId: "safe-local",
@@ -158,16 +160,17 @@ describe("legacy CLI session binding migration", () => {
         cliSessionBindings: { "claude-cli": { sessionId: " ", authEpoch: "Unbound-Epoch" } },
       },
       empty: { sessionId: "empty-local", updatedAt: 3, claudeCliSessionId: " " },
-      malformed: { sessionId: "malformed-local", updatedAt: 4 },
+      malformed,
       locked: {
         sessionId: "locked-local",
         updatedAt: 5,
         agentHarnessId: "claude-cli",
         modelSelectionLocked: true,
+        modelProvider: "claude-cli",
+        model: "retained-model",
         claudeCliSessionId: "Locked-Conversation",
       },
     };
-    Object.assign(rows.malformed, { claudeCliSessionId: 17 });
     const scope = (key: string) => ({ storePath, env: state.env, sessionKey: `agent:main:${key}` });
     for (const [key, entry] of Object.entries(rows)) {
       await replaceSessionEntry(scope(key), entry);
@@ -184,7 +187,7 @@ describe("legacy CLI session binding migration", () => {
     expect(loadSessionEntryReadOnly(scope("safe"))).toEqual(before.safe);
 
     const repair = await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true });
-    expect(repair.repairedSessions).toBe(1);
+    expect(repair.repairedSessions).toBe(2);
     expect(repair.warnings.join("\n")).toContain("agent:main:ambiguous");
     expect(repair.warnings.join("\n")).toContain("agent:main:empty");
     expect(repair.warnings.join("\n")).toContain("agent:main:malformed");
@@ -194,7 +197,23 @@ describe("legacy CLI session binding migration", () => {
       getCliSessionBinding(loadSessionEntryReadOnly(scope("safe")), "claude-cli")?.sessionId,
     ).toBe("Safe-MixedCase/ID");
     expect(loadSessionEntryReadOnly(scope("safe"))).not.toHaveProperty("claudeCliSessionId");
-    for (const key of ["ambiguous", "empty", "malformed", "locked"]) {
+    const locked = loadSessionEntryReadOnly(scope("locked"));
+    expect(locked).toMatchObject({
+      sessionId: "locked-local",
+      updatedAt: 5,
+      agentHarnessId: "claude-cli",
+      modelSelectionLocked: true,
+      modelProvider: "claude-cli",
+      model: "retained-model",
+    });
+    expect(locked).not.toHaveProperty("claudeCliSessionId");
+    expect(
+      resolveCliSessionReuse({
+        binding: getCliSessionBinding(locked, "claude-cli"),
+        authEpochVersion: 4,
+      }),
+    ).toEqual({ mode: "reuse", sessionId: "Locked-Conversation" });
+    for (const key of ["ambiguous", "empty", "malformed"]) {
       expect(loadSessionEntryReadOnly(scope(key))).toEqual(before[key]);
     }
     const repeated = await maybeRepairCodexSessionRoutes({
