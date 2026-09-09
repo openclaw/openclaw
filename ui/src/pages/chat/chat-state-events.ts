@@ -26,7 +26,7 @@ import {
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import { sleep } from "./chat-history-retry.ts";
-import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { chatScopedEventSessionMatches, resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
@@ -55,7 +55,6 @@ import {
   getChatSessionProjection,
   publishChatSessionProjection,
   readChatSessionProjectionScope,
-  reduceChatSessionProjection,
 } from "./history-merge.ts";
 import { captureOutboxPayloadOwner } from "./outbox-payloads.ts";
 import {
@@ -389,10 +388,7 @@ function handleSessionsChangedEvent(
     });
   }
   if (resetsSelectedSession) {
-    const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
-    // Reset keeps the public session ID; the explicit reducer event is the
-    // only proof that its old live and pending transcript no longer exists.
-    reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+    resetChatHistoryProjection(state, resolveChatAgentId(state) ?? undefined);
   }
   if (changesBranchTopology) {
     if (!resetsSelectedSession) {

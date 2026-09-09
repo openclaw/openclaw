@@ -2582,6 +2582,81 @@ describe("canonical session message recovery", () => {
     });
   });
 
+  it("rejects pre-reset active history after a same-session reset event", async () => {
+    const runId = "run-before-reset";
+    const staleHistory = createDeferred<ChatHistoryResult>();
+    const freshHistory = createDeferred<ChatHistoryResult>();
+    const { request, state } = createSessionEventState({
+      chatRunId: null,
+      chatRunError: null,
+      chatDisplayedLeafEntryId: null,
+    });
+    request.mockReturnValueOnce(staleHistory.promise).mockReturnValueOnce(freshHistory.promise);
+    const sessionInfo = {
+      key: state.sessionKey,
+      sessionId: "selected-session",
+      kind: "direct" as const,
+      updatedAt: 1,
+    };
+    const preResetLoad = loadChatHistory(state);
+    expect(request).toHaveBeenCalledOnce();
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: state.sessionKey,
+        sessionId: "selected-session",
+        agentId: "main",
+        reason: "reset",
+        hasActiveRun: false,
+        activeRunIds: [],
+      },
+    });
+
+    staleHistory.resolve({
+      sessionId: "selected-session",
+      sessionInfo: {
+        ...sessionInfo,
+        hasActiveRun: true,
+        status: "running",
+        activeLeafEntryId: "pre-reset-leaf",
+      },
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Request before reset" }],
+          __openclaw: { id: "pre-reset-user", idempotencyKey: `${runId}:user`, seq: 1 },
+        },
+      ],
+      inFlightRun: { runId, text: "", startedAt: 1 },
+    });
+    await preResetLoad;
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunError).toBeNull();
+    expect(state.chatMessages).toEqual([]);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    const resetMarker = {
+      role: "system",
+      content: [],
+      timestamp: 2,
+      __openclaw: { kind: "reset", id: "reset-marker", seq: 1 },
+    };
+    freshHistory.resolve({
+      sessionId: "selected-session",
+      sessionInfo: { ...sessionInfo, updatedAt: 2, hasActiveRun: false, activeRunIds: [] },
+      messages: [resetMarker],
+    });
+    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+
+    expect(state.currentSessionId).toBe("selected-session");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunError).toBeNull();
+    expect(state.chatMessages).toEqual([resetMarker]);
+  });
+
   it("does not clear the selected transcript when another agent resets", () => {
     const retireSessionCompanion = vi.fn();
     const selectedUser = {
