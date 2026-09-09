@@ -226,6 +226,25 @@ function attachIngress(
   return { ingress, receive: harness.receive };
 }
 
+function readIngressProgressMetadata(record: { metadata?: unknown } | undefined) {
+  const metadata = record?.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  return (metadata as Record<string, unknown>).ingressProgress;
+}
+
+async function expectClaimIngressProgress(
+  queue: ChannelIngressQueue<SlackIngressPayload>,
+  eventId: string,
+  expected: Record<string, unknown>,
+): Promise<void> {
+  await vi.waitFor(async () => {
+    const claim = (await queue.listClaims()).find((entry) => entry.id === eventId);
+    expect(readIngressProgressMetadata(claim)).toMatchObject(expected);
+  });
+}
+
 async function withQueue(
   fn: (queue: ChannelIngressQueue<SlackIngressPayload>) => Promise<void>,
 ): Promise<void> {
@@ -416,6 +435,60 @@ describe("Slack durable ingress", () => {
         expect(starts).toEqual([firstEvent.ts, secondEvent.ts]);
       } finally {
         releaseFirstDispatch();
+        await ingress.waitForIdle();
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("marks actual same-session predecessor waits without completing adoption", async () => {
+    await withQueue(async (queue) => {
+      let releaseFirstDispatch: () => void = () => {};
+      let releaseSecondAdoption: () => void = () => {};
+      const firstDispatchGate = new Promise<void>((resolve) => {
+        releaseFirstDispatch = resolve;
+      });
+      const secondAdoptionGate = new Promise<void>((resolve) => {
+        releaseSecondAdoption = resolve;
+      });
+      const routed: string[] = [];
+      const processEvent = vi.fn(async (receiverEvent: ReceiverEvent) => {
+        const eventId = (receiverEvent.body as { event_id: string }).event_id;
+        const lifecycle = resolveSlackIngressTurnLifecycle(receiverEvent.customProperties);
+        await lifecycle?.onSessionRouted?.("agent:main:slack:shared-session");
+        routed.push(eventId);
+        if (eventId === "Ev-previous-turn-first") {
+          await firstDispatchGate;
+        } else {
+          await secondAdoptionGate;
+        }
+        await lifecycle?.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      ingress.start();
+
+      try {
+        await receive(createReceiverEvent("Ev-previous-turn-first"));
+        await vi.waitFor(() => expect(routed).toEqual(["Ev-previous-turn-first"]));
+        await receive(createReceiverEvent("Ev-previous-turn-second"));
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(2));
+
+        await expectClaimIngressProgress(queue, "Ev-previous-turn-second", {
+          stage: "adoption",
+          blocker: "previous_turn",
+        });
+
+        releaseFirstDispatch();
+        await vi.waitFor(() =>
+          expect(routed).toEqual(["Ev-previous-turn-first", "Ev-previous-turn-second"]),
+        );
+        await expectClaimIngressProgress(queue, "Ev-previous-turn-second", {
+          stage: "adoption",
+          blocker: "state_store",
+        });
+      } finally {
+        releaseFirstDispatch();
+        releaseSecondAdoption();
         await ingress.waitForIdle();
         await ingress.stop();
       }
@@ -620,9 +693,17 @@ describe("Slack durable ingress", () => {
           setImmediate(resolve);
         });
         expect(starts).toEqual(["message"]);
+        await expectClaimIngressProgress(queue, "Ev-migration-after-route", {
+          stage: "adoption",
+          blocker: "channel_migration",
+        });
 
         releaseMessage();
         await vi.waitFor(() => expect(starts).toEqual(["message", "channel_id_changed"]));
+        await expectClaimIngressProgress(queue, "Ev-migration-after-route", {
+          stage: "adoption",
+          blocker: "state_store",
+        });
       } finally {
         releaseMessage();
         releaseMigration();

@@ -363,7 +363,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: one exec policy object replaces two deprecated comparator exports.
       // +1: approved bounded TAR inspection through the archive admission owner.
       // +1: canonical runtime-context classifier for native history projection.
-      4447,
+      // +18: narrow ingress observer and diagnostic snapshot contracts.
+      4465,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -495,7 +496,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: exec comparators are members of the shared policy object.
       // +1: approved bounded TAR inspection through the archive admission owner.
       // +1: canonical runtime-context classifier for native history projection.
-      2629,
+      // +1: ingress-owned observation of actual pending dedupe waits.
+      2630,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -4,6 +4,7 @@ import type {
   DiagnosticEventPrivateData,
 } from "../api.js";
 import { formatError } from "./service-exporter.js";
+import type { createIngressSnapshotRecorder } from "./service-ingress.js";
 import type { createDiagnosticsLogExporter } from "./service-logs.js";
 import type { createHarnessRecorders } from "./service-recorders-harness.js";
 import type { createModelRecorders } from "./service-recorders-model.js";
@@ -13,6 +14,7 @@ import type { createUsageRecorders } from "./service-recorders-usage.js";
 import type { OtelLogger } from "./service-types.js";
 
 type DiagnosticsEventRecorders = ReturnType<typeof createHarnessRecorders> &
+  ReturnType<typeof createIngressSnapshotRecorder> &
   ReturnType<typeof createModelRecorders> &
   ReturnType<typeof createOperationsRecorders> &
   ReturnType<typeof createToolAndSystemRecorders> &
@@ -77,6 +79,7 @@ export function createDiagnosticsEventHandler(params: {
     recordTelemetryExporter,
     recordPayloadLarge,
     recordModelFailover,
+    recordIngressSnapshot,
   } = recorders;
   return (
     evt: DiagnosticEventPayload,
@@ -166,6 +169,9 @@ export function createDiagnosticsEventHandler(params: {
           break;
         case "diagnostic.heartbeat":
           recordHeartbeat(evt);
+          return;
+        case "ingress.snapshot":
+          recordIngressSnapshot(evt, metadata);
           return;
         case "diagnostic.liveness.warning":
           recordLivenessWarning(evt);

@@ -6,6 +6,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
+import {
+  observeSlackIngressApiCall,
+  type SlackIngressApiObservationOptions,
+} from "../ingress-observability.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 
 type SlackDmHistoryMessage = {
@@ -40,6 +44,7 @@ export async function resolveSlackDmHistoryContext(params: {
   currentMessageTs?: string;
   limit: number;
   eventScope?: SlackEventScope;
+  observation?: SlackIngressApiObservationOptions;
   envelopeOptions: ReturnType<
     typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions
   >;
@@ -50,14 +55,21 @@ export async function resolveSlackDmHistoryContext(params: {
   }
 
   try {
-    const response = (await (
-      params.eventScope?.client ?? params.ctx.app.client
-    ).conversations.history({
-      token: params.ctx.botToken,
-      channel: params.channelId,
-      ...(params.currentMessageTs ? { latest: params.currentMessageTs, inclusive: true } : {}),
-      limit: maxMessages + 1,
-    })) as { messages?: SlackDmHistoryMessage[] };
+    const client = params.eventScope?.client ?? params.ctx.app.client;
+    const response = (await observeSlackIngressApiCall(
+      {
+        ...params.observation,
+        ingressClientProfile: params.observation?.ingressClientProfile ?? "pooled_listener",
+      },
+      { method: "conversations.history" },
+      () =>
+        client.conversations.history({
+          token: params.ctx.botToken,
+          channel: params.channelId,
+          ...(params.currentMessageTs ? { latest: params.currentMessageTs, inclusive: true } : {}),
+          limit: maxMessages + 1,
+        }),
+    )) as { messages?: SlackDmHistoryMessage[] };
 
     const messages = (response.messages ?? [])
       .filter((message) => {
@@ -80,7 +92,7 @@ export async function resolveSlackDmHistoryContext(params: {
         return cached;
       }
       const resolved = normalizeOptionalString(
-        (await params.ctx.resolveUserName(userId, params.eventScope)).name,
+        (await params.ctx.resolveUserName(userId, params.eventScope, params.observation)).name,
       );
       const label = resolved ?? userId;
       userNames.set(userId, label);

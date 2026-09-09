@@ -1,5 +1,9 @@
+import type { ChannelIngressLifecycleObserver } from "./ingress-observability-contract.js";
+
 /** Full pre-adoption -> adoption ownership lifecycle for one claimed event. */
 export type ChannelIngressDispatchLifecycle = {
+  /** Optional nonblocking observer for durable progress and live operation gauges. */
+  observer?: ChannelIngressLifecycleObserver;
   /** Pre-adoption only. After adopt the drain treats this signal as inert. */
   abortSignal: AbortSignal;
   /**

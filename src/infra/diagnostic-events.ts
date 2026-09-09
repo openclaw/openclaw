@@ -1,6 +1,8 @@
 // Defines and sanitizes runtime diagnostic event payloads.
 import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
+import { resetRegisteredChannelIngressDiagnosticSourcesForTest } from "../channels/message/ingress-diagnostic-registry.js";
+import type { ChannelIngressObservabilitySnapshot } from "../channels/message/ingress-observability-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
@@ -460,6 +462,8 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   queued: number;
 };
 
+type DiagnosticIngressSnapshotEvent = DiagnosticBaseEvent & ChannelIngressObservabilitySnapshot;
+
 export type DiagnosticLivenessWarningReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
 export type DiagnosticPhaseDetails = Record<string, string | number | boolean>;
@@ -866,6 +870,7 @@ export type DiagnosticEventPayload =
   | DiagnosticGatewayEventLoopSampleEvent
   | DiagnosticGcEvent
   | DiagnosticHeartbeatEvent
+  | DiagnosticIngressSnapshotEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
   | DiagnosticToolLoopEvent
@@ -1689,6 +1694,7 @@ export function resetDiagnosticEventsForTest(): void {
   state.asyncDroppedTrustedEvents = 0;
   state.asyncDroppedUntrustedEvents = 0;
   state.asyncDroppedPriorityEvents = 0;
+  resetRegisteredChannelIngressDiagnosticSourcesForTest();
   resetDiagnosticTracePropagationForTest();
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

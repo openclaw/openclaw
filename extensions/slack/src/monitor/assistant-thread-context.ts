@@ -1,6 +1,10 @@
 // Slack plugin module owns Assistant thread context metadata and caching.
 import type { WebClient } from "@slack/web-api";
 import type { SlackEventScope } from "./event-scope.js";
+import {
+  observeSlackIngressApiCall,
+  type SlackIngressApiObservationOptions,
+} from "./ingress-observability.js";
 
 export type SlackAssistantThreadContext = {
   assistantChannelId: string;
@@ -60,13 +64,22 @@ export async function readSlackAssistantThreadContext(params: {
   channelId: string;
   threadTs: string;
   userId?: string;
+  observation?: SlackIngressApiObservationOptions;
 }): Promise<Omit<SlackAssistantThreadContext, "updatedAt"> | undefined> {
-  const response = await params.client.conversations.replies({
-    channel: params.channelId,
-    ts: params.threadTs,
-    include_all_metadata: true,
-    limit: 4,
-  });
+  const response = await observeSlackIngressApiCall(
+    {
+      ...params.observation,
+      ingressClientProfile: params.observation?.ingressClientProfile ?? "pooled_listener",
+    },
+    { method: "conversations.replies" },
+    () =>
+      params.client.conversations.replies({
+        channel: params.channelId,
+        ts: params.threadTs,
+        include_all_metadata: true,
+        limit: 4,
+      }),
+  );
   for (const message of response.messages ?? []) {
     const context = parseSlackAssistantThreadMetadata(message.metadata);
     if (context) {

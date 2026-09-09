@@ -47,6 +47,7 @@ import {
   resolveSampleRate,
   resolveSignalOtelUrl,
 } from "./service-exporter.js";
+import { createIngressSnapshotRecorder } from "./service-ingress.js";
 import { createDiagnosticsLogExporter } from "./service-logs.js";
 import { createDiagnosticsMetrics } from "./service-metrics.js";
 import { registerOwnedSdkRuntime } from "./service-propagation.js";
@@ -190,6 +191,7 @@ type DiagnosticsOtelState = {
   unsubscribe?: (() => void) | null;
   unregisterTracePropagationBridge?: (() => void) | null;
   stopActiveTrustedSpans?: (() => void) | null;
+  stopIngressSnapshotRecorder?: (() => void) | null;
   unregisterOwnedSdkRuntime?: (() => void) | null;
   unregisterUnhandledRejectionHandler?: (() => void) | null;
   retireExporterRoutes?: (preserveFailures?: boolean) => void;
@@ -213,6 +215,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     const failures = await settle(
       current.unregisterTracePropagationBridge,
       current.unsubscribe,
+      current.stopIngressSnapshotRecorder,
       current.stopActiveTrustedSpans,
       current.unregisterOwnedSdkRuntime,
     );
@@ -589,7 +592,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...createHarnessRecorders(recorderRuntime),
         ...createModelRecorders(recorderRuntime),
         ...createToolAndSystemRecorders(recorderRuntime),
+        ...createIngressSnapshotRecorder(recorderRuntime),
       };
+      active.stopIngressSnapshotRecorder = recorders.stopIngressSnapshotRecorder;
 
       active.unsubscribe = subscribe(
         createDiagnosticsEventHandler({

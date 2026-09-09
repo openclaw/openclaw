@@ -22,6 +22,10 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString as normalizeThreadTs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
+import {
+  observeSlackIngressApiCall,
+  type SlackIngressApiObservationOptions,
+} from "./ingress-observability.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.js";
 
 type ThreadTsCacheEntry = {
@@ -74,14 +78,23 @@ async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
   channelId: string;
   messageTs: string;
+  observation?: SlackIngressApiObservationOptions;
 }) {
-  const response = (await params.client.conversations.history({
-    channel: params.channelId,
-    latest: params.messageTs,
-    oldest: params.messageTs,
-    inclusive: true,
-    limit: 1,
-  })) as { messages?: Array<{ ts?: string; thread_ts?: string }> };
+  const response = (await observeSlackIngressApiCall(
+    {
+      ...params.observation,
+      ingressClientProfile: params.observation?.ingressClientProfile ?? "pooled_listener",
+    },
+    { method: "conversations.history" },
+    () =>
+      params.client.conversations.history({
+        channel: params.channelId,
+        latest: params.messageTs,
+        oldest: params.messageTs,
+        inclusive: true,
+        limit: 1,
+      }),
+  )) as { messages?: Array<{ ts?: string; thread_ts?: string }> };
   const message =
     response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
   return normalizeThreadTs(message?.thread_ts);
@@ -137,6 +150,7 @@ export function createSlackThreadTsResolver(params: {
       message: SlackMessageEvent;
       source: "message" | "app_mention";
       turnAdoptionLifecycle?: SlackIngressTurnLifecycle;
+      observation?: SlackIngressApiObservationOptions;
     }): Promise<SlackMessageEvent> => {
       const { message } = request;
       if (!message.parent_user_id || message.thread_ts || !message.ts) {
@@ -162,6 +176,7 @@ export function createSlackThreadTsResolver(params: {
           client: params.client,
           channelId: message.channel,
           messageTs: message.ts,
+          observation: request.observation,
         });
         inflight.set(cacheKey, pending);
       }

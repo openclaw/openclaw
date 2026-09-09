@@ -43,7 +43,7 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
       sidecarStartup: "defer",
     });
     expect(areDiagnosticsEnabledForProcess()).toBe(false);
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const events: string[] = [];
     unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
     const tick = async () => {

@@ -531,6 +531,53 @@ distributions as complete during saturation.
 - `openclaw.session.recovery.age_ms` (histogram, attrs: same as the matching recovery counter)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
 
+### Ingress preparation
+
+Ingress gauges describe durable events waiting for preparation or adoption,
+including a call that has not returned. They are observable gauges: ages advance
+at collection time while work remains pending.
+
+| Metric                                                | Unit         | Attributes     |
+| ----------------------------------------------------- | ------------ | -------------- |
+| `openclaw.ingress.outstanding.count`                  | events       | stage, blocker |
+| `openclaw.ingress.outstanding.oldest_receipt_age_ms`  | ms           | stage, blocker |
+| `openclaw.ingress.outstanding.max_no_progress_age_ms` | ms           | stage          |
+| `openclaw.ingress.outstanding.unknown_progress_count` | events       | stage          |
+| `openclaw.ingress.failed.count`                       | events       | none           |
+| `openclaw.ingress.operation.active.count`             | operations   | operation kind |
+| `openclaw.ingress.operation.active.max_age_ms`        | ms           | operation kind |
+| `openclaw.ingress.snapshot.known`                     | 1            | none           |
+| `openclaw.ingress.snapshot.sampled_at_seconds`        | Unix seconds | none           |
+| `openclaw.ingress.snapshot.freshness_ms`              | ms           | none           |
+
+Attribute keys use the `openclaw.ingress.` prefix: `stage`, `blocker`,
+and `operation.kind`. Their values come from fixed buckets.
+Event, message, channel, session, and operation IDs are not metric labels.
+
+A diagnostic `ingress.snapshot` is sampled every 15 seconds, including idle.
+The recorder suppresses queue and operation gauges when its source sample is
+unknown or more than 45 seconds old; `snapshot.known` becomes zero. A stopped
+exporter cannot send that zero, so backend alerts must also check
+`sampled_at_seconds` against the configured export and scrape cadence. The
+metric export interval defaults to 60 seconds.
+
+Receipt age survives automatic retries. Stage entry, lease refresh, and retry
+alone do not reset meaningful-progress age. Explicit resubmission resets the
+queue's receipt and progress state. Provider metadata with an incompatible shape
+or an existing diagnostics-key value is preserved and reports unknown progress.
+The no-progress metric excludes intentional
+previous-turn, migration, approval, and model waits, as well as execution,
+delivery, and settlement stages. Unknown progress is counted separately.
+
+Operation gauges count currently observed work; retained operation summaries
+from a previous attempt are historical evidence. A pending logical Slack API
+call identifies the method and client profile in diagnostic evidence, but does
+not prove which private SDK retry or provider-internal operation is blocking.
+The `files.download` operation covers the authenticated fetch and temporary-file
+write; its age alone cannot distinguish those steps.
+These diagnostics do not establish timeout authority or complete cleanup of
+owned handles. See [Slack troubleshooting](/channels/slack/troubleshooting).
+
 ### Session liveness telemetry
 
 A `processing` session does not age toward the built-in liveness threshold while OpenClaw observes reply, tool, status, block, or ACP runtime progress. Typing keepalives do not count as progress, so a silent model or harness can still be detected.

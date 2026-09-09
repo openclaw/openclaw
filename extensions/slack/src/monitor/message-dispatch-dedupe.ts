@@ -6,6 +6,10 @@
 // adoption and release on gated/failed dispatch so the surviving twin can
 // still run the same gate without ever producing a second visible reply.
 import {
+  observeChannelIngressDedupeWait,
+  type ChannelIngressLifecycleObserver,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
   createChannelReplayGuard,
   runClaimableDedupeClaimLoop,
   type ChannelReplayClaimHandle,
@@ -68,9 +72,18 @@ export type SlackMessageDispatchReplayGuard = ReturnType<
 export async function claimSlackMessageDispatchReplay(params: {
   guard: SlackMessageDispatchReplayGuard;
   key: string;
+  observer?: ChannelIngressLifecycleObserver;
 }): Promise<SlackMessageDispatchClaimResult> {
   const claim = await runClaimableDedupeClaimLoop(
-    () => params.guard.claim({ keys: [params.key] }),
+    async () => {
+      const result = await params.guard.claim({ keys: [params.key] });
+      return result.kind === "inflight"
+        ? {
+            ...result,
+            pending: observeChannelIngressDedupeWait(params.observer, result.pending),
+          }
+        : result;
+    },
     (_error, rejectionCount) => rejectionCount <= 1,
   );
   return claim.kind === "claimed"

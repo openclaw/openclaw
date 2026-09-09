@@ -31,6 +31,11 @@ import {
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
 import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
+import {
+  CHANNEL_INGRESS_OPERATION_KINDS,
+  type ChannelIngressActiveOperationsSnapshot,
+} from "./ingress-observability-contract.js";
+import { createChannelIngressLifecycleObserver } from "./ingress-observability-lifecycle.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -100,6 +105,7 @@ export type ChannelIngressDrain = {
   recoverStaleClaims: () => Promise<number>;
   drainOnce: (options?: { shouldStop?: () => boolean }) => Promise<{ started: number }>;
   activeLaneKeys: () => ReadonlySet<string>;
+  activeOperations: () => ChannelIngressActiveOperationsSnapshot;
   waitForIdle: () => Promise<void>;
   dispose: () => void;
 };
@@ -169,6 +175,7 @@ export function createChannelIngressDrain<
   }
 
   const removeActive = (state: ActiveHandlerState<TPayload, TMetadata>) => {
+    state.observer?.revoke();
     clearStallTimer(state);
     clearClaimRefresh(state);
     activeByClaim.delete(activeClaimKey(state.claim));
@@ -185,6 +192,7 @@ export function createChannelIngressDrain<
       return;
     }
     state.guillotined = true;
+    state.observer?.revoke();
     clearStallTimer(state);
     clearClaimRefresh(state);
     try {
@@ -328,6 +336,7 @@ export function createChannelIngressDrain<
   ): ChannelIngressDispatchLifecycle => {
     return {
       abortSignal: state.abortController.signal,
+      ...(state.observer ? { observer: state.observer } : {}),
       onAdopted: async () => {
         // Lost adoption is loud: guillotine/supersede already tombstoned/failed the claim.
         if (state.guillotined) {
@@ -435,6 +444,24 @@ export function createChannelIngressDrain<
       settleOnce: async () => {},
     } as ActiveHandlerState<TPayload, TMetadata>;
     state.settleOnce = createIngressSettleOwner(state, removeActive);
+    if (queue.updateProgress) {
+      state.observer = createChannelIngressLifecycleObserver({
+        now,
+        context: {
+          eventId: claim.id,
+          queueName: claim.queueName,
+          channelId: claim.channelId,
+          accountId: claim.accountId,
+        },
+        record: (update) => queue.updateProgress?.(claim, update) ?? false,
+        onError: (error) => {
+          log(
+            `ingress drain: progress observer failed for event ${claim.id}: ${formatError(error)}`,
+          );
+        },
+      });
+      state.observer.stage("routing");
+    }
     const lifecycle = createLifecycle(state);
     armStallWatchdog(state);
     armClaimRefresh(state);
@@ -707,6 +734,36 @@ export function createChannelIngressDrain<
     recoverStaleClaims,
     drainOnce,
     activeLaneKeys: () => new Set(laneOwnerByKey.keys()),
+    activeOperations: () => {
+      const operations: ChannelIngressActiveOperationsSnapshot["operations"][number][] = [];
+      const unknownProgressEvents: NonNullable<
+        ChannelIngressActiveOperationsSnapshot["unknownProgressEvents"]
+      >[number][] = [];
+      const overflowByKind: NonNullable<ChannelIngressActiveOperationsSnapshot["overflowByKind"]> =
+        {};
+      for (const state of activeByClaim.values()) {
+        const snapshot = state.observer?.getActiveOperationSnapshot();
+        if (!snapshot) {
+          continue;
+        }
+        operations.push(...snapshot.operations);
+        unknownProgressEvents.push(...(snapshot.unknownProgressEvents ?? []));
+        for (const kind of CHANNEL_INGRESS_OPERATION_KINDS) {
+          const count = snapshot.overflowByKind?.[kind] ?? 0;
+          if (count > 0) {
+            overflowByKind[kind] = (overflowByKind[kind] ?? 0) + count;
+          }
+        }
+      }
+      const activeOperations: ChannelIngressActiveOperationsSnapshot = { operations };
+      if (unknownProgressEvents.length > 0) {
+        activeOperations.unknownProgressEvents = unknownProgressEvents;
+      }
+      if (Object.keys(overflowByKind).length > 0) {
+        activeOperations.overflowByKind = overflowByKind;
+      }
+      return activeOperations;
+    },
     waitForIdle: async () => {
       const tasks = [...activeByClaim.values()].map((state) => state.task);
       await Promise.allSettled(tasks);

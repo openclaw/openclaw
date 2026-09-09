@@ -638,7 +638,7 @@ describe("startTelegramWebhook", () => {
   ] as const)(
     "respects $binding diagnostics (enabled=$enabled) and preserves the host heartbeat",
     async ({ binding, enabled }) => {
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
       const events: string[] = [];
       const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
       startDiagnosticHeartbeat({}, { sampleLiveness: () => null });

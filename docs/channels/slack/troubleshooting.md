@@ -48,6 +48,29 @@ openclaw doctor
 
   </Accordion>
 
+  <Accordion title="Messages wait before the model starts">
+    With diagnostics enabled, inspect `ingress.snapshot` in Gateway logs. Start
+    with `sampledAt` and `status`: a missing, stale, or unknown sample cannot
+    establish that the queue is idle.
+
+    A known snapshot includes outstanding counts and bounded oldest-event
+    evidence by preparation stage. Match the event, account, workspace, channel,
+    and message timestamps, then inspect receipt age, last progress, and blocker.
+    Live operation evidence names the pending API method and actual client
+    profile. Keep correlation scoped to the same Gateway and account.
+
+    `previous_turn` and `channel_migration` identify intentional ordering waits.
+    A pending logical Slack call is evidence of the awaited call, not proof of
+    rate limiting or the Slack SDK's internal sleep state. Completion at ingress
+    adoption is not model or reply-delivery success.
+
+    Existing queue retention preserves bounded diagnostic summaries after
+    payload cleanup. It does not retain full message content or a complete
+    stage-by-stage history. For metrics and freshness handling, see
+    [Ingress preparation](/gateway/opentelemetry#ingress-preparation).
+
+  </Accordion>
+
   <Accordion title="DM messages ignored">
     Check:
 

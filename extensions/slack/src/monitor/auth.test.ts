@@ -52,6 +52,17 @@ vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async () => {
   };
 });
 
+function createIngressObserver() {
+  const finish = vi.fn((_outcome?: unknown) => {});
+  return {
+    stage: vi.fn(),
+    progress: vi.fn(),
+    correlate: vi.fn(),
+    begin: vi.fn(() => ({ finish })),
+    finish,
+  };
+}
+
 function makeSlackCtx(allowFrom: string[]): SlackMonitorContext {
   return {
     allowFrom,
@@ -134,6 +145,7 @@ function interactiveRequest(
 function makeChannelMemberAuth(
   conversationsMembers = vi.fn(async () => ({ members: ["UOWNER"], response_metadata: {} })),
   allowFromLower = ["uowner"],
+  observation?: Parameters<typeof authorizeSlackBotRoomMessage>[0]["observation"],
 ) {
   const ctx = {
     allowFrom: [],
@@ -148,11 +160,45 @@ function makeChannelMemberAuth(
       channelId: "C1",
       senderId: "U_BOT",
       allowFromLower,
+      ...(observation ? { observation } : {}),
     });
   return { authorize, conversationsMembers };
 }
 
 describe("resolveSlackEffectiveAllowFrom", () => {
+  it("observes the actual channel-member lookup for bot-room authorization", async () => {
+    const observer = createIngressObserver();
+    let resolveLookup!: (value: {
+      members: string[];
+      response_metadata: Record<string, never>;
+    }) => void;
+    const lookup = new Promise<{
+      members: string[];
+      response_metadata: Record<string, never>;
+    }>((resolve) => {
+      resolveLookup = resolve;
+    });
+    const conversationsMembers = vi.fn(() => lookup);
+    const { authorize } = makeChannelMemberAuth(conversationsMembers, ["uowner"], {
+      ingressObserver: observer,
+    });
+
+    const result = authorize();
+    await Promise.resolve();
+
+    expect(observer.begin).toHaveBeenCalledWith({
+      kind: "api",
+      method: "conversations.members",
+      profile: "pooled_listener",
+    });
+    expect(observer.finish).not.toHaveBeenCalled();
+
+    resolveLookup({ members: ["UOWNER"], response_metadata: {} });
+    await expect(result).resolves.toBe(true);
+    expect(observer.finish).toHaveBeenCalledWith("completed");
+    expect(JSON.stringify(observer.begin.mock.calls)).not.toContain("xoxb-test");
+  });
+
   it.each([
     [
       "falls back to channel config allowFrom when pairing store throws",

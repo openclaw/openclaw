@@ -1,12 +1,14 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   registerNodeSqliteKyselyQueryErrorHandler,
 } from "../infra/kysely-sync-cache-state.js";
+import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
-import { isSqliteCorruptionError } from "../infra/sqlite-transaction.js";
+import { isSqliteCorruptionError, isSqliteLockError } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import {
   createOpenClawDatabaseVerificationError,
@@ -183,6 +185,65 @@ function getOpenClawStateDatabaseIfOpenAtPath(pathname: string): OpenClawStateDa
   return cached?.db.isOpen ? cached : undefined;
 }
 
+function getErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  if (!("code" in error)) {
+    return undefined;
+  }
+  const code = error.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function pathExists(pathname: string): boolean {
+  try {
+    statSync(pathname);
+    return true;
+  } catch (error) {
+    if (getErrorCode(error) === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function withCachedOpenClawStateDatabaseOwnerRead<T>(
+  pathname: string,
+  operation: (database: OpenClawStateDatabase) => T,
+): T | undefined {
+  const resolvedPath = path.resolve(pathname);
+  const owner = cachedDatabases.get(resolvedPath);
+  if (!owner?.db.isOpen || owner.db.isTransaction) {
+    return undefined;
+  }
+  if (!pathExists(resolvedPath)) {
+    return undefined;
+  }
+  try {
+    return runWithSqliteBusyTimeout(
+      owner.db,
+      0,
+      () => {
+        if (owner.db.isTransaction) {
+          return undefined;
+        }
+        const admitted = getOpenClawStateDatabaseIfOpenAtPath(resolvedPath);
+        if (admitted !== owner || !admitted.db.isOpen || admitted.db.isTransaction) {
+          return undefined;
+        }
+        return operation(admitted);
+      },
+      { lockFailureReporting: "suppress" },
+    );
+  } catch (error) {
+    if (isSqliteLockError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 /** Remove a closed cached owner while fresh-open access is held. */
 function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase): void {
   if (cachedDatabases.get(database.path) !== database) {
@@ -308,4 +369,5 @@ export const openClawStateDatabaseCache = {
   publishOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
   recordOpenClawStateDatabaseLifecycleOpenError,
+  withCachedOpenClawStateDatabaseOwnerRead,
 };

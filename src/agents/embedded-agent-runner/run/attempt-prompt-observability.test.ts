@@ -32,6 +32,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../infra/diagnostic-events.js", () => ({
+  emitInternalDiagnosticEvent: vi.fn(),
   emitTrustedDiagnosticEvent: hoisted.emitTrustedDiagnosticEvent,
 }));
 vi.mock("../../../plugins/hook-agent-context.js", () => ({

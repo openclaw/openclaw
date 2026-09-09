@@ -15,6 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { CHANNEL_INGRESS_OBSERVABILITY_METADATA_KEY } from "./ingress-observability-contract.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
@@ -76,7 +77,7 @@ describe("channel ingress queue", () => {
         throw new Error(`Expected pending duplicate, got ${pending.kind}`);
       }
       expect(pending.record.payload).toEqual({ text: "first" });
-      expect(completed).toEqual({
+      expect(completed).toMatchObject({
         kind: "completed",
         duplicate: true,
         record: {
@@ -552,29 +553,35 @@ describe("channel ingress queue", () => {
           .where("event_id", "in", ["old", "keep", "retry"])
           .orderBy("event_id", "asc"),
       ).rows;
-      expect(rows).toEqual([
-        {
-          event_id: "keep",
-          last_attempt_at: null,
-          last_error: "bad",
-          metadata_json: null,
-          payload_json: JSON.stringify({ text: "keep" }),
-        },
-        {
-          event_id: "old",
-          last_attempt_at: null,
-          last_error: null,
-          metadata_json: null,
-          payload_json: "null",
-        },
-        {
-          event_id: "retry",
-          last_attempt_at: null,
-          last_error: null,
-          metadata_json: null,
-          payload_json: "null",
-        },
-      ]);
+      const keepRow = rows.find((row) => row.event_id === "keep");
+      const oldRow = rows.find((row) => row.event_id === "old");
+      const retryRow = rows.find((row) => row.event_id === "retry");
+      expect(keepRow).toMatchObject({
+        event_id: "keep",
+        last_attempt_at: null,
+        last_error: "bad",
+        payload_json: JSON.stringify({ text: "keep" }),
+      });
+      expect(
+        JSON.parse(keepRow?.metadata_json ?? "null")?.[CHANNEL_INGRESS_OBSERVABILITY_METADATA_KEY],
+      ).toMatchObject({
+        owner: "openclaw.channel-ingress",
+        terminal: { disposition: "failed", recordedAt: 25 },
+      });
+      expect(oldRow).toEqual({
+        event_id: "old",
+        last_attempt_at: null,
+        last_error: null,
+        metadata_json: null,
+        payload_json: "null",
+      });
+      expect(retryRow).toEqual({
+        event_id: "retry",
+        last_attempt_at: null,
+        last_error: null,
+        metadata_json: null,
+        payload_json: "null",
+      });
 
       expect(await queue.prune({ completedTtlMs: 10, failedTtlMs: 10, now: 40 })).toBe(3);
       expect(await queue.listPending()).toEqual([]);

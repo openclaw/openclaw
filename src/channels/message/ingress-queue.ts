@@ -11,6 +11,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
 import type {
   ChannelIngressEvents,
   DB as OpenClawStateKyselyDatabase,
@@ -20,6 +21,20 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { registerChannelIngressDiagnosticSource } from "./ingress-diagnostic-registry.js";
+import type {
+  ChannelIngressActiveOperationsSnapshot,
+  ChannelIngressObservabilitySnapshot,
+  ChannelIngressProgressUpdate,
+} from "./ingress-observability-contract.js";
+import { buildChannelIngressObservabilitySnapshot } from "./ingress-observability-snapshot.js";
+import {
+  clearChannelIngressProgressMetadata,
+  freezeChannelIngressProgressMetadata,
+  initializeChannelIngressProgressMetadata,
+  mergeChannelIngressProgressMetadata,
+} from "./ingress-observability.js";
 
 /** Pending or retryable inbound channel event stored in the durable ingress queue. */
 export type ChannelIngressQueueRecord<TPayload, TMetadata = unknown> = {
@@ -212,6 +227,23 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     claim: ChannelIngressQueueClaimRef,
     options?: { refreshedAt?: number },
   ): Promise<boolean>;
+  updateProgress?(
+    claim: ChannelIngressQueueClaimRef,
+    update: ChannelIngressProgressUpdate,
+  ): Promise<boolean>;
+  getDiagnosticSnapshot?(
+    now?: number,
+    options?: {
+      activeOperations?:
+        | ChannelIngressActiveOperationsSnapshot["operations"]
+        | ChannelIngressActiveOperationsSnapshot;
+    },
+  ): Promise<ChannelIngressObservabilitySnapshot>;
+  registerDiagnosticSource?(
+    getActiveOperations: () =>
+      | ChannelIngressActiveOperationsSnapshot["operations"]
+      | ChannelIngressActiveOperationsSnapshot,
+  ): () => void;
   complete(
     idOrClaim: string | ChannelIngressQueueClaimRef,
     options?: { metadata?: TCompletedMetadata; completedAt?: number },
@@ -320,6 +352,73 @@ async function openChannelIngressDatabaseForListing(
 
 export function getChannelIngressKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<ChannelIngressDatabase>(db);
+}
+
+async function getChannelIngressDiagnosticSnapshot(
+  now: number,
+  options: {
+    stateDir?: string;
+    channelId?: string;
+    accountId?: string;
+    queueName?: string;
+    activeOperations?:
+      | ChannelIngressActiveOperationsSnapshot["operations"]
+      | ChannelIngressActiveOperationsSnapshot;
+  } = {},
+): Promise<ChannelIngressObservabilitySnapshot> {
+  const env = options.stateDir ? createStateDirEnv(options.stateDir) : process.env;
+  const snapshot = openClawStateDatabaseCache.withCachedOpenClawStateDatabaseOwnerRead(
+    resolveOpenClawStateSqlitePath(env),
+    ({ db }) => {
+      const kysely = getChannelIngressKysely(db);
+      let activeQuery = kysely
+        .selectFrom("channel_ingress_events")
+        .select([
+          "event_id",
+          "channel_id",
+          "account_id",
+          "queue_name",
+          "status",
+          "metadata_json",
+          "received_at",
+          "updated_at",
+          "claimed_at",
+        ])
+        .where("status", "in", ["pending", "claimed"]);
+      let failedQuery = kysely
+        .selectFrom("channel_ingress_events")
+        .select((eb) => eb.fn.countAll<number>().as("count"))
+        .where("status", "=", "failed");
+      if (options.queueName) {
+        activeQuery = activeQuery.where("queue_name", "=", options.queueName);
+        failedQuery = failedQuery.where("queue_name", "=", options.queueName);
+      }
+      if (options.channelId) {
+        activeQuery = activeQuery.where("channel_id", "=", options.channelId);
+        failedQuery = failedQuery.where("channel_id", "=", options.channelId);
+      }
+      if (options.accountId) {
+        activeQuery = activeQuery.where("account_id", "=", options.accountId);
+        failedQuery = failedQuery.where("account_id", "=", options.accountId);
+      }
+      const failed = executeSqliteQueryTakeFirstSync(db, failedQuery);
+      return buildChannelIngressObservabilitySnapshot({
+        rows: executeSqliteQuerySync(db, activeQuery).rows,
+        sampledAt: now,
+        activeOperations: options.activeOperations,
+        failedCount: failed?.count ?? 0,
+      });
+    },
+  );
+  return (
+    snapshot ??
+    buildChannelIngressObservabilitySnapshot({
+      rows: [],
+      sampledAt: now,
+      activeOperations: options.activeOperations,
+      status: "unknown",
+    })
+  );
 }
 
 function affectedRows(result: { numAffectedRows?: bigint }): number {
@@ -652,6 +751,9 @@ export function createChannelIngressQueue<
     }
     const receivedAt = enqueueOptions?.receivedAt ?? now();
     const updatedAt = now();
+    const rawMetadataJson =
+      enqueueOptions?.metadata === undefined ? null : JSON.stringify(enqueueOptions.metadata);
+    const metadataJson = initializeChannelIngressProgressMetadata(rawMetadataJson, receivedAt);
     const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
@@ -668,10 +770,7 @@ export function createChannelIngressQueue<
               status: "pending",
               lane_key: enqueueOptions?.laneKey ?? null,
               payload_json: JSON.stringify(payload),
-              metadata_json:
-                enqueueOptions?.metadata === undefined
-                  ? null
-                  : JSON.stringify(enqueueOptions.metadata),
+              metadata_json: metadataJson ?? rawMetadataJson,
               received_at: receivedAt,
               updated_at: updatedAt,
               attempts: 0,
@@ -1087,6 +1186,54 @@ export function createChannelIngressQueue<
     );
   };
 
+  const updateProgress: NonNullable<
+    ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["updateProgress"]
+  > = async (claimRef, update) => {
+    const eventId = idFrom(claimRef);
+    const observedAtInput = update.observedAt ?? now();
+    const observedAt =
+      typeof observedAtInput === "number" && Number.isFinite(observedAtInput)
+        ? Math.max(0, Math.floor(observedAtInput))
+        : now();
+    const database = openChannelIngressDatabase(options.stateDir);
+    return runOpenClawStateWriteTransaction(
+      (tx) => {
+        const row = selectRow(tx.db, queueName, eventId);
+        if (
+          !row ||
+          row.status !== "claimed" ||
+          row.claim_token === null ||
+          row.claim_token !== claimRef.claim.token
+        ) {
+          return false;
+        }
+        const metadataJson = mergeChannelIngressProgressMetadata(
+          row.metadata_json,
+          { ...update, observedAt },
+          observedAt,
+        );
+        if (metadataJson === null) {
+          return false;
+        }
+        const result = executeSqliteQuerySync(
+          tx.db,
+          getChannelIngressKysely(tx.db)
+            .updateTable("channel_ingress_events")
+            .set({
+              metadata_json: metadataJson,
+              updated_at: observedAt,
+            })
+            .where("queue_name", "=", queueName)
+            .where("event_id", "=", eventId)
+            .where("status", "=", "claimed")
+            .where("claim_token", "=", claimRef.claim.token),
+        );
+        return affectedRows(result) > 0;
+      },
+      { path: database.path },
+    );
+  };
+
   const releaseClaimIfStillStale = async (
     claimRef: ChannelIngressQueueClaimRef,
     releaseOptions: { cutoff: number; releasedAt: number },
@@ -1211,15 +1358,19 @@ export function createChannelIngressQueue<
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
+        const existing = selectRow(tx.db, queueName, eventId);
+        const terminalMetadata = freezeChannelIngressProgressMetadata({
+          metadataJson: existing?.metadata_json ?? null,
+          completedMetadata: completeOptions?.metadata,
+          disposition: "completed",
+          recordedAt: completedAt,
+        });
         const baseUpdate = kysely
           .updateTable("channel_ingress_events")
           .set({
             status: "completed",
             completed_at: completedAt,
-            completed_metadata_json:
-              completeOptions?.metadata === undefined
-                ? null
-                : JSON.stringify(completeOptions.metadata),
+            completed_metadata_json: terminalMetadata.completedMetadataJson,
             payload_json: "null",
             metadata_json: null,
             claim_token: null,
@@ -1326,6 +1477,13 @@ export function createChannelIngressQueue<
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
+        const existing = selectRow(tx.db, queueName, eventId);
+        const terminalMetadata = freezeChannelIngressProgressMetadata({
+          metadataJson: existing?.metadata_json ?? null,
+          disposition: "failed",
+          reason: failOptions.reason,
+          recordedAt: failedAt,
+        });
         const baseUpdate = kysely
           .updateTable("channel_ingress_events")
           .set((eb) => ({
@@ -1342,6 +1500,7 @@ export function createChannelIngressQueue<
             claim_token: null,
             claim_owner: null,
             claimed_at: null,
+            metadata_json: terminalMetadata.metadataJson,
             updated_at: failedAt,
           }))
           .where("queue_name", "=", queueName)
@@ -1391,6 +1550,7 @@ export function createChannelIngressQueue<
               status: "pending",
               payload_json:
                 row.payload_json === FAILED_NULL_PAYLOAD_SENTINEL ? "null" : row.payload_json,
+              metadata_json: clearChannelIngressProgressMetadata(row.metadata_json),
               received_at: resubmittedAt,
               updated_at: resubmittedAt,
               attempts: 0,
@@ -1566,6 +1726,23 @@ export function createChannelIngressQueue<
     claimNext,
     claim,
     refreshClaim,
+    updateProgress,
+    getDiagnosticSnapshot: (sampledAt, snapshotOptions) =>
+      getChannelIngressDiagnosticSnapshot(sampledAt ?? now(), {
+        stateDir: options.stateDir,
+        queueName,
+        activeOperations: snapshotOptions?.activeOperations,
+      }),
+    registerDiagnosticSource: (getActiveOperations) =>
+      registerChannelIngressDiagnosticSource({
+        scopeKey: options.stateDir ?? "",
+        getActiveOperations,
+        getSnapshot: (sampledAt, activeOperations) =>
+          getChannelIngressDiagnosticSnapshot(sampledAt, {
+            stateDir: options.stateDir,
+            activeOperations,
+          }),
+      }),
     complete,
     release,
     fail,

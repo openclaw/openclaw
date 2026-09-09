@@ -48,6 +48,17 @@ function resolveTestSlackThreadStarter(
   });
 }
 
+function createIngressObserver() {
+  const finish = vi.fn((_outcome?: unknown) => {});
+  return {
+    stage: vi.fn(),
+    progress: vi.fn(),
+    correlate: vi.fn(),
+    begin: vi.fn(() => ({ finish })),
+    finish,
+  };
+}
+
 function expectSlackMediaResult(
   result: Awaited<ReturnType<typeof resolveSlackMedia>>,
 ): SlackMediaResult {
@@ -275,6 +286,40 @@ async function expectPrivateDownloadRedirect(params: {
 describe("resolveSlackMedia", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("observes direct Slack file downloads without recording file metadata", async () => {
+    const observer = createIngressObserver();
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [
+        {
+          id: "FSECRET",
+          name: "secret-name.jpg",
+          url_private_download: "https://files.slack.com/secret-name.jpg",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+      observation: { ingressObserver: observer },
+    });
+
+    expectSlackMediaResult(result);
+    expect(observer.begin).toHaveBeenCalledWith({
+      kind: "api",
+      method: "files.download",
+      profile: "media",
+    });
+    expect(observer.finish).toHaveBeenCalledWith("completed");
+    const observed = JSON.stringify(observer.begin.mock.calls);
+    expect(observed).not.toContain("secret-name");
+    expect(observed).not.toContain("xoxb-test-token");
   });
 
   it("prefers url_private_download over url_private", async () => {
@@ -1506,6 +1551,39 @@ describe("resolveSlackAttachmentContent", () => {
       );
     },
   );
+
+  it("observes forwarded Slack image downloads without recording the URL", async () => {
+    const observer = createIngressObserver();
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+
+    const result = await resolveSlackAttachmentContent({
+      attachments: [
+        {
+          is_share: true,
+          image_url: "https://files.slack.com/forwarded-secret.png",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024,
+      observation: { ingressObserver: observer },
+    });
+
+    expect(result?.media).toHaveLength(1);
+    expect(observer.begin).toHaveBeenCalledWith({
+      kind: "api",
+      method: "files.download",
+      profile: "media",
+    });
+    expect(observer.finish).toHaveBeenCalledWith("completed");
+    const observed = JSON.stringify(observer.begin.mock.calls);
+    expect(observed).not.toContain("forwarded-secret");
+    expect(observed).not.toContain("xoxb-test-token");
+  });
 
   it("ignores non-forwarded attachments", async () => {
     const result = await resolveSlackAttachmentContent({

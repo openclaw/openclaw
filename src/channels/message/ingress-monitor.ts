@@ -133,6 +133,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let releaseRestartFenceWake = () => {};
   let suspensionDrainPending = false;
   let unsubscribeSuspension: (() => void) | undefined;
+  let unregisterDiagnosticSource: (() => void) | undefined;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let lastPrunedAt = 0;
   let admissionTail: Promise<void> = Promise.resolve();
@@ -702,6 +703,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       // rethrow is what lets the gateway record the failure as dead ingress rather than as
       // one more anonymous channel crash.
       ensureQueueAvailable();
+      unregisterDiagnosticSource ??= getQueue().registerDiagnosticSource?.(
+        () => drain?.activeOperations() ?? { operations: [] },
+      );
       running = true;
       unsubscribeSuspension ??= onGatewaySuspendAdmissionChange((phase) => {
         if (!running) {
@@ -732,6 +736,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         running = false;
         requested = false;
         clearSuspensionSubscription();
+        unregisterDiagnosticSource?.();
         releaseRestartFenceWake();
         clearPollTimer();
         publishActivity();

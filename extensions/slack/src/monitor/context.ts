@@ -35,6 +35,10 @@ import { resolveSlackChannelConfig } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
 import type { SlackIdentityHealth, SlackInstallationIdentity } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
+import {
+  observeSlackIngressApiCall,
+  type SlackIngressApiObservationOptions,
+} from "./ingress-observability.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
 import { saveRemoteMedia } from "./media.runtime.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
@@ -139,6 +143,7 @@ export type SlackMonitorContext = {
   resolveChannelName: (
     channelId: string,
     eventScope?: SlackEventScope,
+    observation?: SlackIngressApiObservationOptions,
   ) => Promise<SlackChannelInfo>;
   /** Records authoritative event-carried channel type in the channel metadata cache. */
   rememberSlackChannelType: (
@@ -151,7 +156,11 @@ export type SlackMonitorContext = {
     channelId: string | null | undefined,
     eventScope?: SlackEventScope,
   ) => SlackMessageEvent["channel_type"] | undefined;
-  resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<SlackUserInfo>;
+  resolveUserName: (
+    userId: string,
+    eventScope?: SlackEventScope,
+    observation?: SlackIngressApiObservationOptions,
+  ) => Promise<SlackUserInfo>;
   resolveUserAvatar: (userId: string, eventScope?: SlackEventScope) => string | undefined;
   setSlackSessionStatus: (params: {
     channelId: string;
@@ -309,17 +318,29 @@ export function createSlackMonitorContext(params: {
     recallSlackChannelType,
   });
 
-  const resolveChannelName = async (channelId: string, eventScope?: SlackEventScope) => {
+  const resolveChannelName = async (
+    channelId: string,
+    eventScope?: SlackEventScope,
+    observation?: SlackIngressApiObservationOptions,
+  ) => {
     const cacheKey = scopedKey(channelId, eventScope);
     const cached = readLruMapEntry(channelCache, cacheKey);
     if (cached?.metadataLoaded) {
       return cached.info;
     }
     try {
-      const info = await (eventScope?.client ?? params.app.client).conversations.info({
-        token: params.botToken,
-        channel: channelId,
-      });
+      const info = await observeSlackIngressApiCall(
+        {
+          ...observation,
+          ingressClientProfile: observation?.ingressClientProfile ?? "pooled_listener",
+        },
+        { method: "conversations.info" },
+        () =>
+          (eventScope?.client ?? params.app.client).conversations.info({
+            token: params.botToken,
+            channel: channelId,
+          }),
+      );
       const name = info.channel && "name" in info.channel ? info.channel.name : undefined;
       const channel = info.channel ?? undefined;
       const type: SlackMessageEvent["channel_type"] | undefined = channel?.is_im
@@ -347,17 +368,29 @@ export function createSlackMonitorContext(params: {
     }
   };
 
-  const resolveUserName = async (userId: string, eventScope?: SlackEventScope) => {
+  const resolveUserName = async (
+    userId: string,
+    eventScope?: SlackEventScope,
+    observation?: SlackIngressApiObservationOptions,
+  ) => {
     const cacheKey = scopedKey(userId, eventScope);
     const cached = readLruMapEntry(userCache, cacheKey);
     if (cached) {
       return cached;
     }
     try {
-      const info = await (eventScope?.client ?? params.app.client).users.info({
-        token: params.botToken,
-        user: userId,
-      });
+      const info = await observeSlackIngressApiCall(
+        {
+          ...observation,
+          ingressClientProfile: observation?.ingressClientProfile ?? "pooled_listener",
+        },
+        { method: "users.info" },
+        () =>
+          (eventScope?.client ?? params.app.client).users.info({
+            token: params.botToken,
+            user: userId,
+          }),
+      );
       const profile = info.user?.profile;
       const name = profile?.display_name || profile?.real_name || info.user?.name || undefined;
       const imageUrl =

@@ -1,4 +1,4 @@
-import type { Meter, MetricOptions } from "@opentelemetry/api";
+import type { Meter, MetricOptions, ObservableCallback, ObservableGauge } from "@opentelemetry/api";
 import {
   AGENT_DURATION_MS_BUCKETS,
   CONTEXT_TOKENS_BUCKETS,
@@ -18,6 +18,15 @@ export function createDiagnosticsMetrics(
     meter.createCounter(resolveMetricName(name), options);
   const createHistogram = (name: `openclaw.${string}`, options?: MetricOptions) =>
     meter.createHistogram(resolveMetricName(name), options);
+  const createObservableGauge = (name: `openclaw.${string}`, options?: MetricOptions) =>
+    meter.createObservableGauge(resolveMetricName(name), options);
+  const registerObservableGaugeCallback = (
+    gauge: ObservableGauge,
+    callback: ObservableCallback,
+  ) => {
+    gauge.addCallback(callback);
+    return () => gauge.removeCallback(callback);
+  };
 
   return {
     gcDurationHistogram: createHistogram("openclaw.gc.duration_ms", {
@@ -320,6 +329,67 @@ export function createDiagnosticsMetrics(
       unit: "1",
       description: "Diagnostic telemetry exporter lifecycle and failure events",
     }),
+    ingressOutstandingCountGauge: createObservableGauge("openclaw.ingress.outstanding.count", {
+      unit: "{event}",
+      description: "Current outstanding ingress events by fixed stage and blocker",
+    }),
+    ingressOldestReceiptAgeGauge: createObservableGauge(
+      "openclaw.ingress.outstanding.oldest_receipt_age_ms",
+      {
+        unit: "ms",
+        description:
+          "Oldest receipt age among outstanding ingress events by fixed stage and blocker",
+      },
+    ),
+    ingressMaxNoProgressAgeGauge: createObservableGauge(
+      "openclaw.ingress.outstanding.max_no_progress_age_ms",
+      {
+        unit: "ms",
+        description:
+          "Maximum eligible no-progress age among outstanding ingress events by fixed stage",
+      },
+    ),
+    ingressUnknownProgressCountGauge: createObservableGauge(
+      "openclaw.ingress.outstanding.unknown_progress_count",
+      {
+        unit: "{event}",
+        description: "Current outstanding ingress events whose progress stage is unknown",
+      },
+    ),
+    ingressFailedRecordsCountGauge: createObservableGauge("openclaw.ingress.failed.count", {
+      unit: "{event}",
+      description: "Current retained failed ingress records from the ingress snapshot",
+    }),
+    ingressOperationActiveCountGauge: createObservableGauge(
+      "openclaw.ingress.operation.active.count",
+      {
+        unit: "{operation}",
+        description: "Current active ingress API, dedupe, and sleep operations by fixed kind",
+      },
+    ),
+    ingressOperationMaxAgeGauge: createObservableGauge(
+      "openclaw.ingress.operation.active.max_age_ms",
+      {
+        unit: "ms",
+        description: "Maximum active ingress operation age by fixed kind",
+      },
+    ),
+    ingressSnapshotKnownGauge: createObservableGauge("openclaw.ingress.snapshot.known", {
+      unit: "1",
+      description: "Whether the latest ingress diagnostic snapshot is fresh and known",
+    }),
+    ingressSnapshotSampledAtGauge: createObservableGauge(
+      "openclaw.ingress.snapshot.sampled_at_seconds",
+      {
+        unit: "s",
+        description: "Unix timestamp of the latest ingress diagnostic snapshot sample",
+      },
+    ),
+    ingressSnapshotFreshnessGauge: createObservableGauge("openclaw.ingress.snapshot.freshness_ms", {
+      unit: "ms",
+      description: "Age of the latest ingress diagnostic snapshot consumed by the OTEL recorder",
+    }),
+    registerObservableGaugeCallback,
   };
 }
 

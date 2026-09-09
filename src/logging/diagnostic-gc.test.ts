@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 it("owns demand, queued GC batches, and disable/re-enable through the existing heartbeat", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const now = vi.spyOn(performance, "now").mockReturnValue(100);
   const durations: number[] = [];
   const start = () => startDiagnosticHeartbeat({}, { sampleLiveness: () => null });

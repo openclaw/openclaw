@@ -9,6 +9,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import { resolveSlackMessageText } from "../block-text.js";
+import type { SlackIngressObservationOptions } from "../ingress-observability.js";
 import type { SlackMediaResult } from "../media-types.js";
 import type { SlackThreadStarter } from "../thread.js";
 
@@ -120,6 +121,7 @@ export async function resolveSlackMessageContent(params: {
   mediaTotalTimeoutMs?: number;
   abortSignal?: AbortSignal;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
+  observation?: SlackIngressObservationOptions;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
     files: params.message.files,
@@ -140,6 +142,7 @@ export async function resolveSlackMessageContent(params: {
             totalTimeoutMs: params.mediaTotalTimeoutMs,
             abortSignal: params.abortSignal,
             preloadedMedia: params.preloadedMedia,
+            observation: params.observation,
           }),
         )
       : null;

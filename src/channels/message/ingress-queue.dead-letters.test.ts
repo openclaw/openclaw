@@ -47,7 +47,7 @@ describe("channel ingress dead letters", () => {
       }
       await queue.fail(finalClaim, { reason: "handler-error", message: "fatal", failedAt: 30 });
 
-      expect(await queue.listFailed?.({ limit: "all" })).toEqual([
+      expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
         {
           id: "event-1",
           channelId: "telegram",

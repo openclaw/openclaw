@@ -1,3 +1,4 @@
+import type { ChannelIngressObserverController } from "./ingress-observability-contract.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.js";
 
 export class IngressAdoptionLostError extends Error {
@@ -24,6 +25,7 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   laneKey: string;
   claim: ChannelIngressQueueClaim<TPayload, TMetadata>;
   abortController: AbortController;
+  observer?: ChannelIngressObserverController;
   startedAt: number;
   phase: "dispatching" | "deferred" | "adopted" | "settled";
   occupiesLane: boolean;

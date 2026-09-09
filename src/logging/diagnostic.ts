@@ -2,11 +2,16 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { resolveCompactionTimeoutMs } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "../agents/embedded-agent-runner/run-state.js";
+import {
+  getDiagnosticIngressSnapshot,
+  resetRegisteredChannelIngressDiagnosticSourcesForTest,
+} from "../channels/message/ingress-diagnostic-registry.js";
+import { createUnknownChannelIngressObservabilitySnapshot as createUnknownDiagnosticIngressSnapshot } from "../channels/message/ingress-observability-snapshot.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
-  emitInternalDiagnosticEvent as emitDiagnosticEvent,
+  emitInternalDiagnosticEvent,
   isDiagnosticsEnabled,
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
@@ -75,6 +80,8 @@ import {
 
 export { diagnosticLogger } from "./diagnostic-runtime.js";
 
+const emitDiagnosticEvent = emitInternalDiagnosticEvent;
+
 const webhookStats = {
   received: 0,
   processed: 0,
@@ -91,6 +98,7 @@ const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
 const DEFAULT_LIVENESS_CPU_CORE_RATIO_WARN = 0.9;
 const DEFAULT_LIVENESS_WARN_COOLDOWN_MS = 120_000;
 const DIAGNOSTIC_HEARTBEAT_INTERVAL_MS = 30_000;
+const DIAGNOSTIC_INGRESS_SNAPSHOT_INTERVAL_MS = 15_000;
 const loadStuckSessionRecoveryRuntime = createLazyRuntimeModule(
   () => import("./diagnostic-stuck-session-recovery.runtime.js"),
 );
@@ -470,6 +478,44 @@ function formatDiagnosticWorkLabels(work: DiagnosticWorkSnapshot): string {
     work.queuedLabels.length > 0 ? `queued=${work.queuedLabels.join("|")}` : "",
   ].filter(Boolean);
   return parts.join(" ");
+}
+
+function emitDiagnosticIngressSnapshotEvent(
+  snapshot: ReturnType<typeof createUnknownDiagnosticIngressSnapshot>,
+): void {
+  if (
+    diagnosticIngressLatestEmittedSampledAt !== undefined &&
+    snapshot.sampledAt < diagnosticIngressLatestEmittedSampledAt
+  ) {
+    return;
+  }
+  diagnosticIngressLatestEmittedSampledAt = snapshot.sampledAt;
+  diag.info("ingress.snapshot", snapshot);
+  emitInternalDiagnosticEvent(snapshot);
+}
+
+function emitDiagnosticIngressSnapshot(now: number): void {
+  if (diagnosticIngressSnapshotInFlight) {
+    emitDiagnosticIngressSnapshotEvent(createUnknownDiagnosticIngressSnapshot(now));
+    return;
+  }
+  const generation = diagnosticIngressSnapshotGeneration;
+  diagnosticIngressSnapshotInFlight = true;
+  void (async () => {
+    try {
+      const snapshot = await getDiagnosticIngressSnapshot(now);
+      if (generation !== diagnosticIngressSnapshotGeneration) {
+        return;
+      }
+      emitDiagnosticIngressSnapshotEvent(snapshot);
+    } catch {
+      // getDiagnosticIngressSnapshot owns provider fallback; this guard keeps the heartbeat alive.
+    } finally {
+      if (generation === diagnosticIngressSnapshotGeneration) {
+        diagnosticIngressSnapshotInFlight = false;
+      }
+    }
+  })();
 }
 
 function resolveStuckSessionWarnMs(): number {
@@ -1112,6 +1158,9 @@ export function logToolLoopAction(
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let lastDiagnosticHeartbeatTickAt: number | undefined;
+let diagnosticIngressSnapshotInFlight = false;
+let diagnosticIngressSnapshotGeneration = 0;
+let diagnosticIngressLatestEmittedSampledAt: number | undefined;
 
 export function startDiagnosticHeartbeat(
   config?: OpenClawConfig,
@@ -1129,6 +1178,8 @@ export function startDiagnosticHeartbeat(
   if (heartbeatInterval) {
     return;
   }
+  diagnosticIngressSnapshotGeneration += 1;
+  diagnosticIngressLatestEmittedSampledAt = undefined;
   // Gateway supplies its lifecycle-owned monitor; other runtimes retain the
   // built-in sampler. Never allocate two perf monitors for one heartbeat.
   if (!opts?.sampleLiveness) {
@@ -1138,6 +1189,14 @@ export function startDiagnosticHeartbeat(
     opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
   lastDiagnosticHeartbeatTickAt = Date.now();
   heartbeatInterval = setInterval(() => {
+    const now = Date.now();
+    emitDiagnosticIngressSnapshot(now);
+    const heartbeatElapsedMs =
+      lastDiagnosticHeartbeatTickAt === undefined ? 0 : now - lastDiagnosticHeartbeatTickAt;
+    if (heartbeatElapsedMs < DIAGNOSTIC_HEARTBEAT_INTERVAL_MS) {
+      return;
+    }
+    lastDiagnosticHeartbeatTickAt = now;
     // Reuse this tick for exporter demand changes; GC collection never adds a timer.
     reconcileDiagnosticGcObserver();
     let heartbeatConfig = config;
@@ -1152,10 +1211,6 @@ export function startDiagnosticHeartbeat(
     const stuckSessionAbortMs =
       opts?.testTimings?.stuckSessionAbortMs ?? resolveStuckSessionAbortMs(stuckSessionWarnMs);
     const compactionSafetyTimeoutMs = resolveCompactionTimeoutMs(heartbeatConfig);
-    const now = Date.now();
-    const heartbeatElapsedMs =
-      lastDiagnosticHeartbeatTickAt === undefined ? 0 : now - lastDiagnosticHeartbeatTickAt;
-    lastDiagnosticHeartbeatTickAt = now;
     const heartbeatOverdueMs = Math.max(0, heartbeatElapsedMs - DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
     const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
     // Observe ordinary timer jitter at the scheduled tick so it cannot consume
@@ -1187,7 +1242,6 @@ export function startDiagnosticHeartbeat(
         emitSample: shouldRecordMemorySample,
       });
     }
-
     if (!shouldRecordMemorySample) {
       return;
     }
@@ -1286,7 +1340,7 @@ export function startDiagnosticHeartbeat(
         });
       }
     }
-  }, DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
+  }, DIAGNOSTIC_INGRESS_SNAPSHOT_INTERVAL_MS);
   heartbeatInterval.unref?.();
 }
 
@@ -1297,6 +1351,9 @@ export function stopDiagnosticHeartbeat() {
     heartbeatInterval = null;
   }
   lastDiagnosticHeartbeatTickAt = undefined;
+  diagnosticIngressSnapshotGeneration += 1;
+  diagnosticIngressSnapshotInFlight = false;
+  diagnosticIngressLatestEmittedSampledAt = undefined;
   stopDiagnosticRunActivityTracking();
   retireDiagnosticSessionObservations();
   stopDiagnosticLivenessSampler();
@@ -1317,6 +1374,8 @@ function resetDiagnosticStateForTest(): void {
   resetDiagnosticMemoryForTest();
   resetDiagnosticPhasesForTest();
   resetDiagnosticStabilityRecorderForTest();
+  resetRegisteredChannelIngressDiagnosticSourcesForTest();
+  diagnosticIngressLatestEmittedSampledAt = undefined;
 }
 
 const testing = {

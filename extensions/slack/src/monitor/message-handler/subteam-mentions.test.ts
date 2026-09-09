@@ -3,6 +3,17 @@ import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { isSlackSubteamMentionForBot } from "./subteam-mentions.js";
 
+function createIngressObserver() {
+  const finish = vi.fn((_outcome?: unknown) => {});
+  return {
+    stage: vi.fn(),
+    progress: vi.fn(),
+    correlate: vi.fn(),
+    begin: vi.fn(() => ({ finish })),
+    finish,
+  };
+}
+
 function createClient(users: string[]) {
   return {
     usergroups: {
@@ -33,6 +44,39 @@ describe("Slack subteam mentions", () => {
       usergroup: "S123",
       team_id: "T1",
     });
+  });
+
+  it("observes the actual user-group member lookup", async () => {
+    const observer = createIngressObserver();
+    let resolveLookup!: (value: { ok: true; users: string[] }) => void;
+    const lookup = new Promise<{ ok: true; users: string[] }>((resolve) => {
+      resolveLookup = resolve;
+    });
+    const client = {
+      usergroups: { users: { list: vi.fn(() => lookup) } },
+    } as unknown as WebClient & {
+      usergroups: { users: { list: ReturnType<typeof vi.fn> } };
+    };
+
+    const result = isSlackSubteamMentionForBot({
+      client,
+      text: "<!subteam^S987|quiet> ping",
+      botUserId: "U_BOT",
+      observation: { ingressObserver: observer },
+    });
+    await Promise.resolve();
+
+    expect(observer.begin).toHaveBeenCalledWith({
+      kind: "api",
+      method: "usergroups.users.list",
+      profile: "pooled_listener",
+    });
+    expect(observer.finish).not.toHaveBeenCalled();
+
+    resolveLookup({ ok: true, users: ["U_BOT"] });
+    await expect(result).resolves.toBe(true);
+    expect(observer.finish).toHaveBeenCalledWith("completed");
+    expect(JSON.stringify(observer.begin.mock.calls)).not.toContain("S987");
   });
 
   it("fails closed and caches successful membership lookups", async () => {

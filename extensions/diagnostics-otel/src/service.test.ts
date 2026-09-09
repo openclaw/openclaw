@@ -12,7 +12,14 @@ const telemetryState = vi.hoisted(() => {
     traceFlags: number;
   };
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
+  type TestObservableGauge = {
+    observe: ReturnType<typeof vi.fn>;
+    addCallback: ReturnType<typeof vi.fn>;
+    removeCallback: ReturnType<typeof vi.fn>;
+    callbacks: Set<(observable: { observe: ReturnType<typeof vi.fn> }) => void>;
+  };
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
+  const observableGauges = new Map<string, TestObservableGauge>();
   const spans: Array<{
     name: string;
     addEvent: ReturnType<typeof vi.fn>;
@@ -52,8 +59,26 @@ const telemetryState = vi.hoisted(() => {
       histograms.set(name, histogram);
       return histogram;
     }),
+    createObservableGauge: vi.fn((name: string) => {
+      const gauge: TestObservableGauge = {
+        observe: vi.fn(),
+        callbacks: new Set(),
+        addCallback: vi.fn(
+          (callback: (observable: { observe: ReturnType<typeof vi.fn> }) => void) => {
+            gauge.callbacks.add(callback);
+          },
+        ),
+        removeCallback: vi.fn(
+          (callback: (observable: { observe: ReturnType<typeof vi.fn> }) => void) => {
+            gauge.callbacks.delete(callback);
+          },
+        ),
+      };
+      observableGauges.set(name, gauge);
+      return gauge;
+    }),
   };
-  return { counters, histograms, spans, tracer, meter };
+  return { counters, histograms, observableGauges, spans, tracer, meter };
 });
 
 const traceProviderCtor = vi.hoisted(() => vi.fn());
@@ -261,7 +286,22 @@ import {
   logMessageProcessed,
   runWithDiagnosticTraceContext,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { emitDiagnosticEvent, type DiagnosticEventPayload } from "../api.js";
+import {
+  CHANNEL_INGRESS_BLOCKERS,
+  CHANNEL_INGRESS_OBSERVABILITY_SCHEMA_VERSION,
+  CHANNEL_INGRESS_OPERATION_KINDS,
+  CHANNEL_INGRESS_PREPARATION_STAGES,
+  emitDiagnosticEvent,
+  type ChannelIngressBlocker,
+  type ChannelIngressBlockerSnapshot,
+  type ChannelIngressObservabilitySnapshot,
+  type ChannelIngressOperationAggregate,
+  type ChannelIngressOperationKind,
+  type ChannelIngressPreparationStage,
+  type ChannelIngressStageSnapshot,
+  type ChannelIngressUnknownProgressSnapshot,
+  type DiagnosticEventPayload,
+} from "../api.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import {
   createExporterHealthEventEmitter,
@@ -356,6 +396,76 @@ const OTEL_CERT_ENV_KEYS = [
 const ORIGINAL_OTEL_CERT_ENV = Object.fromEntries(
   OTEL_CERT_ENV_KEYS.map((key) => [key, process.env[key]]),
 ) as Record<(typeof OTEL_CERT_ENV_KEYS)[number], string | undefined>;
+
+function createEmptyIngressBlockerSnapshot(
+  blocker: ChannelIngressBlocker,
+): ChannelIngressBlockerSnapshot {
+  return { blocker, total: 0, pending: 0, claimed: 0 };
+}
+
+function createEmptyIngressBlockerSnapshots(): Record<
+  ChannelIngressBlocker,
+  ChannelIngressBlockerSnapshot
+> {
+  return Object.fromEntries(
+    CHANNEL_INGRESS_BLOCKERS.map((blocker) => [
+      blocker,
+      createEmptyIngressBlockerSnapshot(blocker),
+    ]),
+  ) as Record<ChannelIngressBlocker, ChannelIngressBlockerSnapshot>;
+}
+
+function createEmptyIngressStageSnapshot(
+  stage: ChannelIngressPreparationStage,
+): ChannelIngressStageSnapshot {
+  return {
+    stage,
+    total: 0,
+    pending: 0,
+    claimed: 0,
+    unknownProgress: 0,
+    eligibleNoProgressCount: 0,
+    blockers: createEmptyIngressBlockerSnapshots(),
+  };
+}
+
+function createEmptyIngressOperationSnapshot(
+  kind: ChannelIngressOperationKind,
+): ChannelIngressOperationAggregate {
+  return { kind, total: 0, known: true, truncated: false, overflowCount: 0 };
+}
+
+function createIngressSnapshot(sampledAt: number): ChannelIngressObservabilitySnapshot {
+  return {
+    type: "ingress.snapshot",
+    schemaVersion: CHANNEL_INGRESS_OBSERVABILITY_SCHEMA_VERSION,
+    sampledAt,
+    status: "known",
+    isolationAvailable: false,
+    failedCount: 0,
+    stages: Object.fromEntries(
+      CHANNEL_INGRESS_PREPARATION_STAGES.map((stage) => [
+        stage,
+        createEmptyIngressStageSnapshot(stage),
+      ]),
+    ) as Record<ChannelIngressPreparationStage, ChannelIngressStageSnapshot>,
+    unknown: {
+      stage: "unknown",
+      total: 0,
+      pending: 0,
+      claimed: 0,
+      unknownProgress: 0,
+      eligibleNoProgressCount: 0,
+      blockers: createEmptyIngressBlockerSnapshots(),
+    } satisfies ChannelIngressUnknownProgressSnapshot,
+    operations: Object.fromEntries(
+      CHANNEL_INGRESS_OPERATION_KINDS.map((kind) => [
+        kind,
+        createEmptyIngressOperationSnapshot(kind),
+      ]),
+    ) as Record<ChannelIngressOperationKind, ChannelIngressOperationAggregate>,
+  };
+}
 
 function startedSpanCall(name: string) {
   const calls = telemetryState.tracer.startSpan.mock.calls as unknown as Array<
@@ -508,6 +618,18 @@ function firstCounterAddCall(name: string): [unknown, Record<string, unknown>?] 
     throw new Error(`Expected counter ${name}`);
   }
   return mockCall(counter.add) as [unknown, Record<string, unknown>?];
+}
+
+function observeGauge(name: string): Array<[unknown, Record<string, unknown>?]> {
+  const gauge = telemetryState.observableGauges.get(name);
+  if (!gauge) {
+    throw new Error(`Expected observable gauge ${name}`);
+  }
+  gauge.observe.mockClear();
+  for (const callback of gauge.callbacks) {
+    callback({ observe: gauge.observe });
+  }
+  return gauge.observe.mock.calls as Array<[unknown, Record<string, unknown>?]>;
 }
 
 function lastHistogramRecord(name: string) {
@@ -874,11 +996,13 @@ describe("diagnostics-otel service", () => {
     delete process.env.OTEL_PROPAGATORS;
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
+    telemetryState.observableGauges.clear();
     telemetryState.spans.length = 0;
     telemetryState.tracer.startSpan.mockClear();
     telemetryState.tracer.setSpanContext.mockClear();
     telemetryState.meter.createCounter.mockClear();
     telemetryState.meter.createHistogram.mockClear();
+    telemetryState.meter.createObservableGauge.mockClear();
     traceProviderCtor.mockClear();
     traceProviderShutdown.mockClear();
     meterProviderCtor.mockClear();
@@ -910,6 +1034,7 @@ describe("diagnostics-otel service", () => {
     createNodeProxyAgentMock.mockReturnValue(undefined);
     unhandledRejectionHandlerState.reset();
     unhandledRejectionHandlerState.register.mockClear();
+    vi.useRealTimers();
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
@@ -987,6 +1112,7 @@ describe("diagnostics-otel service", () => {
         process.env[key] = value;
       }
     }
+    vi.useRealTimers();
   });
 
   test("drops camelCase and snake_case diagnostic id log attributes before export", async () => {
@@ -1084,6 +1210,268 @@ describe("diagnostics-otel service", () => {
       );
     },
   );
+
+  test("records ingress snapshot gauges from internal canonical snapshots", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const sampledAt = new Date("2026-01-01T00:00:00.000Z").getTime();
+    vi.setSystemTime(sampledAt);
+    await startServiceFixture(["metrics"]);
+
+    const snapshot = createIngressSnapshot(sampledAt);
+    snapshot.stages.routing.total = 2;
+    snapshot.stages.routing.pending = 1;
+    snapshot.stages.routing.claimed = 1;
+    snapshot.stages.routing.eligibleNoProgressCount = 1;
+    snapshot.stages.routing.maxEligibleNoProgressAgeMs = 12_000;
+    snapshot.stages.routing.blockers.slack_api.total = 2;
+    snapshot.stages.routing.blockers.slack_api.pending = 1;
+    snapshot.stages.routing.blockers.slack_api.claimed = 1;
+    snapshot.stages.routing.blockers.slack_api.oldestReceiptAgeMs = 20_000;
+    snapshot.unknown.total = 1;
+    snapshot.unknown.pending = 1;
+    snapshot.unknown.unknownProgress = 1;
+    snapshot.unknown.blockers.unknown.total = 1;
+    snapshot.unknown.blockers.unknown.pending = 1;
+    snapshot.unknown.blockers.unknown.oldestReceiptAgeMs = 30_000;
+    snapshot.failedCount = 4;
+    snapshot.operations.api.total = 1;
+    snapshot.operations.api.oldestAgeMs = 7_000;
+    snapshot.operations.dedupe.total = 5;
+    snapshot.operations.dedupe.known = false;
+    snapshot.operations.dedupe.truncated = true;
+    snapshot.operations.dedupe.overflowCount = 5;
+
+    emitInternalDiagnosticEventForTest(snapshot);
+    await waitForDiagnosticEventsDrained();
+    vi.setSystemTime(sampledAt + 2_000);
+
+    expect(observeGauge("openclaw.ingress.outstanding.count")).toEqual(
+      expect.arrayContaining([
+        [
+          2,
+          {
+            "openclaw.ingress.stage": "routing",
+            "openclaw.ingress.blocker": "slack_api",
+          },
+        ],
+        [
+          1,
+          {
+            "openclaw.ingress.stage": "unknown",
+            "openclaw.ingress.blocker": "unknown",
+          },
+        ],
+      ]),
+    );
+    expect(observeGauge("openclaw.ingress.outstanding.oldest_receipt_age_ms")).toEqual(
+      expect.arrayContaining([
+        [
+          22_000,
+          {
+            "openclaw.ingress.stage": "routing",
+            "openclaw.ingress.blocker": "slack_api",
+          },
+        ],
+        [
+          32_000,
+          {
+            "openclaw.ingress.stage": "unknown",
+            "openclaw.ingress.blocker": "unknown",
+          },
+        ],
+      ]),
+    );
+    expect(observeGauge("openclaw.ingress.outstanding.max_no_progress_age_ms")).toEqual(
+      expect.arrayContaining([[14_000, { "openclaw.ingress.stage": "routing" }]]),
+    );
+    expect(observeGauge("openclaw.ingress.outstanding.unknown_progress_count")).toEqual(
+      expect.arrayContaining([[1, { "openclaw.ingress.stage": "unknown" }]]),
+    );
+    expect(observeGauge("openclaw.ingress.failed.count")).toEqual([[4, {}]]);
+    const operationCountObservations = observeGauge("openclaw.ingress.operation.active.count");
+    expect(operationCountObservations).toEqual(
+      expect.arrayContaining([[1, { "openclaw.ingress.operation.kind": "api" }]]),
+    );
+    expect(operationCountObservations).not.toEqual(
+      expect.arrayContaining([[5, { "openclaw.ingress.operation.kind": "dedupe" }]]),
+    );
+    expect(observeGauge("openclaw.ingress.operation.active.max_age_ms")).toEqual(
+      expect.arrayContaining([[9_000, { "openclaw.ingress.operation.kind": "api" }]]),
+    );
+    expect(observeGauge("openclaw.ingress.snapshot.known")).toEqual([[1, {}]]);
+    expect(observeGauge("openclaw.ingress.snapshot.sampled_at_seconds")).toEqual([
+      [Math.floor(sampledAt / 1000), {}],
+    ]);
+    expect(observeGauge("openclaw.ingress.snapshot.freshness_ms")).toEqual([[2_000, {}]]);
+  });
+
+  test("keeps snapshot gauges on stable no-label series when status changes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const knownSampledAt = new Date("2026-02-03T12:00:00.000Z").getTime();
+    vi.setSystemTime(knownSampledAt);
+    await startServiceFixture(["metrics"]);
+
+    emitInternalDiagnosticEventForTest(createIngressSnapshot(knownSampledAt));
+    await waitForDiagnosticEventsDrained();
+
+    expect(observeGauge("openclaw.ingress.snapshot.known")).toEqual([[1, {}]]);
+    expect(observeGauge("openclaw.ingress.snapshot.sampled_at_seconds")).toEqual([
+      [Math.floor(knownSampledAt / 1000), {}],
+    ]);
+    expect(observeGauge("openclaw.ingress.snapshot.freshness_ms")).toEqual([[0, {}]]);
+
+    const unknownSampledAt = knownSampledAt + 15_000;
+    vi.setSystemTime(unknownSampledAt);
+    emitInternalDiagnosticEventForTest({
+      ...createIngressSnapshot(unknownSampledAt),
+      status: "unknown",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(observeGauge("openclaw.ingress.snapshot.known")).toEqual([[0, {}]]);
+    expect(observeGauge("openclaw.ingress.snapshot.sampled_at_seconds")).toEqual([
+      [Math.floor(unknownSampledAt / 1000), {}],
+    ]);
+    expect(observeGauge("openclaw.ingress.snapshot.freshness_ms")).toEqual([[0, {}]]);
+    expect(observeGauge("openclaw.ingress.outstanding.count")).toEqual([]);
+  });
+
+  test("treats stale ingress snapshots as unknown and suppresses queue gauges", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date("2026-01-01T00:00:00.000Z").getTime();
+    vi.setSystemTime(now);
+    await startServiceFixture(["metrics"]);
+
+    const snapshot = createIngressSnapshot(now - 46_000);
+    snapshot.stages.routing.blockers.slack_api.total = 1;
+    snapshot.operations.api.total = 1;
+
+    emitInternalDiagnosticEventForTest(snapshot);
+    await waitForDiagnosticEventsDrained();
+
+    expect(observeGauge("openclaw.ingress.snapshot.known")).toEqual([[0, {}]]);
+    expect(observeGauge("openclaw.ingress.snapshot.sampled_at_seconds")).toEqual([]);
+    expect(observeGauge("openclaw.ingress.outstanding.count")).toEqual([]);
+    expect(observeGauge("openclaw.ingress.operation.active.count")).toEqual([]);
+  });
+
+  test("rejects future and out-of-order ingress snapshots", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date("2026-01-01T00:00:00.000Z").getTime();
+    vi.setSystemTime(now);
+    await startServiceFixture(["metrics"]);
+
+    const futureSnapshot = createIngressSnapshot(now + 1);
+    futureSnapshot.failedCount = 99;
+    emitInternalDiagnosticEventForTest(futureSnapshot);
+    await waitForDiagnosticEventsDrained();
+
+    expect(observeGauge("openclaw.ingress.snapshot.known")).toEqual([[0, {}]]);
+    expect(observeGauge("openclaw.ingress.failed.count")).toEqual([]);
+
+    const freshSnapshot = createIngressSnapshot(now);
+    freshSnapshot.failedCount = 1;
+    freshSnapshot.operations.api.total = 1;
+    emitInternalDiagnosticEventForTest(freshSnapshot);
+    const olderSnapshot = createIngressSnapshot(now - 1);
+    olderSnapshot.failedCount = 99;
+    olderSnapshot.operations.api.total = 99;
+    emitInternalDiagnosticEventForTest(olderSnapshot);
+    await waitForDiagnosticEventsDrained();
+
+    expect(observeGauge("openclaw.ingress.failed.count")).toEqual([[1, {}]]);
+    expect(observeGauge("openclaw.ingress.operation.active.count")).toEqual(
+      expect.arrayContaining([[1, { "openclaw.ingress.operation.kind": "api" }]]),
+    );
+    expect(observeGauge("openclaw.ingress.operation.active.count")).not.toEqual(
+      expect.arrayContaining([[99, { "openclaw.ingress.operation.kind": "api" }]]),
+    );
+  });
+
+  test.each([
+    {
+      name: "untrusted",
+      emitSnapshot: (snapshot: ChannelIngressObservabilitySnapshot) =>
+        emitDiagnosticEvent(snapshot),
+    },
+    {
+      name: "public trusted",
+      emitSnapshot: (snapshot: ChannelIngressObservabilitySnapshot) =>
+        emitTrustedDiagnosticEvent(snapshot),
+    },
+  ])("ignores $name ingress snapshots from plugin emitters", async ({ emitSnapshot }) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date("2026-01-01T00:00:00.000Z").getTime();
+    vi.setSystemTime(now);
+    await startServiceFixture(["metrics"]);
+
+    const snapshot = createIngressSnapshot(now);
+    snapshot.stages.routing.blockers.slack_api.total = 1;
+    snapshot.failedCount = 1;
+    snapshot.operations.api.total = 1;
+
+    emitSnapshot(snapshot);
+    await waitForDiagnosticEventsDrained();
+
+    expect(observeGauge("openclaw.ingress.snapshot.known")).toEqual([[0, {}]]);
+    expect(observeGauge("openclaw.ingress.outstanding.count")).toEqual([]);
+    expect(observeGauge("openclaw.ingress.failed.count")).toEqual([]);
+  });
+
+  test("bounds spoofed ingress snapshot labels to canonical buckets", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const sampledAt = new Date("2026-01-01T00:00:00.000Z").getTime();
+    vi.setSystemTime(sampledAt);
+    await startServiceFixture(["metrics"]);
+
+    const snapshot = createIngressSnapshot(sampledAt) as ChannelIngressObservabilitySnapshot & {
+      stages: ChannelIngressObservabilitySnapshot["stages"] & Record<string, unknown>;
+      operations: ChannelIngressObservabilitySnapshot["operations"] & Record<string, unknown>;
+    };
+    snapshot.stages.routing.stage = "unexpected-stage" as ChannelIngressPreparationStage;
+    snapshot.stages.routing.blockers.slack_api.blocker =
+      "unexpected-blocker" as ChannelIngressBlocker;
+    snapshot.stages.routing.blockers.slack_api.total = 1;
+    const spoofedStages = snapshot.stages as Record<string, unknown>;
+    spoofedStages["unexpected-stage"] = { total: 99 };
+    snapshot.operations.api.kind = "unexpected-operation" as ChannelIngressOperationKind;
+    snapshot.operations.api.total = 1;
+    const spoofedOperations = snapshot.operations as Record<string, unknown>;
+    spoofedOperations["unexpected-operation"] = { total: 99 };
+
+    emitInternalDiagnosticEventForTest(snapshot);
+    await waitForDiagnosticEventsDrained();
+
+    const outstandingAttrs = observeGauge("openclaw.ingress.outstanding.count").map(
+      ([, attrs]) => attrs,
+    );
+    expect(outstandingAttrs).toContainEqual({
+      "openclaw.ingress.stage": "routing",
+      "openclaw.ingress.blocker": "slack_api",
+    });
+    expect(outstandingAttrs).not.toContainEqual({
+      "openclaw.ingress.stage": "unexpected-stage",
+      "openclaw.ingress.blocker": "unexpected-blocker",
+    });
+    expect(observeGauge("openclaw.ingress.operation.active.count")).toEqual(
+      expect.arrayContaining([[1, { "openclaw.ingress.operation.kind": "api" }]]),
+    );
+    expect(observeGauge("openclaw.ingress.operation.active.count")).not.toEqual(
+      expect.arrayContaining([[99, { "openclaw.ingress.operation.kind": "unexpected-operation" }]]),
+    );
+  });
+
+  test("removes ingress observable callbacks when the service stops", async () => {
+    const { ctx, service } = await startServiceFixture(["metrics"]);
+    const gauges = [...telemetryState.observableGauges.values()];
+    expect(gauges.length).toBeGreaterThan(0);
+    expect(gauges.every((gauge) => gauge.callbacks.size === 1)).toBe(true);
+
+    await service.stop?.(ctx);
+
+    expect(gauges.every((gauge) => gauge.callbacks.size === 0)).toBe(true);
+    expect(gauges.every((gauge) => gauge.removeCallback.mock.calls.length > 0)).toBe(true);
+  });
 
   test("records message-flow metrics and spans", async () => {
     await startServiceFixture(["traces", "metrics", "logs"]);

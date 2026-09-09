@@ -15,6 +15,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackRuntime } from "../runtime.js";
+import { observeSlackIngressProgress } from "./ingress-observability.js";
 import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 const SLACK_INGRESS_PAYLOAD_VERSION = 1;
@@ -335,10 +336,20 @@ export function createSlackDurableIngress(
             // A queued session turn owns its durable claim; its predecessor may
             // legitimately outlive the pre-adoption watchdog.
             lifecycle.onAdoptionFinalizing();
+            observeSlackIngressProgress(
+              lifecycle.observer ? { ingressObserver: lifecycle.observer } : undefined,
+              { stage: "adoption", blocker: "previous_turn" },
+            );
           }
           monitor.requestDrain();
-          await previousTurn;
-          lifecycle.abortSignal.throwIfAborted();
+          if (previousTurn) {
+            await previousTurn;
+            lifecycle.abortSignal.throwIfAborted();
+            observeSlackIngressProgress(
+              lifecycle.observer ? { ingressObserver: lifecycle.observer } : undefined,
+              { stage: "adoption", blocker: "state_store" },
+            );
+          }
         },
         onAdopted: async () => {
           try {
@@ -371,8 +382,16 @@ export function createSlackDurableIngress(
             // settle; later channel traffic cannot overtake the config change.
             adoptOnCompletion = true;
             lifecycle.onAdoptionFinalizing();
+            observeSlackIngressProgress(
+              lifecycle.observer ? { ingressObserver: lifecycle.observer } : undefined,
+              { stage: "adoption", blocker: "channel_migration" },
+            );
             await Promise.all(channelTurns);
             lifecycle.abortSignal.throwIfAborted();
+            observeSlackIngressProgress(
+              lifecycle.observer ? { ingressObserver: lifecycle.observer } : undefined,
+              { stage: "adoption", blocker: "state_store" },
+            );
           }
         }
         if (raw.kind === "relay") {

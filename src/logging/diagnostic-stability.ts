@@ -251,7 +251,8 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "gateway.rpc":
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
-      // High-volume measurements are exporter-only and excluded by the subscription.
+    case "ingress.snapshot":
+      // High-volume measurements retain only envelope fields if they reach this ring.
       break;
     case "model.usage":
       record.channel = event.channel;

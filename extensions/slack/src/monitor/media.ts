@@ -13,6 +13,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
+import {
+  observeSlackIngressApiCall,
+  type SlackIngressApiObservationOptions,
+} from "./ingress-observability.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import {
   type FetchLike,
@@ -213,28 +217,36 @@ async function fetchFreshSlackFileUrl(params: {
   file: SlackFile;
   client?: SlackWebClient;
   isRefreshedFileAllowed?: (file: SlackFile) => boolean;
+  observation?: SlackIngressApiObservationOptions;
 }): Promise<string | null> {
-  if (!params.file.id || !params.client) {
+  const client = params.client;
+  const fileId = params.file.id;
+  if (!fileId || !client) {
     return null;
   }
   try {
-    const info = await params.client.files.info({ file: params.file.id });
+    const info = await observeSlackIngressApiCall(
+      {
+        ...params.observation,
+        ingressClientProfile: params.observation?.ingressClientProfile ?? "pooled_listener",
+      },
+      { method: "files.info" },
+      () => client.files.info({ file: fileId }),
+    );
     const freshFile = info.file as SlackFile | undefined;
     if (freshFile && params.isRefreshedFileAllowed?.(freshFile) === false) {
-      logVerbose(`slack: refreshed file metadata rejected for file id=${params.file.id}`);
+      logVerbose(`slack: refreshed file metadata rejected for file id=${fileId}`);
       return null;
     }
     const freshUrl = freshFile?.url_private_download ?? freshFile?.url_private;
     if (freshUrl) {
-      logVerbose(`slack: refreshed file URL via files.info for file id=${params.file.id}`);
+      logVerbose(`slack: refreshed file URL via files.info for file id=${fileId}`);
       return freshUrl;
     }
-    logVerbose(`slack: files.info returned no private URL for file id=${params.file.id}`);
+    logVerbose(`slack: files.info returned no private URL for file id=${fileId}`);
     return null;
   } catch (error) {
-    logVerbose(
-      `slack: files.info failed for file id=${params.file.id}: ${formatErrorMessage(error)}`,
-    );
+    logVerbose(`slack: files.info failed for file id=${fileId}: ${formatErrorMessage(error)}`);
     return null;
   }
 }
@@ -248,6 +260,7 @@ async function downloadSlackMediaFile(params: {
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
   govSlack: boolean;
+  observation?: SlackIngressApiObservationOptions;
 }): Promise<SlackMediaResult> {
   const { url: slackUrl, requestInit } = createSlackMediaRequest(
     params.url,
@@ -255,20 +268,30 @@ async function downloadSlackMediaFile(params: {
     params.govSlack,
   );
   const fetchImpl = createSlackMediaFetch(params.govSlack);
-  const saved = await saveSlackMedia({
-    options: {
-      url: slackUrl,
-      fetchImpl,
-      requestInit,
-      filePathHint: params.file.name,
-      fallbackContentType: resolveSlackMediaMimetype(params.file, params.file.mimetype),
-      maxBytes: params.maxBytes,
-      ssrfPolicy: params.govSlack ? SLACK_GOV_MEDIA_SSRF_POLICY : SLACK_MEDIA_SSRF_POLICY,
+  // saveSlackMedia includes the local temp-file write after the authenticated fetch;
+  // the observation records the logical Slack file download boundary only.
+  const saved = await observeSlackIngressApiCall(
+    {
+      ...params.observation,
+      ingressClientProfile: params.observation?.ingressClientProfile ?? "media",
     },
-    readIdleTimeoutMs: params.readIdleTimeoutMs,
-    totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
-    abortSignal: params.abortSignal,
-  });
+    { method: "files.download", profile: "media" },
+    () =>
+      saveSlackMedia({
+        options: {
+          url: slackUrl,
+          fetchImpl,
+          requestInit,
+          filePathHint: params.file.name,
+          fallbackContentType: resolveSlackMediaMimetype(params.file, params.file.mimetype),
+          maxBytes: params.maxBytes,
+          ssrfPolicy: params.govSlack ? SLACK_GOV_MEDIA_SSRF_POLICY : SLACK_MEDIA_SSRF_POLICY,
+        },
+        readIdleTimeoutMs: params.readIdleTimeoutMs,
+        totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
+        abortSignal: params.abortSignal,
+      }),
+  );
 
   // Guard against auth/login HTML pages returned instead of binary media.
   // Allow user-provided HTML files through.
@@ -334,6 +357,7 @@ export async function resolveSlackMedia(params: {
   abortSignal?: AbortSignal;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
   unavailableFiles?: Map<SlackFile, string>;
+  observation?: SlackIngressApiObservationOptions;
 }): Promise<SlackMediaResult[] | null> {
   const govSlack = isGovSlackClient(params.client);
   const files = params.files ?? [];
@@ -347,6 +371,7 @@ export async function resolveSlackMedia(params: {
       file,
       client: params.client,
       isRefreshedFileAllowed: params.isRefreshedFileAllowed,
+      observation: params.observation,
     });
 
   const { results } = await runTasksWithConcurrency({
@@ -394,6 +419,7 @@ export async function resolveSlackAttachmentContent(params: {
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
+  observation?: SlackIngressApiObservationOptions;
 }): Promise<{
   text: string;
   media: SlackMediaResult[];
@@ -489,18 +515,28 @@ export async function resolveSlackAttachmentContent(params: {
           govSlack,
         );
         const fetchImpl = createSlackMediaFetch(govSlack);
-        const saved = await saveSlackMedia({
-          options: {
-            url: slackUrl,
-            fetchImpl,
-            requestInit,
-            maxBytes: params.maxBytes,
-            ssrfPolicy: govSlack ? SLACK_GOV_MEDIA_SSRF_POLICY : SLACK_MEDIA_SSRF_POLICY,
+        // saveSlackMedia includes the local temp-file write after the authenticated fetch;
+        // the observation records the logical Slack forwarded-image download boundary only.
+        const saved = await observeSlackIngressApiCall(
+          {
+            ...params.observation,
+            ingressClientProfile: params.observation?.ingressClientProfile ?? "media",
           },
-          readIdleTimeoutMs: params.readIdleTimeoutMs,
-          totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
-          abortSignal: params.abortSignal,
-        });
+          { method: "files.download", profile: "media" },
+          () =>
+            saveSlackMedia({
+              options: {
+                url: slackUrl,
+                fetchImpl,
+                requestInit,
+                maxBytes: params.maxBytes,
+                ssrfPolicy: govSlack ? SLACK_GOV_MEDIA_SSRF_POLICY : SLACK_MEDIA_SSRF_POLICY,
+              },
+              readIdleTimeoutMs: params.readIdleTimeoutMs,
+              totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
+              abortSignal: params.abortSignal,
+            }),
+        );
         const label = saved.fileName ?? "forwarded image";
         attachmentMedia.push({
           path: saved.path,

@@ -9,7 +9,12 @@ import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
-import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import { CHANNEL_INGRESS_OBSERVABILITY_METADATA_KEY } from "../channels/message/ingress-observability-contract.js";
+import {
+  createChannelIngressQueue,
+  type ChannelIngressQueue,
+  type ChannelIngressQueueClaim,
+} from "../channels/message/ingress-queue.js";
 import * as channelRegistry from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -1768,7 +1773,10 @@ describe("state migrations", () => {
     let retainedOpen:
       | ((options?: { accountId?: string }) => { enqueue: (...args: never[]) => unknown })
       | undefined;
-    let retainedQueue: { enqueue: (id: string, payload: unknown) => Promise<unknown> } | undefined;
+    let retainedQueue:
+      | Pick<ChannelIngressQueue<{ note: string }>, "enqueue" | "updateProgress">
+      | undefined;
+    let retainedProgressClaim: ChannelIngressQueueClaim<{ note: string }> | undefined;
     let mutableLanePresentDuringMigration = false;
     pluginDoctorStateMigrationEntries.entries = [
       {
@@ -1789,8 +1797,22 @@ describe("state migrations", () => {
               // the same objects can be driven again after the section returns.
               const queue = open<{ note: string }>({ accountId: "default" });
               await queue.enqueue("inside-section", { note: "owned" });
+              await queue.enqueue("progress-section", { note: "claimed" });
+              const claim = await queue.claim("progress-section", { ownerId: "migration" });
+              if (!claim) {
+                throw new Error("Expected progress-section claim");
+              }
+              await expect(
+                queue.updateProgress?.(claim, {
+                  stage: "thread_history",
+                  blocker: "slack_api",
+                  observedAt: 100,
+                  progressAt: 100,
+                }),
+              ).resolves.toBe(true);
+              retainedProgressClaim = claim;
               retainedOpen = open as unknown as typeof retainedOpen;
-              retainedQueue = queue as unknown as typeof retainedQueue;
+              retainedQueue = queue;
             }
             return { changes: ["ingress revocation test migrated"], warnings: [] };
           },
@@ -1831,11 +1853,32 @@ describe("state migrations", () => {
           stateDir,
         }).listPending({ limit: "all", orderBy: "received" })
       ).map((row) => row.id);
+    const readProgressRow = () =>
+      openOpenClawStateDatabase({ env })
+        .db.prepare(
+          `SELECT metadata_json, updated_at
+             FROM channel_ingress_events
+            WHERE queue_name = ? AND event_id = ?`,
+        )
+        .get(JSON.stringify(["line", "default"]), "progress-section");
 
     const beforeIds = await readPendingIds();
+    const beforeProgressRow = readProgressRow();
+    const beforeMetadata = beforeProgressRow?.metadata_json;
+    if (typeof beforeMetadata !== "string") {
+      throw new Error("Expected persisted progress metadata");
+    }
+    const beforeProgress = JSON.parse(beforeMetadata)[CHANNEL_INGRESS_OBSERVABILITY_METADATA_KEY];
     const beforeDigest = digest();
     // The write the locked section DID make is on disk, so the file is a live witness.
     expect(beforeIds).toContain("inside-section");
+    expect(beforeProgressRow?.updated_at).toBe(100);
+    expect(beforeProgress).toMatchObject({
+      stage: "thread_history",
+      blocker: "slack_api",
+      lastProgressAt: 100,
+      updatedAt: 100,
+    });
 
     // Both retained handles are now outside the section that owned the state, and the
     // guard refuses before any promise is created, so no write ever starts.
@@ -1845,9 +1888,23 @@ describe("state migrations", () => {
     expect(() => retainedQueue?.enqueue("after-section", { note: "leaked" })).toThrow(
       /ingress queue access has expired/i,
     );
+    const updateRetainedProgress = retainedQueue?.updateProgress?.bind(retainedQueue);
+    const progressClaim = retainedProgressClaim;
+    if (!updateRetainedProgress || !progressClaim) {
+      throw new Error("Expected retained progress handle and claim");
+    }
+    expect(() =>
+      updateRetainedProgress(progressClaim, {
+        stage: "delivery",
+        blocker: "none",
+        observedAt: 200,
+        progressAt: 200,
+      }),
+    ).toThrow(/ingress queue access has expired/i);
 
     const afterIds = await readPendingIds();
     expect(afterIds).toStrictEqual(beforeIds);
+    expect(readProgressRow()).toStrictEqual(beforeProgressRow);
     expect(digest()).toBe(beforeDigest);
   });
 

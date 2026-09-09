@@ -30,6 +30,14 @@ export {
 } from "../channels/message-access/runtime-identity.js";
 export { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
 export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";
+export { observeChannelIngressDedupeWait } from "../channels/message/ingress-observability-lifecycle.js";
+export type {
+  ChannelIngressBlocker,
+  ChannelIngressCorrelation,
+  ChannelIngressLifecycleObserver,
+  ChannelIngressOperationOutcome,
+  ChannelIngressPreparationStage,
+} from "../channels/message/ingress-observability-contract.js";
 export type {
   ChannelIngressAccessGroupMembershipResolver,
   ChannelIngressCommandPresetInput,

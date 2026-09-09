@@ -8,6 +8,10 @@ import {
   type IngressDrainTestPayload as Payload,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
+import {
+  CHANNEL_INGRESS_OBSERVABILITY_METADATA_KEY,
+  CHANNEL_INGRESS_OBSERVABILITY_SCHEMA_VERSION,
+} from "./ingress-observability-contract.js";
 
 describe("channel ingress drain restart-recovery tombstone", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -101,25 +105,37 @@ describe("channel ingress drain restart-recovery tombstone", () => {
             expectDefined(lifecycles.get("evt-head"), "head lifecycle").onFailed,
             "head failure lifecycle",
           )(error);
-          const expectedFailed = [
-            {
-              id: "evt-head",
-              channelId: "test",
-              accountId: "a",
-              queueName: JSON.stringify(["test", "a"]),
-              laneKey: "dm",
-              payload: { text: "question" },
-              receivedAt: 1,
+          const expectedFailedHead = {
+            id: "evt-head",
+            channelId: "test",
+            accountId: "a",
+            queueName: JSON.stringify(["test", "a"]),
+            laneKey: "dm",
+            payload: { text: "question" },
+            receivedAt: 1,
+            updatedAt: 10_000,
+            attempts: priorRetry ? 1 : 0,
+            ...(priorRetry ? { lastAttemptAt: 10 } : {}),
+            failedAt: 10_000,
+            reason: "restart-recovery-tombstone",
+            message:
+              "reply admission refused | terminal generation | SESSION_RESTART_RECOVERY_TOMBSTONE",
+          };
+          const failedRows = await queue.listFailed?.({ limit: "all" });
+          expect(failedRows).toEqual([expect.objectContaining(expectedFailedHead)]);
+          const failedHead = expectDefined(failedRows?.[0], "failed head");
+          expect(failedHead.metadata).toEqual({
+            [CHANNEL_INGRESS_OBSERVABILITY_METADATA_KEY]: {
+              owner: "openclaw.channel-ingress",
+              schemaVersion: CHANNEL_INGRESS_OBSERVABILITY_SCHEMA_VERSION,
+              stage: "routing",
+              blocker: "none",
+              stageStartedAt: 10_000,
+              lastProgressAt: 1,
               updatedAt: 10_000,
-              attempts: priorRetry ? 1 : 0,
-              ...(priorRetry ? { lastAttemptAt: 10 } : {}),
-              failedAt: 10_000,
-              reason: "restart-recovery-tombstone",
-              message:
-                "reply admission refused | terminal generation | SESSION_RESTART_RECOVERY_TOMBSTONE",
+              terminal: { disposition: "failed", recordedAt: 10_000 },
             },
-          ];
-          expect(await queue.listFailed?.({ limit: "all" })).toEqual(expectedFailed);
+          });
           expect(await drain.drainOnce()).toEqual({ started: 1 });
           await vi.waitFor(() =>
             expect([...lifecycles.keys()]).toEqual(["evt-head", "evt-follower"]),
@@ -149,7 +165,9 @@ describe("channel ingress drain restart-recovery tombstone", () => {
             });
             expect(await restarted.drainOnce()).toEqual({ started: 0 });
             expect(dispatchAfterRestart).not.toHaveBeenCalled();
-            expect(await reopened.listFailed?.({ limit: "all" })).toEqual(expectedFailed);
+            const reopenedFailedRows = await reopened.listFailed?.({ limit: "all" });
+            expect(reopenedFailedRows).toEqual([expect.objectContaining(expectedFailedHead)]);
+            expect(reopenedFailedRows?.[0]?.metadata).toEqual(failedHead.metadata);
           } finally {
             restarted.dispose();
           }

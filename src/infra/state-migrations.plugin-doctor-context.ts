@@ -189,6 +189,13 @@ function guardIngressQueueMutations<TPayload, TMetadata, TCompletedMetadata>(
       return refreshClaim(...args);
     };
   }
+  const updateProgress = queue.updateProgress?.bind(queue);
+  if (updateProgress) {
+    guarded.updateProgress = (...args) => {
+      assertCurrent();
+      return updateProgress(...args);
+    };
+  }
   const resubmit = queue.resubmit?.bind(queue);
   if (resubmit) {
     guarded.resubmit = (...args) => {

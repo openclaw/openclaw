@@ -15,6 +15,14 @@ import { hasSlackMessageTableBlock } from "./block-text.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
+import {
+  buildSlackIngressCorrelation,
+  createSlackIngressCompositeObserver,
+  createSlackIngressScopedObserver,
+  observeSlackIngressStage,
+  type SlackIngressObservationOptions,
+  type SlackIngressPreparationObserver,
+} from "./ingress-observability.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.js";
 import {
   buildSlackMessageDispatchReplayKey,
@@ -46,6 +54,8 @@ export type SlackMessageHandler = (
     awaitDispatch?: boolean;
     /** Durable ingress ownership carried into reply-lane adoption. */
     turnAdoptionLifecycle?: SlackIngressTurnLifecycle;
+    /** Shared ingress progress observer scoped to this Slack event. */
+    ingressObserver?: SlackIngressPreparationObserver;
   },
 ) => Promise<void>;
 
@@ -116,6 +126,20 @@ export function createSlackMessageHandler(params: {
           `slack message dispatch dedupe persistence failed: ${formatErrorMessage(error)}`,
         ),
     });
+  const buildEventIngressObserver = (
+    message: SlackMessageEvent,
+    opts: Parameters<SlackMessageHandler>[1],
+  ): SlackIngressPreparationObserver | undefined =>
+    createSlackIngressScopedObserver(
+      opts.ingressObserver ?? opts.turnAdoptionLifecycle?.observer,
+      buildSlackIngressCorrelation({
+        eventType: opts.source,
+        message,
+        teamId: ctx.teamId,
+        eventScope: opts.eventScope,
+      }),
+    );
+
   const { debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
@@ -194,6 +218,10 @@ export function createSlackMessageHandler(params: {
                   const existingIndex = claimedKeys.get(replayKey);
                   if (existingIndex !== undefined) {
                     const existing = surviving[existingIndex];
+                    const ingressObserver = createSlackIngressCompositeObserver([
+                      existing?.opts.ingressObserver,
+                      entry.opts.ingressObserver,
+                    ]);
                     const merged = {
                       ...entry,
                       opts: {
@@ -202,15 +230,29 @@ export function createSlackMessageHandler(params: {
                           ? { source: "app_mention" as const }
                           : {}),
                         ...(existing?.opts.wasMentioned ? { wasMentioned: true } : {}),
+                        ...(ingressObserver ? { ingressObserver } : {}),
                       },
                     };
                     surviving[existingIndex] = merged;
                     latestSurviving = merged;
                     continue;
                   }
+                  const entryObservation: SlackIngressObservationOptions | undefined = entry.opts
+                    .ingressObserver
+                    ? { ingressObserver: entry.opts.ingressObserver }
+                    : undefined;
+                  observeSlackIngressStage(entryObservation, {
+                    stage: "dedupe_wait",
+                    progress: "waiting",
+                  });
                   const claim = await claimSlackMessageDispatchReplay({
                     guard: dispatchReplayGuard,
                     key: replayKey,
+                    ...(entry.opts.ingressObserver ? { observer: entry.opts.ingressObserver } : {}),
+                  });
+                  observeSlackIngressStage(entryObservation, {
+                    stage: "dedupe_wait",
+                    progress: "meaningful",
                   });
                   if (claim.kind === "claimed") {
                     claims.push(claim.handle);
@@ -248,6 +290,12 @@ export function createSlackMessageHandler(params: {
                   ...last.message,
                   text: combinedText,
                 };
+                const ingressObserver = createSlackIngressCompositeObserver(
+                  surviving.map((entry) => entry.opts.ingressObserver),
+                );
+                const observation: SlackIngressObservationOptions | undefined = ingressObserver
+                  ? { ingressObserver }
+                  : undefined;
                 const { prepareSlackMessage, dispatchPreparedSlackMessage } =
                   await loadSlackMessagePipeline();
                 const {
@@ -266,6 +314,7 @@ export function createSlackMessageHandler(params: {
                     message: syntheticMessage,
                     opts: {
                       ...lastOpts,
+                      ...(ingressObserver ? { ingressObserver } : {}),
                       wasMentioned: combinedMentioned || last.opts.wasMentioned,
                       onVisibleDrop: () => {
                         visibleDrop = true;
@@ -284,6 +333,11 @@ export function createSlackMessageHandler(params: {
                     releaseClaims();
                     return;
                   }
+                  observeSlackIngressStage(observation, {
+                    stage: "adoption",
+                    blocker: "state_store",
+                    progress: "waiting",
+                  });
                   await turnAdoptionLifecycle?.onSessionRouted?.(prepared.route.sessionKey);
                   // Commit at adoption (durable turn ownership), release on abandonment;
                   // deferred turns hand settlement to the reply lane with the claim held.
@@ -297,6 +351,10 @@ export function createSlackMessageHandler(params: {
                       await commitClaims();
                       await turnAdoptionLifecycle?.onAdopted();
                       await admissionLifecycle.onAdopted();
+                      observeSlackIngressStage(observation, {
+                        stage: "adoption",
+                        progress: "meaningful",
+                      });
                     },
                     onDeferred: () => {
                       turnAdoptionLifecycle?.onDeferred();
@@ -305,6 +363,11 @@ export function createSlackMessageHandler(params: {
                         return false;
                       }
                       settlementHandedOff = true;
+                      observeSlackIngressStage(observation, {
+                        stage: "execution",
+                        blocker: "model",
+                        progress: "waiting",
+                      });
                       return undefined;
                     },
                     onDeferredHeartbeat: () => {
@@ -314,6 +377,10 @@ export function createSlackMessageHandler(params: {
                     onAbandoned: () => {
                       settlementHandedOff = true;
                       releaseClaims();
+                      observeSlackIngressStage(observation, {
+                        stage: "settlement",
+                        progress: "meaningful",
+                      });
                       // Slack has no owner-local teardown gated on core claim release.
                       void turnAdoptionLifecycle?.onAbandoned();
                       void admissionLifecycle.onAbandoned();
@@ -395,6 +462,11 @@ export function createSlackMessageHandler(params: {
     ) {
       return undefined;
     }
+    let ingressObserver = buildEventIngressObserver(message, opts);
+    let observation: SlackIngressObservationOptions | undefined = ingressObserver
+      ? { ingressObserver }
+      : undefined;
+    observeSlackIngressStage(observation, { stage: "queued", progress: "waiting" });
     // Record Slack's explicit type before thread-resolution awaits.
     // Relay and native events can overlap; a following typeless bot event must see it.
     ctx.rememberSlackChannelType(message.channel, message.channel_type, opts.eventScope);
@@ -405,11 +477,20 @@ export function createSlackMessageHandler(params: {
       threadTsResolver = createSlackThreadTsResolver({ client });
       threadTsResolvers.set(client, threadTsResolver);
     }
+    observeSlackIngressStage(observation, {
+      stage: "routing",
+      blocker: "slack_api",
+      progress: "waiting",
+    });
     const resolvedMessage = await threadTsResolver.resolve({
       message,
       source: opts.source,
+      ...(observation ? { observation } : {}),
       ...(opts.turnAdoptionLifecycle ? { turnAdoptionLifecycle: opts.turnAdoptionLifecycle } : {}),
     });
+    ingressObserver = buildEventIngressObserver(resolvedMessage, opts);
+    observation = ingressObserver ? { ingressObserver } : undefined;
+    observeSlackIngressStage(observation, { stage: "routing", progress: "meaningful" });
     const teamId = opts.eventScope?.teamId;
     const debounceKey = buildSlackDebounceKey(resolvedMessage, ctx.accountId, teamId);
     const conversationKey = buildTopLevelSlackConversationKey(
@@ -441,6 +522,7 @@ export function createSlackMessageHandler(params: {
       message: resolvedMessage,
       opts: {
         ...opts,
+        ...(ingressObserver ? { ingressObserver } : {}),
         ...(dispatchCompletion
           ? {
               dispatchCompletion: {

@@ -6,6 +6,10 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  observeSlackIngressApiCall,
+  type SlackIngressApiObservationOptions,
+} from "../ingress-observability.js";
 
 const SUBTEAM_MENTION_RE = /<!subteam\^([A-Z0-9]+)(?:\|[^>]*)?>/gi;
 const SUBTEAM_MEMBER_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -41,6 +45,7 @@ async function readSlackSubteamUsers(params: {
   teamId?: string;
   now: number;
   log?: (message: string) => void;
+  observation?: SlackIngressApiObservationOptions;
 }): Promise<ReadonlySet<string>> {
   let bySubteam = subteamMemberCache.get(params.client);
   if (!bySubteam) {
@@ -62,10 +67,18 @@ async function readSlackSubteamUsers(params: {
   }
 
   try {
-    const response = await params.client.usergroups.users.list({
-      usergroup: params.subteamId,
-      ...(params.teamId ? { team_id: params.teamId } : {}),
-    });
+    const response = await observeSlackIngressApiCall(
+      {
+        ...params.observation,
+        ingressClientProfile: params.observation?.ingressClientProfile ?? "pooled_listener",
+      },
+      { method: "usergroups.users.list" },
+      () =>
+        params.client.usergroups.users.list({
+          usergroup: params.subteamId,
+          ...(params.teamId ? { team_id: params.teamId } : {}),
+        }),
+    );
     if (!response.ok) {
       params.log?.(
         `slack: failed to resolve user-group mention ${params.subteamId}: ${response.error ?? "unknown_error"}`,
@@ -100,6 +113,7 @@ export async function isSlackSubteamMentionForBot(params: {
   teamId?: string;
   now?: number;
   log?: (message: string) => void;
+  observation?: SlackIngressApiObservationOptions;
 }): Promise<boolean> {
   const botUserId = normalizeSlackId(params.botUserId);
   if (!botUserId) {
@@ -117,6 +131,7 @@ export async function isSlackSubteamMentionForBot(params: {
       teamId: normalizeOptionalString(params.teamId),
       now,
       log: params.log,
+      observation: params.observation,
     });
     if (users.has(botUserId)) {
       return true;
