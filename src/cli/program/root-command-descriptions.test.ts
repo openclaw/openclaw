@@ -5,9 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
 import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
-import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
+import { registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
-import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
+import {
+  getCoreCliCommandDescriptors,
+  getCoreCliCommandNamesCore,
+} from "./core-command-descriptors.js";
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
@@ -224,7 +227,7 @@ async function registerAllBuiltInCommands(): Promise<Command> {
   const ctx = createProgramContext();
   const argv = ["node", "openclaw", "completion"];
 
-  for (const name of getCoreCliCommandNames()) {
+  for (const name of getCoreCliCommandNamesCore()) {
     await registerCoreCliByName(program, ctx, name);
   }
   for (const entry of getSubCliEntriesCore()) {
