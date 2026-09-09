@@ -65,7 +65,7 @@ read_when:
   </Accordion>
 
   <Accordion title="What does OpenClaw send to the Foundation?">
-    By default, a daily update check carrying the OpenClaw version, OS, Node version, and CPU architecture: the same information any package registry sees. Optional anonymous feature statistics are off by default and carry no identifier. No prompts, messages, model names, keys, paths, or machine identifiers are ever sent to the Foundation. Set `update.checkOnStart: false` to send nothing at all. Traffic to the model providers and chat platforms you configure is separate and goes to them, as always; see "Is all data used with OpenClaw saved locally?" below. Details: [Usage telemetry and update checks](/gateway/telemetry).
+    By default, a daily update check carrying the OpenClaw version, OS, Node version, and CPU architecture: the same information any package registry sees. Optional anonymous feature statistics are off by default and carry no identifier. No prompts, messages, model names, keys, paths, or machine identifiers are ever sent to the Foundation. Set `update.checkOnStart: false` to send nothing at all. Traffic to the model providers and chat platforms you configure is separate and goes to them, as always; see [Is all data used with OpenClaw saved locally?](/help/faq/where-things-live-on-disk#is-all-data-used-with-openclaw-saved-locally). Details: [Usage telemetry and update checks](/gateway/telemetry).
 
   </Accordion>
 
