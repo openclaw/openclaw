@@ -154,6 +154,8 @@ export type PluginChannelRegistration = PluginRegistrationOwner & {
   resolveChannelRuntime?: () => PluginRuntime["channel"];
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
+  /** Host-owned capture of the exact verified official channel registration. */
+  captureReadAuthority?: () => (() => boolean) | undefined;
 };
 
 type PluginChannelSetupRegistration = PluginRegistrationOwner & {

@@ -226,16 +226,18 @@ describe("slack web client config", () => {
     );
   });
 
-  it("passes merged options into WebClient", () => {
+  it("passes merged options into WebClient", async () => {
     const customFetch = vi.fn() as never;
 
     createSlackWebClient("xoxb-test", { timeout: 1234, fetch: customFetch });
 
     expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
-      fetch: customFetch,
+      fetch: expect.any(Function),
       retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
       timeout: 1234,
     });
+    await WebClient.mock.calls[0]?.[1]?.fetch?.("https://slack.test/api/");
+    expect(customFetch).toHaveBeenCalledWith("https://slack.test/api/", undefined);
   });
 
   it("bounds startup auth while preserving listener transport options", () => {
@@ -284,17 +286,19 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toEqual(SLACK_WRITE_RETRY_OPTIONS);
   });
 
-  it("passes the bounded lookup policy into WebClient", () => {
+  it("passes the bounded lookup policy into WebClient", async () => {
     const customFetch = vi.fn() as never;
 
     createSlackLookupClient("lookup-fixture", { fetch: customFetch });
 
     expect(WebClient).toHaveBeenCalledWith("lookup-fixture", {
-      fetch: customFetch,
+      fetch: expect.any(Function),
       rejectRateLimitedCalls: true,
       retryConfig: { retries: 0 },
       timeout: 30_000,
     });
+    await WebClient.mock.calls[0]?.[1]?.fetch?.("https://slack.test/api/");
+    expect(customFetch).toHaveBeenCalledWith("https://slack.test/api/", undefined);
   });
 
   it("respects explicit write client concurrency overrides", () => {
@@ -530,11 +534,12 @@ describe("slack proxy dispatcher", () => {
 
   it("preserves an explicitly provided fetch", async () => {
     process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
-    const customFetch = vi.fn() as never;
+    const customFetch = vi.fn(async () => new Response(null, { status: 200 }));
     const dispatcher = resolveSlackProxyDispatcher();
     const options = resolveSlackWebClientOptions({ fetch: customFetch }, dispatcher);
 
-    expect(options.fetch).toBe(customFetch);
+    await requireFetch(options)("https://slack.invalid/api/auth.test");
+    expect(customFetch).toHaveBeenCalledWith("https://slack.invalid/api/auth.test", undefined);
     await dispatcher?.close();
   });
 

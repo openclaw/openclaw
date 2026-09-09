@@ -10,6 +10,7 @@ import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-poli
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
+import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
@@ -300,6 +301,23 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     const id = plugin.id;
+    // Each registration gets a distinct capture function, even for the same owner.
+    // Capture activation at invocation: registration can precede registry activation.
+    const captureReadAuthority = () => {
+      const entry = registry.channels.find((candidate) => candidate.plugin.id === id);
+      const ownerCurrent = capturePluginLifecycleAuthority(registry, record, {
+        scopedRuntime: true,
+      });
+      const isCurrent = () =>
+        ownerCurrent?.() === true &&
+        record.trustedOfficialInstall === true &&
+        entry !== undefined &&
+        registry.channels.includes(entry) &&
+        entry.pluginId === record.id &&
+        entry.plugin === plugin &&
+        entry.captureReadAuthority === captureReadAuthority;
+      return isCurrent() ? isCurrent : undefined;
+    };
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
     if (registrationCapabilities.runtimeChannel && existingRuntime) {
       if (existingRuntime.pluginId === record.id) {
@@ -307,6 +325,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         existingRuntime.pluginName = record.name;
         existingRuntime.resolveChannelRuntime = resolveChannelRuntime;
         existingRuntime.origin = record.origin;
+        existingRuntime.captureReadAuthority = captureReadAuthority;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
         const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
@@ -366,6 +385,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       plugin,
       resolveChannelRuntime,
       origin: record.origin,
+      captureReadAuthority,
       source: record.source,
       rootDir: record.rootDir,
     });

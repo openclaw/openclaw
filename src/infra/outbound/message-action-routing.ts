@@ -342,6 +342,7 @@ type PreparedMessageRoute = {
   accountId?: string | null;
   dryRun: boolean;
   defersExternalTargetResolution: boolean;
+  assertReadAuthorityCurrent?: () => void;
 };
 
 export async function prepareMessageRoute(params: {
@@ -435,9 +436,10 @@ export async function prepareMessageRoute(params: {
         input.conversationReadOrigin,
       ),
     });
+  let assertReadAuthorityCurrent: (() => void) | undefined;
   if (!delegatesActionToGateway || dryRun) {
     const authorization = input.messageActionAuthorization;
-    actionParams = prepareExternalMessageActionTargetForResolution({
+    const preparedRead = prepareExternalMessageActionTargetForResolution({
       channel,
       action,
       cfg,
@@ -452,6 +454,8 @@ export async function prepareMessageRoute(params: {
       ),
       toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
     });
+    actionParams = preparedRead.params;
+    assertReadAuthorityCurrent = preparedRead.assertReadAuthorityCurrent;
   }
 
   return {
@@ -461,6 +465,7 @@ export async function prepareMessageRoute(params: {
     accountId,
     dryRun,
     defersExternalTargetResolution,
+    assertReadAuthorityCurrent,
   };
 }
 

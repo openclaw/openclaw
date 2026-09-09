@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { WebAPIRateLimitedError, type RetryOptions, type WebClientOptions } from "@slack/web-api";
 import {
   addActiveManagedProxyTlsOptions,
+  captureChannelReadAuthority,
   resolveFetch,
   resolveEnvHttpProxyAgentOptions,
 } from "openclaw/plugin-sdk/fetch-runtime";
@@ -95,6 +96,19 @@ function buildSlackFetch(
   }) as NonNullable<WebClientOptions["fetch"]>;
 }
 
+function fenceSlackReadFetch(
+  slackFetch: NonNullable<WebClientOptions["fetch"]>,
+): NonNullable<WebClientOptions["fetch"]> {
+  // Read/lookup clients are operation-local. Capture before the SDK queues or
+  // retries, and also honor a caller scope when an unscoped client is reused.
+  const assertReadAuthority = captureChannelReadAuthority();
+  return (input, init) => {
+    assertReadAuthority?.();
+    captureChannelReadAuthority()?.();
+    return slackFetch(input, init);
+  };
+}
+
 function resolveSlackApiUrlFromEnv(): string | undefined {
   return process.env.SLACK_API_URL?.trim() || undefined;
 }
@@ -104,8 +118,9 @@ function applySlackApiUrlAndProxyOptions(
   dispatcher?: SlackProxyDispatcher,
 ): void {
   const slackApiUrl = options.slackApiUrl ?? resolveSlackApiUrlFromEnv();
-  if (dispatcher && !options.fetch) {
-    options.fetch = buildSlackFetch(dispatcher);
+  const fetch = options.fetch ?? buildSlackFetch(dispatcher);
+  if (fetch) {
+    options.fetch = fenceSlackReadFetch(fetch);
   }
   if (slackApiUrl !== undefined) {
     options.slackApiUrl = slackApiUrl;
