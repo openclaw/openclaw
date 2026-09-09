@@ -80,38 +80,48 @@ export async function detectSetupMigrationSources(params: {
       loadMigrationContextModule(),
       loadConfigPathsModule(),
     ]);
-  return await withPluginMigrationProviders({ cfg: params.config }, async (providers) => {
-    const stateDir = resolveStateDir();
-    const logger = createMigrationLogger(params.runtime);
-    const detections: SetupMigrationDetection[] = [];
-    for (const provider of providers) {
-      if (!provider.detect) {
-        continue;
-      }
-      try {
-        const detection = await provider.detect({
-          config: params.config,
-          stateDir,
-          logger,
-        });
-        if (detection.found) {
-          detections.push({
-            providerId: provider.id,
-            label: detection.label ?? provider.label,
-            ...(detection.source ? { source: detection.source } : {}),
-            ...(detection.message ? { message: detection.message } : {}),
-          });
-        }
-      } catch (error) {
-        // Detection is advisory; one failing provider must not prevent onboarding
-        // from offering other migration sources.
-        logger.debug?.(
-          `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
+  return await withPluginMigrationProviders(
+    {
+      cfg: params.config,
+      onCleanupError: (error) => {
+        params.runtime.error(
+          `Migration discovery result retained, but plugin cleanup failed: ${formatErrorMessage(error)}`,
         );
+      },
+    },
+    async (providers) => {
+      const stateDir = resolveStateDir();
+      const logger = createMigrationLogger(params.runtime);
+      const detections: SetupMigrationDetection[] = [];
+      for (const provider of providers) {
+        if (!provider.detect) {
+          continue;
+        }
+        try {
+          const detection = await provider.detect({
+            config: params.config,
+            stateDir,
+            logger,
+          });
+          if (detection.found) {
+            detections.push({
+              providerId: provider.id,
+              label: detection.label ?? provider.label,
+              ...(detection.source ? { source: detection.source } : {}),
+              ...(detection.message ? { message: detection.message } : {}),
+            });
+          }
+        } catch (error) {
+          // Detection is advisory; one failing provider must not prevent onboarding
+          // from offering other migration sources.
+          logger.debug?.(
+            `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
+          );
+        }
       }
-    }
-    return { detections, providerDescriptors: providers.map(describeSetupMigrationProvider) };
-  });
+      return { detections, providerDescriptors: providers.map(describeSetupMigrationProvider) };
+    },
+  );
 }
 
 function describeSetupMigrationProvider(

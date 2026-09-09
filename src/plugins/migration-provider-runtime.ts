@@ -85,7 +85,12 @@ function mergeMigrationProviders(
 
 /** Keep provider callbacks and opaque plans inside the operation that owns their registration. */
 export async function withPluginMigrationProviders<T>(
-  params: { cfg?: OpenClawConfig; providerId?: string },
+  params: {
+    cfg?: OpenClawConfig;
+    providerId?: string;
+    /** Report final cleanup failure only after the consuming operation succeeded. */
+    onCleanupError?: (error: unknown) => void | Promise<void>;
+  },
   run: (providers: MigrationProviderPlugin[]) => Promise<T>,
 ): Promise<T> {
   const activeRegistry = getLoadedRuntimePluginRegistry();
@@ -133,6 +138,13 @@ export async function withPluginMigrationProviders<T>(
     }
     throw error;
   }
-  await acquisition.release();
+  try {
+    await acquisition.release();
+  } catch (error) {
+    if (!params.onCleanupError) {
+      throw error;
+    }
+    await params.onCleanupError(error);
+  }
   return result;
 }

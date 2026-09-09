@@ -26,9 +26,10 @@ const silentRuntime: RuntimeEnv = {
 export async function withMemoryMigrationProviders<T>(
   config: OpenClawConfig,
   run: (providers: MigrationProviderPlugin[]) => Promise<T>,
+  onCleanupError?: (error: unknown) => void | Promise<void>,
 ): Promise<T> {
   return await withPluginMigrationProviders(
-    { cfg: config },
+    { cfg: config, onCleanupError },
     async (providers) =>
       await run(
         providers.filter((provider) => provider.supportedItemKinds?.includes(MEMORY_ITEM_KIND)),

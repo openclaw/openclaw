@@ -160,21 +160,17 @@ export async function offerPostInstallMigrations(
     return { config: params.config };
   }
   const { withPluginMigrationProviders } = await import("../plugins/migration-provider-runtime.js");
-  let completedResult: PostInstallMigrationResult | undefined;
-  try {
-    return await withPluginMigrationProviders({ cfg: params.config }, async (providers) => {
-      completedResult = await runPostInstallMigrationOffers(params, providers);
-      return completedResult;
-    });
-  } catch (error) {
-    if (!completedResult) {
-      throw error;
-    }
-    params.runtime.log(
-      `Post-install migration result retained, but plugin cleanup failed: ${formatErrorMessage(error)}`,
-    );
-    return completedResult;
-  }
+  return await withPluginMigrationProviders(
+    {
+      cfg: params.config,
+      onCleanupError: (error) => {
+        params.runtime.log(
+          `Post-install migration result retained, but plugin cleanup failed: ${formatErrorMessage(error)}`,
+        );
+      },
+    },
+    async (providers) => await runPostInstallMigrationOffers(params, providers),
+  );
 }
 
 async function runPostInstallMigrationOffers(
