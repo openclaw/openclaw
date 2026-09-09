@@ -1913,6 +1913,20 @@
                     "group": "Browsing and fetching pages",
                     "pages": [
                       "tools/browser",
+                      {
+                        "group": "Browser",
+                        "pages": [
+                          "tools/browser/setup",
+                          "tools/browser/profiles",
+                          "tools/browser/configuration",
+                          "tools/browser/remote",
+                          "tools/browser/security",
+                          "tools/browser/existing-session",
+                          "tools/browser/isolation",
+                          "tools/browser/troubleshooting",
+                          "tools/browser/agent-tools"
+                        ]
+                      },
                       "tools/browser-control",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-login",
