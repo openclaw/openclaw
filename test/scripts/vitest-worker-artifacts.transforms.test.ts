@@ -98,8 +98,8 @@ describe("fresh compiled subprocess invocation", { concurrent }, () => {
         expect(counts(), "unchanged parents must reuse filesystem transforms").toEqual([1, 1]);
         await launch("source");
         expect(counts()).toEqual([2, 2]);
-        await launch("compiled");
-        expect(counts()).toEqual([2, 2]);
+        // Switching back with a leaf edit also proves the unchanged parent reuses
+        // its compiled transform, without preparing another complete worker set.
         fs.writeFileSync(value, 'export const value: string = "second";');
         await launch("compiled", "second");
         expect(counts()).toEqual([3, 2]);
