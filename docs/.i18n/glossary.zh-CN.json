@@ -3044,6 +3044,46 @@
     "target": "Gateway 协议身份验证"
   },
   {
+    "source": "System and channel methods",
+    "target": "系统与频道方法"
+  },
+  {
+    "source": "Talk, config, and agent methods",
+    "target": "Talk、配置与代理方法"
+  },
+  {
+    "source": "Session control",
+    "target": "会话控制"
+  },
+  {
+    "source": "Devices, nodes, and approvals",
+    "target": "设备、节点与审批"
+  },
+  {
+    "source": "Session list bootstrap and events",
+    "target": "会话列表引导与事件"
+  },
+  {
+    "source": "Gateway protocol system and channel methods",
+    "target": "Gateway 协议系统与频道方法"
+  },
+  {
+    "source": "Gateway protocol talk, config, and agent methods",
+    "target": "Gateway 协议 Talk、配置与代理方法"
+  },
+  {
+    "source": "Gateway protocol session control",
+    "target": "Gateway 协议会话控制"
+  },
+  {
+    "source": "Gateway protocol device, node, and approval methods",
+    "target": "Gateway 协议设备、节点与审批方法"
+  },
+  {
+    "source": "Gateway protocol session bootstrap and events",
+    "target": "Gateway 协议会话引导与事件"
+  },
+  {
     "source": "Config and utilities",
     "target": "配置与实用工具"
   },
