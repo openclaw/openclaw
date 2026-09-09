@@ -448,6 +448,18 @@ suite.define(() => {
         await page.getByRole("link", { name: "Settings", exact: true }).waitFor();
         await page.getByText("Plan and track agent-owned work.", { exact: true }).waitFor();
         await page.getByRole("link", { name: "View on ClawHub", exact: true }).waitFor();
+        const securityAudit = page.getByRole("link", { name: /Security audit/iu });
+        expect(await securityAudit.getAttribute("href")).toBe(
+          "https://clawhub.ai/openclaw/plugins/workboard/security-audit",
+        );
+        expect(await securityAudit.getAttribute("class")).toContain(
+          "plugin-catalog-detail__security--pass",
+        );
+        expect(await securityAudit.getByText("Pass", { exact: true }).count()).toBe(1);
+        expect(
+          await securityAudit.locator(".plugin-catalog-detail__security-score > span").count(),
+        ).toBe(3);
+        expect(await securityAudit.getByText("clean", { exact: true }).count()).toBe(0);
         expect(
           await page
             .getByRole("tab")

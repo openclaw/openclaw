@@ -141,7 +141,7 @@ describe("renderPluginCatalogResults", () => {
     expect(onCategoryChange).toHaveBeenCalledWith("tools");
   });
 
-  it("shows installed status or an install action with the featured download treatment", () => {
+  it("shows exactly one top-right status or install action and omits download counts", () => {
     const onInstall = vi.fn();
     const installed = plugin("installed", {
       local: {
@@ -159,11 +159,14 @@ describe("renderPluginCatalogResults", () => {
     );
 
     const installedCard = container.querySelector('[data-plugin-id="installed"]');
-    expect(installedCard?.querySelector('[aria-label="Enabled"]')).not.toBeNull();
+    const installedAction = installedCard?.querySelector(".plugin-catalog-card__action");
+    expect(installedAction?.querySelector('[aria-label="Enabled"]')).not.toBeNull();
     expect(installedCard?.querySelector("button")).toBeNull();
     const availableCard = container.querySelector('[data-plugin-id="available"]');
-    expect(availableCard?.textContent).toContain("1.2k downloads");
-    availableCard?.querySelector<HTMLButtonElement>("button")?.click();
+    const availableAction = availableCard?.querySelector(".plugin-catalog-card__action");
+    expect(availableAction?.querySelectorAll("button")).toHaveLength(1);
+    expect(container.querySelector(".plugin-download-count")).toBeNull();
+    availableAction?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onInstall).toHaveBeenCalledWith("available");
   });
 });

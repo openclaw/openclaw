@@ -470,14 +470,25 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
 
 /* ---------- Unified plugin catalog ---------- */
 
-.plugins-hub-header__secondary.btn--icon {
+.plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon {
+  box-sizing: border-box;
   width: 34px;
   min-width: 34px;
   height: 34px;
+  min-height: 34px;
   padding: 7px;
+  border-color: var(--border);
+  background: transparent;
+  color: var(--muted);
 }
 
-.plugins-hub-header__secondary.btn--icon svg {
+.plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon svg {
   width: 18px;
   height: 18px;
 }
@@ -619,9 +630,10 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
   position: relative;
   min-width: 0;
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: var(--space-3);
-  padding: var(--space-4);
+  grid-template-rows: auto auto;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
@@ -662,25 +674,29 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
   object-fit: cover;
 }
 
-.plugin-catalog-card__footer {
+.plugin-catalog-card__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.plugin-catalog-card__head > .installed-plugins-card__head {
+  min-width: 0;
+}
+
+.plugin-catalog-card__action {
+  position: relative;
+  z-index: 3;
   display: flex;
   min-height: 30px;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.plugin-catalog-card__footer .plugin-download-count {
-  justify-content: flex-start;
-  text-align: left;
 }
 
 .plugin-catalog-card__install,
 .plugin-catalog-card__status {
-  position: relative;
-  z-index: 3;
   flex: 0 0 auto;
-  margin-inline-start: auto;
 }
 
 .plugins-settings-row__status {

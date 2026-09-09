@@ -13,6 +13,7 @@ import { clawHubPackageUrl } from "./catalog-links.ts";
 import { formatCompactCount } from "./catalog-results.ts";
 import { renderPluginDetailShell } from "./detail-shell.ts";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.ts";
+import { renderPluginSecurityAudit } from "./security-audit.ts";
 
 export type PluginCatalogDetailTab =
   | "readme"
@@ -39,23 +40,6 @@ export type PluginCatalogDetailProps = {
 
 function tabLabel(tab: PluginCatalogDetailTab): string {
   return t(`pluginsPage.detailTabs.${tab}`);
-}
-
-function securityLabel(status: string): string {
-  return /^(?:clean|pass|safe)$/iu.test(status) ? "Pass" : status;
-}
-
-function securityTone(status: string): "pass" | "warning" | "danger" | "unknown" {
-  if (/^(?:clean|pass|safe)$/iu.test(status)) {
-    return "pass";
-  }
-  if (/^(?:suspicious|warning|review)$/iu.test(status)) {
-    return "warning";
-  }
-  if (/^(?:blocked|danger|fail|malicious)$/iu.test(status)) {
-    return "danger";
-  }
-  return "unknown";
 }
 
 export function renderPluginDetailReadme(result: PluginDiscoveryDetailResult): TemplateResult {
@@ -298,25 +282,7 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
             : nothing
         }
       </dl>
-      ${
-        detail.security
-          ? html`<a
-              class="plugin-catalog-detail__security plugin-catalog-detail__security--${securityTone(
-                detail.security.status,
-              )}"
-              href=${packageUrl ? `${packageUrl}/security-audit` : nothing}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <h2>${t("pluginsPage.detailSecurity")} ${icons.info}</h2>
-              <div class="plugin-catalog-detail__security-score">
-                <strong>${securityLabel(detail.security.status)}</strong>
-                <span aria-hidden="true"></span><span aria-hidden="true"></span
-                ><span aria-hidden="true"></span>
-              </div>
-            </a>`
-          : nothing
-      }
+      ${detail.security ? renderPluginSecurityAudit(detail.security.status, packageUrl) : nothing}
       ${
         packageUrl
           ? html`<a

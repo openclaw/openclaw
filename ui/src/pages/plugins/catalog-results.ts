@@ -110,25 +110,12 @@ export function formatCompactCount(value: number): string {
   return `${millions >= 100 ? Math.round(millions) : Number(millions.toFixed(1))}m`;
 }
 
-function renderDownloadCount(downloads: number | undefined): TemplateResult | typeof nothing {
-  if (downloads === undefined) {
-    return nothing;
-  }
-  const count = formatCompactCount(downloads);
-  return html`<span
-    class="plugin-download-count"
-    aria-label=${t("pluginsPage.downloadCount", { count })}
-  >
-    <span aria-hidden="true">${icons.download}</span>
-    ${t("pluginsPage.downloadCount", { count })}
-  </span>`;
-}
-
 function renderCatalogCard(
   plugin: PluginDiscoveryEntry,
   props: PluginCatalogResultsProps,
 ): TemplateResult {
-  const installed = plugin.local.installed && plugin.local.state !== "not-installed";
+  const installedState = plugin.local.state === "not-installed" ? null : plugin.local.state;
+  const installed = plugin.local.installed && installedState !== null;
   const canInstall = props.canInstall && plugin.local.action === "install";
   return html`<article
     class="plugin-catalog-card oc-card oc-card-interactive"
@@ -146,46 +133,47 @@ function renderCatalogCard(
         props.onOpenEntry(plugin.id);
       }}
     ></a>
-    <div class="installed-plugins-card__head">
-      <span
-        class="installed-plugins-card__art plugin-catalog-card__art"
-        aria-hidden="true"
-        data-plugin-icon-id=${plugin.local.pluginId ?? nothing}
-      >
-        ${renderCatalogIcon(plugin, props)}
-      </span>
-      ${renderPluginCardIdentity({
-        name: plugin.catalog.name,
-        attribution: {
-          ...(plugin.catalog.author ? { author: plugin.catalog.author } : {}),
-          official: plugin.catalog.official,
-        },
-        linkedAuthor: true,
-      })}
+    <div class="plugin-catalog-card__head">
+      <div class="installed-plugins-card__head">
+        <span
+          class="installed-plugins-card__art plugin-catalog-card__art"
+          aria-hidden="true"
+          data-plugin-icon-id=${plugin.local.pluginId ?? nothing}
+        >
+          ${renderCatalogIcon(plugin, props)}
+        </span>
+        ${renderPluginCardIdentity({
+          name: plugin.catalog.name,
+          attribution: {
+            ...(plugin.catalog.author ? { author: plugin.catalog.author } : {}),
+            official: plugin.catalog.official,
+          },
+          linkedAuthor: true,
+        })}
+      </div>
+      <div class="plugin-catalog-card__action">
+        ${
+          installed
+            ? renderPluginStateStatus(installedState, "plugin-catalog-card__status")
+            : html`<button
+                type="button"
+                class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                aria-label=${t("pluginsPage.installNamed", { name: plugin.catalog.name })}
+                ?disabled=${!canInstall}
+                @click=${(event: MouseEvent) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (canInstall) {
+                    props.onInstall(plugin.id);
+                  }
+                }}
+              >
+                ${t("pluginsPage.install")}
+              </button>`
+        }
+      </div>
     </div>
     ${renderPluginCardSummary(plugin.catalog.summary || t("pluginsPage.optionalCapability"))}
-    <footer class="plugin-catalog-card__footer">
-      ${renderDownloadCount(plugin.catalog.downloads)}
-      ${
-        installed
-          ? renderPluginStateStatus(plugin.local.state, "plugin-catalog-card__status")
-          : html`<button
-              type="button"
-              class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
-              aria-label=${t("pluginsPage.installNamed", { name: plugin.catalog.name })}
-              ?disabled=${!canInstall}
-              @click=${(event: MouseEvent) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (canInstall) {
-                  props.onInstall(plugin.id);
-                }
-              }}
-            >
-              ${t("pluginsPage.install")}
-            </button>`
-      }
-    </footer>
   </article>`;
 }
 
