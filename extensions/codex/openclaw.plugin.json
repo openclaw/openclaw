@@ -1,6 +1,6 @@
 {
   "id": "codex",
-  "categories": ["developer-tools"],
+  "categories": ["agent-runtimes"],
   "providers": ["codex"],
   "syntheticAuthRefs": ["codex"],
   "providerCatalogEntry": "./provider-discovery.ts",

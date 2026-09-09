@@ -1,6 +1,6 @@
 {
   "id": "copilot",
-  "categories": ["developer-tools"],
+  "categories": ["agent-runtimes"],
   "doctorContract": {
     "configRepair": true
   },
