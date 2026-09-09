@@ -1651,11 +1651,7 @@ function canonicalizeLegacyAuthOrder(
   ]);
   const unresolved = (entry: unknown): boolean =>
     typeof entry !== "string" ||
-    Boolean(
-      options?.preserveUnmappedLegacyIds &&
-      isLegacyAuthProfileId(entry) &&
-      !profileIdMap.has(entry),
-    );
+    Boolean(options?.preserveUnmappedLegacyIds && !profileIdMap.has(entry));
   const rewrite = (entry: unknown): unknown => {
     if (typeof entry !== "string") {
       return entry;
@@ -1958,7 +1954,7 @@ export function maybeRepairLegacyAuthProfileStores(params: {
       ...collectRawAuthRotationProfileIds(target.state),
     ]);
     for (const [from, to] of params.profileIdMap) {
-      if (from !== to && Object.hasOwn(profiles, from) && occupied.has(to)) {
+      if (from !== to && occupied.has(from) && occupied.has(to)) {
         return {
           changes: [],
           warnings: [

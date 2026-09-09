@@ -2374,7 +2374,7 @@ src/commands/configure.wizard.ts	2
 src/commands/daemon-install-helpers.ts	3
 src/commands/docs.ts	2
 src/commands/doctor-agent-memory-schema.ts	1
-src/commands/doctor-auth-flat-profiles.ts	5
+src/commands/doctor-auth-flat-profiles.ts	3
 src/commands/doctor-auth-migration-receipts.ts	3
 src/commands/doctor-auth-profile-config.ts	4
 src/commands/doctor-config-analysis.ts	3

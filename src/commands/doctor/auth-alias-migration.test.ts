@@ -13,6 +13,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { AgentRuntimePolicyConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -370,6 +371,10 @@ describe("Doctor stored auth alias migration", () => {
         version: 1,
         profiles: { "openai:chatgpt-work": agentCredential },
       };
+      // Keep the retired field explicit in this migration fixture.
+      const legacyRuntime: AgentRuntimePolicyConfig & { authProfileId: string } = {
+        authProfileId: "openai-codex:work",
+      };
       const cfg: OpenClawConfig = {
         plugins: { enabled: false },
         agents: {
@@ -377,7 +382,7 @@ describe("Doctor stored auth alias migration", () => {
             workspace: fixture.workspaceDir,
             models: {
               "openai/fixture-model": {
-                agentRuntime: { authProfileId: "openai-codex:work" },
+                agentRuntime: legacyRuntime,
               },
             },
           },
@@ -429,11 +434,14 @@ describe("Doctor stored auth alias migration", () => {
       });
 
       const migratedConfig = result.state.candidate;
+      const migratedRuntime =
+        migratedConfig.agents?.defaults?.models?.["openai/fixture-model"]?.agentRuntime;
       const migratedId =
-        migratedConfig.agents?.defaults?.models?.["openai/fixture-model"]?.agentRuntime
-          ?.authProfileId;
+        migratedRuntime && "authProfileId" in migratedRuntime
+          ? migratedRuntime.authProfileId
+          : undefined;
       expect(migratedId).toBeDefined();
-      if (!migratedId) {
+      if (typeof migratedId !== "string") {
         throw new Error("Doctor removed the configured account reference");
       }
       expect.soft(migratedId).not.toBe("openai-codex:work");
