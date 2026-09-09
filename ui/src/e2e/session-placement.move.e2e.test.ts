@@ -512,6 +512,7 @@ suite.define(() => {
     const page = await context.newPage();
     const parent = {
       key: "agent:main:placement-parent",
+      sessionId: "session:agent:main:placement-parent",
       kind: "direct" as const,
       label: "Placement parent",
       updatedAt: 1,
@@ -527,12 +528,22 @@ suite.define(() => {
       ...offline.placement,
       runner: { kind: "device", status: "offline" },
     } as typeof offline.placement;
+    const historyMessages = [
+      { role: "assistant", content: "Deferred available startup transcript settled." },
+    ];
+    const models = [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }];
+    const staleStartup = {
+      sessionId: available.sessionId,
+      sessionInfo: { ...available, archived: false, pinned: false },
+      messages: historyMessages,
+      thinkingLevel: null,
+      metadata: { models },
+    };
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup"],
       featureMethods: ["chat.startup", "sessions.move"],
-      historyMessages: [
-        { role: "assistant", content: "Deferred available startup transcript settled." },
-      ],
+      historyMessages,
+      models,
       methodResponses: {
         "sessions.list": {
           cases: [
@@ -595,6 +606,14 @@ suite.define(() => {
       });
       const rosterMatch = { includeGlobal: true, agentId: "main" };
       const listCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      // Current primary, child, and descriptor reads share one offline fixture owner.
+      await gateway.setSessionsListResponse(chatSessionListResponse([parent, offline]));
+      await gateway.setMethodResponse("sessions.list", {
+        cases: [
+          { match: { spawnedBy: parent.key }, response: chatSessionListResponse([offline]) },
+          { response: chatSessionListResponse([parent, offline]) },
+        ],
+      });
       await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await gateway.waitForRequest("sessions.list", { after: listCount, match: rosterMatch });
@@ -621,7 +640,7 @@ suite.define(() => {
       await expect.poll(() => panes.count()).toBe(2);
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
-      await gateway.resolveDeferred("chat.startup");
+      await gateway.resolveDeferred("chat.startup", staleStartup);
       await expect
         .poll(() => page.getByText("Deferred available startup transcript settled.").count())
         .toBe(2);

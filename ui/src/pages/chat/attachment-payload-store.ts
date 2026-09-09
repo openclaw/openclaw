@@ -1,5 +1,4 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { requestVideoPoster } from "../../lib/media/video-poster.ts";
 
 type AttachmentPayload = {
   blob?: Blob;
@@ -56,20 +55,26 @@ export function getChatAttachmentVideoPosterUrl(
   if (!(payload?.blob instanceof File) || payload.blob.size > 512 * 1024 * 1024) {
     return null;
   }
-  const src = createObjectUrl(payload.blob);
+  const file = payload.blob;
+  const src = createObjectUrl(file);
   if (!src) {
     return null;
   }
   const controller = new AbortController();
   const poster: NonNullable<AttachmentPayload["videoPoster"]> = {
     controller,
-    promise: requestVideoPoster({
-      key: payload.blob,
-      src,
-      width: 54,
-      height: 54,
-      signal: controller.signal,
-    })
+    promise: import("../../lib/media/video-poster.ts")
+      .then(
+        ({ requestVideoPoster }) =>
+          requestVideoPoster({
+            key: file,
+            src,
+            width: 54,
+            height: 54,
+            signal: controller.signal,
+          }),
+        () => null,
+      )
       .then((blob) => {
         if (!blob || payloads.get(attachment.id)?.videoPoster !== poster) {
           return null;

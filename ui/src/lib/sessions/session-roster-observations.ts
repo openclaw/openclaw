@@ -9,7 +9,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "./session-key.ts";
-import type { ObservedSessionList } from "./session-managed-list-refresh.ts";
+import type { ObservedSessionList } from "./session-list-query.ts";
 import { createSessionRowProvenance } from "./session-row-provenance.ts";
 import {
   createSessionRunTerminalReconciler,

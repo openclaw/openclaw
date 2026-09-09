@@ -14,16 +14,10 @@ import {
   sessionListQueryAgentId,
   type ManagedSessionList,
   type ManagedSessionListRefresh,
+  type ObservedSessionList,
 } from "./session-list-query.ts";
 import { requestSessionListParams } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
-
-export type ObservedSessionList = {
-  scope: SessionListScope;
-  connectionEpoch: number | null;
-  snapshot: SessionListSnapshot;
-  listeners: Set<(snapshot: SessionListSnapshot) => void>;
-};
 
 export function publishManagedList(
   entry: ObservedSessionList,

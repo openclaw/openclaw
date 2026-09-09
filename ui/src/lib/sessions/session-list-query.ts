@@ -4,10 +4,10 @@ import type {
   SessionGateway,
   SessionListOptions,
   SessionListScope,
+  SessionListSnapshot,
   SessionRefreshOptions,
 } from "./session-capability.ts";
 import { normalizeAgentId } from "./session-key.ts";
-import type { ObservedSessionList } from "./session-managed-list-refresh.ts";
 import {
   buildSessionListParams,
   DEFAULT_SESSION_LIST_QUERY,
@@ -36,6 +36,13 @@ export type ManagedSessionListRefresh = {
   append: boolean;
   offset?: number;
   invalidated?: true;
+};
+
+export type ObservedSessionList = {
+  scope: SessionListScope;
+  connectionEpoch: number | null;
+  snapshot: SessionListSnapshot;
+  listeners: Set<(snapshot: SessionListSnapshot) => void>;
 };
 
 export type ManagedSessionList = ObservedSessionList & {
