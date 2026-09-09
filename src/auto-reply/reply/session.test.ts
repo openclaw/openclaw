@@ -3756,7 +3756,6 @@ describe("initSessionState reset authorization", () => {
           workspaceDir: path.dirname(storePath),
           defaultGroupActivation: () => "mention",
           resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
           resolveDefaultThinkingLevel: async () => undefined,
           provider: "openai",
           model: "test-model",
