@@ -248,6 +248,10 @@ export type SubagentRunRecord = {
   agentDir?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;
+  /** First clock-derived wait expiry observed without terminalizing the child. */
+  waitExpiryObservedAt?: number;
+  /** Set after provisional notification settlement; not a visible-delivery receipt. */
+  waitExpiryAnnouncedAt?: number;
   spawnMode?: SpawnSubagentMode;
   /** Monotonic ownership generation within one child session. */
   generation?: number;
