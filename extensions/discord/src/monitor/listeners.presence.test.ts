@@ -304,7 +304,7 @@ describe("DiscordPresenceListener", () => {
       const snapshotPresence = {
         user: { id: "user-1" },
         status: PresenceUpdateStatus.Online,
-        activities: [{ name: "Chess", type: 0, created_at: 0 }],
+        activities: [{ id: "activity-1", name: "Chess", type: 0, created_at: 0 }],
         client_status: {},
       } satisfies Omit<GatewayPresenceUpdate, "guild_id">;
 
