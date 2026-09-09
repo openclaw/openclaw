@@ -1,6 +1,5 @@
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { resolveCliExecutionAuthProfileId } from "../../agents/cli-execution-auth.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
 import {
   clearCliSessionInStore,
@@ -25,7 +24,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
-import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+import { resolveCliForwardedAuthProfileId } from "./agent-runner-auth-profile.js";
 import {
   createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
@@ -82,15 +81,12 @@ export async function runCliFallbackCandidate(
       resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
-  const authProfile = resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
-    config: params.runtimeConfig,
-  });
-  const cliAuthProfileId = resolveCliExecutionAuthProfileId({
+  const cliAuthProfileId = resolveCliForwardedAuthProfileId({
+    candidateRun: params.candidateRun,
     cliExecutionProvider: params.cliExecutionProvider,
     authProfileProvider: params.provider,
     config: params.runtimeConfig,
     agentDir: resolveAgentDir(params.runtimeConfig, turn.followupRun.run.agentId),
-    selected: authProfile,
   });
   const hookMessageProvider = resolveOriginMessageProvider({
     originatingChannel: turn.followupRun.originatingChannel,
