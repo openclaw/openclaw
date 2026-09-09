@@ -260,6 +260,7 @@
     },
     "responseTimeoutMs": {
       "label": "Response Timeout (ms)",
+      "help": "Classic response timeout and realtime supervisor inactivity deadline. Visible answer text or tool execution refreshes the realtime deadline.",
       "advanced": true
     }
   },

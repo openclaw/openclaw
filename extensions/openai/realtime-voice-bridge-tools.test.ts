@@ -584,4 +584,28 @@ describe("OpenAI realtime voice bridge tools", () => {
       expectedResponseCreateEvent(),
     ]);
   });
+
+  it("drops queued out-of-band speech when the owning voice run is cancelled", async () => {
+    const bridge = createNativeBridge({ onToolCall: vi.fn() });
+    const socket = await connectReadyBridge(bridge);
+    expect(bridge.supportsOutOfBandSpeech).toBe(true);
+
+    emitCompletedToolCalls(socket);
+    await bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    bridge.sendUserMessage?.("First phrase");
+    bridge.sendUserMessage?.("Queued stale phrase");
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+
+    bridge.handleBargeIn?.({ force: true, audioPlaybackActive: true });
+    emitServerEvent(socket, {
+      type: "response.created",
+      response: { id: "resp_first_phrase" },
+    });
+    emitServerEvent(socket, {
+      type: "response.done",
+      response: { id: "resp_first_phrase", status: "completed", output: [] },
+    });
+
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+  });
 });

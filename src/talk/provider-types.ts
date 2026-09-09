@@ -351,6 +351,8 @@ export type RealtimeVoiceBridge = {
   supportsToolResultContinuation?: boolean;
   /** False when the provider cannot accept a tool result without starting a response. */
   supportsToolResultSuppression?: boolean;
+  /** True when sendUserMessage can create ordered speech while a tool call remains pending. */
+  supportsOutOfBandSpeech?: boolean;
   /** Per-session override for provider-confirmed input-audio barge-in handling. */
   handlesInputAudioBargeIn?: boolean;
   connect(): Promise<void>;
@@ -362,6 +364,8 @@ export type RealtimeVoiceBridge = {
   ): void;
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
+  /** Drop provider-owned speech that has not started yet. */
+  clearPendingSpeech?(): void;
   /**
    * Returns void when submission completes synchronously, or a Promise that resolves at the
    * asynchronous completion boundary exposed by the provider and rejects on submission failure.

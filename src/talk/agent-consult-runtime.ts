@@ -46,6 +46,13 @@ const REALTIME_VOICE_YIELD_ACK_MAX_CHARS = 500;
 const REALTIME_VOICE_YIELD_ACK_FALLBACK =
   "I started that work and will share the result when it is ready.";
 
+/** Sanitized user-visible assistant text emitted while a realtime consult is still running. */
+export type RealtimeVoiceAgentConsultVisiblePartial = {
+  runId: string;
+  text: string;
+  replace?: true;
+};
+
 /**
  * Sender-auth contract revision for official realtime voice plugins.
  *
@@ -387,6 +394,10 @@ export async function consultRealtimeVoiceAgent(params: {
   extraSystemPrompt?: string;
   fallbackText?: string;
   abortSignal?: AbortSignal;
+  /** Inactivity deadline refreshed only by visible answer text or real tool execution. */
+  progressTimeoutMs?: number;
+  /** Receives only the sanitized assistant-answer lane, never reasoning or tool payloads. */
+  onVisiblePartial?: (partial: RealtimeVoiceAgentConsultVisiblePartial) => Promise<void> | void;
   onRunStarted?: (params: {
     runId: string;
     sessionId: string;
@@ -484,9 +495,42 @@ export async function consultRealtimeVoiceAgent(params: {
       const timeoutMs =
         params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg });
       const runRegistration = params.onRunStarted?.({ runId, sessionId, timeoutMs });
-      const abortSignal = runRegistration?.abortSignal
-        ? AbortSignal.any([lifecycleAbortController.signal, runRegistration.abortSignal])
-        : lifecycleAbortController.signal;
+      const progressAbortController = new AbortController();
+      const progressTimeoutMs =
+        params.progressTimeoutMs !== undefined &&
+        Number.isFinite(params.progressTimeoutMs) &&
+        params.progressTimeoutMs > 0
+          ? Math.min(Math.floor(params.progressTimeoutMs), 2_147_483_647)
+          : undefined;
+      let progressTimer: ReturnType<typeof setTimeout> | undefined;
+      const armProgressTimeout = () => {
+        if (!progressTimeoutMs || progressAbortController.signal.aborted) {
+          return;
+        }
+        if (progressTimer) {
+          clearTimeout(progressTimer);
+        }
+        progressTimer = setTimeout(() => {
+          progressAbortController.abort(
+            new DOMException(
+              `Realtime voice agent consult stalled for ${progressTimeoutMs}ms`,
+              "TimeoutError",
+            ),
+          );
+        }, progressTimeoutMs);
+        progressTimer.unref?.();
+      };
+      const abortSignals = [lifecycleAbortController.signal];
+      if (runRegistration?.abortSignal) {
+        abortSignals.push(runRegistration.abortSignal);
+      }
+      if (progressTimeoutMs) {
+        abortSignals.push(progressAbortController.signal);
+      }
+      const abortSignal =
+        abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0]!;
+      let visibleDeliveryFailed = false;
+      armProgressTimeout();
 
       // Voice consults suppress verbose/reasoning output because the bridge needs a short,
       // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
@@ -536,13 +580,47 @@ export async function consultRealtimeVoiceAgent(params: {
           "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
         agentDir,
         abortSignal,
+        onPartialReply: params.onVisiblePartial
+          ? async (payload) => {
+              const text = payload.text?.trim();
+              if (!text) {
+                return;
+              }
+              armProgressTimeout();
+              if (visibleDeliveryFailed || abortSignal.aborted) {
+                return;
+              }
+              try {
+                await params.onVisiblePartial?.({
+                  runId,
+                  text,
+                  ...(payload.replace ? { replace: true } : {}),
+                });
+              } catch (error) {
+                visibleDeliveryFailed = true;
+                params.logger.warn(
+                  `[talk] realtime agent consult streaming disabled after delivery failure: ${error instanceof Error ? error.message : String(error)}`,
+                );
+              }
+            }
+          : undefined,
+        onExecutionPhase: (info) => {
+          if (info.phase === "tool_execution_started") {
+            armProgressTimeout();
+          }
+        },
       });
       const result = await runPromise
         .catch((error: unknown) => {
           assertRealtimeVoiceConsultNotInterrupted(abortSignal);
           throw error;
         })
-        .finally(() => runRegistration?.cleanup?.());
+        .finally(() => {
+          if (progressTimer) {
+            clearTimeout(progressTimer);
+          }
+          runRegistration?.cleanup?.();
+        });
       assertRealtimeVoiceConsultNotInterrupted(abortSignal, result.meta);
 
       if (result.meta?.yielded === true) {
