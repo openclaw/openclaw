@@ -1,145 +1,48 @@
-// Control UI model metadata boundary.
+import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
-import { invalidateChatMetadataStore } from "./chat/chat-metadata-store.ts";
-import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
+import type { ApplicationGateway } from "../app/context.ts";
+import { t } from "../i18n/index.ts";
 
-const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
-// A picker open is an operator signal to revalidate, but full provider discovery can be slow.
-const MODEL_CATALOG_REFRESH_COOLDOWN_MS = 5 * 60_000;
+export type ModelCatalogReadScope = Pick<
+  ModelsListParams,
+  "agentId" | "sessionKey" | "authProfileId"
+>;
 
-type ModelCatalogCacheEntry = {
-  expiresAt: number;
-  refreshEligibleAt?: number;
-  result: ModelCatalogResult;
-  inFlight?: ModelCatalogPendingRequest;
-  inFlightRefresh?: boolean;
-};
-
-type ModelCatalogPendingRequest = {
-  controller?: AbortController;
-  promise: Promise<ModelCatalogResult>;
-  subscribers: Set<object>;
-};
-
-const modelCatalogCache = new WeakMap<GatewayBrowserClient, Map<string, ModelCatalogCacheEntry>>();
-
-export function invalidateModelCatalogCache(client: GatewayBrowserClient): void {
-  modelCatalogCache.delete(client);
+export function modelCatalogRefreshError(result: ModelCatalogResult): string | null {
+  return result.refreshFailed
+    ? t(
+        result.models.length
+          ? "chat.modelControls.modelsRefreshFailed"
+          : "chat.modelControls.modelsUnavailable",
+      )
+    : null;
 }
 
-function modelCatalogCacheFor(client: GatewayBrowserClient): Map<string, ModelCatalogCacheEntry> {
-  let cache = modelCatalogCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    modelCatalogCache.set(client, cache);
-  }
-  return cache;
-}
-
+/** The Gateway owns publication and freshness; callers own their request lifetime. */
 export async function loadModelCatalog(
-  client: GatewayBrowserClient,
-  opts: {
-    agentId: string;
-    preparedOnly?: boolean;
-    refresh?: boolean;
-    refreshIfDue?: boolean;
-    signal?: AbortSignal;
-  },
+  client: Pick<GatewayBrowserClient, "request">,
+  options: ModelsListParams & { signal?: AbortSignal },
 ): Promise<ModelCatalogResult> {
-  opts.signal?.throwIfAborted();
-  const cache = modelCatalogCacheFor(client);
-  const agentId = opts.agentId.trim();
-  const cacheKey = `${agentId}\0${opts.preparedOnly ? "prepared" : "exact"}`;
-  const preparedCacheKey = `${agentId}\0prepared`;
-  const cached = cache.get(cacheKey);
-  const now = Date.now();
-  // Abort is synchronous, but cache cleanup runs in a promise reaction. A
-  // replacement during that gap must not inherit the retired producer/cooldown.
-  const pendingRequestAborted = cached?.inFlight?.controller?.signal.aborted === true;
-  const refresh =
-    opts.refresh === true ||
-    (opts.refreshIfDue === true &&
-      (pendingRequestAborted || (cached?.refreshEligibleAt ?? 0) <= now));
-  const nextRefreshEligibleAt = refresh
-    ? now + MODEL_CATALOG_REFRESH_COOLDOWN_MS
-    : cached?.refreshEligibleAt;
-  const refreshCooldownActive =
-    opts.refreshIfDue === true && (cached?.refreshEligibleAt ?? 0) > now;
-  if (
-    opts.refreshIfDue === true &&
-    cached?.inFlight &&
-    !pendingRequestAborted &&
-    cached.inFlightRefresh === true
-  ) {
-    return await subscribeToSharedRequest(cached.inFlight, {}, opts.signal);
-  }
-  if (!refresh && cached?.result && (cached.expiresAt > now || refreshCooldownActive)) {
-    return cached.result;
-  }
-  if (cached?.inFlight && !pendingRequestAborted && (!refresh || cached.inFlightRefresh === true)) {
-    return await subscribeToSharedRequest(cached.inFlight, {}, opts.signal);
-  }
-
-  // The cache write happens here, gated on inFlight identity: a refresh call
-  // replaces inFlight, so an older request resolving late cannot clobber the
-  // fresher result with pre-mutation catalog data.
-  const controller = opts.signal ? new AbortController() : undefined;
+  const { signal, agentId, view = "configured", ...optionsWithoutScope } = options;
+  signal?.throwIfAborted();
   const params = {
-    view: "configured",
-    agentId,
-    ...(opts.preparedOnly === true ? { preparedOnly: true } : {}),
-    ...(refresh ? { refresh: true } : {}),
+    view,
+    ...optionsWithoutScope,
+    ...(agentId === undefined ? {} : { agentId: agentId.trim() }),
   };
-  const inFlight: ModelCatalogPendingRequest = {
-    controller,
-    subscribers: new Set(),
-    promise: (controller
-      ? client.request<ModelCatalogResult>("models.list", params, { signal: controller.signal })
-      : client.request<ModelCatalogResult>("models.list", params)
-    )
-      .then((result) => {
-        const latest = cache.get(cacheKey);
-        if (modelCatalogCache.get(client) === cache && latest?.inFlight === inFlight) {
-          const refreshEligibleAt = refresh
-            ? Date.now() + MODEL_CATALOG_REFRESH_COOLDOWN_MS
-            : nextRefreshEligibleAt;
-          const entry = {
-            expiresAt: Date.now() + MODEL_CATALOG_CACHE_TTL_MS,
-            ...(refreshEligibleAt ? { refreshEligibleAt } : {}),
-            result,
-          };
-          cache.set(cacheKey, entry);
-          if (opts.preparedOnly !== true) {
-            // An exact catalog supersedes the prepared projection. Reusing it for
-            // automatic reads prevents route re-entry from restoring stale data.
-            cache.set(preparedCacheKey, entry);
-            // Discovery changes prepared metadata, including session-locked projections.
-            invalidateChatMetadataStore(client, { agentId });
-          }
-        }
-        return result;
-      })
-      .catch((error: unknown) => {
-        const latest = cache.get(cacheKey);
-        if (refresh && latest?.inFlight === inFlight) {
-          delete latest.refreshEligibleAt;
-        }
-        throw error;
-      })
-      .finally(() => {
-        const latest = cache.get(cacheKey);
-        if (latest?.inFlight === inFlight) {
-          delete latest.inFlight;
-        }
-      }),
-  };
-  cache.set(cacheKey, {
-    expiresAt: cached?.expiresAt ?? 0,
-    ...(nextRefreshEligibleAt ? { refreshEligibleAt: nextRefreshEligibleAt } : {}),
-    result: cached?.result ?? { models: [] },
-    inFlight,
-    ...(refresh ? { inFlightRefresh: true } : {}),
+  return signal
+    ? await client.request<ModelCatalogResult>("models.list", params, { signal })
+    : await client.request<ModelCatalogResult>("models.list", params);
+}
+
+export function subscribeModelCatalogChanges(
+  gateway: ApplicationGateway,
+  listener: () => void,
+): () => void {
+  return gateway.subscribeEvents((event) => {
+    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
+      listener();
+    }
   });
-  return await subscribeToSharedRequest(inFlight, {}, opts.signal);
 }

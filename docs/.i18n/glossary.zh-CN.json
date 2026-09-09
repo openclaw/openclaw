@@ -2514,5 +2514,285 @@
   {
     "source": "Automation troubleshooting",
     "target": "自动化故障排查"
+  },
+  {
+    "source": "Test suites and commands",
+    "target": "测试套件与命令"
+  },
+  {
+    "source": "Live and Docker/Parallels workflows",
+    "target": "Live 与 Docker/Parallels 工作流"
+  },
+  {
+    "source": "Docker test runners",
+    "target": "Docker 测试运行器"
+  },
+  {
+    "source": "QA-specific runners",
+    "target": "QA 专用运行器"
+  },
+  {
+    "source": "Contract tests",
+    "target": "契约测试"
+  },
+  {
+    "source": "Writing and adding tests",
+    "target": "编写与添加测试"
+  },
+  {
+    "source": "Provider model catalogs",
+    "target": "提供商模型目录"
+  },
+  {
+    "source": "Provider hook families",
+    "target": "提供商 Hook 族"
+  },
+  {
+    "source": "Provider hook wiring",
+    "target": "提供商 Hook 接线"
+  },
+  {
+    "source": "Provider voice capabilities",
+    "target": "提供商语音能力"
+  },
+  {
+    "source": "Provider media and search",
+    "target": "提供商媒体与搜索"
+  },
+  {
+    "source": "Run doctor",
+    "target": "运行 Doctor"
+  },
+  {
+    "source": "What doctor checks",
+    "target": "Doctor 检查内容"
+  },
+  {
+    "source": "Config and migration repairs",
+    "target": "配置与迁移修复"
+  },
+  {
+    "source": "Provider and route repairs",
+    "target": "提供商与路由修复"
+  },
+  {
+    "source": "State, session, and plugin repairs",
+    "target": "状态、会话与插件修复"
+  },
+  {
+    "source": "Gateway, service, and security checks",
+    "target": "Gateway、服务与安全检查"
+  },
+  {
+    "source": "Workspace tips and Dreams UI actions",
+    "target": "工作区提示与 Dreams UI 操作"
+  },
+  {
+    "source": "Bun",
+    "target": "Bun"
+  },
+  {
+    "source": "Bun compatibility",
+    "target": "Bun 兼容性"
+  },
+  {
+    "source": "Environment variables",
+    "target": "环境变量"
+  },
+  {
+    "source": "Linux",
+    "target": "Linux"
+  },
+  {
+    "source": "Memory configuration",
+    "target": "记忆配置"
+  },
+  {
+    "source": "Node.js",
+    "target": "Node.js"
+  },
+  {
+    "source": "Node.js compatibility",
+    "target": "Node.js 兼容性"
+  },
+  {
+    "source": "Runtimes",
+    "target": "运行时"
+  },
+  {
+    "source": "macOS",
+    "target": "macOS"
+  },
+  {
+    "source": "Run tests locally",
+    "target": "本地运行测试"
+  },
+  {
+    "source": "Control UI, TUI, and E2E lanes",
+    "target": "控制 UI、TUI 与 E2E 通道"
+  },
+  {
+    "source": "Docker test suites",
+    "target": "Docker 测试套件"
+  },
+  {
+    "source": "Test performance and benchmarks",
+    "target": "测试性能与基准"
+  },
+  {
+    "source": "Test runner internals",
+    "target": "测试运行器内部机制"
+  },
+  {
+    "source": "Remote test proof",
+    "target": "远程测试验证"
+  },
+  {
+    "source": "OpenAI setup",
+    "target": "OpenAI 设置"
+  },
+  {
+    "source": "OpenAI models",
+    "target": "OpenAI 模型"
+  },
+  {
+    "source": "OpenAI runtimes and Codex auth",
+    "target": "OpenAI 运行时与 Codex 认证"
+  },
+  {
+    "source": "OpenAI coverage and cost",
+    "target": "OpenAI 覆盖范围与费用"
+  },
+  {
+    "source": "OpenAI image and video generation",
+    "target": "OpenAI 图像与视频生成"
+  },
+  {
+    "source": "OpenAI voice and speech",
+    "target": "OpenAI 语音与语音合成"
+  },
+  {
+    "source": "Azure OpenAI endpoints",
+    "target": "Azure OpenAI 端点"
+  },
+  {
+    "source": "OpenAI advanced configuration",
+    "target": "OpenAI 高级配置"
+  },
+  {
+    "source": "Code Mode quickstart",
+    "target": "代码模式快速上手"
+  },
+  {
+    "source": "Code Mode configuration",
+    "target": "代码模式配置"
+  },
+  {
+    "source": "Code Mode tool surface",
+    "target": "代码模式工具暴露面"
+  },
+  {
+    "source": "Code Mode guest API",
+    "target": "代码模式来宾 API"
+  },
+  {
+    "source": "Code Mode output",
+    "target": "代码模式输出"
+  },
+  {
+    "source": "Code Mode internals",
+    "target": "代码模式内部机制"
+  },
+  {
+    "source": "Code Mode troubleshooting",
+    "target": "代码模式故障排查"
+  },
+  {
+    "source": "Code Mode maintainer notes",
+    "target": "代码模式维护者说明"
+  },
+  {
+    "source": "Security trust model",
+    "target": "安全信任模型"
+  },
+  {
+    "source": "Running the security audit",
+    "target": "运行安全审计"
+  },
+  {
+    "source": "Security audit checks",
+    "target": "安全审计检查项"
+  },
+  {
+    "source": "Hardened baselines",
+    "target": "加固基线"
+  },
+  {
+    "source": "Access control and allowlists",
+    "target": "访问控制与允许列表"
+  },
+  {
+    "source": "Prompt injection",
+    "target": "提示注入"
+  },
+  {
+    "source": "Tool and agent permissions",
+    "target": "工具与 Agent 权限"
+  },
+  {
+    "source": "Browser control risks",
+    "target": "浏览器控制风险"
+  },
+  {
+    "source": "Network exposure",
+    "target": "网络暴露面"
+  },
+  {
+    "source": "Secrets, storage, and logs",
+    "target": "密钥、存储与日志"
+  },
+  {
+    "source": "Dependency locking",
+    "target": "依赖锁定"
+  },
+  {
+    "source": "Rate limiting",
+    "target": "限流"
+  },
+  {
+    "source": "Operator incident response",
+    "target": "运维方事件响应"
+  },
+  {
+    "source": "Command surface",
+    "target": "命令总览"
+  },
+  {
+    "source": "Operator flow",
+    "target": "操作员流程"
+  },
+  {
+    "source": "Canonical scenario coverage",
+    "target": "标准场景覆盖"
+  },
+  {
+    "source": "Channel QA reference",
+    "target": "通道 QA 参考"
+  },
+  {
+    "source": "Slack QA",
+    "target": "Slack QA"
+  },
+  {
+    "source": "WhatsApp QA and credentials",
+    "target": "WhatsApp QA 与凭据"
+  },
+  {
+    "source": "Extending the QA stack",
+    "target": "扩展 QA 技术栈"
+  },
+  {
+    "source": "QA reporting",
+    "target": "QA 报告"
   }
 ]

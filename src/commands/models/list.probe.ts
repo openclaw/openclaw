@@ -390,10 +390,7 @@ export async function buildProbeTargets(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
-    // A provider probe only needs candidate selection. Keep it request-scoped so it cannot
-    // supersede or be superseded by the Gateway's concurrent full-catalog materialization.
     readOnly: true,
-    providerDiscoveryProviderIds: providers,
   });
   const candidates = buildProbeCandidateMap(modelCandidates);
   const targets: AuthProbeTarget[] = [];

@@ -248,6 +248,16 @@ describe("session catalog SDK", () => {
     expect(onHost).toHaveBeenCalledTimes(2);
 
     await expect(
+      provider.openTerminal({ hostId: "node:node-1", threadId: "remote-thread" }),
+    ).resolves.toEqual({
+      kind: "node",
+      nodeId: "node-1",
+      command: "family.terminal",
+      paramsJSON: JSON.stringify({ threadId: "remote-thread" }),
+      title: "family remote-thread",
+    });
+
+    await expect(
       provider.continueSession({ hostId: "gateway", threadId: "local-thread" }),
     ).resolves.toEqual({ sessionKey: "agent:main:created" });
   });

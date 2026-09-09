@@ -5,6 +5,57 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import type { PluginManifestProviderEndpoint } from "./manifest-types.js";
+import {
+  matchesPluginProviderEndpoint,
+  normalizePluginProviderBaseUrl,
+} from "./plugin-metadata-provider-facts.js";
+
+/** Limits implicit catalogs to endpoints declared by their provider owner. */
+export function isProviderCatalogSourceAllowed(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  plugin?: Pick<PluginManifestRecord, "modelCatalog"> & {
+    providerEndpoints?: readonly PluginManifestProviderEndpoint[];
+  };
+}): boolean {
+  const configuredBaseUrl = findNormalizedProviderValue(
+    params.config?.models?.providers,
+    params.provider,
+  )?.baseUrl;
+  if (!configuredBaseUrl || !params.plugin) {
+    return true;
+  }
+  const catalog = params.plugin.modelCatalog;
+  const alias = findNormalizedProviderValue(catalog?.aliases, params.provider);
+  const provider = findNormalizedProviderValue(
+    catalog?.providers,
+    alias?.provider ?? params.provider,
+  );
+  const baseUrls = [
+    alias?.baseUrl,
+    provider?.baseUrl,
+    ...(provider?.models ?? []).map((model) => model.baseUrl),
+  ].filter((baseUrl): baseUrl is string => Boolean(baseUrl));
+  const endpoints = params.plugin.providerEndpoints ?? [];
+  // Adapters without native declarations keep their existing discovery contract.
+  // Authored rows do not pass through this implicit-source decision.
+  if (baseUrls.length === 0 && endpoints.length === 0) {
+    return true;
+  }
+  const normalizedBaseUrl = normalizePluginProviderBaseUrl(configuredBaseUrl);
+  if (!normalizedBaseUrl) {
+    return false;
+  }
+  const host = new URL(normalizedBaseUrl).hostname;
+  return (
+    baseUrls.some((baseUrl) => normalizePluginProviderBaseUrl(baseUrl) === normalizedBaseUrl) ||
+    endpoints.some((endpoint) =>
+      matchesPluginProviderEndpoint(endpoint, { host, normalizedBaseUrl }),
+    )
+  );
+}
 
 /** Core built-in model API ids that do not imply plugin ownership of a provider config. */
 export const CORE_BUILT_IN_MODEL_APIS = new Set([

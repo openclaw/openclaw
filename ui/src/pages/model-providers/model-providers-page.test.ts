@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelsProbeResult } from "../../api/types.ts";
+import type { SelectPicker } from "../../components/select-picker.ts";
+import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
@@ -320,7 +322,7 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("preserves trailing fallbacks when replacing the visible fallback", async () => {
-    const { context, runtimeConfig } = createHarness("main");
+    const { context, request, runtimeConfig } = createHarness("main");
     const model = {
       primary: "openai/gpt-5",
       fallbacks: ["anthropic/claude-sonnet", "google/gemini-pro"],
@@ -346,16 +348,19 @@ describe("ModelProvidersPage agent scope", () => {
     page.requestUpdate();
     await page.updateComplete;
     runtimeConfig.patch.mockClear();
+    const catalog = { models: page.data.models };
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method: string) =>
+      method === "models.list" ? catalog : originalRequest(method),
+    );
 
-    const fallback = [
-      ...page.querySelectorAll<HTMLElement & { value: string; updateComplete: Promise<unknown> }>(
-        "wa-select",
-      ),
-    ].find((select) => select.querySelector('[slot="label"]')?.textContent === "Fallback Model");
+    await updatePickers(page);
+    const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
+      (select) =>
+        select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
+    );
     expect(fallback).toBeDefined();
-    fallback!.value = "xai/grok";
-    await fallback!.updateComplete;
-    fallback!.dispatchEvent(new Event("change", { bubbles: true }));
+    await choosePickerValue(fallback!, "xai/grok");
 
     await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
@@ -426,12 +431,13 @@ describe("ModelProvidersPage agent scope", () => {
     runtimeConfig.canPatch = false;
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.config).toEqual({}));
+    await updatePickers(page);
     const defaults = page.querySelector(".model-providers__defaults");
 
     expect(
-      [...(defaults?.querySelectorAll("wa-select, wa-radio-group") ?? [])].every((control) =>
-        control.hasAttribute("disabled"),
-      ),
+      [
+        ...(defaults?.querySelectorAll("openclaw-select-picker button, wa-radio-group") ?? []),
+      ].every((control) => control.hasAttribute("disabled")),
     ).toBe(true);
     expect(page.textContent).not.toContain("operator.admin access");
   });

@@ -260,7 +260,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
       source ? sanitizeTerminalText(shortenHomeInString(source)) : "missing";
     return differences.map(
       (difference) =>
-        `${sanitizeTerminalText(difference.pluginId)}: persisted ${formatSource(difference.persistedSource)}; derived ${formatSource(difference.derivedSource)}`,
+        `${sanitizeTerminalText(difference.pluginId)}: ${difference.changed.join("+")} changed; persisted ${formatSource(difference.persistedSource)}; derived ${formatSource(difference.derivedSource)}`,
     );
   };
 

@@ -16,8 +16,8 @@ import { createRuntimeTasks } from "./runtime-tasks.js";
 
 const runtimeTaskMocks = getRuntimeTaskMocks();
 
-afterEach(() => {
-  resetRuntimeTaskTestState();
+afterEach(async () => {
+  await resetRuntimeTaskTestState();
 });
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");

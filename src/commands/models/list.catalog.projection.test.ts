@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createModelCatalogView } from "../../agents/model-catalog-view.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
-import { toListRowInput, toModelRow } from "./list.model-row.js";
+import { buildPublicModelProjection } from "../../gateway/server-methods/models-list-public-projection.js";
 
 describe("catalog view to CLI row", () => {
   it("does not repeat configured metadata lookup after filtering", () => {
@@ -44,20 +44,15 @@ describe("catalog view to CLI row", () => {
     const view = createModelCatalogView({ cfg: { models: { providers } }, catalog: [model] });
     const evaluation = { availability: true, routeResolution: null };
     const { entry } = view.project(model, evaluation);
-    const row = toModelRow({
-      model: { ...entry, input: toListRowInput(entry.input) },
-      key: "bench/model-1",
-      tags: [],
-      authAvailability: evaluation.availability,
-    });
+    const row = buildPublicModelProjection(entry, { includeDetails: true });
 
     expect(providerCatalogScan.mock.calls.length).toBeLessThanOrEqual(1);
     expect(row).toMatchObject({
-      key: "bench/model-1",
+      id: "model-1",
+      provider: "bench",
       name: "Configured Model",
-      input: "text+image",
+      input: ["text", "image"],
       contextWindow: 64_000,
-      available: true,
     });
   });
 });

@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import { resolveAuthProfileOrder } from "./order.js";
 import {
   applyLegacyAuthStore,
@@ -274,11 +275,7 @@ describe("persisted auth profile boundary", () => {
         runtimeExternalProfileIds: [],
         runtimeExternalProfileIdsAuthoritative: true,
         profiles: {
-          [profileId]: {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-local",
-          },
+          [profileId]: createApiKeyCredential("anthropic", "sk-local"),
         },
         order: {
           anthropic: [profileId],
@@ -306,16 +303,8 @@ describe("persisted auth profile boundary", () => {
         version: AUTH_STORE_VERSION,
         runtimePersistedProfileIds: ["openai:base", "openai:overridden"],
         profiles: {
-          "openai:base": {
-            type: "api_key",
-            provider: "openai",
-            key: "base-key",
-          },
-          "openai:overridden": {
-            type: "api_key",
-            provider: "openai",
-            key: "old-key",
-          },
+          "openai:base": createApiKeyCredential("openai", "base-key"),
+          "openai:overridden": createApiKeyCredential("openai", "old-key"),
         },
       },
       {
@@ -323,16 +312,8 @@ describe("persisted auth profile boundary", () => {
         runtimePersistedProfileIds: ["openai:added"],
         runtimeLocalProfileIds: ["openai:added"],
         profiles: {
-          "openai:overridden": {
-            type: "api_key",
-            provider: "openai",
-            key: "scoped-key",
-          },
-          "openai:added": {
-            type: "api_key",
-            provider: "openai",
-            key: "added-key",
-          },
+          "openai:overridden": createApiKeyCredential("openai", "scoped-key"),
+          "openai:added": createApiKeyCredential("openai", "added-key"),
         },
       },
     );
@@ -446,11 +427,7 @@ describe("persisted auth profile boundary", () => {
       {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openai:main": {
-            type: "api_key",
-            provider: "OpenAI",
-            key: "main-key",
-          },
+          "openai:main": createApiKeyCredential("OpenAI", "main-key"),
         },
         order: {
           OpenAI: ["openai:main"],
@@ -459,16 +436,8 @@ describe("persisted auth profile boundary", () => {
       {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openai:agent": {
-            type: "api_key",
-            provider: "openai",
-            key: "agent-key",
-          },
-          "openai:other-agent": {
-            type: "api_key",
-            provider: "openai",
-            key: "other-agent-key",
-          },
+          "openai:agent": createApiKeyCredential("openai", "agent-key"),
+          "openai:other-agent": createApiKeyCredential("openai", "other-agent-key"),
         },
         order: {
           openai: ["openai:agent"],

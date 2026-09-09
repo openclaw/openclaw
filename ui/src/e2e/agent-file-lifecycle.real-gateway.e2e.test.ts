@@ -2,7 +2,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import type WaSelect from "@awesome.me/webawesome/dist/components/select/select.js";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
@@ -16,6 +15,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   captureAgentFileScreenshot,
   selectAgentFileWorkspace,
@@ -134,11 +134,11 @@ catalogSuite.define(() => {
     url.hash = new URL(browserUrl).hash;
     const frames: unknown[] = [];
     const commands: unknown[] = [];
-    const metadataRequests = new Set<string>();
+    const catalogRequests = new Set<string>();
     const mutations: string[] = [];
-    let rejectMetadata = false;
-    let holdMetadata = false;
-    const heldMetadata: Array<() => void> = [];
+    let rejectCatalog = false;
+    let holdCatalog = false;
+    const heldCatalogs: Array<() => void> = [];
     const publish = async (id: string) => {
       const args = [
         "config",
@@ -167,8 +167,8 @@ catalogSuite.define(() => {
               const frame = requireRecord(JSON.parse(message.toString()));
               if (frame.type === "req" && frame.method !== "connect") {
                 frames.push({ direction: "sent", frame });
-                if (frame.method === "chat.metadata" && typeof frame.id === "string") {
-                  metadataRequests.add(frame.id);
+                if (frame.method === "models.list" && typeof frame.id === "string") {
+                  catalogRequests.add(frame.id);
                 }
                 if (
                   ["config.set", "config.patch", "config.apply", "agents.update"].includes(
@@ -182,21 +182,21 @@ catalogSuite.define(() => {
             });
             server.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
-              const metadataReply = typeof frame.id === "string" && metadataRequests.has(frame.id);
+              const catalogReply = typeof frame.id === "string" && catalogRequests.has(frame.id);
               if (
-                metadataReply ||
+                catalogReply ||
                 frame.event === "config.changed" ||
                 frame.event === "chat.metadata.changed"
               ) {
                 frames.push({
                   direction: "received",
                   frame,
-                  transportFailure: metadataReply && rejectMetadata,
+                  transportFailure: catalogReply && rejectCatalog,
                 });
               }
-              if (metadataReply && holdMetadata) {
-                heldMetadata.push(() => socket.send(message));
-              } else if (metadataReply && rejectMetadata) {
+              if (catalogReply && holdCatalog) {
+                heldCatalogs.push(() => socket.send(message));
+              } else if (catalogReply && rejectCatalog) {
                 socket.send(
                   JSON.stringify({
                     type: "res",
@@ -215,17 +215,17 @@ catalogSuite.define(() => {
           const editor = page.locator("openclaw-agents-page");
           const picker = editor.locator(".model-picker__select");
           await expect
-            .poll(() => picker.locator('wa-option[value="fixture/retiring"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
           await editor
             .locator(".agent-identity-editor__fields input[maxlength='64']")
             .fill("Keep this identity draft");
-          await picker.click();
-          await picker.locator('wa-option[value="fixture/selected"]').click();
+          await picker.locator(".picker-select__trigger").click();
+          await picker.locator('[role="option"][data-value="fixture/selected"]').click();
           const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
           await fallbackInput.fill("fixture/anchor");
           await fallbackInput.press("Enter");
-          const selected = () => picker.evaluate((element) => (element as WaSelect).value);
+          const selected = () => pickerValue(picker);
           await expect.poll(selected).toBe("fixture/selected");
           await expect.poll(() => mutations.length).toBeGreaterThan(0);
           await expect
@@ -244,9 +244,11 @@ catalogSuite.define(() => {
 
           await publish("published");
           await expect
-            .poll(() => picker.locator('wa-option[value="fixture/published"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
             .toBe(1);
-          expect(await picker.locator('wa-option[value="fixture/retiring"]').count()).toBe(0);
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
+          ).toBe(0);
           await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
 
           inventoryModel = "inventory-after";
@@ -255,46 +257,54 @@ catalogSuite.define(() => {
           expect(refreshed.code, refreshed.stderr).toBe(0);
           expect(refreshed.stdout).toContain("inventory-after");
           await expect
-            .poll(() => picker.locator('wa-option[value="ollama/inventory-after"]').count())
+            .poll(() =>
+              picker.locator('[role="option"][data-value="ollama/inventory-after"]').count(),
+            )
             .toBe(1);
-          expect(await picker.locator('wa-option[value="ollama/inventory-before"]').count()).toBe(
-            0,
-          );
+          expect(
+            await picker.locator('[role="option"][data-value="ollama/inventory-before"]').count(),
+          ).toBe(0);
 
-          holdMetadata = true;
+          holdCatalog = true;
           inventoryModel = "inventory-held";
           commands.push(await owner.cli(refreshInventoryArgs));
-          await expect.poll(() => heldMetadata.length).toBeGreaterThan(0);
-          holdMetadata = false;
+          await expect.poll(() => heldCatalogs.length).toBeGreaterThan(0);
+          holdCatalog = false;
           inventoryModel = "inventory-latest";
           commands.push(await owner.cli(refreshInventoryArgs));
           await expect
-            .poll(() => picker.locator('wa-option[value="ollama/inventory-latest"]').count())
+            .poll(() =>
+              picker.locator('[role="option"][data-value="ollama/inventory-latest"]').count(),
+            )
             .toBe(1);
-          for (const release of heldMetadata) {
+          for (const release of heldCatalogs) {
             release();
           }
           await page.screenshot({
             path: path.join(catalogSuite.artifactDir, "latest-publication.png"),
           });
-          expect(await picker.locator('wa-option[value="ollama/inventory-latest"]').count()).toBe(
-            1,
-          );
-          expect(await picker.locator('wa-option[value="ollama/inventory-held"]').count()).toBe(0);
+          expect(
+            await picker.locator('[role="option"][data-value="ollama/inventory-latest"]').count(),
+          ).toBe(1);
+          expect(
+            await picker.locator('[role="option"][data-value="ollama/inventory-held"]').count(),
+          ).toBe(0);
 
-          rejectMetadata = true;
+          rejectCatalog = true;
           await publish("held");
           const error = editor
             .getByRole("alert")
             .filter({ hasText: "Catalog transport unavailable" });
           await error.waitFor({ state: "visible" });
-          expect(await picker.locator('wa-option[value="fixture/published"]').count()).toBe(1);
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/published"]').count(),
+          ).toBe(1);
           await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
 
-          rejectMetadata = false;
+          rejectCatalog = false;
           await publish("recovered");
           await expect
-            .poll(() => picker.locator('wa-option[value="fixture/recovered"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await selected()).toBe("fixture/selected");

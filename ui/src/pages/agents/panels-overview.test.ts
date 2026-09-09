@@ -196,7 +196,7 @@ describe("fallback field", () => {
     const { field } = renderFallbacks();
 
     expect(field.value).toEqual([existingFallback]);
-    expect(field.exclude).toEqual([primary]);
+    expect(field.isExcluded(primary)).toBe(true);
     expect(field.options.map((option) => option.value)).toEqual(
       expect.arrayContaining([primary, existingFallback, "google/gemini-3-pro"]),
     );
@@ -214,6 +214,47 @@ describe("fallback field", () => {
       "google/gemini-3-pro",
     ]);
   });
+
+  it.each(["fast", "FAST", "fast@work"])(
+    "excludes primary alias %s while retaining case-distinct model choices",
+    (primaryAlias) => {
+      const target = "custom/model-a";
+      const caseDistinct = "custom/Model-A";
+      const { field } = renderFallbacks({
+        agentsList: {
+          defaultId: "alpha",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "alpha" }, { id: "beta", model: { primary: caseDistinct } }],
+        },
+        config: {
+          form: {
+            agents: {
+              defaults: {
+                model: { primary: primaryAlias },
+                models: { [target]: { alias: "fast" } },
+              },
+              entries: { alpha: {}, beta: {} },
+            },
+          },
+          loading: false,
+          saving: false,
+          dirty: false,
+          error: null,
+        },
+        modelCatalog: [
+          { provider: "custom", id: "model-a", name: "Lowercase model" },
+          { provider: "custom", id: "Model-A", name: "Uppercase model" },
+        ],
+      });
+
+      expect(field.isExcluded("FAST")).toBe(true);
+      expect(field.isExcluded(`${target}@other`)).toBe(false);
+      expect(field.options.filter((option) => !field.isExcluded(option.value))).toEqual([
+        expect.objectContaining({ value: caseDistinct, label: "Uppercase model" }),
+      ]);
+    },
+  );
 
   it("disables the field without config write access", () => {
     const access = { ...createProps().access, canUpdateConfig: false };

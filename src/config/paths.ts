@@ -24,6 +24,10 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
 
 export let isNixMode = resolveIsNixMode();
 
+/** Config mutation policy is independent of Nix package and service ownership. */
+export function resolveIsConfigReadOnly(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.OPENCLAW_CONFIG_READONLY === "1" || resolveIsNixMode(env);
+}
 const CONFIG_FILENAME = "openclaw.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
 

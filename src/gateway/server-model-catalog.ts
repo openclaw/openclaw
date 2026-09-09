@@ -206,7 +206,7 @@ export async function readPreparedGatewayModelCatalog(
 export async function readPreparedGatewayModelCatalogOwnerSnapshot(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<PreparedGatewayModelCatalogSnapshot | undefined> {
-  const { getPublishedPreparedModelCatalogOwnerSnapshot } =
+  const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
     await import("../agents/prepared-model-catalog.js");
   const config = (params?.getConfig ?? getRuntimeConfig)();
   const candidate = getPublishedPreparedModelCatalogOwnerSnapshot({
@@ -218,13 +218,14 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
   if (!candidate) {
     return undefined;
   }
-  const owner = resolvePublishedModelCatalogOwner(candidate);
+  const published = materializePreparedModelCatalogOwner(candidate);
+  const owner = resolvePublishedModelCatalogOwner(published);
   return {
     ...projectGatewayModelCatalogSnapshot(owner),
     authModes: owner.authModes,
     authStore: owner.authStore,
     metadataSnapshot: owner.metadataSnapshot,
-    authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
+    authMaterializations: getPreparedModelRuntimeAuthMaterializations(published),
     pluginRegistry: owner.pluginRegistry,
     isCurrent: owner.isCurrent,
     observationConfig: owner.observationConfig,

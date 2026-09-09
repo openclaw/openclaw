@@ -1009,6 +1009,9 @@ describe("system agent operations", () => {
     expect(beforePersistentApply).toHaveBeenCalledOnce();
     expectRuntimeArg(installRequest.runtime);
     expect(lines.join("\n")).toContain("[openclaw] done: plugin.install");
+    expect(lines.join("\n")).not.toContain(
+      "Restart the Gateway to apply installed plugin changes.",
+    );
     const audit = readLastAuditEntry();
     expectAuditRecord(
       audit,

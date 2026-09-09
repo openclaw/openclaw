@@ -73,7 +73,7 @@ vi.mock("../infra/env.js", async (importOriginal) => ({
 }));
 
 vi.mock("../infra/runtime-guard.js", () => ({
-  assertSupportedRuntime: vi.fn(),
+  assertSupportedRuntime: vi.fn(async () => {}),
 }));
 
 vi.mock("../infra/path-env.js", () => ({

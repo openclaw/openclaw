@@ -2780,6 +2780,95 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
     );
   });
 
+  it.each([
+    [
+      PLUGIN_NPM_RELEASE_WORKFLOW,
+      "preview_plugins_npm",
+      "Checkout trusted planning tooling",
+      "Validate publishable plugin metadata",
+      ".release-tooling",
+      "${{ github.workflow_sha }}",
+    ],
+    [
+      PLUGIN_NPM_RELEASE_WORKFLOW,
+      "preview_plugin_pack",
+      "Checkout trusted packaging tooling",
+      "Prepare immutable npm preflight artifact",
+      ".release-tooling",
+      "${{ github.workflow_sha }}",
+    ],
+    [
+      PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
+      "preview_plugins_clawhub",
+      "Checkout trusted planning tooling",
+      "Validate publishable plugin metadata",
+      ".release-tooling",
+      "${{ github.workflow_sha }}",
+    ],
+    [
+      ".github/workflows/plugin-clawhub-new.yml",
+      "resolve_bootstrap_plan",
+      "Checkout trusted planning tooling",
+      "Validate publishable plugin metadata",
+      ".release-tooling",
+      "${{ github.workflow_sha }}",
+    ],
+    [
+      ".github/workflows/plugin-clawhub-new.yml",
+      "pack_bootstrap_plugins",
+      "Checkout trusted workflow tooling",
+      "Pack immutable ClawHub bootstrap artifacts",
+      ".release-harness",
+      "${{ github.sha }}",
+    ],
+  ])(
+    "initializes independent plugin tooling before %s/%s",
+    (file, jobName, checkoutName, consumerName, toolingPath, toolingRef) => {
+      const job = workflowJob(file, jobName);
+      const checkout = workflowStep(job, checkoutName);
+      const setup = workflowStep(job, "Setup Node environment");
+      const install = workflowStep(job, "Install trusted plugin tooling dependencies");
+      const consumer = workflowStep(job, consumerName);
+      expect(checkout.with).toMatchObject({
+        ref: toolingRef,
+        path: toolingPath,
+        "persist-credentials": false,
+      });
+      expect(checkout.with?.["sparse-checkout"]).toBeUndefined();
+      expect(install["working-directory"]).toBe(toolingPath);
+      expect(install.env).toMatchObject({ CI: "true" });
+      expect(install.run).toBe("pnpm install --frozen-lockfile --prefer-offline --ignore-scripts");
+      expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(checkout));
+      expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(setup));
+      expect(job.steps!.indexOf(install)).toBeLessThan(job.steps!.indexOf(consumer));
+      const root = tempDirs.make("plugin-tooling-install-");
+      const tooling = join(root, toolingPath);
+      const bin = join(root, "bin");
+      mkdirSync(tooling);
+      mkdirSync(bin);
+      writeFileSync(join(root, "candidate-sentinel"), "unchanged");
+      writeFileSync(
+        join(bin, "pnpm"),
+        `#!${process.execPath}
+const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),ci:process.env.CI}));
+`,
+        { mode: 0o755 },
+      );
+      const result = spawnSync("bash", ["-euo", "pipefail", "-c", install.run!], {
+        cwd: tooling,
+        encoding: "utf8",
+        env: { ...process.env, ...install.env, PATH: `${bin}:${process.env.PATH}` },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(join(tooling, "install-proof.json"), "utf8"))).toMatchObject({
+        args: ["install", "--frozen-lockfile", "--prefer-offline", "--ignore-scripts"],
+        ci: "true",
+      });
+      expect(existsSync(join(root, "install-proof.json"))).toBe(false);
+      expect(readFileSync(join(root, "candidate-sentinel"), "utf8")).toBe("unchanged");
+    },
+  );
+
   it("runs plugin npm preflight trust from the exact workflow tooling checkout", () => {
     const job = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm");
     const checkout = workflowStep(job, "Checkout trusted planning tooling");
@@ -4256,9 +4345,14 @@ NODE
         workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
         "Verify release workflow evidence",
       );
-      const script = evidenceStep.run?.match(
-        /node --input-type=module - "\$RUNNER_TEMP\/release-publish-run.json" <<'NODE'\n([\s\S]*?)\nNODE/u,
-      )?.[1];
+      const script = evidenceStep.run
+        ?.match(
+          /node --input-type=module - "\$RUNNER_TEMP\/release-publish-run.json"[^\n]* <<'NODE'\n([\s\S]*?)\nNODE/u,
+        )?.[1]
+        ?.replace(
+          '"./.closeout-tooling/scripts/lib/stable-release-closeout.mjs"',
+          JSON.stringify(pathToFileURL(resolve("scripts/lib/stable-release-closeout.mjs")).href),
+        );
       expect(script).toBeDefined();
       const root = tempDirs.make("stable-closeout-recovery-");
       const runPath = join(root, "run.json");
@@ -4282,11 +4376,23 @@ NODE
           jobs,
         }),
       );
-      const result = spawnSync(process.execPath, ["--input-type=module", "-", runPath], {
-        input: script,
-        encoding: "utf8",
-        env: { ...process.env, ALLOW_FAILED_PUBLISH_RECOVERY: "true" },
-      });
+      const evidencePath = join(root, "evidence.json");
+      const manifestPath = join(root, "manifest.json");
+      writeFileSync(evidencePath, JSON.stringify({ releasePublishRunId: "12" }));
+      writeFileSync(
+        `${evidencePath}.sha256`,
+        `${createHash("sha256").update(readFileSync(evidencePath)).digest("hex")}  evidence.json\n`,
+      );
+      writeFileSync(manifestPath, "{}");
+      const result = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-", runPath, manifestPath, evidencePath],
+        {
+          input: script,
+          encoding: "utf8",
+          env: { ...process.env, ALLOW_FAILED_PUBLISH_RECOVERY: "true" },
+        },
+      );
       expect(result.status, result.stderr).toBe(ok ? 0 : 1);
       if (ok) {
         expect(result.stdout).toContain("apps may be pending");

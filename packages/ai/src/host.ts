@@ -129,6 +129,8 @@ type AnthropicInlineContentNormalizer = (
 
 /** Narrow host ports consumed by the built-in provider adapters. */
 export interface AiTransportHost {
+  /** Retains accepted lifecycle work after its caller observes cancellation. */
+  observePendingProviderWork?: (pending: Promise<unknown>) => void;
   /**
    * Builds a policy-guarded fetch for one model request.
    * Returning undefined keeps the provider SDK's default fetch.

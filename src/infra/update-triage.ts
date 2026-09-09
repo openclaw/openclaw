@@ -28,8 +28,8 @@ export type UpdateTriageTarget = {
 };
 
 type UpdateTriageResult =
-  | { status: "completed"; hint: string; contextPath?: string }
-  | { status: "failed"; hint: string; contextPath?: string }
+  | { status: "completed"; hint: string }
+  | { status: "failed"; hint: string }
   | { status: "cancelled" };
 
 type UpdateTriageInvocation = {
@@ -228,7 +228,7 @@ async function runPreparedUpdateFailureTriage(
         hint += `\nDiagnostics export unavailable: ${reason}`;
       }
     }
-    return { status: "completed", hint, ...(contextPath ? { contextPath } : {}) };
+    return { status: "completed", hint };
   } catch (error) {
     if (!isCurrent()) {
       return { status: "cancelled" };
@@ -253,7 +253,6 @@ async function runPreparedUpdateFailureTriage(
     return {
       status: "failed",
       hint: `${message}\n${TRIAGE_OUTPUT_HINT}`,
-      ...(contextPath ? { contextPath } : {}),
     };
   }
 }

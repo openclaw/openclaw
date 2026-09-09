@@ -77,6 +77,29 @@ async function assertNoRequests(baseUrl) {
   if (!Array.isArray(payload?.requests)) {
     throw new Error("ClawHub fixture request ledger must contain a requests array");
   }
+  const legacyPackage = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE;
+  if (legacyPackage) {
+    const packagePath = `/api/v1/packages/${encodeURIComponent(legacyPackage)}`;
+    const artifactPrefix = `GET ${packagePath}/versions/`;
+    const artifactSuffix = "/artifact";
+    const artifactRequest = payload.requests[1] ?? "";
+    const version =
+      artifactRequest.startsWith(artifactPrefix) && artifactRequest.endsWith(artifactSuffix)
+        ? decodeURIComponent(artifactRequest.slice(artifactPrefix.length, -artifactSuffix.length))
+        : "";
+    const expected = [
+      `GET ${packagePath}`,
+      `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact`,
+      `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact/download`,
+    ];
+    if (!version || JSON.stringify(payload.requests) !== JSON.stringify(expected)) {
+      throw new Error(
+        `unexpected legacy ClawHub fixture requests: ${JSON.stringify(payload.requests)}`,
+      );
+    }
+    console.log("Verified complete legacy ClawHub artifact audit sequence.");
+    return;
+  }
   if (payload.requests.length !== 0) {
     throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
   }

@@ -1,5 +1,9 @@
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -122,4 +126,33 @@ export function setFastModelsCliBackendDeps(): void {
       },
     ],
   });
+}
+
+export function createModelsTestOwner(
+  config: OpenClawConfig,
+  entries: ModelCatalogEntry[],
+  params: { agentId?: string; agentDir?: string; workspaceDir?: string },
+): PreparedModelRuntimeSnapshot {
+  return {
+    catalogOwner: {
+      agentId: params.agentId ?? "main",
+      workspaceDir: params.workspaceDir ?? "/tmp",
+    },
+    agentId: params.agentId ?? "main",
+    agentDir: params.agentDir ?? "/tmp/models-agent",
+    workspaceDir: params.workspaceDir ?? "/tmp",
+    activeProjectKeys: [],
+    config,
+    observationConfig: config,
+    authModes: {},
+    metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    isCurrent: () => true,
+    allowGatewaySubagentBinding: false,
+    modelCatalog: { entries, routeVariants: entries },
+    configuredRuntimeModels: [],
+    inlineProviderModels: [],
+    createStores() {
+      throw new Error("Browsing must not start model execution");
+    },
+  };
 }

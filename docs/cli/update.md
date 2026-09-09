@@ -399,6 +399,17 @@ With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.
 
+Doctor repair uses the same enabled-plugin and default-check selection as
+ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,
+do not run during routine finalization. Explicit candidate checks still run
+when requested with `doctor --lint --only codex/managed-app-server`.
+The version probe has a five-second deadline, terminates its process group
+where supported, and bounds output draining when a descendant retains a pipe.
+A timed-out probe cannot be accepted merely because its direct child exited
+successfully. Nonfatal Doctor warnings appear in `postUpdate.doctor.warnings`;
+finalization reports `status: "warning"` and exits successfully when no other
+step fails. Codex runtime readiness remains owned by its plugin after restart.
+
 Finalization (including the supervisor-facing `update finalize` command) records
 phase starts and finishes immediately on stderr and in the update run ledger.
 The defaults are 30 seconds for preflight admission, config validation, config backup, and completion

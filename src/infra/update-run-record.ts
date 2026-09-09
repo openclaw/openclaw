@@ -60,3 +60,10 @@ export function finishUpdateRunRecord(
   record.after = { ...record.after, ...result.after };
   record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
 }
+
+export type UpdateFetchFailure = {
+  reason: "fetch-failed";
+  failedAtMs: number;
+  detail: string;
+  runId: string;
+};
