@@ -76,6 +76,7 @@ function buildAskUserPromptPayload(
 function getRequiredParamGroupsForTool(
   toolName: string,
 ): readonly RequiredParamGroup[] | undefined {
+  // SAFETY: toolName is constrained to known tool names by the caller context.
   return TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
 }
 
@@ -84,6 +85,7 @@ function collectMissingRequiredParamLabels(toolName: string, args: unknown): str
   if (!groups?.length) {
     return [];
   }
+  // SAFETY: typeof check above guarantees args is a plain object.
   const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
   if (!record) {
     return groups.map((group) => group.label ?? group.keys.join(" or "));
