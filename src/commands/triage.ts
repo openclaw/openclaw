@@ -462,6 +462,34 @@ export async function triageCommand(
       }
       return;
     }
+    if (handoff.agent === "claude" && !automatic) {
+      const { runUtf8CommandWithTimeout } = await import("../process/exec.js");
+      const help = await runUtf8CommandWithTimeout(
+        [handoff.program.command, ...handoff.program.leadingArgv, "--help"],
+        {
+          env: targetEnv,
+          ...agentOptions,
+          timeoutMs: 10_000,
+          killProcessTree: true,
+          outputCapture: "tail",
+          maxOutputBytes: 64 * 1024,
+        },
+      );
+      if (!isCurrent()) {
+        return;
+      }
+      if (
+        help.termination !== "exit" ||
+        help.code !== 0 ||
+        !`${help.stdout}\n${help.stderr}`.includes("--safe-mode")
+      ) {
+        runtime.error(
+          "Installed Claude does not advertise --safe-mode; Claude Code 2.1.169 or newer is required for direct triage launch.",
+        );
+        runtime.log(`Run without safe mode: ${suggestedCommands[0]}`);
+        exitCliAfterOutput(runtime, 1);
+      }
+    }
     runtime.log(`Starting ${handoff.agent}; use --agent <name> to select another coding agent.`);
     // Project startup hooks can block the repair prompt before Claude's first turn.
     const args =

@@ -627,6 +627,7 @@ describe("update failure triage boundary", () => {
             path.join(bin, "claude"),
             `#!${process.execPath}\n` +
               `const fs = require("node:fs");\n` +
+              `if (process.argv.includes("--help")) { process.stdout.write("--safe-mode\\n"); process.exit(0); }\n` +
               `fs.appendFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({\n` +
               `  cwd: fs.realpathSync(process.cwd()),\n` +
               `  home: process.env.HOME,\n` +

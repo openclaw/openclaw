@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   collectDoctorFindings: vi.fn(),
   writeDiagnosticSupportExport: vi.fn(),
   resolveExecutablePath: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
   spawn: vi.fn(),
 }));
 
@@ -32,6 +33,10 @@ vi.mock("../logging/diagnostic-support-export.js", () => ({
 vi.mock("../infra/executable-path.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/executable-path.js")>()),
   resolveExecutablePath: mocks.resolveExecutablePath,
+}));
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
 }));
 
 const agents = ["claude", "codex", "opencode", "pi"] as const;
@@ -70,6 +75,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.collectDoctorFindings.mockResolvedValue([]);
   mocks.resolveExecutablePath.mockImplementation((agent: string) => `/usr/local/bin/${agent}`);
+  mocks.runUtf8CommandWithTimeout.mockImplementation(async (argv, options) => {
+    if (argv.at(-1) === "--help") {
+      return { stdout: "--safe-mode", stderr: "", code: 0, termination: "exit" };
+    }
+    const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    return await actual.runUtf8CommandWithTimeout(argv, options);
+  });
   mocks.spawn.mockImplementation(() => {
     const child = new EventEmitter();
     queueMicrotask(() => child.emit("exit", 0, null));
