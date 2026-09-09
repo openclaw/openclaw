@@ -2,13 +2,20 @@ import { html, nothing, type TemplateResult } from "lit";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { renderSettingsRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+import type { PluginCatalogItem, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { pluginOriginLabel } from "./consent-dialog.ts";
 import { pluginRowKey } from "./plugin-row-message.ts";
-import type { DetailProps } from "./settings-view.ts";
+
+type PluginLifecycleProps = {
+  inspection: PluginsInspectResult | null;
+  mutationBlockedReason: string | null;
+  canMutate: boolean;
+  busy: Readonly<Record<string, boolean>>;
+  onUninstall: (pluginId: string, rowKey: string) => void;
+};
 
 export function renderPluginLifecycle(
-  props: DetailProps,
+  props: PluginLifecycleProps,
   plugin: PluginCatalogItem,
 ): TemplateResult {
   const key = pluginRowKey(plugin.id);
