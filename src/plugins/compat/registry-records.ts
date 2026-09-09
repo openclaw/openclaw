@@ -171,6 +171,24 @@ export const PLUGIN_COMPAT_RECORDS = [
       "Legacy Plugin SDK session-agent resolver names preserve ambient system-agent fallback while published plugins migrate to strict owner-required aliases.",
   },
   {
+    code: "agent-harness-credential-prompt-string-argument",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-08-08",
+    deprecated: "2026-09-09",
+    warningStarts: "2026-09-09",
+    removeAfter: "2026-11-30",
+    replacement: "options object `{ controlToolsAvailable }`",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#credential-prompt-builder",
+    surfaces: [
+      "openclaw/plugin-sdk/agent-harness-runtime buildCredentialSafetyPrompt string argument",
+    ],
+    diagnostics: ["JSDoc parameter deprecation", "plugin compatibility registry"],
+    tests: ["src/agents/credential-safety-prompt.test.ts"],
+    releaseNote:
+      "The credential prompt helper remains available with private login-code handoff and capability-aware terminal setup guidance; its ignored legacy string argument is supported through 2026-11-30.",
+  },
+  {
     code: "removed-session-transcript-file-api",
     status: "removed",
     owner: "sdk",

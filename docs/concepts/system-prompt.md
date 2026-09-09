@@ -33,7 +33,7 @@ The prompt is compact, with fixed sections:
 - **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance. When `progress_card` is enabled (`tools.updatePlan`, on by default), its own description explains how to maintain one durable plan and status note, keep at most one step `in_progress`, and skip routine updates that do not change the picture.
 - **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing.
 - **Promised Work**: promising future, background, delegated, or continued work creates follow-through ownership: arrange an available completion or watch path before ending the turn, proactively return with the result or a concrete blocker, and never treat progress (like `running`) as completion.
-- **Safety**: short guardrail reminder against power-seeking behavior or bypassing oversight.
+- **Safety**: short guardrail reminder against power-seeking behavior or bypassing oversight, plus private delivery of short-lived login codes in groups and a terminal setup route when no control tools are available.
 - **Runtime Context**: stable guidance for all providers, immediately after Safety and above the cache boundary. Messages delimited by `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>` and `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>` carry runtime context for the user request they follow, not user-authored text. This includes compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. Each available capability emits a current snapshot, including `none` when empty, which supersedes older snapshots. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message. Carriers themselves hold only the delimited body, so this instruction is not repeated per turn.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Control**: inspect config with `gateway` (`config.get` / `config.schema.lookup`); request restart, config, channel, plugin, agent, and model/provider changes through `openclaw` when available. Delegated changes follow [effective permissions](/gateway/permission-modes#delegated-setup-and-repair). Owner-requested updates use the `gateway` action `update.run` only on explicit user request, with automatic restart and a completion or failure notice. Without `gateway`, direct the user to the OpenClaw owner, `openclaw update` in a terminal, or the Control UI. Never update OpenClaw or stop/restart its Gateway service through chat shell commands; do not invent CLI commands.
@@ -67,10 +67,15 @@ At the `ultra` thinking level, a **Proactive Sub-Agent Orchestration** section i
 The `secrets` tool description teaches metadata-first discovery, task-needed
 masked requests, and returned store SecretRefs for supported config fields.
 Setup tool descriptions route credential collection through masked flows.
-When neither `openclaw` nor `gateway` is available, **OpenClaw Control** directs
+The **Safety** section directs user-requested login or pairing codes and
+verification URLs from group conversations to the requesting user in private,
+followed by a group acknowledgment without the code or URL. When neither
+`openclaw` nor `gateway` is available, it directs
 channel, provider, and credential setup to `openclaw channels add <channel>` or
 `openclaw configure` in a terminal, where prompts mask secrets. Tokens, API keys,
-and passwords are not collected in chat. See [Secrets](/tools/secrets).
+and passwords are not collected in chat. This credential guidance also appears
+in Codex and Copilot prompts, based on their callable control tools.
+See [Secrets](/tools/secrets).
 
 UI presentation guidance is shared with native Codex developer instructions.
 It includes only current callable tools, including deferred and Code Mode tools;

@@ -85,6 +85,71 @@ describe("buildDeveloperInstructions Git co-authors", () => {
   });
 });
 
+describe("buildDeveloperInstructions credential routing", () => {
+  const tool = (name: string) => ({
+    type: "function" as const,
+    name,
+    description: name,
+    inputSchema: { type: "object" },
+  });
+  const cases: {
+    name: string;
+    dynamicTools: CodexDynamicToolSpec[];
+    disableTools?: boolean;
+    terminalSetup: boolean;
+  }[] = [
+    { name: "no controls", dynamicTools: [], terminalSetup: true },
+    { name: "openclaw", dynamicTools: [tool("openclaw")], terminalSetup: false },
+    { name: "gateway", dynamicTools: [tool("gateway")], terminalSetup: false },
+    {
+      name: "both controls",
+      dynamicTools: [tool("openclaw"), tool("gateway")],
+      terminalSetup: false,
+    },
+    {
+      name: "disabled controls",
+      dynamicTools: [tool("openclaw"), tool("gateway")],
+      disableTools: true,
+      terminalSetup: true,
+    },
+    {
+      name: "deferred gateway",
+      dynamicTools: [{ ...tool("gateway"), deferLoading: true }],
+      terminalSetup: false,
+    },
+    {
+      name: "namespaced control",
+      dynamicTools: [
+        {
+          type: "namespace",
+          name: "openclaw_direct",
+          description: "Tools",
+          tools: [tool("openclaw")],
+        },
+      ],
+      terminalSetup: false,
+    },
+    {
+      name: "namespace name without a control",
+      dynamicTools: [
+        { type: "namespace", name: "openclaw", description: "Tools", tools: [tool("message")] },
+      ],
+      terminalSetup: true,
+    },
+  ];
+
+  it.each(cases)("routes setup with $name", ({ dynamicTools, disableTools, terminalSetup }) => {
+    const instructions = buildDeveloperInstructions(createParams({ disableTools }), {
+      dynamicTools,
+    });
+
+    expect(instructions.includes("openclaw channels add <channel>")).toBe(terminalSetup);
+    expect(instructions.includes("openclaw configure")).toBe(terminalSetup);
+    expect(instructions).toContain("only to the requesting user in private");
+    expect(instructions).toContain("then acknowledge in the group without them");
+  });
+});
+
 describe("buildDeveloperInstructions delegation guidance", () => {
   it("shares the visible-session delegation policy with a canonical main session", () => {
     const instructions = buildInstructions();

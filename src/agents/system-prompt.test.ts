@@ -458,20 +458,42 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it.each([
-    { toolNames: [], terminalSetup: true },
-    { toolNames: ["openclaw"], terminalSetup: false },
-    { toolNames: ["gateway"], terminalSetup: false },
-    { toolNames: ["openclaw", "gateway"], terminalSetup: false },
-  ])(
-    "routes credential setup according to available tools: $toolNames",
-    ({ toolNames, terminalSetup }) => {
-      const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames });
-      const control = prompt.split("## OpenClaw Control\n")[1]?.split("\n## ")[0];
+  it.each(
+    [
+      { toolNames: [], terminalSetup: true },
+      { toolNames: ["openclaw"], terminalSetup: false },
+      { toolNames: ["gateway"], terminalSetup: false },
+      { toolNames: ["openclaw", "gateway"], terminalSetup: false },
+      {
+        toolNames: ["exec"],
+        capabilityToolNames: ["openclaw"],
+        codeModeActive: true,
+        terminalSetup: false,
+      },
+      {
+        toolNames: ["exec"],
+        capabilityToolNames: ["gateway"],
+        codeModeActive: true,
+        terminalSetup: false,
+      },
+    ].flatMap((surface) =>
+      (["full", "minimal"] as const).map((promptMode) => ({ surface, promptMode })),
+    ),
+  )(
+    "routes credential setup in $promptMode prompts according to available tools: $surface.toolNames / $surface.capabilityToolNames",
+    ({ promptMode, surface: { terminalSetup, ...toolSurface } }) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode,
+        ...toolSurface,
+      });
 
-      expect(control).toBeDefined();
-      expect(control?.includes("openclaw channels add <channel>")).toBe(terminalSetup);
-      expect(control?.includes("openclaw configure")).toBe(terminalSetup);
+      expect(prompt.includes("openclaw channels add <channel>")).toBe(terminalSetup);
+      expect(prompt.includes("openclaw configure")).toBe(terminalSetup);
+      expect(prompt).toContain(
+        "deliver short-lived codes and verification URLs only to the requesting user in private",
+      );
+      expect(prompt).toContain("then acknowledge in the group without them");
     },
   );
 

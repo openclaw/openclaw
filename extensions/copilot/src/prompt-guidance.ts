@@ -1,4 +1,5 @@
 import {
+  buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
   buildSkillWorkshopPromptSection,
@@ -54,6 +55,11 @@ export function buildCopilotPromptGuidance(params: {
       sourceReplyDeliveryMode: params.attempt.sourceReplyDeliveryMode,
       messageToolAvailable: callableTools.has("message"),
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+    }),
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable:
+        params.attempt.disableTools !== true &&
+        (callableTools.has("openclaw") || callableTools.has("gateway")),
     }),
     params.workspaceBootstrapInstructions?.trim(),
     extraSystemPrompt

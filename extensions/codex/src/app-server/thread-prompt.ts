@@ -1,4 +1,5 @@
 import {
+  buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildUiPresentationPrompt,
   buildSkillWorkshopPromptSection,
@@ -46,6 +47,7 @@ export function buildDeveloperInstructions(
   let hasSessionsYield = false;
   let hasSubagentsList = false;
   let hasSessionsSend = false;
+  let hasControlTools = false;
   let hasSeenDirectNamespace = false;
   for (const spec of options.dynamicTools ?? []) {
     const isDirectNamespace =
@@ -75,6 +77,7 @@ export function buildDeveloperInstructions(
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
       hasSubagentsList ||= name === "subagents";
       hasSessionsSend ||= name === "sessions_send";
+      hasControlTools ||= name === "openclaw" || name === "gateway";
     }
   }
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
@@ -134,6 +137,9 @@ export function buildDeveloperInstructions(
     params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"
       ? buildUiPresentationPrompt({ showWidgetToolName, dashboardToolName, portalToolName })
       : undefined,
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable: params.disableTools !== true && hasControlTools,
+    }),
     nativeCommandGuidance,
     params.gitCoauthorPrompt,
     params.extraSystemPrompt,

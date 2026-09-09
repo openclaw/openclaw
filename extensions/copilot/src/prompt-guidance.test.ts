@@ -28,6 +28,25 @@ function buildGuidance(
 }
 
 describe("buildCopilotPromptGuidance", () => {
+  it.each([
+    { tools: [], disableTools: false, terminalSetup: true },
+    { tools: ["openclaw"], disableTools: false, terminalSetup: false },
+    { tools: ["gateway"], disableTools: false, terminalSetup: false },
+    { tools: ["openclaw", "gateway"], disableTools: false, terminalSetup: false },
+    { tools: ["openclaw", "gateway"], disableTools: true, terminalSetup: true },
+    { tools: [" gateway "], disableTools: false, terminalSetup: false },
+  ])(
+    "routes credential setup with $tools (disabled=$disableTools)",
+    ({ tools, disableTools, terminalSetup }) => {
+      const guidance = buildGuidance({ disableTools }, tools);
+
+      expect(guidance?.includes("openclaw channels add <channel>")).toBe(terminalSetup);
+      expect(guidance?.includes("openclaw configure")).toBe(terminalSetup);
+      expect(guidance).toContain("only to the requesting user in private");
+      expect(guidance).toContain("then acknowledge in the group without them");
+    },
+  );
+
   it("composes ordered OpenClaw policy from the final callable capabilities", () => {
     const guidance = buildGuidance();
 
