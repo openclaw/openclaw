@@ -629,10 +629,18 @@ class GatewaySessionReconnectTest {
               val socket =
                 object : WebSocket {
                   override fun request(): Request = request
+
                   override fun queueSize(): Long = 0
+
                   override fun send(text: String): Boolean = false
+
                   override fun send(bytes: ByteString): Boolean = false
-                  override fun close(code: Int, reason: String?): Boolean = false
+
+                  override fun close(
+                    code: Int,
+                    reason: String?,
+                  ): Boolean = false
+
                   override fun cancel() = Unit
                 }
               created.complete(socket to listener)

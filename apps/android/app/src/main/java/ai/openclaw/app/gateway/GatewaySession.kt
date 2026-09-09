@@ -20,6 +20,7 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.onTimeout
@@ -475,13 +476,14 @@ class GatewaySession(
     tls: GatewayTlsParams? = null,
     bootstrapHandoff: GatewayBootstrapHandoff? = null,
   ) {
+    val connectionToClose: Connection?
     synchronized(notificationLock) {
-      val connectionToClose: Connection?
       val target = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff)
       synchronized(lifecycleLock) {
         desired?.cleanupDeadline?.cancel()
         desired = target
         connectionToClose = currentConnection
+        connectionToClose?.retire()
         if (connectionToClose != null) {
           // A replacement cannot start another resolver until the previous transport drains.
           // Bound its visible wait independently of OkHttp's eventual cancellation callback.
@@ -504,8 +506,8 @@ class GatewaySession(
           reconnectSignal.trySend(Unit)
         }
       }
-      connectionToClose?.closeQuietly()
     }
+    connectionToClose?.closeQuietly()
   }
 
   /** Clears desired connection state, closes the socket, and stops reconnect attempts. */
@@ -527,6 +529,7 @@ class GatewaySession(
       desired = null
       drainReconnectSignals()
       connectionToClose = currentConnection
+      connectionToClose?.retire()
       jobToCancel = job
       job = null
       // Stop retry work now; the ordered tail still drains accepted tokens and callbacks.
@@ -563,6 +566,7 @@ class GatewaySession(
   }
 
   private fun signalReconnect(resumeAuthPaused: Boolean) {
+    val connectionToClose: Connection?
     synchronized(lifecycleLock) {
       val target = desired ?: return
       if (resumeAuthPaused) {
@@ -570,9 +574,11 @@ class GatewaySession(
       } else if (target.reconnectPausedForAuthFailure || currentConnection?.isReady() == true) {
         return
       }
-      currentConnection?.closeQuietly()
+      connectionToClose = currentConnection
+      connectionToClose?.retire()
       reconnectSignal.trySend(Unit)
     }
+    connectionToClose?.closeQuietly()
   }
 
   // The channel is conflated. A wake queued just after timeout still resets the next attempt.
@@ -1013,6 +1019,7 @@ class GatewaySession(
     private val closedDeferred = CompletableDeferred<Unit>()
     private val connectChallengeDeferred = CompletableDeferred<ConnectChallenge>()
     private val terminalCallbackClaimed = AtomicBoolean(false)
+    private val socketCancellationStarted = AtomicBoolean(false)
     private val connectResponseAccepted = AtomicBoolean(false)
 
     @Volatile
@@ -1033,6 +1040,10 @@ class GatewaySession(
     private val client: OkHttpClient = buildClient()
     private val listener = Listener()
     private var socket: WebSocket? = null
+
+    // A null socket is not a completed transport while OkHttp's factory still owns its return.
+    private var socketCreationPending = false
+    private var transportFinished = false
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
     private var lastEventSequence: Long? = null
@@ -1070,12 +1081,41 @@ class GatewaySession(
         withTimeout(connectTimeoutMs) {
           // OkHttp can invoke onOpen before newWebSocket returns. Keep publication under the
           // send lock, and reject a retirement that won while this coroutine waited for it.
-          writeLock.withLock {
-            currentCoroutineContext().ensureActive()
-            synchronized(lifecycleLock) {
-              check(state.get() == ConnectionState.CONNECTING && desired === target) { "Gateway closed" }
-              socket = webSocketFactory?.invoke(client, request, listener) ?: client.newWebSocket(request, listener)
+          var socketToCancel: WebSocket? = null
+          try {
+            writeLock.withLock {
+              val context = currentCoroutineContext()
+              context.ensureActive()
+              synchronized(lifecycleLock) {
+                check(state.get() == ConnectionState.CONNECTING && desired === target) { "Gateway closed" }
+                socketCreationPending = true
+              }
+              val createdSocket =
+                try {
+                  webSocketFactory?.invoke(client, request, listener) ?: client.newWebSocket(request, listener)
+                } catch (error: Throwable) {
+                  synchronized(lifecycleLock) {
+                    socketCreationPending = false
+                    retire()
+                  }
+                  throw error
+                }
+              synchronized(lifecycleLock) {
+                // Own the returned socket before observing cancellation. An early terminal
+                // callback must not be undone by publishing the factory's late return.
+                socketCreationPending = false
+                if (transportFinished) {
+                  closedDeferred.complete(Unit)
+                } else {
+                  socket = createdSocket
+                  if (!context.isActive || state.get() != ConnectionState.CONNECTING || desired !== target || currentConnection !== this@Connection) {
+                    socketToCancel = retire()
+                  }
+                }
+              }
             }
+          } finally {
+            cancelSocket(socketToCancel)
           }
           connectDeferred.await()
         }
@@ -1311,7 +1351,7 @@ class GatewaySession(
 
     fun markReady(): Boolean = state.compareAndSet(ConnectionState.CONNECTING, ConnectionState.READY)
 
-    fun closeQuietly() {
+    fun retire(): WebSocket? =
       synchronized(lifecycleLock) {
         if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
           incomingMessages.close()
@@ -1319,9 +1359,21 @@ class GatewaySession(
             connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
           }
         }
-        // Explicit retirement is immediate. WebSocket.close() only queues a close frame and can
-        // leave the old transport live for OkHttp's full close timeout.
-        socket?.cancel() ?: closedDeferred.complete(Unit)
+        if (socket == null && !socketCreationPending) closedDeferred.complete(Unit)
+        socket
+      }
+
+    fun closeQuietly() {
+      cancelSocket(retire())
+    }
+
+    @OptIn(DelicateCoroutinesApi::class)
+    private fun cancelSocket(socket: WebSocket?) {
+      if (socket == null || !socketCancellationStarted.compareAndSet(false, true)) return
+      // Callbacks can retire a connection reentrantly under notificationLock. Keep physical
+      // cancellation off that thread; this one owned child still drains in joinOwnedWork().
+      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
+        withContext(NonCancellable) { socket.cancel() }
       }
     }
 
@@ -1356,8 +1408,11 @@ class GatewaySession(
 
     private fun finalizeTransport(connectError: Throwable) {
       if (!connectDeferred.isCompleted) connectDeferred.completeExceptionally(connectError)
-      socket = null
-      closedDeferred.complete(Unit)
+      synchronized(lifecycleLock) {
+        transportFinished = true
+        socket = null
+        if (!socketCreationPending) closedDeferred.complete(Unit)
+      }
     }
 
     private fun buildClient(): OkHttpClient {
@@ -1379,21 +1434,26 @@ class GatewaySession(
         webSocket: WebSocket,
         response: Response,
       ) {
-        synchronized(lifecycleLock) {
-          if (currentConnection !== this@Connection || desired !== target || state.get() != ConnectionState.CONNECTING) {
-            webSocket.cancel()
-            return
-          }
-          connectHandshakeJob =
-            connectionScope.launch {
-              try {
-                val challenge = awaitConnectChallenge()
-                sendConnect(challenge)
-              } catch (err: Throwable) {
-                connectDeferred.completeExceptionally(err)
-                closeQuietly()
-              }
+        val accepted =
+          synchronized(lifecycleLock) {
+            if (currentConnection !== this@Connection || desired !== target || state.get() != ConnectionState.CONNECTING) {
+              false
+            } else {
+              connectHandshakeJob =
+                connectionScope.launch {
+                  try {
+                    val challenge = awaitConnectChallenge()
+                    sendConnect(challenge)
+                  } catch (err: Throwable) {
+                    connectDeferred.completeExceptionally(err)
+                    closeQuietly()
+                  }
+                }
+              true
             }
+          }
+        if (!accepted) {
+          cancelSocket(webSocket)
         }
       }
 
@@ -2048,48 +2108,53 @@ class GatewaySession(
     }
   }
 
-  private suspend fun connectOnce(target: DesiredConnection, loopJob: Job) =
-    withContext(Dispatchers.IO) {
-      var ownedConnection: Connection? = null
-      try {
-        val conn = Connection(target).also { ownedConnection = it }
+  private suspend fun connectOnce(
+    target: DesiredConnection,
+    loopJob: Job,
+  ) = withContext(Dispatchers.IO) {
+    var ownedConnection: Connection? = null
+    try {
+      val conn = Connection(target).also { ownedConnection = it }
+      synchronized(lifecycleLock) {
+        if (desired !== target) return@withContext
+        target.cleanupDeadline?.cancel()
+        target.cleanupDeadline = null
+        currentConnection = conn
+      }
+      val connected = conn.connect()
+      synchronized(notificationLock) {
         synchronized(lifecycleLock) {
-          if (desired !== target) return@withContext
-          target.cleanupDeadline?.cancel()
-          target.cleanupDeadline = null
-          currentConnection = conn
+          if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady()) return@withContext
+          // Ready metadata precedes callbacks; retries requested by a callback remain queued.
+          pluginSurfaceUrls = connected.pluginSurfaceUrls
+          sessionRouting = connected.sessionRouting
+          drainReconnectSignals()
+          onConnected(connected.hello)
         }
-        val connected = conn.connect()
-        synchronized(notificationLock) {
-          synchronized(lifecycleLock) {
-            if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady()) return@withContext
-            // Ready metadata precedes callbacks; retries requested by a callback remain queued.
-            pluginSurfaceUrls = connected.pluginSurfaceUrls
-            sessionRouting = connected.sessionRouting
-            drainReconnectSignals()
-            onConnected(connected.hello)
+      }
+      conn.awaitClose()
+    } catch (err: CancellationException) {
+      throw err
+    } catch (err: Throwable) {
+      // Publish before cleanup: OkHttp cannot deliver onFailure while native DNS is blocked.
+      // The reconnect loop still waits for cleanup, so Retry cannot accumulate resolver workers.
+      synchronized(notificationLock) {
+        val conn = ownedConnection
+        val error =
+          when (err) {
+            is GatewayConnectFailure -> err.gatewayError
+
+            is ConnectException,
+            is NoRouteToHostException,
+            is UnknownHostException,
+            is SocketException,
+            is SocketTimeoutException,
+            -> gatewayNetworkConnectError()
+
+            else -> null
           }
-        }
-        conn.awaitClose()
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
-        // Publish before cleanup: OkHttp cannot deliver onFailure while native DNS is blocked.
-        // The reconnect loop still waits for cleanup, so Retry cannot accumulate resolver workers.
-        synchronized(notificationLock) {
-          val conn = ownedConnection
-          val error =
-            when (err) {
-              is GatewayConnectFailure -> err.gatewayError
-              is ConnectException,
-              is NoRouteToHostException,
-              is UnknownHostException,
-              is SocketException,
-              is SocketTimeoutException,
-              -> gatewayNetworkConnectError()
-              else -> null
-            }
-          val current = synchronized(lifecycleLock) {
+        val current =
+          synchronized(lifecycleLock) {
             if ((conn != null && currentConnection !== conn) || desired !== target || job !== loopJob || !loopJob.isActive) {
               false
             } else {
@@ -2098,33 +2163,33 @@ class GatewaySession(
               true
             }
           }
-          if (current) {
-            conn?.closeQuietly()
-            onDisconnected("Gateway error: ${err.message ?: err::class.java.simpleName}")
-            if (error != null && synchronized(lifecycleLock) { job === loopJob && loopJob.isActive && desired === target }) {
-              onConnectFailure(error, target.reconnectPausedForAuthFailure)
-            }
+        if (current) {
+          conn?.retire()
+          onDisconnected("Gateway error: ${err.message ?: err::class.java.simpleName}")
+          if (error != null && synchronized(lifecycleLock) { job === loopJob && loopJob.isActive && desired === target }) {
+            onConnectFailure(error, target.reconnectPausedForAuthFailure)
           }
         }
-        throw err
-      } finally {
-        // Callback failures and cancellation must drain this socket's owned work before the loop
-        // forgets it. Otherwise a retired connect can restore device auth after a later reset.
-        ownedConnection?.let { conn ->
-          withContext(NonCancellable) {
-            conn.closeQuietly()
-            conn.joinOwnedWork()
-          }
-          synchronized(lifecycleLock) {
-            if (currentConnection === conn) {
-              currentConnection = null
-              pluginSurfaceUrls = emptyMap()
-              sessionRouting = null
-            }
+      }
+      throw err
+    } finally {
+      // Callback failures and cancellation must drain this socket's owned work before the loop
+      // forgets it. Otherwise a retired connect can restore device auth after a later reset.
+      ownedConnection?.let { conn ->
+        withContext(NonCancellable) {
+          conn.closeQuietly()
+          conn.joinOwnedWork()
+        }
+        synchronized(lifecycleLock) {
+          if (currentConnection === conn) {
+            currentConnection = null
+            pluginSurfaceUrls = emptyMap()
+            sessionRouting = null
           }
         }
       }
     }
+  }
 
   private fun normalizeCanvasHostUrl(
     raw: String?,

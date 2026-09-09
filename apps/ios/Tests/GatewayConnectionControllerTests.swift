@@ -1959,7 +1959,7 @@ private func waitUntil(
         defer { registryIsolation.restore() }
         try await withUserDefaults(["gateway.autoconnect": false]) {
             let host = "replacement-\(UUID().uuidString).example.ts.net"
-            let stableID = "manual|\(host)|443"
+            let stableID = "manual|\(host.lowercased())|443"
             defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
             let resetRelease = AsyncStream<Void>.makeStream()
             defer { resetRelease.continuation.finish() }

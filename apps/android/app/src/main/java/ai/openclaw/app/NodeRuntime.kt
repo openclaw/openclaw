@@ -148,6 +148,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -731,12 +732,15 @@ internal fun gatewayConnectionStatusForDisplay(statusText: String): String {
     status == "Gateway connection timed out. Check your network and that the Gateway is running, then retry." -> {
       nativeString("Gateway connection timed out. Check your network and that the Gateway is running, then retry.")
     }
+
     status == "Could not reach the Gateway. Check your network and that the Gateway is running, then retry." -> {
       nativeString("Could not reach the Gateway. Check your network and that the Gateway is running, then retry.")
     }
+
     status == "The previous network request is still stopping. Check your connection, then retry." -> {
       nativeString("The previous network request is still stopping. Check your connection, then retry.")
     }
+
     status == "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected." -> {
       nativeString("Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.")
     }
@@ -1591,6 +1595,7 @@ class NodeRuntime private constructor(
 
     override fun invoke(): Boolean = isCurrent()
   }
+
   private val gatewayStatusLock = Any()
 
   private val operatorSession: GatewaySession =
@@ -4843,80 +4848,82 @@ class NodeRuntime private constructor(
     if (tls?.required == true) {
       val storedFingerprint = tls.expectedFingerprint
       intent.handedOff = true
-      tlsProbeJob = scope.launch {
-        val tlsProbe =
-          try {
-            tlsProbeRunner.probe(endpoint.host, endpoint.port) {
-              synchronized(gatewayLifecycleIntentLock) {
-                if (!intent() || !isCurrentConnectAttempt(connectAttemptId)) throw CancellationException("Gateway request superseded")
-                // Actual TLS probing has its own network deadline. Keep this operation's
-                // admission budget for the lifecycle queue after the probe returns.
-                intent.waitingForAdmission = false
-                updateStatus { gatewayRetirementDisplay = null }
-                setStandaloneGatewayStatus("Verify gateway TLS fingerprint…")
+      tlsProbeJob =
+        scope.launch {
+          val tlsProbe =
+            try {
+              tlsProbeRunner.probe(endpoint.host, endpoint.port) {
+                synchronized(gatewayLifecycleIntentLock) {
+                  if (!intent() || !isCurrentConnectAttempt(connectAttemptId)) throw CancellationException("Gateway request superseded")
+                  // Actual TLS probing has its own network deadline. Keep this operation's
+                  // admission budget for the lifecycle queue after the probe returns.
+                  intent.waitingForAdmission = false
+                  updateStatus { gatewayRetirementDisplay = null }
+                  setStandaloneGatewayStatus("Verify gateway TLS fingerprint…")
+                }
+              }
+            } catch (error: Throwable) {
+              finishGatewayConnectionOperation(intent)
+              throw error
+            }
+          synchronized(gatewayLifecycleIntentLock) {
+            if (!intent() || !isCurrentConnectAttempt(connectAttemptId)) return@launch
+            intent.waitingForAdmission = true
+            publishGatewayAdmission(intent, waitingForCleanup = intent.deadlineExpired)
+          }
+          launchGatewayLifecycle(intent) {
+            finishGatewayConnectionOperation(intent)
+            if (!isCurrentConnectAttempt(connectAttemptId)) return@launchGatewayLifecycle
+            when (
+              val decision =
+                decideGatewayTlsTrust(
+                  storedFingerprint = storedFingerprint,
+                  systemTrustCandidate = isGatewayTlsSystemTrustCandidate(endpoint.host),
+                  probeResult = tlsProbe,
+                )
+            ) {
+              GatewayTlsTrustDecision.SystemTrusted -> {
+                // Automatic platform trust only applies where no user-accepted pin exists.
+                // Replacing a pin always requires explicit confirmation in the trust prompt.
+                registerGateway(endpoint, setActive = true)
+                connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+              }
+
+              is GatewayTlsTrustDecision.PinnedTrust -> {
+                connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+              }
+
+              is GatewayTlsTrustDecision.PromptRequired -> {
+                setStandaloneGatewayStatus(
+                  decision.probeFailure?.let(::gatewayTlsProbeFailureMessage) ?: "Verify gateway TLS fingerprint…",
+                )
+                publishGatewayTrustPromptIfCurrent(
+                  connectAttemptId = connectAttemptId,
+                  prompt =
+                    GatewayTrustPrompt(
+                      endpoint = endpoint,
+                      fingerprintSha256 = decision.fingerprintSha256,
+                      auth = auth,
+                      previousFingerprintSha256 = decision.previousFingerprintSha256,
+                      probeFailure = decision.probeFailure,
+                      systemTrustAvailable = decision.systemTrustAvailable,
+                    ),
+                )
+              }
+
+              is GatewayTlsTrustDecision.Failed -> {
+                connectingEndpointStableId = null
+                val problem =
+                  if (decision.reason == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
+                    gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
+                  } else {
+                    null
+                  }
+                setStandaloneGatewayStatus(problem?.message ?: gatewayTlsProbeFailureMessage(decision.reason), problem)
               }
             }
-          } catch (error: Throwable) {
-            finishGatewayConnectionOperation(intent)
-            throw error
-          }
-        synchronized(gatewayLifecycleIntentLock) {
-          if (!intent() || !isCurrentConnectAttempt(connectAttemptId)) return@launch
-          intent.waitingForAdmission = true
-          publishGatewayAdmission(intent, waitingForCleanup = intent.deadlineExpired)
-        }
-        launchGatewayLifecycle(intent) {
-          finishGatewayConnectionOperation(intent)
-          if (!isCurrentConnectAttempt(connectAttemptId)) return@launchGatewayLifecycle
-          when (
-            val decision =
-              decideGatewayTlsTrust(
-                storedFingerprint = storedFingerprint,
-                systemTrustCandidate = isGatewayTlsSystemTrustCandidate(endpoint.host),
-                probeResult = tlsProbe,
-              )
-          ) {
-            GatewayTlsTrustDecision.SystemTrusted -> {
-              // Automatic platform trust only applies where no user-accepted pin exists.
-              // Replacing a pin always requires explicit confirmation in the trust prompt.
-              registerGateway(endpoint, setActive = true)
-              connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
-            }
-
-            is GatewayTlsTrustDecision.PinnedTrust -> {
-              connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
-            }
-
-            is GatewayTlsTrustDecision.PromptRequired -> {
-              setStandaloneGatewayStatus(
-                decision.probeFailure?.let(::gatewayTlsProbeFailureMessage) ?: "Verify gateway TLS fingerprint…",
-              )
-              publishGatewayTrustPromptIfCurrent(
-                connectAttemptId = connectAttemptId,
-                prompt =
-                  GatewayTrustPrompt(
-                    endpoint = endpoint,
-                    fingerprintSha256 = decision.fingerprintSha256,
-                    auth = auth,
-                    previousFingerprintSha256 = decision.previousFingerprintSha256,
-                    probeFailure = decision.probeFailure,
-                    systemTrustAvailable = decision.systemTrustAvailable,
-                  ),
-              )
-            }
-            is GatewayTlsTrustDecision.Failed -> {
-              connectingEndpointStableId = null
-              val problem =
-                if (decision.reason == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
-                  gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
-                } else {
-                  null
-                }
-              setStandaloneGatewayStatus(problem?.message ?: gatewayTlsProbeFailureMessage(decision.reason), problem)
-            }
           }
         }
-      }
       return
     }
 

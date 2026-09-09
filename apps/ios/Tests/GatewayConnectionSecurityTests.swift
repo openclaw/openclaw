@@ -920,7 +920,7 @@ import Testing
             #expect(appModel.lastGatewayProblem?.kind == .tlsPinMismatch)
             #expect(controller.pendingTrustPrompt == nil)
         }
-        #expect(GatewaySettingsStore.loadFingerprint(stableID: auth.targetStableID) == nil)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: auth.targetStableID) == nil)
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == active.stableID)
     }
 

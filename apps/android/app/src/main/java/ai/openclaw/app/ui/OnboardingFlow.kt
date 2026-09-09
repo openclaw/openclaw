@@ -2673,15 +2673,24 @@ internal fun gatewayRecoveryPrimaryAction(
   problem: GatewayConnectionProblem? = null,
 ): GatewayRecoveryPrimaryAction? =
   when (state) {
-    GatewayRecoveryUiState.Connected -> GatewayRecoveryPrimaryAction.Finish
-    GatewayRecoveryUiState.Failed ->
+    GatewayRecoveryUiState.Connected -> {
+      GatewayRecoveryPrimaryAction.Finish
+    }
+
+    GatewayRecoveryUiState.Failed -> {
       if (problem?.isNetworkFailure == true) GatewayRecoveryPrimaryAction.Retry else GatewayRecoveryPrimaryAction.Back
-    GatewayRecoveryUiState.ApprovalRequired -> GatewayRecoveryPrimaryAction.Retry
+    }
+
+    GatewayRecoveryUiState.ApprovalRequired -> {
+      GatewayRecoveryPrimaryAction.Retry
+    }
 
     GatewayRecoveryUiState.NodeCapabilityApprovalPending,
     GatewayRecoveryUiState.Pairing,
     GatewayRecoveryUiState.Finishing,
-    -> null
+    -> {
+      null
+    }
   }
 
 internal fun gatewayRecoveryShowsDiagnosticAction(
@@ -2725,12 +2734,15 @@ internal fun gatewayPairingUiState(
       !gatewayConnectionProblem.canAutoRetry -> GatewayRecoveryUiState.ApprovalRequired
 
     gatewayConnectionProblem?.isPairingRequired == true -> GatewayRecoveryUiState.Pairing
+
     gatewayConnectionProblem?.isNetworkFailure == true -> GatewayRecoveryUiState.Failed
+
     gatewayConnectionProblem?.pauseReconnect == true -> GatewayRecoveryUiState.Failed
 
     gatewayStatusLooksLikePairing(statusText) -> GatewayRecoveryUiState.Pairing
 
     gatewayStatusLooksLikeFailure(statusText) -> GatewayRecoveryUiState.Failed
+
     else -> GatewayRecoveryUiState.Finishing
   }
 
@@ -2831,14 +2843,22 @@ internal fun recoveryGatewayName(
 
 internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =
   when (gatewayConnectionProblem.code) {
-    "NETWORK_UNREACHABLE" ->
+    "NETWORK_UNREACHABLE" -> {
       if (gatewayConnectionProblem.isTailscaleRoute && gatewayConnectionProblem.reason != "transport-cleanup") {
         nativeString("This address may use Tailscale. Open Tailscale and connect to the Gateway's tailnet, then retry. Check that the Gateway computer is online and OpenClaw is running.")
       } else {
         gatewayConnectionStatusForDisplay(gatewayConnectionProblem.message)
       }
-    "PROTOCOL_MISMATCH" -> recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem)
-    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> nativeString("The code may have expired or been generated for another Gateway.")
+    }
+
+    "PROTOCOL_MISMATCH" -> {
+      recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem)
+    }
+
+    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> {
+      nativeString("The code may have expired or been generated for another Gateway.")
+    }
+
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_TOKEN_MISMATCH",
     -> {

@@ -755,7 +755,9 @@ class GatewayBootstrapAuthTest {
       val endpoint = tlsGatewayEndpoint()
       prefs.saveGatewayTlsFingerprint(endpoint.stableId, fingerprint)
       val runtimeScope = readField<CoroutineScope>(runtime, "scope")
-      val existingJobs = runtimeScope.coroutineContext.job.children.toSet()
+      val existingJobs =
+        runtimeScope.coroutineContext.job.children
+          .toSet()
 
       runtime.connect(
         endpoint,
@@ -956,7 +958,12 @@ class GatewayBootstrapAuthTest {
           writeField(runtime, "scope", CoroutineScope(originalScope.coroutineContext + StandardTestDispatcher(scheduler)))
           runtime.connect(GatewayEndpoint.manual("second.tail-example.ts.net", 443))
           assertTrue("A new request cancels the old native owner before admission", worker.get().isCancelled)
-          scheduler.runCurrent()
+          withTimeout(5_000) {
+            while (readField<Job?>(runtime, "tlsProbeJob") == null) {
+              scheduler.runCurrent()
+              delay(10)
+            }
+          }
           val secondProbe = readField<Job>(runtime, "tlsProbeJob")
           runtime.connect(GatewayEndpoint.manual("third.tail-example.ts.net", 443))
           assertTrue("The superseded waiter must not later start DNS", secondProbe.isCancelled)
@@ -966,8 +973,15 @@ class GatewayBootstrapAuthTest {
           assertNull(runtime.gatewayConnectionDisplay.value.problem)
           scheduler.advanceTimeBy(GATEWAY_CONNECT_TIMEOUT_MS)
           scheduler.runCurrent()
-          assertEquals("transport-cleanup", runtime.gatewayConnectionDisplay.value.problem?.reason)
-          assertFalse(runtime.gatewayConnectionDisplay.value.problem?.isTailscaleRoute == true)
+          assertEquals(
+            "transport-cleanup",
+            runtime.gatewayConnectionDisplay.value.problem
+              ?.reason,
+          )
+          assertFalse(
+            runtime.gatewayConnectionDisplay.value.problem
+              ?.isTailscaleRoute == true,
+          )
           assertNull(runtime.pendingGatewayTrust.value)
           if (disconnectBeforeRelease) runtime.disconnect()
           release.countDown()
@@ -985,7 +999,12 @@ class GatewayBootstrapAuthTest {
             assertNull(runtime.pendingGatewayTrust.value)
           } else {
             assertEquals(listOf("first.tail-example.ts.net", "third.tail-example.ts.net"), hosts.toList())
-            assertEquals("third.tail-example.ts.net", runtime.pendingGatewayTrust.value?.endpoint?.host)
+            assertEquals(
+              "third.tail-example.ts.net",
+              runtime.pendingGatewayTrust.value
+                ?.endpoint
+                ?.host,
+            )
             assertNull(runtime.gatewayConnectionDisplay.value.problem)
           }
         } finally {
@@ -1265,16 +1284,13 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
-  fun queuedGatewaySwitchKeepsRetirementDeadlineUnlessExplicitlyDisconnected() =
-    runBlocking { assertQueuedGatewayCleanupDeadline(StalledSessionOwner.PRIMARY) }
+  fun queuedGatewaySwitchKeepsRetirementDeadlineUnlessExplicitlyDisconnected() = runBlocking { assertQueuedGatewayCleanupDeadline(StalledSessionOwner.PRIMARY) }
 
   @Test
-  fun idlePrimaryCleanupKeepsRetirementDeadlineUnlessExplicitlyDisconnected() =
-    runBlocking { assertQueuedGatewayCleanupDeadline(StalledSessionOwner.IDLE_PRIMARY) }
+  fun idlePrimaryCleanupKeepsRetirementDeadlineUnlessExplicitlyDisconnected() = runBlocking { assertQueuedGatewayCleanupDeadline(StalledSessionOwner.IDLE_PRIMARY) }
 
   @Test
-  fun secondaryPromotionKeepsRetirementDeadlineUnlessExplicitlyDisconnected() =
-    runBlocking { assertQueuedGatewayCleanupDeadline(StalledSessionOwner.SECONDARY) }
+  fun secondaryPromotionKeepsRetirementDeadlineUnlessExplicitlyDisconnected() = runBlocking { assertQueuedGatewayCleanupDeadline(StalledSessionOwner.SECONDARY) }
 
   private enum class StalledSessionOwner { PRIMARY, IDLE_PRIMARY, SECONDARY }
 
