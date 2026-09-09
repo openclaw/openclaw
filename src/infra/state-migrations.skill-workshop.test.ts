@@ -15,6 +15,10 @@ import {
 } from "../skills/workshop/service.js";
 import { updateSkillProposalRecord } from "../skills/workshop/store.js";
 import {
+  SKILL_WORKSHOP_ROLLBACK_SCHEMA,
+  type SkillProposalRollback,
+} from "../skills/workshop/types.js";
+import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -166,6 +170,76 @@ describe("automatic Skill Workshop migration", () => {
     expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).toThrow("Doctor stopped");
     await expect(fs.readFile(corrupt.file, "utf8")).resolves.toBe(corrupt.metadata);
   });
+
+  it.each([
+    "corrupt draft",
+    "interrupted apply",
+    "corrupt rollback",
+    "missing draft with rollback",
+  ] as const)(
+    "refuses an ownerless bundle with %s before deferring ownership",
+    async (artifact) => {
+      const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+      await state.writeConfig(config);
+      const proposal = await seedSidecar("ownerless", state.path("unconfigured-workspace"));
+      const proposalDir = path.dirname(proposal.file);
+      const draftPath = path.join(proposalDir, "PROPOSAL.md");
+      const rollbackPath = path.join(proposalDir, "rollback.json");
+      const rollback: SkillProposalRollback = {
+        schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
+        proposalId: proposal.record.id,
+        writtenAt: "2026-09-01T00:00:00.000Z",
+        targetSkillFile: proposal.record.target.skillFile,
+        action: "create",
+        supportFiles: [],
+      };
+      const rollbackText = artifact === "corrupt rollback" ? "{broken" : JSON.stringify(rollback);
+      const missingDraft = artifact === "missing draft with rollback";
+      if (artifact === "corrupt draft") {
+        await fs.writeFile(draftPath, "corrupt draft");
+      } else {
+        await fs.writeFile(rollbackPath, rollbackText);
+        if (missingDraft) {
+          await fs.unlink(draftPath);
+        }
+      }
+      const draft = missingDraft ? undefined : await fs.readFile(draftPath, "utf8");
+
+      const result = await autoMigrateLegacyState({
+        cfg: config,
+        env: state.env,
+        homedir: () => state.home,
+        doctorOnlyStateMigrations: true,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      });
+      const receipt = result.stepReceipts.find((entry) => entry.id === "skill-workshop");
+      expect(receipt).toMatchObject({
+        outcome: "refused",
+        warnings: [
+          expect.stringContaining(
+            `Failed to migrate Skill Workshop proposal ${proposal.record.id}`,
+          ),
+        ],
+      });
+      if (artifact === "corrupt draft") {
+        expect(receipt?.warnings.join("\n")).toContain("draft hash does not match");
+      } else if (artifact === "interrupted apply" || missingDraft) {
+        expect(receipt?.warnings.join("\n")).toContain("unfinished apply recovery");
+      }
+      expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).toThrow(
+        "Doctor stopped",
+      );
+      await expect(fs.readFile(proposal.file, "utf8")).resolves.toBe(proposal.metadata);
+      if (missingDraft) {
+        await expect(fs.access(draftPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(fs.readFile(draftPath, "utf8")).resolves.toBe(draft);
+      }
+      if (artifact !== "corrupt draft") {
+        await expect(fs.readFile(rollbackPath, "utf8")).resolves.toBe(rollbackText);
+      }
+    },
+  );
 
   it.each([15, 16])(
     "keeps pending proposals readable after migrating legacy targets from schema %i",

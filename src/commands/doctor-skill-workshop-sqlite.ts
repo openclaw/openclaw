@@ -415,6 +415,32 @@ type PreparedLegacyProposal = {
   ownerAgentId: string;
 };
 
+async function readLegacyProposalArtifacts(
+  stateRoot: Root,
+  record: SkillProposalRecord,
+): Promise<SkillProposalRollback | undefined> {
+  const rollback = await readLegacyRollback(stateRoot, record.id);
+  const draft = await stateRoot
+    .read(`${PROPOSALS_DIR}/${record.id}/PROPOSAL.md`, {
+      hardlinks: "reject",
+      maxBytes: MAX_RECORD_BYTES,
+      symlinks: "reject",
+    })
+    .catch((error: unknown) => {
+      // Missing drafts must not quarantine a bundle that still owns apply recovery.
+      if (rollback && isMissingPathError(error)) {
+        throw new Error(
+          "Legacy bundle has a missing draft and unfinished apply recovery; restore its draft before retrying Doctor.",
+        );
+      }
+      throw error;
+    });
+  if (hashSkillProposalContent(draft.buffer.toString("utf8")) !== record.draftHash) {
+    throw new Error("proposal draft hash does not match proposal metadata");
+  }
+  return rollback;
+}
+
 async function prepareLegacyProposal(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -431,6 +457,7 @@ async function prepareLegacyProposal(params: {
   if (record.value.id !== params.proposalId) {
     throw new Error("invalid proposal metadata");
   }
+  const rollback = await readLegacyProposalArtifacts(params.stateRoot, record.value);
   const workspaceDir = resolveLegacyWorkshopWorkspaceDir(
     record.value.target.skillDir,
     params.config,
@@ -443,6 +470,11 @@ async function prepareLegacyProposal(params: {
     workspaceDir,
   });
   if (!owner.ownerAgentId) {
+    if (rollback) {
+      throw new Error(
+        `Legacy bundle has unfinished apply recovery at ${path.join(resolveStateDir(params.env), proposalDir, "rollback.json")}; resolve its owning agent and recover the retained apply before retrying Doctor.`,
+      );
+    }
     const candidates = workspaceDir
       ? listWorkspaceOwnerAgentIds(params.config, params.env, workspaceDir).toSorted()
       : [];
@@ -464,15 +496,7 @@ async function migrateProposal(params: {
 }): Promise<void> {
   const { record, ownerAgentId } = params.prepared;
   const proposalDir = `${PROPOSALS_DIR}/${record.id}`;
-  const draft = await params.stateRoot.read(`${proposalDir}/PROPOSAL.md`, {
-    hardlinks: "reject",
-    maxBytes: MAX_RECORD_BYTES,
-    symlinks: "reject",
-  });
-  if (hashSkillProposalContent(draft.buffer.toString("utf8")) !== record.draftHash) {
-    throw new Error("proposal draft hash does not match proposal metadata");
-  }
-  const rollback = await readLegacyRollback(params.stateRoot, record.id);
+  const rollback = await readLegacyProposalArtifacts(params.stateRoot, record);
   importLegacySkillProposal({
     record,
     rollback,
