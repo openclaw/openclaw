@@ -79,6 +79,32 @@ it.each(["work", "dashboard:incognito-work"])(
   },
 );
 
+it("reuses the persisted session when an explicit key's opaque tail is uppercase", async () => {
+  await withOpenClawTestState({ label: "command-uppercase-tail-session" }, async (state) => {
+    const storePath = state.path("sessions.sqlite");
+    // Client-generated opaque tails (a ULID, for example) carry uppercase, while
+    // persisted store rows always hold the canonical store-folded key.
+    const sessionKey = "agent:main:assist:01M21F31SCNCCQQ3N4X43AY420";
+    const cfg = {
+      agents: { defaults: {} },
+      session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } },
+    } satisfies OpenClawConfig;
+
+    const first = resolveSession({ cfg, sessionKey });
+    expect(first.sessionEntry).toBeUndefined();
+    expect(first.isNewSession).toBe(true);
+    await sessionAccessor.replaceSessionEntry(
+      { sessionKey: first.sessionKey, storePath },
+      { sessionId: first.sessionId, updatedAt: Date.now(), sessionStartedAt: Date.now() },
+    );
+
+    const second = resolveSession({ cfg, sessionKey });
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(second.isNewSession).toBe(false);
+    expect(second.sessionEntry?.sessionId).toBe(first.sessionId);
+  });
+});
+
 it("does not provision a missing incognito lookup or select a hidden run-owned entry", async () => {
   await withOpenClawTestState({ label: "command-private-session" }, async (state) => {
     const storePath = state.path("sessions.sqlite");
