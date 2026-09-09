@@ -21,7 +21,7 @@ function normalizedAlias(value: string | null | undefined): string | undefined {
   return normalized || undefined;
 }
 
-function localAliases(plugin: PluginCatalogEntry): string[] {
+function localIdentityAliases(plugin: PluginCatalogEntry): string[] {
   const aliases = [plugin.id, plugin.packageName];
   if (plugin.install?.source === "clawhub") {
     aliases.push(plugin.install.packageName);
@@ -37,8 +37,24 @@ function indexLocalPlugins(
 ): Map<string, PluginCatalogEntry> {
   const index = new Map<string, PluginCatalogEntry>();
   for (const plugin of plugins) {
-    for (const alias of localAliases(plugin)) {
+    for (const alias of localIdentityAliases(plugin)) {
       index.set(alias, plugin);
+    }
+  }
+  return index;
+}
+
+function indexClawHubPlugins(
+  plugins: readonly PluginCatalogEntry[],
+): Map<string, PluginCatalogEntry> {
+  const index = new Map<string, PluginCatalogEntry>();
+  for (const plugin of plugins) {
+    const packageName =
+      plugin.clawhubPackage ??
+      (plugin.install?.source === "clawhub" ? plugin.install.packageName : undefined);
+    const identity = normalizedAlias(packageName);
+    if (identity) {
+      index.set(identity, plugin);
     }
   }
   return index;
@@ -48,14 +64,7 @@ function findLocalPlugin(
   plugin: ClawHubPluginCatalogEntry,
   index: ReadonlyMap<string, PluginCatalogEntry>,
 ): PluginCatalogEntry | undefined {
-  for (const alias of [plugin.runtimeId, plugin.packageName]) {
-    const normalized = normalizedAlias(alias);
-    const match = normalized ? index.get(normalized) : undefined;
-    if (match) {
-      return match;
-    }
-  }
-  return undefined;
+  return index.get(normalizedAlias(plugin.packageName) ?? "");
 }
 
 function projectLocalFacts(
@@ -145,7 +154,7 @@ export function joinClawHubPluginCatalog(params: {
   query?: string;
   cursor?: string;
 }): PluginDiscoveryEntry[] {
-  const localIndex = indexLocalPlugins(params.local.plugins);
+  const localIndex = indexClawHubPlugins(params.local.plugins);
   const remote = params.remote.map((plugin) => {
     const localPlugin = findLocalPlugin(plugin, localIndex);
     return {

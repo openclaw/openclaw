@@ -587,7 +587,11 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         </dl>
         ${
           catalog.detail.security
-            ? renderPluginSecurityAudit(catalog.detail.security.status, packageUrl)
+            ? renderPluginSecurityAudit(
+                catalog.detail.security.status,
+                catalog.detail.security.auditUrl ??
+                  (packageUrl ? `${packageUrl}/security-audit` : undefined),
+              )
             : nothing
         }
         ${
@@ -632,7 +636,11 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         )}
       </div>`,
       identity: html`<div class="plugin-catalog-detail__publisher">
-        <span class="plugin-catalog-detail__publisher-icon" aria-hidden="true">
+        <span
+          class="plugin-catalog-detail__publisher-icon"
+          aria-hidden="true"
+          data-plugin-icon-id=${plugin.id}
+        >
           ${
             props.iconUrls[plugin.id]
               ? html`<img

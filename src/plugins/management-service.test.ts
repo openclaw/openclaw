@@ -331,6 +331,7 @@ describe("plugin management service", () => {
     });
 
     expect(catalog.plugins[0]).toMatchObject({
+      clawhubPackage: "@openclaw/memory-tools",
       categories: ["memory", "tools"],
     });
     expect(catalog.plugins[0]).not.toHaveProperty("category");
@@ -378,6 +379,7 @@ describe("plugin management service", () => {
       packages: [{ name: "community/memory", version: "4.5.6" }],
     });
     expect(catalog.plugins[0]).toMatchObject({
+      clawhubPackage: "community/memory",
       categories: ["memory", "tools"],
     });
     expect(cached.plugins[0]).toMatchObject({

@@ -356,6 +356,20 @@ describe("ClawHub plugin catalog client", () => {
           },
         });
       }
+      if (url.pathname.endsWith("/versions/1.2.2/security")) {
+        return jsonResponse({
+          overview: "Exact release passed ClawHub security review.",
+          securityAuditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
+          trust: {
+            scanStatus: "clean",
+            moderationState: "approved",
+            blockedFromDownload: false,
+            reasons: [],
+            pending: false,
+            stale: false,
+          },
+        });
+      }
       if (url.pathname.endsWith("/file")) {
         return new Response("# Memory Plus\n\nLong-term memory.", { status: 200 });
       }
@@ -388,6 +402,7 @@ describe("ClawHub plugin catalog client", () => {
       "/api/v1/packages/memory-plus/versions?limit=10",
       "/api/v1/packages/memory-plus/versions/1.2.2",
       "/api/v1/packages/memory-plus/file?path=README.md&preview=1&version=1.2.2",
+      "/api/v1/packages/memory-plus/versions/1.2.2/security",
     ]);
     expect(detail).toMatchObject({
       packageName: "memory-plus",
@@ -420,10 +435,8 @@ describe("ClawHub plugin catalog client", () => {
       },
       security: {
         status: "clean",
-        verdict: "benign",
-        summary: "Capabilities match the stated purpose.",
-        guidance: "Review the API key before enabling.",
-        checkedAt: 400,
+        auditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
+        summary: "Exact release passed ClawHub security review.",
       },
     });
   });

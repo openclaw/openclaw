@@ -21,11 +21,11 @@ function securityTone(status: string): "pass" | "warning" | "danger" | "unknown"
 
 export function renderPluginSecurityAudit(
   status: string,
-  packageUrl: string | null | undefined,
+  auditUrl: string | null | undefined,
 ): TemplateResult {
   return html`<a
     class="plugin-catalog-detail__security plugin-catalog-detail__security--${securityTone(status)}"
-    href=${packageUrl ? `${packageUrl}/security-audit` : nothing}
+    href=${auditUrl ?? nothing}
     target="_blank"
     rel="noopener noreferrer"
   >

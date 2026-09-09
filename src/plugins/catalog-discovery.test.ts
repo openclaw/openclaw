@@ -34,7 +34,7 @@ describe("plugin discovery identity and local join", () => {
     expect(resolvePluginDiscoveryIdentity("@alice/memory-plus")).toBeUndefined();
   });
 
-  it("joins a package runtime alias to authoritative Gateway state", () => {
+  it("joins a recorded ClawHub package identity to authoritative Gateway state", () => {
     const [plugin] = joinClawHubPluginCatalog({
       remote: [remote],
       local: {
@@ -42,6 +42,7 @@ describe("plugin discovery identity and local join", () => {
           {
             id: "memory-plus",
             name: "Memory Plus",
+            clawhubPackage: "@alice/memory-plus",
             installed: true,
             enabled: false,
             state: "needs-setup",
@@ -60,6 +61,27 @@ describe("plugin discovery identity and local join", () => {
       pluginId: "memory-plus",
       action: "manage",
     });
+  });
+
+  it("does not treat an unrelated runtime alias as installed", () => {
+    const [plugin] = joinClawHubPluginCatalog({
+      remote: [remote],
+      local: {
+        plugins: [
+          {
+            id: "memory-plus",
+            name: "Different package",
+            installed: true,
+            enabled: true,
+            state: "enabled",
+          },
+        ],
+        diagnostics: [],
+        mutationAllowed: true,
+      },
+    });
+
+    expect(plugin?.local).toMatchObject({ installed: false, state: "not-installed" });
   });
 
   it("does not claim install eligibility when Gateway mutation is disabled", () => {
@@ -85,6 +107,7 @@ describe("plugin discovery identity and local join", () => {
           {
             id: "memory-plus",
             packageName: "@alice/memory-plus",
+            clawhubPackage: "@alice/memory-plus",
             name: "Local presentation",
             installed: true,
             enabled: true,
@@ -247,6 +270,7 @@ describe("plugin discovery identity and local join", () => {
           {
             id: "memory-plus",
             name: "Memory Remote Local",
+            clawhubPackage: "@alice/memory-plus",
             origin: "global",
             installed: true,
             enabled: false,

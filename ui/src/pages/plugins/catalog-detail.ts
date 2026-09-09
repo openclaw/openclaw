@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../components/icons.ts";
+import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { renderSettingsPage } from "../../components/settings-ui.ts";
@@ -44,12 +45,15 @@ function tabLabel(tab: PluginCatalogDetailTab): string {
 
 export function renderPluginDetailReadme(result: PluginDiscoveryDetailResult): TemplateResult {
   const readmeHtml = result.detail.readme
-    ? toSanitizedMarkdownHtml(result.detail.readme)
+    ? toSanitizedMarkdownHtml(result.detail.readme, { mode: "document" })
         .replaceAll("<h1", "<h2")
         .replaceAll("</h1>", "</h2>")
     : null;
   return result.detail.readme
-    ? html`<article class="plugin-catalog-detail__readme sidebar-markdown">
+    ? html`<article
+        class="plugin-catalog-detail__readme sidebar-markdown"
+        @click=${handleMarkdownCodeBlockClick}
+      >
         ${unsafeHTML(readmeHtml)}
       </article>`
     : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoReadme")}</p>`;
@@ -282,7 +286,14 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
             : nothing
         }
       </dl>
-      ${detail.security ? renderPluginSecurityAudit(detail.security.status, packageUrl) : nothing}
+      ${
+        detail.security
+          ? renderPluginSecurityAudit(
+              detail.security.status,
+              detail.security.auditUrl ?? (packageUrl ? `${packageUrl}/security-audit` : undefined),
+            )
+          : nothing
+      }
       ${
         packageUrl
           ? html`<a

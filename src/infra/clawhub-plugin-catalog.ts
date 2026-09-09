@@ -14,6 +14,10 @@ import {
   requestClawHub,
   type ClawHubFetch,
 } from "./clawhub-client.js";
+import {
+  fetchClawHubPackageSecurity,
+  type ClawHubPackageSecurityResponse,
+} from "./clawhub-packages.js";
 
 export type ClawHubPluginCatalogEntry = {
   packageName: string;
@@ -78,6 +82,7 @@ type ClawHubPluginVerification = {
 
 type ClawHubPluginSecurity = {
   status: string;
+  auditUrl?: string;
   verdict?: string;
   summary?: string;
   guidance?: string;
@@ -341,22 +346,23 @@ function parseVerification(
   };
 }
 
-function parseSecurity(
-  value: Record<string, unknown> | undefined,
-): ClawHubPluginSecurity | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const verdict = readClawHubStringField(value, "verdict", "plugin security analysis");
-  const summary = readClawHubStringField(value, "summary", "plugin security analysis");
-  const guidance = readClawHubStringField(value, "guidance", "plugin security analysis");
-  const checkedAt = readOptionalNonNegativeNumber(value, "checkedAt", "plugin security analysis");
+function projectSecurity(value: ClawHubPackageSecurityResponse): ClawHubPluginSecurity {
+  const trust = value.trust;
+  const moderationStatus =
+    trust.moderationState && trust.moderationState !== "approved"
+      ? trust.moderationState
+      : undefined;
+  const status = trust.blockedFromDownload
+    ? "blocked"
+    : trust.pending
+      ? "pending"
+      : trust.stale
+        ? "stale"
+        : (moderationStatus ?? trust.scanStatus ?? "unknown");
   return {
-    status: readRequiredClawHubStringField(value, "status", "plugin security analysis"),
-    ...(verdict ? { verdict } : {}),
-    ...(summary ? { summary } : {}),
-    ...(guidance ? { guidance } : {}),
-    ...(checkedAt !== undefined ? { checkedAt } : {}),
+    status,
+    auditUrl: value.securityAuditUrl,
+    summary: value.overview,
   };
 }
 
@@ -651,7 +657,7 @@ export async function fetchClawHubPluginDetail(
     fetchImpl: params.fetchImpl,
   };
   const version = params.version ?? catalog.latestVersion;
-  const [versionsValue, versionValue, readme] = await Promise.all([
+  const [versionsValue, versionValue, readme, security] = await Promise.all([
     fetchClawHubJson<unknown>({
       ...shared,
       path: `/api/v1/packages/${encodeURIComponent(params.packageName)}/versions`,
@@ -664,6 +670,13 @@ export async function fetchClawHubPluginDetail(
         })
       : Promise.resolve(undefined),
     fetchOptionalReadme({ ...shared, packageName: params.packageName, version }),
+    version
+      ? fetchClawHubPackageSecurity({
+          ...shared,
+          name: params.packageName,
+          version,
+        }).then(projectSecurity)
+      : Promise.resolve(undefined),
   ]);
   if (versionValue !== undefined && !isRecord(versionValue)) {
     throw new Error("Malformed ClawHub plugin version response: expected an object.");
@@ -680,9 +693,6 @@ export async function fetchClawHubPluginDetail(
     versionRecord
       ? readOptionalRecord(versionRecord, "verification", "plugin version")
       : readOptionalRecord(value.package, "verification", "plugin detail"),
-  );
-  const security = parseSecurity(
-    versionRecord ? readOptionalRecord(versionRecord, "llmAnalysis", "plugin version") : undefined,
   );
   const owner = {
     ...(ownerHandle ? { handle: ownerHandle } : {}),

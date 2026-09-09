@@ -143,6 +143,8 @@ export const PluginCatalogEntrySchema = closedObject({
   id: NonEmptyString,
   name: NonEmptyString,
   packageName: Type.Optional(NonEmptyString),
+  /** Canonical ClawHub identity proven by install provenance or the official catalog. */
+  clawhubPackage: Type.Optional(NonEmptyString),
   description: Type.Optional(Type.String()),
   version: Type.Optional(NonEmptyString),
   kind: Type.Optional(Type.Array(NonEmptyString)),
@@ -472,6 +474,7 @@ export const PluginDiscoveryDetailSchema = closedObject({
   security: Type.Optional(
     closedObject({
       status: NonEmptyString,
+      auditUrl: Type.Optional(NonEmptyString),
       verdict: Type.Optional(NonEmptyString),
       summary: Type.Optional(Type.String()),
       guidance: Type.Optional(Type.String()),

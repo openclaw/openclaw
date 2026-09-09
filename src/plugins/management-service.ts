@@ -369,6 +369,14 @@ export const listManagedPlugins = withManagedPluginCache(
       if (record.packageName) {
         plugin.packageName = record.packageName;
       }
+      const recordedClawHubPackage =
+        installRecord?.source === "clawhub"
+          ? normalizeOptionalString(installRecord.clawhubPackage)
+          : undefined;
+      const discoveryClawHubPackage = clawhubPackage ?? recordedClawHubPackage;
+      if (discoveryClawHubPackage) {
+        plugin.clawhubPackage = discoveryClawHubPackage;
+      }
       if (presentation.description) {
         plugin.description = presentation.description;
       }
