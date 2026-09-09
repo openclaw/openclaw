@@ -3,7 +3,6 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { reconnectMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import {
   captureScreenshot,
-  desktopViewport,
   describeControlUiE2e,
   discoveryResult,
   initialInventory,
