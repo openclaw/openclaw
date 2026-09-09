@@ -267,6 +267,8 @@ KillMode=mixed
 WantedBy=default.target
 ```
 
+`TimeoutStopSec=330` covers the Gateway's five-minute cooperative drain plus teardown reserve. To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
+
   </Tab>
 
   <Tab title="Windows (native)">
@@ -289,16 +291,36 @@ that points at `gateway.cmd` inside the state directory.
 
 Use a system unit for multi-user/always-on hosts.
 
+Start with the user-unit example, install it under
+`/etc/systemd/system/openclaw-gateway[-<profile>].service`, adjust
+`ExecStart=` if your `openclaw` binary lives elsewhere, and add `User=` to
+its `[Service]` section:
+
+```ini
+[Service]
+User=<user>
+```
+
+Replace `<user>` with the non-root account that owns the OpenClaw state and
+configuration. A system unit without `User=` runs as root. Running the Gateway
+and its agent commands as root is unsafe and unsupported for this setup.
+
+When `Group=` is omitted, systemd uses the selected account's primary group.
+By default, `User=` also supplies that account's `HOME`, which OpenClaw uses
+for normal state and configuration lookup. For intentional custom locations,
+set `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` in the unit environment.
+Do not copy configuration into root's home as a workaround. On a single-user
+host, the user unit above with `loginctl enable-linger` is the supported way
+to keep the Gateway running without a login session.
+
+Do not also let `openclaw doctor --fix` install a user-level gateway service for the same profile/port. Doctor refuses that automatic install when it finds a system-level OpenClaw gateway service; use `OPENCLAW_SERVICE_REPAIR_POLICY=external` when the system unit owns the lifecycle.
+
+After writing the unit, reload systemd and enable it:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now openclaw-gateway[-<profile>].service
 ```
-
-Use the same service body as the user unit, but install it under
-`/etc/systemd/system/openclaw-gateway[-<profile>].service` and adjust
-`ExecStart=` if your `openclaw` binary lives elsewhere.
-
-Do not also let `openclaw doctor --fix` install a user-level gateway service for the same profile/port. Doctor refuses that automatic install when it finds a system-level OpenClaw gateway service; use `OPENCLAW_SERVICE_REPAIR_POLICY=external` when the system unit owns the lifecycle.
 
   </Tab>
 </Tabs>
