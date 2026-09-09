@@ -123,6 +123,41 @@ describe("chat pane first-turn attachment lifecycle", () => {
       pane.disconnectedCallback();
     }
   });
+
+  it("forwards createChatSession options to the pane's createSession implementation", () => {
+    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    const client = {
+      addEventListener: vi.fn(() => vi.fn()),
+      request: vi.fn(),
+    } as unknown as GatewayBrowserClient;
+    const context = createInitializationContext();
+    context.gateway.snapshot.client = client;
+    pane.sessionKey = "agent:main:current";
+    pane.chatMessagesBySession = new Map();
+    pane.context = context;
+    const createSession = vi
+      .spyOn(
+        pane as unknown as { createSession: (options?: { label?: string }) => unknown },
+        "createSession",
+      )
+      .mockResolvedValue("completed");
+    const stopAfterAttach = new Error("stop after attach");
+    let attachedState: ChatPageHost | undefined;
+    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
+      attachedState = state;
+      throw stopAfterAttach;
+    });
+
+    try {
+      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      attachedState?.createChatSession?.({ label: "Planning notes" });
+      expect(createSession).toHaveBeenCalledWith({ label: "Planning notes" });
+      attachedState?.createChatSession?.();
+      expect(createSession).toHaveBeenLastCalledWith(undefined);
+    } finally {
+      pane.disconnectedCallback();
+    }
+  });
 });
 
 describe("chat pane session suggestion lifecycle", () => {

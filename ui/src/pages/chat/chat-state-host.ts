@@ -16,6 +16,7 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import type { ChatNewSessionResult } from "./chat-pane-shared.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
@@ -156,7 +157,7 @@ export type ChatPageHost = ChatHost &
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;
     handleCloseImage: () => void;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
-    createChatSession?: () => Promise<boolean>;
+    createChatSession?: (options?: { label?: string }) => Promise<ChatNewSessionResult>;
     confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
     refreshCurrentSessionTools?: () => Promise<void>;

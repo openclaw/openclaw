@@ -164,6 +164,22 @@ describe("embedded-agent runner run lifecycle", () => {
     await expect(waitPromise).resolves.toBe(true);
   });
 
+  it("skips waiting on a preserved reply run during lifecycle cleanup", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:close-wait",
+      sessionId: "session-close-wait",
+      resetTriggered: false,
+    });
+
+    // The initiating /close turn is still active while the delete mutation
+    // runs; waiting on it would deadlock until the timeout.
+    await expect(
+      waitForEmbeddedAgentRunEnd("session-close-wait", 50, { preserveReplyRun: true }),
+    ).resolves.toBe(true);
+
+    operation.complete();
+  });
+
   it("waits for a replacement run under the same session id", async () => {
     const firstHandle = createRunHandle({ runId: "run-first" });
     const replacementHandle = createRunHandle();

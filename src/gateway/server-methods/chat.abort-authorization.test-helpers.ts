@@ -19,6 +19,7 @@ export async function invokeAbort({
   connId,
   deviceId,
   preserveSideRuns,
+  exemptRunId,
   scopes = ["operator.write"],
   onAuthorizedAfterQueuedAbort,
   excludeRunIds,
@@ -29,6 +30,7 @@ export async function invokeAbort({
   connId: string;
   deviceId: string;
   preserveSideRuns?: boolean;
+  exemptRunId?: string;
   scopes?: string[];
   onAuthorizedAfterQueuedAbort?: () => boolean;
   excludeRunIds?: ReadonlySet<string>;
@@ -47,6 +49,7 @@ export async function invokeAbort({
       sessionKey,
       ...(runId ? { runId } : {}),
       ...(preserveSideRuns ? { preserveSideRuns: true } : {}),
+      ...(exemptRunId ? { exemptRunId } : {}),
     },
     client: { connId, connect: { device: { id: deviceId }, scopes } },
   });

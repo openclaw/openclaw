@@ -8,6 +8,7 @@ import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
 import { handleDashboardCommand } from "./commands-dashboard.js";
+import { handleDeleteSessionCommand } from "./commands-delete-session.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import {
@@ -72,6 +73,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleLearnCommand,
     handleLoopCommand,
     handleNameCommand,
+    handleDeleteSessionCommand,
     handleDiagnosticsCommand,
     handleTasksCommand,
     handleSteerCommand,

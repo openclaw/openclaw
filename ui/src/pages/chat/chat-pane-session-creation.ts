@@ -21,7 +21,9 @@ import {
   NEW_SESSION_ACTIVE_RUN_MESSAGE,
   NEW_SESSION_CREATE_FAILED_MESSAGE,
   NEW_SESSION_LIST_LOADING_MESSAGE,
+  NEW_SESSION_RENAME_FAILED_MESSAGE,
   preparePaneSessionHandoff,
+  type ChatNewSessionResult,
 } from "./chat-pane-shared.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { canCreateChatSession } from "./chat-state-route.ts";
@@ -199,10 +201,12 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     }
   };
 
-  protected readonly createSession = async (): Promise<boolean> => {
+  protected readonly createSession = async (options?: {
+    label?: string;
+  }): Promise<ChatNewSessionResult> => {
     const state = this.state;
     if (!state || !state.client || !state.connected) {
-      return false;
+      return "cancelled";
     }
     const context = this.context;
     const sessions = context.sessions;
@@ -245,44 +249,72 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     if (!canCreateChatSession(state)) {
       setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
       state.requestUpdate?.();
-      return false;
+      return "cancelled";
     }
     if (state.sessionsLoading) {
       setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE);
       state.requestUpdate?.();
-      return false;
+      return "cancelled";
     }
     const initialAccess = readCreateAccess();
     if (!initialAccess.allowed) {
       publishCreateAccessError(initialAccess.reason);
-      return false;
+      return "cancelled";
     }
     if (
       !(await this.confirmConversationReset()) ||
       !isCurrent() ||
       !areUiSessionKeysEquivalent(state.sessionKey, previousSessionKey)
     ) {
-      return false;
+      return "cancelled";
     }
     if (!canCreateChatSession(state)) {
       setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
       state.requestUpdate?.();
-      return false;
+      return "cancelled";
     }
     const currentAccess = readCreateAccess();
     if (!currentAccess.allowed) {
       publishCreateAccessError(currentAccess.reason);
-      return false;
+      return "cancelled";
     }
 
     setChatError(state, null);
     if (preservesBoard) {
       const resetResult = await clearChatHistory(state);
-      return resetResult !== "failed";
+      // Only patch on a confirmed-completed reset: an "uncertain" reset may not
+      // have landed a fresh incarnation, so patching the label could rename the
+      // wrong session.
+      if (options?.label && isCurrent() && resetResult === "completed") {
+        const labelAgentId =
+          scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+          resolveAgentIdFromSessionKey(previousSessionKey);
+        let labelPatched: Awaited<ReturnType<typeof sessions.patch>> = null;
+        try {
+          labelPatched = await sessions.patch(
+            previousSessionKey,
+            { label: options.label },
+            labelAgentId ? { agentId: labelAgentId } : undefined,
+          );
+        } catch (error: unknown) {
+          this.publishHeaderError(error);
+          return "consumed-error";
+        }
+        if (!labelPatched) {
+          state.lastError = NEW_SESSION_RENAME_FAILED_MESSAGE;
+          state.chatError = state.lastError;
+          state.requestUpdate?.();
+          return "consumed-error";
+        }
+      }
+      return resetResult === "failed" ? "cancelled" : "completed";
     }
-    const nextSessionKey = await sessions.create(createParams);
+    const nextSessionKey = await sessions.create({
+      ...createParams,
+      ...(options?.label ? { label: options.label } : {}),
+    });
     if (!isCurrent()) {
-      return false;
+      return "cancelled";
     }
     if (
       !nextSessionKey ||
@@ -299,10 +331,10 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         );
         state.requestUpdate?.();
       }
-      return false;
+      return "cancelled";
     }
     if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
-      return false;
+      return "cancelled";
     }
     preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
       attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
@@ -312,6 +344,6 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         : {}),
       ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
     });
-    return true;
+    return "completed";
   };
 }

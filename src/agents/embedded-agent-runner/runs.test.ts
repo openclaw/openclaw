@@ -477,4 +477,34 @@ describe("embedded-agent runner run registry", () => {
       sessionFile,
     );
   });
+  it("preserves the initiating reply run when reply-run aborts are skipped", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:close-initiator",
+      sessionId: "session-close-initiator",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+
+    // A chat-initiated session delete must not abort its own reply run: that
+    // turn still owes the user the close confirmation reply.
+    expect(abortEmbeddedAgentRun("session-close-initiator", { preserveReplyRun: true })).toBe(
+      false,
+    );
+    expect(operation.result).toBeNull();
+    expect(isReplyRunActiveForSessionId("session-close-initiator")).toBe(true);
+
+    // Without the preserve flag the same call aborts the reply run.
+    expect(abortEmbeddedAgentRun("session-close-initiator")).toBe(true);
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+  });
+
+  it("still aborts an embedded run handle when preserving the reply run", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun("session-embedded-preserve", createEmbeddedRunHandle({ abort }));
+
+    expect(abortEmbeddedAgentRun("session-embedded-preserve", { preserveReplyRun: true })).toBe(
+      true,
+    );
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
 });

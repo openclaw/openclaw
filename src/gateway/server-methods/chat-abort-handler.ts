@@ -62,12 +62,18 @@ export async function handleChatAbortRequestWithLifecycle(
     sessionKey: rawSessionKey,
     runId,
     preserveSideRuns,
+    exemptRunId,
   } = params as {
     sessionKey: string;
     agentId?: string;
     runId?: string;
     preserveSideRuns?: boolean;
+    exemptRunId?: string;
   };
+  const effectiveExcludeRunIds =
+    lifecycle.excludeRunIds || exemptRunId
+      ? new Set([...(lifecycle.excludeRunIds ?? []), ...(exemptRunId ? [exemptRunId] : [])])
+      : undefined;
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
   const abortCfg = context.getRuntimeConfig();
   const parsedAbortSessionKey = parseAgentSessionKey(rawSessionKey);
@@ -161,7 +167,7 @@ export async function handleChatAbortRequestWithLifecycle(
       requester,
       assertCurrent: sessionMutationAuthorization?.assertCurrent,
       preserveSideRuns,
-      excludeRunIds: lifecycle.excludeRunIds,
+      excludeRunIds: effectiveExcludeRunIds,
       onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
       cascadeDescendants: lifecycle.cascadeDescendants,
     });
