@@ -232,8 +232,11 @@ export async function assertSupportedRuntime(
   if (details.kind === "node" && argv && classifyUnsupportedNodeCommand(argv)) {
     if (emitDiagnosticWarning && !diagnosticWarningPrinted) {
       const warning = formatUnsupportedNodeDiagnosticWarning(details.version);
-      if (providedRuntime) providedRuntime.error(warning);
-      else process.stderr.write(`${warning}\n`);
+      if (providedRuntime) {
+        providedRuntime.error(warning);
+      } else {
+        process.stderr.write(`${warning}\n`);
+      }
       diagnosticWarningPrinted = true;
     }
     return;

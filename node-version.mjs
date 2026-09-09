@@ -36,7 +36,9 @@ const ROOT_VALUE_OPTIONS = ["--profile", "--log-level", "--container"];
 
 function consumeOption(args, index, booleanOptions, valueOptions) {
   const arg = args[index];
-  if (booleanOptions.includes(arg)) return 1;
+  if (booleanOptions.includes(arg)) {
+    return 1;
+  }
   const equals = arg.indexOf("=");
   if (valueOptions.includes(equals < 0 ? arg : arg.slice(0, equals))) {
     return equals >= 0 ? 1 : args[index + 1] === undefined ? 0 : 2;
@@ -53,7 +55,9 @@ function diagnosticOptions(args, booleanOptions, valueOptions = []) {
       [...ROOT_BOOLEAN_OPTIONS, ...booleanOptions],
       [...ROOT_VALUE_OPTIONS, ...valueOptions],
     );
-    if (!consumed) return null;
+    if (!consumed) {
+      return null;
+    }
     flags.add(args[index]);
     index += consumed;
   }
@@ -69,7 +73,9 @@ export function classifyUnsupportedNodeCommand(argv) {
   let index = 0;
   while (index < args.length) {
     const consumed = consumeOption(args, index, ROOT_BOOLEAN_OPTIONS, ROOT_VALUE_OPTIONS);
-    if (!consumed) break;
+    if (!consumed) {
+      break;
+    }
     index += consumed;
   }
   const command = args[index++];
@@ -80,7 +86,9 @@ export function classifyUnsupportedNodeCommand(argv) {
   if (command === "gateway") {
     while (index < args.length) {
       const consumed = consumeOption(args, index, ROOT_BOOLEAN_OPTIONS, ROOT_VALUE_OPTIONS);
-      if (!consumed) break;
+      if (!consumed) {
+        break;
+      }
       index += consumed;
     }
     return args[index] === "status" ? "diagnostic" : null;
@@ -105,7 +113,9 @@ export function classifyUnsupportedNodeCommand(argv) {
   if (command === "update") {
     while (index < args.length) {
       const consumed = consumeOption(args, index, ROOT_BOOLEAN_OPTIONS, ROOT_VALUE_OPTIONS);
-      if (!consumed) break;
+      if (!consumed) {
+        break;
+      }
       index += consumed;
     }
     if (args[index] === "status") {

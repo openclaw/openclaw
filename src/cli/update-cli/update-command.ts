@@ -1,8 +1,4 @@
 // Main update orchestration for source checkouts and package installs.
-import {
-  formatUnsupportedNodeVersionMessage,
-  isSupportedOpenClawNodeVersion,
-} from "../../../node-version.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createConfigIO } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
@@ -82,24 +78,6 @@ import { withUpdateFailureTriage } from "./update-command-triage.js";
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
 export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
-  // Refuse before admission can open the live run ledger on the unsupported CLI runtime.
-  if (!process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node)) {
-    const error = formatUnsupportedNodeVersionMessage(process.versions.node);
-    if (inputOpts.json) {
-      defaultRuntime.writeJson({
-        status: "error",
-        mode: "unknown",
-        reason: "node-runtime-preflight",
-        error,
-        steps: [],
-        durationMs: 0,
-      });
-    } else {
-      defaultRuntime.error(`node-runtime-preflight: ${error}`);
-    }
-    defaultRuntime.exit(1);
-    return;
-  }
   const invocationCwd = tryResolveInvocationCwd();
   const recoveryState: UpdateCommandRecoveryState = {
     triageTarget: { env: resolveServiceRefreshEnv(process.env, invocationCwd) },
