@@ -9750,16 +9750,7 @@ data class GatewayNodesDevicesSummary(
   val devicePairingAvailable: Boolean = true,
 )
 
-enum class GatewayNodeApprovalState {
-  Loading,
-  Unsupported,
-  Approved,
-  PendingApproval,
-  PendingReapproval,
-  Unapproved,
-}
-
-/** Current phone approval state; only pending variants can carry an approval target. */
+/** Node capability approval state; only pending variants can carry an approval target. */
 sealed interface GatewayNodeCapabilityApproval {
   data object Loading : GatewayNodeCapabilityApproval
 
@@ -9793,7 +9784,7 @@ internal fun GatewayNodeCapabilityApproval.withoutExactRequestId(): GatewayNodeC
     }
   }
 
-internal fun GatewayNodesDevicesSummary.withoutExactApprovalRequestIds(): GatewayNodesDevicesSummary = copy(nodes = nodes.map { node -> node.copy(pendingRequestId = null) })
+internal fun GatewayNodesDevicesSummary.withoutExactApprovalRequestIds(): GatewayNodesDevicesSummary = copy(nodes = nodes.map { node -> node.copy(approvalState = node.approvalState.withoutExactRequestId() ?: node.approvalState) })
 
 /** Prevents an older gateway response from publishing after a newer refresh begins. */
 internal class LatestGatewayRefreshGuard {
@@ -9821,14 +9812,24 @@ internal class LatestGatewayRefreshGuard {
     }
 }
 
-internal fun parseGatewayNodeApprovalState(raw: String?): GatewayNodeApprovalState =
-  when (raw?.trim()?.lowercase()) {
-    null, "" -> GatewayNodeApprovalState.Loading
-    "approved" -> GatewayNodeApprovalState.Approved
-    "pending-approval" -> GatewayNodeApprovalState.PendingApproval
-    "pending-reapproval" -> GatewayNodeApprovalState.PendingReapproval
-    "unapproved" -> GatewayNodeApprovalState.Unapproved
-    else -> GatewayNodeApprovalState.Loading
+private fun parseGatewayNodeApprovalState(node: JsonObject): GatewayNodeCapabilityApproval {
+  // Only omission identifies a legacy gateway; malformed and future values stay fail-closed.
+  if (!node.containsKey("approvalState")) return GatewayNodeCapabilityApproval.Unsupported
+  val requestId = node["pendingRequestId"].asStringOrNull()
+  return when (node["approvalState"].asStringOrNull()?.trim()?.lowercase()) {
+    "approved" -> GatewayNodeCapabilityApproval.Approved
+    "pending-approval" -> GatewayNodeCapabilityApproval.PendingApproval(requestId)
+    "pending-reapproval" -> GatewayNodeCapabilityApproval.PendingReapproval(requestId)
+    "unapproved" -> GatewayNodeCapabilityApproval.Unapproved
+    else -> GatewayNodeCapabilityApproval.Loading
+  }.withSafeRequestId()
+}
+
+private fun GatewayNodeCapabilityApproval.withSafeRequestId(): GatewayNodeCapabilityApproval =
+  when (this) {
+    is GatewayNodeCapabilityApproval.PendingApproval -> copy(requestId = normalizeGatewayApprovalRequestId(requestId))
+    is GatewayNodeCapabilityApproval.PendingReapproval -> copy(requestId = normalizeGatewayApprovalRequestId(requestId))
+    else -> this
   }
 
 internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
@@ -9836,38 +9837,7 @@ internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorS
 internal fun currentNodeCapabilityApproval(
   nodes: List<GatewayNodeSummary>,
   selfNodeId: String,
-): GatewayNodeCapabilityApproval {
-  val node = nodes.firstOrNull { it.id == selfNodeId } ?: return GatewayNodeCapabilityApproval.Loading
-  return when (node.approvalState) {
-    GatewayNodeApprovalState.Loading -> {
-      GatewayNodeCapabilityApproval.Loading
-    }
-
-    GatewayNodeApprovalState.Unsupported -> {
-      GatewayNodeCapabilityApproval.Unsupported
-    }
-
-    GatewayNodeApprovalState.Approved -> {
-      GatewayNodeCapabilityApproval.Approved
-    }
-
-    GatewayNodeApprovalState.PendingApproval -> {
-      GatewayNodeCapabilityApproval.PendingApproval(
-        normalizeGatewayApprovalRequestId(node.pendingRequestId),
-      )
-    }
-
-    GatewayNodeApprovalState.PendingReapproval -> {
-      GatewayNodeCapabilityApproval.PendingReapproval(
-        normalizeGatewayApprovalRequestId(node.pendingRequestId),
-      )
-    }
-
-    GatewayNodeApprovalState.Unapproved -> {
-      GatewayNodeCapabilityApproval.Unapproved
-    }
-  }
-}
+): GatewayNodeCapabilityApproval = nodes.firstOrNull { it.id == selfNodeId }?.approvalState?.withSafeRequestId() ?: GatewayNodeCapabilityApproval.Loading
 
 internal fun parseGatewayNodeSummary(item: JsonElement): GatewayNodeSummary? {
   val obj = item.asObjectOrNull() ?: return null
@@ -9881,14 +9851,7 @@ internal fun parseGatewayNodeSummary(item: JsonElement): GatewayNodeSummary? {
     deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
     paired = obj.boolean("paired"),
     connected = obj.boolean("connected"),
-    // Only an omitted field identifies a legacy gateway; malformed and future values stay fail-closed.
-    approvalState =
-      if (obj.containsKey("approvalState")) {
-        parseGatewayNodeApprovalState(obj["approvalState"].asStringOrNull())
-      } else {
-        GatewayNodeApprovalState.Unsupported
-      },
-    pendingRequestId = normalizeGatewayApprovalRequestId(obj["pendingRequestId"].asStringOrNull()),
+    approvalState = parseGatewayNodeApprovalState(obj),
     capabilities = parseGatewayStringArray(obj["caps"] as? JsonArray),
     commands = parseGatewayStringArray(obj["commands"] as? JsonArray),
   )
@@ -9921,8 +9884,7 @@ data class GatewayNodeSummary(
   val deviceFamily: String?,
   val paired: Boolean,
   val connected: Boolean,
-  val approvalState: GatewayNodeApprovalState,
-  val pendingRequestId: String?,
+  val approvalState: GatewayNodeCapabilityApproval,
   val capabilities: List<String>,
   val commands: List<String>,
 )
