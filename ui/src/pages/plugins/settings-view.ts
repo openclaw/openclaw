@@ -42,6 +42,7 @@ import { renderPluginDetailRows, renderPluginDetailShell } from "./detail-shell.
 import { buildInstalledPluginDetailTabs, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { renderPluginOfficialBadge } from "./plugin-card.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
+import { matchesPluginQuery, pluginStatePresentation } from "./plugin-state-presentation.ts";
 import { renderPluginLifecycle } from "./settings-lifecycle.ts";
 import { pluginEntryValue } from "./settings-model.ts";
 
@@ -98,35 +99,6 @@ export type DetailProps = SharedProps & {
   onRetryInspection: () => void;
   onTabChange: (tab: InstalledPluginDetailTab) => void;
 };
-
-function pluginStatePresentation(plugin: PluginCatalogItem): {
-  kind: "ok" | "warn" | "danger" | "muted";
-  label: string;
-} {
-  switch (plugin.state) {
-    case "enabled":
-      return { kind: "ok", label: t("pluginsPage.enabled") };
-    case "disabled":
-      return { kind: "muted", label: t("pluginsPage.disabled") };
-    case "needs-setup":
-      return { kind: "warn", label: t("pluginsPage.setupRequired") };
-    case "error":
-      return { kind: "danger", label: t("pluginsPage.needsAttention") };
-    case "not-installed":
-      return { kind: "muted", label: t("pluginsPage.available") };
-  }
-  return plugin.state satisfies never;
-}
-
-function matchesQuery(plugin: PluginCatalogItem, query: string): boolean {
-  const needle = query.trim().toLocaleLowerCase();
-  return (
-    !needle ||
-    [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
-      value?.toLocaleLowerCase().includes(needle),
-    )
-  );
-}
 
 function renderMessage(message: PluginRowMessage | undefined) {
   if (!message) {
@@ -199,7 +171,7 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
   }
   const refreshError = props.error ? renderRetryError(props.error, props.onRefresh) : nothing;
   const plugins = (props.result?.plugins ?? [])
-    .filter((plugin) => plugin.installed && matchesQuery(plugin, props.query))
+    .filter((plugin) => plugin.installed && matchesPluginQuery(plugin, props.query))
     .toSorted((left, right) => left.name.localeCompare(right.name));
   if (plugins.length === 0) {
     return html`${refreshError}${renderSettingsEmpty(

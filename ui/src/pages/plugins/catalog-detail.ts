@@ -71,7 +71,7 @@ export function renderPluginDetailReadme(result: PluginDiscoveryDetailResult): T
     : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoReadme")}</p>`;
 }
 
-export function renderPluginDetailSkills(result: PluginDiscoveryDetailResult): TemplateResult {
+function renderPluginDetailSkills(result: PluginDiscoveryDetailResult): TemplateResult {
   return result.detail.skills.length
     ? html`<div class="plugin-catalog-detail__rows">
         ${result.detail.skills.map(
