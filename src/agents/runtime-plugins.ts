@@ -107,6 +107,7 @@ function resolveAgentRuntimePluginRegistryLoad(
 /** Loads the registry handle owned by an agent prepared-runtime generation. */
 export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
+  onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
   const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
   if (
@@ -114,11 +115,14 @@ export function loadAgentRuntimePluginRegistryHandle(
     loadOptions.onlyPluginIds !== undefined &&
     registryContainsRuntimePluginIds(params.reusableRegistry, loadOptions.onlyPluginIds)
   ) {
+    onPrimaryRegistry?.(params.reusableRegistry);
     return params.reusableRegistry;
   }
   // Discovery-only load: full mode can replace process-global sandbox backends.
   // Adopt full-only runtime capabilities from the matching composition-root owners.
   const pluginRegistry = loadPluginRegistryHandle({ ...loadOptions, activate: false });
+  // Media providers remain owned by this source when full-only donors require a copy.
+  onPrimaryRegistry?.(pluginRegistry);
   const activeRegistry = getActivePluginRegistry();
   if (!activeRegistry) {
     return pluginRegistry;

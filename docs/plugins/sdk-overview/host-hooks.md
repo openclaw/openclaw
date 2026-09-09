@@ -61,6 +61,16 @@ completed video assets and result metadata. Video assets may contain buffers or
 provider-hosted URLs. Downloads after the call returns belong to the caller;
 registration disposal must not invalidate those completed artifacts.
 
+For `image_generate` tools prepared from an owned inspection, resources remain
+held through preflight and, once accepted, through generation, image saving, and
+any rollback. A `started` result acknowledges acceptance; it does not mean the
+work or cleanup has finished. If the original inspection retires during
+preflight, new task admission is rejected. Prepare tools from the current provider
+setup before retrying.
+An already accepted task keeps its captured resources until its work settles.
+Raw prepared registries retain their existing host lifetime; this does not enable
+automatic physical disposal for all prepared runtimes.
+
 Executable CLI command registration also uses an owned, uncached registry. Its
 resources remain available through asynchronous registration, command actions,
 and their tracked cleanup, then `dispose()` runs. Closing command preparation

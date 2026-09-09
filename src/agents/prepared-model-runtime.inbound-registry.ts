@@ -27,6 +27,7 @@ export type PreparedInboundRegistryLoader = (
   input: PreparedInboundRegistryInput,
   metadataSnapshot: PluginMetadataSnapshot,
   configuredHarnessRuntimes?: readonly string[],
+  onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ) => PluginRegistry;
 
 function inboundRegistryIdentity(input: PreparedInboundRegistryInput): string {
@@ -61,6 +62,7 @@ export function loadPreparedInboundPluginRegistry(
   input: PreparedInboundRegistryInput,
   metadataSnapshot = prepareOwnedPluginLoadContext(input, input.env ?? process.env, undefined),
   configuredHarnessRuntimes?: readonly string[],
+  onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
   const activeRegistry = getActivePluginRegistry();
   // Identity is the generation authority. Manifest equivalence alone could let a
@@ -83,15 +85,21 @@ export function loadPreparedInboundPluginRegistry(
       : undefined;
   const registry =
     reusableGatewayRegistry ??
-    loadAgentRuntimePluginRegistryHandle({
-      config: input.config,
-      env: input.env ?? process.env,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-      metadataSnapshot,
-      preferBuiltPluginArtifacts: true,
-      configuredHarnessRuntimes,
-    });
+    loadAgentRuntimePluginRegistryHandle(
+      {
+        config: input.config,
+        env: input.env ?? process.env,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        metadataSnapshot,
+        preferBuiltPluginArtifacts: true,
+        configuredHarnessRuntimes,
+      },
+      onPrimaryRegistry,
+    );
+  if (reusableGatewayRegistry) {
+    onPrimaryRegistry?.(reusableGatewayRegistry);
+  }
   prepareOwnedPluginLoadContext(input, input.env ?? process.env, registry, metadataSnapshot, true);
   return registry;
 }
@@ -100,20 +108,31 @@ export function loadPreparedInboundPluginRegistry(
 export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLoader {
   const registries = new Map<
     string,
-    { metadataSnapshot: PluginMetadataSnapshot; registry: PluginRegistry }
+    {
+      metadataSnapshot: PluginMetadataSnapshot;
+      registry: PluginRegistry;
+      primaryRegistry: PluginRegistry;
+    }
   >();
-  return (input, metadataSnapshot, configuredHarnessRuntimes) => {
+  return (input, metadataSnapshot, configuredHarnessRuntimes, onPrimaryRegistry) => {
     const key = inboundRegistryIdentity(input);
     const existing = registries.get(key);
     if (existing?.metadataSnapshot === metadataSnapshot) {
+      onPrimaryRegistry?.(existing.primaryRegistry);
       return existing.registry;
     }
+    let primaryRegistry: PluginRegistry | undefined;
     const registry = loadPreparedInboundPluginRegistry(
       input,
       metadataSnapshot,
       configuredHarnessRuntimes,
+      (source) => {
+        primaryRegistry = source;
+      },
     );
-    registries.set(key, { metadataSnapshot, registry });
+    primaryRegistry ??= registry;
+    registries.set(key, { metadataSnapshot, registry, primaryRegistry });
+    onPrimaryRegistry?.(primaryRegistry);
     return registry;
   };
 }
@@ -130,6 +149,7 @@ export function prepareWorkspacePluginRegistries(
 ): {
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
+  primaryRegistry?: PluginRegistry;
 } {
   // Read-only catalog owners stay runtime-free. Executable probes opt in to provider runtime,
   // while non-core harness probes carry the exact selected plugin generation.
@@ -137,36 +157,53 @@ export function prepareWorkspacePluginRegistries(
     return {};
   }
   // Resolve batch facts only for a registry load; read-only and reused registries need no scan.
+  let primaryRegistry: PluginRegistry | undefined;
   const inboundPluginRegistry = input.readOnly
     ? undefined
     : (reusableGeneration?.inboundPluginRegistry ??
-      loadInboundRegistry?.(input, metadataSnapshot, getConfiguredHarnessRuntimes?.()));
+      loadInboundRegistry?.(input, metadataSnapshot, getConfiguredHarnessRuntimes?.(), (source) => {
+        primaryRegistry = source;
+      }));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
+  primaryRegistry ??= reusableGeneration?.mediaCapabilityProviderSource?.registry ?? baseRegistry;
+  let loadedPrimaryRegistry: PluginRegistry | undefined;
   const runtimePluginRegistry =
     input.runtimePluginSelections || !baseRegistry
-      ? loadAgentRuntimePluginRegistryHandle({
-          ...(input.loadRuntimePlugins
-            ? { basePluginIds: [] }
-            : baseRegistry
-              ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
-              : basePluginIds !== undefined
-                ? { basePluginIds }
-                : {}),
-          ...(reusableGeneration?.pluginRegistry
-            ? { reusableRegistry: reusableGeneration.pluginRegistry }
-            : {}),
-          config: input.config,
-          env: input.env ?? process.env,
-          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-          ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-          metadataSnapshot,
-          ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
-          selections: input.runtimePluginSelections,
-          configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
-        })
+      ? loadAgentRuntimePluginRegistryHandle(
+          {
+            ...(input.loadRuntimePlugins
+              ? { basePluginIds: [] }
+              : baseRegistry
+                ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
+                : basePluginIds !== undefined
+                  ? { basePluginIds }
+                  : {}),
+            ...(reusableGeneration?.pluginRegistry
+              ? { reusableRegistry: reusableGeneration.pluginRegistry }
+              : {}),
+            config: input.config,
+            env: input.env ?? process.env,
+            ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+            ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+            metadataSnapshot,
+            ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
+            selections: input.runtimePluginSelections,
+            configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
+          },
+          (source) => {
+            loadedPrimaryRegistry =
+              reusableGeneration && source === reusableGeneration.pluginRegistry
+                ? (reusableGeneration.mediaCapabilityProviderSource?.registry ?? source)
+                : source;
+          },
+        )
       : baseRegistry;
   return {
     runtimePluginRegistry,
+    primaryRegistry:
+      runtimePluginRegistry === baseRegistry
+        ? (primaryRegistry ?? runtimePluginRegistry)
+        : (loadedPrimaryRegistry ?? runtimePluginRegistry),
     ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
   };
 }

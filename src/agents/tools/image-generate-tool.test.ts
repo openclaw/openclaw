@@ -40,6 +40,8 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => (
 }));
 
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
+let imageGenerationExecution: typeof import("./image-generate-tool.execution.js");
+let mediaGenerationRegistry: typeof import("../../media-generation/registry.js");
 let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
@@ -352,6 +354,8 @@ describe("createImageGenerateTool", () => {
       };
     });
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
+    imageGenerationExecution = await import("./image-generate-tool.execution.js");
+    mediaGenerationRegistry = await import("../../media-generation/registry.js");
     imageOps = await import("../../media/media-services.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
@@ -363,6 +367,19 @@ describe("createImageGenerateTool", () => {
   });
 
   beforeEach(() => {
+    // These fixtures cover routing and limits; the native suite proves actual resource ownership.
+    vi.spyOn(imageGenerationExecution, "acquireImageGenerationToolProviders").mockImplementation(
+      async ({ cfg }) => ({
+        providers: imageGenerationRuntime.listRuntimeImageGenerationProviders({ config: cfg }),
+        assertOpen() {},
+        run: async (run) => await run(),
+        release: async () => {},
+      }),
+    );
+    vi.spyOn(mediaGenerationRegistry, "withImageGenerationProviders").mockImplementation(
+      async (cfg, run) =>
+        await run(imageGenerationRuntime.listRuntimeImageGenerationProviders({ config: cfg })),
+    );
     for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
       vi.stubEnv(envVar, "");
     }
@@ -1262,6 +1279,9 @@ describe("createImageGenerateTool", () => {
   });
 
   it("returns active status for a duplicate image request with the same prompt", async () => {
+    const acquireProviders = vi.mocked(
+      imageGenerationExecution.acquireImageGenerationToolProviders,
+    );
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
@@ -1304,6 +1324,7 @@ describe("createImageGenerateTool", () => {
     });
 
     expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(acquireProviders).not.toHaveBeenCalled();
     expect(resultText(result)).toContain(
       "Image generation task task-existing-image is already running",
     );
