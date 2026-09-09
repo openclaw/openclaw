@@ -2653,6 +2653,17 @@
                       "cli/dns",
                       "cli/docs",
                       "cli/mcp",
+                      {
+                        "group": "MCP",
+                        "pages": [
+                          "cli/mcp/serve",
+                          "cli/mcp/registry",
+                          "cli/mcp/json-output",
+                          "cli/mcp/transports",
+                          "cli/mcp/control-ui",
+                          "cli/mcp/apps"
+                        ]
+                      },
                       "cli/proxy",
                       "cli/wiki"
                     ]

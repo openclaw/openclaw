@@ -3408,6 +3408,30 @@
     "target": "运行与配置策略检查"
   },
   {
+    "source": "Run OpenClaw as an MCP server",
+    "target": "将 OpenClaw 作为 MCP 服务器运行"
+  },
+  {
+    "source": "Manage saved MCP servers",
+    "target": "管理已保存的 MCP 服务器"
+  },
+  {
+    "source": "JSON output shapes",
+    "target": "JSON 输出结构"
+  },
+  {
+    "source": "Transports and OAuth",
+    "target": "传输方式与 OAuth"
+  },
+  {
+    "source": "MCP in the Control UI",
+    "target": "Control UI 中的 MCP"
+  },
+  {
+    "source": "MCP Apps",
+    "target": "MCP Apps"
+  },
+  {
     "source": "Accept and watch policy state",
     "target": "接受并监视策略状态"
   },
