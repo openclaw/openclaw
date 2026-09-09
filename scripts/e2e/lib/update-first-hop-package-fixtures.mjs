@@ -269,7 +269,7 @@ export function packFirstHopUpdateFixture(candidateTarball, outputTarball, seque
   };
 }
 
-export function packNegativeUpdateFixture(candidateTarball, outputTarball) {
+function packNegativeUpdateFixture(candidateTarball, outputTarball) {
   return {
     method: "candidate-missing-compatibility-fixture",
     ...packTransformedFixture(candidateTarball, outputTarball, removeLegacyUpdateCompatChunks),
