@@ -2581,6 +2581,17 @@
                       "cli/plugins",
                       "cli/path",
                       "cli/policy",
+                      {
+                        "group": "Policy",
+                        "pages": [
+                          "cli/policy/authoring",
+                          "cli/policy/rules",
+                          "cli/policy/scopes",
+                          "cli/policy/running-checks",
+                          "cli/policy/attestation",
+                          "cli/policy/findings"
+                        ]
+                      },
                       "cli/skills",
                       "cli/workboard"
                     ]

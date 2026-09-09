@@ -3326,5 +3326,29 @@
   {
     "source": "Configuration — provider examples",
     "target": "配置 — 提供商示例"
+  },
+  {
+    "source": "Author a policy file",
+    "target": "编写策略文件"
+  },
+  {
+    "source": "Policy rule reference",
+    "target": "策略规则参考"
+  },
+  {
+    "source": "Scoped policy overlays",
+    "target": "作用域策略覆盖"
+  },
+  {
+    "source": "Run and configure policy checks",
+    "target": "运行与配置策略检查"
+  },
+  {
+    "source": "Accept and watch policy state",
+    "target": "接受并监视策略状态"
+  },
+  {
+    "source": "Policy findings, repair, and exit codes",
+    "target": "策略发现项、修复与退出码"
   }
 ]
