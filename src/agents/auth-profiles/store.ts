@@ -23,11 +23,10 @@ import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
+  assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationReady,
   assertAuthProfileMigrationStateAtDatabasePath,
-  clearAuthProfileMigrationRequired,
   listLegacyAuthProfileSources,
-  markAuthProfileMigrationRequired,
   warnLegacyAuthProfileSourcesIgnored,
 } from "./legacy-source-diagnostic.js";
 import {
@@ -113,6 +112,8 @@ import { buildPersistedAuthProfileState, loadPersistedAuthProfileState } from ".
 import type { AuthProfileStore } from "./types.js";
 
 type LoadAuthProfileStoreOptions = {
+  /** Limit a credential-read refusal to the provider being resolved; writes stay owner-wide. */
+  migrationProvider?: string;
   /** Materialize only this explicitly selected personal account into the returned view. */
   profileId?: string;
   allowKeychainPrompt?: boolean;
@@ -1207,7 +1208,10 @@ export function createAuthProfileStoreRuntime(
 
   function resolveRuntimeAuthProfileStore(
     agentDir?: string,
-    options?: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt" | "inheritedAuthDir">,
+    options?: Pick<
+      LoadAuthProfileStoreOptions,
+      "allowKeychainPrompt" | "inheritedAuthDir" | "migrationProvider" | "config"
+    >,
   ): AuthProfileStore | null {
     // Ambient snapshots may include non-portable shared profiles. A bounded exec
     // scope composes its view from the actual local store and its filtered base.
@@ -1232,6 +1236,8 @@ export function createAuthProfileStoreRuntime(
     }
     if (requestedStore) {
       const persistedMainStore = loadAuthProfileStoreForAgent(options?.inheritedAuthDir, {
+        migrationProvider: options?.migrationProvider,
+        config: options?.config,
         readOnly: true,
         syncExternalCli: false,
         ...resolvePersistedLoadOptions(options),
@@ -1242,6 +1248,8 @@ export function createAuthProfileStoreRuntime(
     }
     if (mainStore) {
       const persistedRequestedStore = loadAuthProfileStoreForAgent(agentDir, {
+        migrationProvider: options?.migrationProvider,
+        config: options?.config,
         readOnly: true,
         syncExternalCli: false,
         ...resolvePersistedLoadOptions(options),
@@ -1532,7 +1540,15 @@ export function createAuthProfileStoreRuntime(
     }
     const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
     const effectiveOptions = resolveRuntimeAuthProfileLoadOptions(options);
-    assertAuthProfileMigrationReady(effectiveAgentDir, env);
+    const databasePath = effectiveAgentDir
+      ? resolveAgentAuthPath(effectiveAgentDir)
+      : resolveSharedAuthPath(env);
+    assertAuthProfileMigrationReady(
+      effectiveAgentDir,
+      env,
+      effectiveOptions?.migrationProvider,
+      effectiveOptions?.config,
+    );
     const store =
       !effectiveAgentDir && env && !effectiveOptions?.database
         ? loadPersistedSharedAuthProfileStore(env)
@@ -1558,26 +1574,21 @@ export function createAuthProfileStoreRuntime(
       agentDir: effectiveAgentDir,
       env,
     });
+    assertAuthProfileMigrationCandidates({
+      databasePath,
+      candidates: legacySources,
+      hasCredentials: () => Boolean(store && Object.keys(store.profiles).length > 0),
+      provider: effectiveOptions?.migrationProvider,
+      config: effectiveOptions?.config,
+    });
     const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
-    // A populated canonical store owns credentials; retired files beside it are
-    // unarchived bytes. An empty or absent store still requires migration.
-    if (credentialSources.length > 0 && (!store || Object.keys(store.profiles).length === 0)) {
-      const migrationError = new AuthProfileMigrationRequiredError({
+    if (credentialSources.length === 0 || (store && Object.keys(store.profiles).length > 0)) {
+      warnLegacyAuthProfileSourcesIgnored({
         agentDir: effectiveAgentDir,
         env,
-        sources: credentialSources,
+        sources: legacySources,
       });
-      if (store) {
-        markAuthProfileMigrationRequired(effectiveAgentDir, migrationError, env);
-      }
-      throw migrationError;
     }
-    warnLegacyAuthProfileSourcesIgnored({
-      agentDir: effectiveAgentDir,
-      env,
-      sources: legacySources,
-    });
-    clearAuthProfileMigrationRequired(effectiveAgentDir, env);
     const synced = maybeSyncPersistedExternalCliAuthProfiles({
       store: store ?? createEmptyAuthProfileStore(),
       agentDir: effectiveAgentDir,
@@ -1705,6 +1716,7 @@ export function createAuthProfileStoreRuntime(
   function ensureAuthProfileStore(
     agentDir?: string,
     options?: {
+      migrationProvider?: string;
       profileId?: string;
       allowKeychainPrompt?: boolean;
       config?: OpenClawConfig;
@@ -1769,6 +1781,8 @@ export function createAuthProfileStoreRuntime(
   function ensureAuthProfileStoreWithoutExternalProfiles(
     agentDir?: string,
     options?: {
+      migrationProvider?: string;
+      config?: OpenClawConfig;
       profileId?: string;
       allowKeychainPrompt?: boolean;
       inheritedAuthDir?: string;

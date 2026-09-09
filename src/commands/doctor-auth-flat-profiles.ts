@@ -11,6 +11,7 @@ import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   clearAuthProfileMigrationDiagnostics,
   listLegacyAuthProfileArchives,
+  readLegacyAuthProfileProviders,
   resolveLegacyOAuthPath,
 } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
@@ -971,10 +972,17 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
 
   note(
     [
-      ...detected.map(
-        (candidate) =>
-          `- ${shortenHomePath(candidate.authPath)} / ${shortenHomePath(candidate.statePath)}`,
-      ),
+      ...detected.map((candidate) => {
+        const hasCredentials =
+          fs.existsSync(candidate.authPath) || fs.existsSync(candidate.legacyPath);
+        const providers = readLegacyAuthProfileProviders([
+          { kind: "auth-profiles", path: candidate.authPath },
+          ...(fs.existsSync(candidate.legacyPath)
+            ? [{ kind: "legacy-auth" as const, path: candidate.legacyPath }]
+            : []),
+        ]);
+        return `- ${shortenHomePath(candidate.authPath)} / ${shortenHomePath(candidate.statePath)}${hasCredentials ? ` (affected providers: ${providers?.join(", ") ?? "unknown; provider scope unavailable"})` : ""}`;
+      }),
       ...(hasLegacyOAuth ? [`- ${shortenHomePath(oauthPath)} (shared-main owner)`] : []),
       `- ${formatCliCommand("openclaw doctor --fix")} imports legacy auth profile JSON into SQLite, verifies it, records a receipt, and archives the original bytes.`,
     ].join("\n"),

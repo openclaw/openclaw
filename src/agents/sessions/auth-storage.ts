@@ -22,6 +22,7 @@ import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
+  markAuthProfileMigrationRequired,
 } from "../auth-profiles/legacy-source-diagnostic.js";
 import { normalizeOAuthRefreshCredential } from "../auth-profiles/oauth-refresh-fence.js";
 import {
@@ -443,12 +444,21 @@ export class AuthStorage {
   }
 
   static forAgent(agentDir: string = getAgentDir()): AuthStorage {
-    assertAuthProfileMigrationReady(agentDir);
-    const preparedStore =
-      getRuntimeAuthProfileStoreSnapshotCore(agentDir) ??
-      loadAuthProfileStoreForSecretsRuntime(agentDir);
-    assertAuthStorageSecretRefsMaterialized(preparedStore);
-    return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore), agentDir);
+    try {
+      assertAuthProfileMigrationReady(agentDir);
+      const preparedStore =
+        getRuntimeAuthProfileStoreSnapshotCore(agentDir) ??
+        loadAuthProfileStoreForSecretsRuntime(agentDir);
+      assertAuthStorageSecretRefsMaterialized(preparedStore);
+      return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore), agentDir);
+    } catch (error) {
+      if (!(error instanceof AuthProfileMigrationRequiredError) || !error.affectedProviders) {
+        throw error;
+      }
+      // Keep persistence fenced; getApiKey checks the selected provider before fallback.
+      markAuthProfileMigrationRequired(agentDir, error);
+      return new AuthStorage(new SqliteAuthStorageBackend(agentDir), agentDir);
+    }
   }
 
   /**
@@ -507,8 +517,14 @@ export class AuthStorage {
     this.errors.push(normalizedError);
   }
 
-  private getCanonicalLoadError(): Error | null {
+  private getCanonicalLoadError(provider?: string): Error | null {
     if (!this.loadError) {
+      return null;
+    }
+    if (
+      this.loadError instanceof AuthProfileMigrationRequiredError &&
+      !this.loadError.blocksProvider(provider)
+    ) {
       return null;
     }
     return this.migrationOwnerAgentDir ||
@@ -741,10 +757,10 @@ export class AuthStorage {
     }
 
     if (this.migrationOwnerAgentDir) {
-      assertAuthProfileMigrationReady(this.migrationOwnerAgentDir);
+      assertAuthProfileMigrationReady(this.migrationOwnerAgentDir, undefined, providerId);
     }
 
-    const canonicalLoadError = this.getCanonicalLoadError();
+    const canonicalLoadError = this.getCanonicalLoadError(providerId);
     if (canonicalLoadError) {
       // Canonical-store ownership blocks implicit env/config fallback. An
       // explicit runtime override above remains the only caller-owned escape.

@@ -7,6 +7,7 @@ import {
   ModelRegistry as PublicModelRegistry,
 } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const providerOAuthMocks = vi.hoisted(() => ({
   login: vi.fn(),
@@ -582,6 +583,41 @@ describe("SQLite auth storage", () => {
 
     expect(() => AuthStorage.forAgent(agentDir)).toThrow("requires legacy credential migration");
   });
+
+  it.each(["local", "shared"])(
+    "keeps unrelated provider fallback available with a %s migration refusal",
+    async (owner) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-session-migration-" },
+        async (state) => {
+          const agentDir = state.agentDir("worker");
+          fs.mkdirSync(agentDir, { recursive: true });
+          writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+          await state.writeJson(
+            `agents/${owner === "local" ? "worker" : "main"}/agent/auth-profiles.json`,
+            {
+              version: 1,
+              profiles: {
+                "anthropic:default": { type: "api_key", provider: "anthropic", key: "legacy-key" },
+              },
+            },
+          );
+          const storage = AuthStorage.forAgent(agentDir);
+          storage.setFallbackResolver(() => "fallback-key");
+          for (const reload of [false, true]) {
+            if (reload) {
+              storage.reload();
+            }
+            await expect(storage.getApiKey("litellm")).resolves.toBe("fallback-key");
+            await expect(storage.getApiKey("anthropic")).rejects.toMatchObject({
+              code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+              affectedProviders: ["anthropic"],
+            });
+          }
+        },
+      );
+    },
+  );
 
   it("fails closed when a legacy credential source appears after construction", async () => {
     const agentDir = makeAgentDir();

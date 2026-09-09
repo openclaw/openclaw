@@ -163,6 +163,15 @@ SecretRef input is for static credentials only. OAuth credentials are runtime-mu
 
 ## Legacy-Compatible Messaging
 
+When an empty SQLite auth store has a retired `auth-profiles.json` beside it,
+runtime inspects provider metadata without importing or resolving its credentials.
+`AUTH_PROFILE_MIGRATION_REQUIRED` blocks only those providers, including their auth
+aliases; unrelated provider auth remains available. Unreadable or unrecognized
+legacy data retains the owner-wide refusal. A populated SQLite store retains its
+warning-only behavior. Recorded refusals remain until the lifecycle explicitly
+clears them; changing or removing a legacy file does not release them. Doctor lists the affected providers, and
+`openclaw doctor --fix` performs the supported verified import and archive.
+
 For script compatibility, probe errors keep this first line unchanged:
 
 `Auth profile credentials are missing or expired.`
