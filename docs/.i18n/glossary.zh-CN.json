@@ -780,6 +780,50 @@
     "target": "沙箱隔离"
   },
   {
+    "source": "What gets sandboxed",
+    "target": "哪些内容会被沙箱隔离"
+  },
+  {
+    "source": "Modes, scope, and backend",
+    "target": "模式、作用域与后端"
+  },
+  {
+    "source": "Supported capability matrix",
+    "target": "支持的能力矩阵"
+  },
+  {
+    "source": "Docker backend",
+    "target": "Docker 后端"
+  },
+  {
+    "source": "Podman backend",
+    "target": "Podman 后端"
+  },
+  {
+    "source": "SSH backend",
+    "target": "SSH 后端"
+  },
+  {
+    "source": "OpenShell backend",
+    "target": "OpenShell 后端"
+  },
+  {
+    "source": "Workspace access",
+    "target": "工作区访问权限"
+  },
+  {
+    "source": "Multiple folders for one agent",
+    "target": "为单个 Agent 配置多个目录"
+  },
+  {
+    "source": "Images and setup",
+    "target": "镜像与设置"
+  },
+  {
+    "source": "setupCommand (one-time container setup)",
+    "target": "setupCommand（一次性容器设置）"
+  },
+  {
     "source": "sandboxed",
     "target": "沙箱隔离"
   },
