@@ -1681,6 +1681,20 @@
                       "concepts/memory-honcho",
                       "concepts/memory-search",
                       "concepts/active-memory",
+                      {
+                        "group": "Active memory",
+                        "pages": [
+                          "concepts/active-memory/enabling",
+                          "concepts/active-memory/how-it-works",
+                          "concepts/active-memory/session-controls",
+                          "concepts/active-memory/tuning",
+                          "concepts/active-memory/memory-tools",
+                          "concepts/active-memory/advanced-options",
+                          "concepts/active-memory/configuration",
+                          "concepts/active-memory/recommended-setup",
+                          "concepts/active-memory/troubleshooting"
+                        ]
+                      },
                       "concepts/dreaming"
                     ]
                   },

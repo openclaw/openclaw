@@ -700,6 +700,38 @@
     "target": "主动记忆"
   },
   {
+    "source": "Enabling active memory",
+    "target": "启用主动记忆"
+  },
+  {
+    "source": "How active memory works",
+    "target": "主动记忆的工作原理"
+  },
+  {
+    "source": "Session controls",
+    "target": "会话控制"
+  },
+  {
+    "source": "Query modes, prompts, and models",
+    "target": "查询模式、提示词与模型"
+  },
+  {
+    "source": "Memory tools",
+    "target": "记忆工具"
+  },
+  {
+    "source": "Advanced overrides and transcripts",
+    "target": "高级覆盖与转录"
+  },
+  {
+    "source": "Recommended setup",
+    "target": "推荐设置"
+  },
+  {
+    "source": "Troubleshooting active memory",
+    "target": "主动记忆故障排查"
+  },
+  {
     "source": "Commitments",
     "target": "跟进承诺"
   },
