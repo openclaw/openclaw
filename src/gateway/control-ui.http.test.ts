@@ -22,6 +22,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
@@ -170,7 +172,6 @@ describe("handleControlUiHttpRequest", () => {
       assistantAgentId?: string;
       devGitBranch?: string;
       environment?: { label: string; color: string };
-      localMediaPreviewRoots?: string[];
       seamColor?: string;
       terminalEnabled: boolean;
       cliAgentsEnabled: boolean;
@@ -213,7 +214,17 @@ describe("handleControlUiHttpRequest", () => {
   }) {
     const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method, headers: params.headers ?? {} } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method,
+        headers: params.headers ?? {},
+        headersDistinct: Object.fromEntries(
+          Object.entries(params.headers ?? {}).map(([name, value]) => [
+            name,
+            Array.isArray(value) ? value : [String(value)],
+          ]),
+        ),
+      } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
@@ -465,59 +476,70 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
+  async function withControlUiHome<T>(prefix: string, fn: () => Promise<T>): Promise<T> {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    let databasePath: string | undefined;
+    try {
+      return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+        databasePath = resolveOpenClawStateSqlitePath();
+        return await fn();
+      });
+    } finally {
+      // A failed database close must leave its files intact.
+      if (databasePath) {
+        closeOpenClawStateDatabaseByPath(databasePath);
+      }
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  }
+
   async function withPairedOperatorDeviceToken<T>(params: {
     issuerGeneration?: string;
     browserMetadata?: boolean;
     fn: (token: string) => Promise<T>;
   }) {
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-device-token-"));
-    try {
-      return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
-        const deviceId = "control-ui-device";
-        const requested = await requestDevicePairing({
+    return await withControlUiHome("openclaw-ui-device-token-", async () => {
+      const deviceId = "control-ui-device";
+      const requested = await requestDevicePairing({
+        deviceId,
+        publicKey: "test-public-key",
+        role: "operator",
+        scopes: ["operator.read"],
+        ...(params.browserMetadata
+          ? {
+              clientId: "openclaw-control-ui",
+              clientMode: "webchat",
+            }
+          : {}),
+      });
+      const approved = await approveDevicePairing(requested.request.requestId, {
+        callerScopes: ["operator.read"],
+      });
+      expect(approved?.status).toBe("approved");
+      let operatorToken =
+        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      if (params.issuerGeneration) {
+        const issued = await ensureDeviceToken({
           deviceId,
-          publicKey: "test-public-key",
           role: "operator",
           scopes: ["operator.read"],
-          ...(params.browserMetadata
-            ? {
-                clientId: "openclaw-control-ui",
-                clientMode: "webchat",
-              }
-            : {}),
+          issuer: {
+            kind: "shared-gateway-auth",
+            generation: params.issuerGeneration,
+          },
         });
-        const approved = await approveDevicePairing(requested.request.requestId, {
-          callerScopes: ["operator.read"],
-        });
-        expect(approved?.status).toBe("approved");
-        let operatorToken =
-          approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
-        if (params.issuerGeneration) {
-          const issued = await ensureDeviceToken({
-            deviceId,
-            role: "operator",
-            scopes: ["operator.read"],
-            issuer: {
-              kind: "shared-gateway-auth",
-              generation: params.issuerGeneration,
-            },
-          });
-          operatorToken = issued?.token;
-        }
-        expect(typeof operatorToken).toBe("string");
-        return await params.fn(operatorToken ?? "");
-      });
-    } finally {
-      await fs.rm(tempHome, { recursive: true, force: true });
-    }
+        operatorToken = issued?.token;
+      }
+      expect(typeof operatorToken).toBe("string");
+      return await params.fn(operatorToken ?? "");
+    });
   }
 
   async function withScopedPairedOperatorDevice<T>(params: {
     scopes: string[];
     fn: (bearer: string) => Promise<T>;
   }) {
-    const tempHome = testTempDirs.make("openclaw-ui-scoped-device-");
-    return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+    return await withControlUiHome("openclaw-ui-scoped-device-", async () => {
       const deviceId = `control-ui-device-${randomUUID()}`;
       const requested = await requestDevicePairing({
         deviceId,
@@ -1586,57 +1608,59 @@ describe("handleControlUiHttpRequest", () => {
     },
   );
 
-  it("serves bootstrap config JSON", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-            config: {
-              agents: {
-                defaults: { workspace: tmp },
-                list: [
-                  {
-                    id: "roboclaw",
-                    default: true,
-                    workspace: tmp,
-                    identity: {
-                      name: "</script><script>alert(1)//",
-                      avatar: "</script>.png",
+  it.each([undefined, true, false])(
+    "serves bootstrap config JSON with cliAgents=%s",
+    async (enabled) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: {
+                agents: {
+                  defaults: { workspace: tmp },
+                  list: [
+                    {
+                      id: "roboclaw",
+                      default: true,
+                      workspace: tmp,
+                      identity: {
+                        name: "</script><script>alert(1)//",
+                        avatar: "</script>.png",
+                      },
                     },
-                  },
-                ],
-              },
-              ui: { seamColor: "#1A2b3C" },
-              gateway: {
-                cliAgents: { enabled: true },
-                controlUi: { environment: { label: "edge", color: "amber" } },
+                  ],
+                },
+                ui: { seamColor: "#1A2b3C" },
+                gateway: {
+                  ...(enabled === undefined ? {} : { cliAgents: { enabled } }),
+                  controlUi: { environment: { label: "edge", color: "amber" } },
+                },
               },
             },
-          },
-        );
-        expect(handled).toBe(true);
-        const parsed = parseBootstrapPayload(end);
-        expect(parsed.basePath).toBe("");
-        expect(parsed.assistantName).toBe("</script><script>alert(1)//");
-        expect(parsed.assistantAvatar).toBe("A");
-        expect(parsed.assistantAvatarStatus).toBe("none");
-        expect(parsed.assistantAvatarReason).toBe("missing");
-        expect(parsed.assistantAgentId).toBe("roboclaw");
-        expect(parsed.seamColor).toBe("#1A2b3C");
-        expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
-        expect(parsed.terminalEnabled).toBe(true);
-        expect(parsed.cliAgentsEnabled).toBe(true);
-        expect(parsed.automaticallyFetchFavicons).toBe(true);
-        expect(parsed.communityInvite).toBe(true);
-        expect(parsed.devGitBranch).toBeUndefined();
-        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
-      },
-    });
-  });
+          );
+          expect(handled).toBe(true);
+          const parsed = parseBootstrapPayload(end);
+          expect(parsed.basePath).toBe("");
+          expect(parsed.assistantName).toBe("</script><script>alert(1)//");
+          expect(parsed.assistantAvatar).toBe("A");
+          expect(parsed.assistantAvatarStatus).toBe("none");
+          expect(parsed.assistantAvatarReason).toBe("missing");
+          expect(parsed.assistantAgentId).toBe("roboclaw");
+          expect(parsed.seamColor).toBe("#1A2b3C");
+          expect(parsed.environment).toEqual({ label: "edge", color: "amber" });
+          expect(parsed.terminalEnabled).toBe(true);
+          expect(parsed.cliAgentsEnabled).toBe(enabled !== false);
+          expect(parsed.automaticallyFetchFavicons).toBe(true);
+          expect(parsed.communityInvite).toBe(true);
+          expect(parsed.devGitBranch).toBeUndefined();
+        },
+      });
+    },
+  );
 
   it.each(["automaticallyFetchFavicons", "communityInvite"] as const)(
     "projects an explicit %s opt-out into bootstrap config",
@@ -1986,8 +2010,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("penalizes both credential scopes when a Control UI read token is invalid", async () => {
-    const tempHome = testTempDirs.make("openclaw-ui-invalid-token-");
-    await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+    await withControlUiHome("openclaw-ui-invalid-token-", async () => {
       await withControlUiRoot({
         fn: async (tmp) => {
           const rateLimiter = createAuthRateLimiterSpy();
@@ -2058,8 +2081,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("rejects a rate-limited Control UI read when no valid device token is presented", async () => {
-    const tempHome = testTempDirs.make("openclaw-ui-rate-limited-token-");
-    await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+    await withControlUiHome("openclaw-ui-rate-limited-token-", async () => {
       await withControlUiRoot({
         fn: async (tmp) => {
           const rateLimiter = createAuthRateLimiterSpy();
@@ -2563,7 +2585,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarStatus).toBe("none");
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
-        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });

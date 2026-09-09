@@ -1,3 +1,4 @@
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import {
@@ -45,7 +46,7 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { IncompleteToolCallError, transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
@@ -181,7 +182,7 @@ export async function processResponsesStream<TApi extends Api>(
     }
   };
   const appendThinkingDelta = (slot: ThinkingOutputSlot, delta: string): void => {
-    slot.block.thinking += delta;
+    appendAssistantThinking(slot.block, delta);
     stream.push({
       type: "thinking_delta",
       contentIndex: slot.contentIndex,
@@ -669,8 +670,11 @@ export async function processResponsesStream<TApi extends Api>(
           resolveCompletedResponsesToolCall(incompleteToolCall);
         }
         if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
-          throw new Error(
-            output.errorMessage ?? "Responses stream completed with unresolved tool calls",
+          if (output.errorMessage) {
+            throw new Error(output.errorMessage);
+          }
+          throw new IncompleteToolCallError(
+            "Responses stream completed with unresolved tool calls",
           );
         }
         if (event.type === "response.completed" || output.stopReason === "length") {

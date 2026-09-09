@@ -156,11 +156,20 @@ describe("unit-fast vitest lane", () => {
       try {
         const includeFile = path.join(directory, "include.json");
         fs.writeFileSync(includeFile, JSON.stringify(selectedTests));
-        process.env.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
-        const selections = [];
-        for (const name of ["unit-fast", "unit-fast-isolated", "unit-fast-fake-timers"]) {
-          const { default: config } = await import("./test/vitest/vitest." + name + ".config.ts?io-probe=" + Date.now());
-          selections.push(config.test.include);
+        const selections = {};
+        for (const mode of ["cli", "env"]) {
+          if (mode === "cli") {
+            delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+            process.argv = ["node", "vitest", "run", ...selectedTests];
+          } else {
+            process.env.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+            process.argv = ["node", "vitest", "run"];
+          }
+          selections[mode] = [];
+          for (const name of ["unit-fast", "unit-fast-isolated", "unit-fast-fake-timers"]) {
+            const { default: config } = await import("./test/vitest/vitest." + name + ".config.ts?io-probe=" + mode);
+            selections[mode].push(config.test.include);
+          }
         }
         console.log("UNIT_FAST_SELECTION_PROBE", JSON.stringify(selections));
         const { default: unitConfig, createUnitVitestConfigWithOptions } = await import("./test/vitest/vitest.unit.config.ts?io-probe=" + Date.now());
@@ -229,11 +238,15 @@ describe("unit-fast vitest lane", () => {
     expect(Number(probeMatch?.[5])).toBe(0);
     const selection = configProbeResult.stdout.match(/UNIT_FAST_SELECTION_PROBE (.+)/u);
     expect(selection, configProbeResult.stdout).not.toBeNull();
-    expect(JSON.parse(selection?.[1] ?? "null")).toEqual([
+    const selectedFastIncludes = [
       ["src/agents/agent-tools.deferred-followup-guidance.test.ts"],
       ["src/test-utils/openclaw-test-state.test.ts"],
       ["src/utils.test.ts"],
-    ]);
+    ];
+    expect(JSON.parse(selection?.[1] ?? "null")).toEqual({
+      cli: selectedFastIncludes,
+      env: selectedFastIncludes,
+    });
     const unitSelection = configProbeResult.stdout.match(/UNIT_SELECTION_PROBE (.+)/u);
     expect(unitSelection, configProbeResult.stdout).not.toBeNull();
     const excluded = [
@@ -417,6 +430,7 @@ describe("unit-fast vitest lane", () => {
     for (const file of [
       "src/agents/agent-command.compaction-rotation.test.ts",
       "src/agents/agent-command.embedded-maintenance.test.ts",
+      "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
     ]) {
       expect(isUnitFastTestFile(file), file).toBe(false);
       expect(resolveUnitFastTestIncludePattern(file), file).toBeNull();
@@ -497,7 +511,6 @@ describe("unit-fast vitest lane", () => {
       "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
-      "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
       "src/agents/tools/computer-tool.context.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",
       "src/agents/tools/computer-tool.v2.test.ts",

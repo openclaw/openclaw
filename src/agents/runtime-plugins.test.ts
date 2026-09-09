@@ -1,5 +1,5 @@
 // Verifies agent runtime plugin loads stay scoped to prepared-runtime handles.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -55,6 +55,10 @@ import {
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  bindPluginRuntimeArtifactSelection,
+  resolvePluginRuntimeArtifactSelection,
+} from "../plugins/plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -113,19 +117,34 @@ describe("agent runtime plugin registries", () => {
       .mockImplementation((_config, selections) => selections);
   });
 
+  afterEach(() => {
+    for (const [options] of hoisted.loadPluginRegistryHandle.mock.calls) {
+      expect(options).not.toHaveProperty("capabilityCatalogContext");
+      expect(options.runtimeOptions ?? {}).not.toHaveProperty("modelAuth");
+      expect(options.runtimeOptions ?? {}).not.toHaveProperty("modelConfig");
+    }
+  });
+
   it("adopts full-only runtime capabilities from the active composition-root registry", () => {
     const activeRegistry = createEmptyPluginRegistry();
+    const primaryRegistry = createEmptyPluginRegistry();
     const contextEnginesAdopted = { handle: "context-engines" };
     const presentersAdopted = { handle: "presenters" };
+    const onPrimaryRegistry = vi.fn();
+    hoisted.loadPluginRegistryHandle.mockReturnValue(primaryRegistry);
     hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
     hoisted.adoptRuntimeContextEngineRegistrations.mockReturnValue(contextEnginesAdopted);
     hoisted.adoptRuntimeWidgetPresenterRegistrations.mockReturnValue(presentersAdopted);
 
     expect(
-      loadAgentRuntimePluginRegistryHandle({ config: {} as never, workspaceDir: "/tmp/workspace" }),
+      loadAgentRuntimePluginRegistryHandle(
+        { config: {}, workspaceDir: "/tmp/workspace" },
+        onPrimaryRegistry,
+      ),
     ).toBe(presentersAdopted);
+    expect(onPrimaryRegistry).toHaveBeenCalledExactlyOnceWith(primaryRegistry);
     expect(hoisted.adoptRuntimeContextEngineRegistrations).toHaveBeenCalledWith(
-      { handle: true },
+      primaryRegistry,
       activeRegistry,
     );
     expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).toHaveBeenCalledWith(
@@ -222,31 +241,37 @@ describe("agent runtime plugin registries", () => {
     }
   });
 
-  it("reuses the current Gateway generation and loads only the imported-plugin delta", () => {
+  it("reuses the current Gateway generation and loads only the imported-plugin delta", async () => {
     const config = {} as never;
     const workspaceDir = "/tmp/default-workspace";
-    const activeRegistry = {
-      plugins: [
-        { id: "gateway-owned", origin: "bundled", status: "loaded" },
-        {
-          id: "deferred",
-          origin: "bundled",
-          status: "loaded",
-          format: "openclaw",
-          imported: false,
-        },
-      ],
-    };
-    const metadataSnapshot = {
-      ...createMetadataSnapshot(workspaceDir, undefined),
-      manifestRegistry: {
-        diagnostics: [],
-        plugins: [
-          { id: "gateway-owned", origin: "bundled" },
-          { id: "deferred", origin: "bundled" },
-        ],
-      },
-    };
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
+      workspaceDir,
+      manifestRegistry: makeRegistry([
+        { id: "gateway-owned", origin: "bundled", channels: [] },
+        { id: "deferred", origin: "bundled", channels: [] },
+      ]),
+    });
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.plugins = metadataSnapshot.plugins.map((manifest) => {
+      const record = createPluginRecord({
+        id: manifest.id,
+        rootDir: manifest.rootDir,
+        source: manifest.source,
+        origin: manifest.origin,
+        format: "openclaw",
+        imported: manifest.id !== "deferred",
+      });
+      bindPluginRuntimeArtifactSelection(record, {
+        preferBuiltPluginArtifacts: false,
+        runtimeEntry: resolvePluginRuntimeArtifactSelection({
+          ...manifest,
+          entryKind: "runtime",
+          preferBuiltPluginArtifacts: false,
+        }),
+      });
+      return record;
+    });
     const selectedRegistry = { plugins: [...activeRegistry.plugins, { id: "selected-provider" }] };
     hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
     hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue(workspaceDir);
@@ -258,7 +283,7 @@ describe("agent runtime plugin registries", () => {
       pluginIds: [...(basePluginIds ?? []), "selected-provider"],
     }));
 
-    const prepared = prepareWorkspacePluginRegistries(
+    const prepared = await prepareWorkspacePluginRegistries(
       {
         agentDir: "/tmp/agent",
         allowGatewaySubagentBinding: true,
@@ -271,18 +296,15 @@ describe("agent runtime plugin registries", () => {
       true,
     );
 
-    expect(prepared.inboundPluginRegistry).toBe(activeRegistry);
-    expect(prepared.runtimePluginRegistry).toBe(selectedRegistry);
-    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ basePluginIds: ["gateway-owned"] }),
-    );
+    expect(prepared.inboundPluginRegistry === activeRegistry).toBe(true);
+    expect(prepared.runtimePluginRegistry === selectedRegistry).toBe(true);
+    expect(hoisted.resolveAgentRuntimePluginLoadPlan.mock.calls[0]?.[0].basePluginIds).toEqual([
+      "gateway-owned",
+    ]);
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledOnce();
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["gateway-owned", "selected-provider"],
-        preferBuiltPluginArtifacts: true,
-      }),
-    );
+    const loadedOptions = hoisted.loadPluginRegistryHandle.mock.calls[0]?.[0];
+    expect(loadedOptions?.onlyPluginIds).toEqual(["gateway-owned", "selected-provider"]);
+    expect(loadedOptions?.preferBuiltPluginArtifacts).toBe(true);
   });
 
   it.each([

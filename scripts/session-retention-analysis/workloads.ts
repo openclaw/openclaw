@@ -60,8 +60,9 @@ type GroupOptions = {
 const STALE_EPOCH_MS = Date.UTC(2023, 0, 1);
 const RECENT_WINDOW_MS = 60_000;
 
-function fixtureKey(writer: FixtureWriter, suffix: string): string {
-  return `agent:main:retention-${writer.workload}-${suffix}`;
+function fixtureKey(writer: FixtureWriter, suffix: string, disposable = true): string {
+  const scope = disposable ? "subagent:" : "";
+  return `agent:main:${scope}retention-${writer.workload}-${suffix}`;
 }
 
 function fixtureSessionId(writer: FixtureWriter, suffix: string, generation: number): string {
@@ -116,7 +117,10 @@ function writeGroup(
   sessionIds: string[];
 } {
   const suffix = options.keySuffix ?? String(options.index).padStart(6, "0");
-  const sessionKey = fixtureKey(writer, suffix);
+  // Current maintenance archives durable conversations in place. Use the
+  // production disposable-runtime shape for deletion candidates, while pinned
+  // and recent controls remain durable conversation rows.
+  const sessionKey = fixtureKey(writer, suffix, !(options.pinned || options.recent));
   const generations = Math.max(1, options.generations ?? 1);
   let previousSessionId: string | undefined;
   let currentSessionId = "";

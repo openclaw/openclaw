@@ -6,7 +6,7 @@ import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { readAuthProfileStoreForTest } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
-import type { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import type { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
@@ -36,6 +36,7 @@ import {
   resolvePluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import * as providerAuthPersistence from "../plugins/provider-auth-persistence.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginRegistryLifecycleEpoch } from "../plugins/registry-lifecycle.js";
 import {
@@ -59,28 +60,28 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
-import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
+import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
 import { setupInferenceLog, type ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
-import { runSetupInferenceTest } from "./setup-inference-test.js";
+import { runSetupInferenceTest as runSetupInferenceTestImpl } from "./setup-inference-test.js";
 import {
   SetupInferenceActivationIndeterminateError,
   activateSetupInference as activateSetupInferenceImpl,
   type BoundVerifySetupInferenceResult,
-  detectSetupInference,
-  listManualSetupInferenceOptions,
+  detectSetupInference as detectSetupInferenceImpl,
+  listManualSetupInferenceOptions as listManualSetupInferenceOptionsImpl,
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
   listSetupInferencePrepareOptions,
-  resolvePersistentApplyInference,
+  resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl,
   type VerifySetupInferenceResult,
   verifySetupInference as verifySetupInferenceImpl,
   verifySetupInferenceConfig as verifySetupInferenceConfigImpl,
 } from "./setup-inference.js";
-import { applySystemAgentModelSelection } from "./setup-model-selection.js";
+import { applySystemAgentModelSelection as applySystemAgentModelSelectionImpl } from "./setup-model-selection.js";
 import {
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import {
@@ -104,6 +105,7 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 
 vi.mock("../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
+  refreshPluginRegistryForPreparedConfig: mocks.refreshPluginRegistryAfterConfigMutation,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -162,10 +164,36 @@ const suiteTempRootTracker = createSuiteTempRootTracker({
   prefix: "setup-inference-test-",
 });
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+const runSystemAgentTurnWithDeps: typeof runSystemAgentTurnWithDepsImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSystemAgentTurnWithDepsImpl(...args));
+
+const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
+      args[0],
+    );
+
+const resolvePersistentApplyInference: typeof resolvePersistentApplyInferenceImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => resolvePersistentApplyInferenceImpl(...args));
+
+const detectSetupInference: typeof detectSetupInferenceImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => detectSetupInferenceImpl(...args));
+
+const listManualSetupInferenceOptions: typeof listManualSetupInferenceOptionsImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => listManualSetupInferenceOptionsImpl(...args));
+
+const runSetupInferenceTest: typeof runSetupInferenceTestImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSetupInferenceTestImpl(...args));
+
+const applySystemAgentModelSelection: typeof applySystemAgentModelSelectionImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => applySystemAgentModelSelectionImpl(...args));
+
 let inMemoryAuthProfileStores = new Map<string, AuthProfileStore>();
 
 beforeAll(async () => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
     materializedMainRuntimeConfig,
   );
   cliBackendsTesting.setDepsForTest({
@@ -203,13 +231,12 @@ afterAll(async () => {
     }
   } finally {
     cliBackendsTesting.resetDepsForTest();
-    pluginMetadataSnapshot?.restore();
   }
 });
 
 beforeEach(() => {
   inMemoryAuthProfileStores = new Map();
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
+  pluginMetadataSnapshot?.bindForConfig(materializedMainRuntimeConfig);
 });
 
 async function createMainAgentFixture() {
@@ -415,14 +442,16 @@ async function activateSetupInference(
       } as never);
     }) as typeof deps.transformConfigWithPendingPluginInstalls;
   }
-  return activateSetupInferenceImpl({
-    runtime,
-    surface: "gateway",
-    ...activationParams,
-    // Most activation tests isolate commit mechanics from the verified-owner
-    // implementation. Owner-CAS regressions opt back into the real helper.
-    deps,
-  });
+  return pluginMetadataSnapshot!.run(() =>
+    activateSetupInferenceImpl({
+      runtime,
+      surface: "gateway",
+      ...activationParams,
+      // Most activation tests isolate commit mechanics from the verified-owner
+      // implementation. Owner-CAS regressions opt back into the real helper.
+      deps,
+    }),
+  );
 }
 
 type TestVerifySetupInferenceParams = Omit<
@@ -443,11 +472,13 @@ function verifySetupInference(
   params: TestVerifySetupInferenceParams & { bindSession?: boolean },
 ): Promise<VerifySetupInferenceResult | BoundVerifySetupInferenceResult> {
   const { useRealAuthProfileStore = false, ...verifyParams } = params;
-  return verifySetupInferenceImpl({
-    runtime,
-    ...verifyParams,
-    deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
-  } as never);
+  return pluginMetadataSnapshot!.run(() =>
+    verifySetupInferenceImpl({
+      runtime,
+      ...verifyParams,
+      deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
+    } as never),
+  );
 }
 
 async function verifySetupInferenceConfig(
@@ -458,11 +489,13 @@ async function verifySetupInferenceConfig(
 ): ReturnType<typeof verifySetupInferenceConfigImpl> {
   const { useRealAuthProfileStore = false, ...verifyParams } = params;
   pluginMetadataSnapshot?.bind({ config: verifyParams.config, env: process.env });
-  return verifySetupInferenceConfigImpl({
-    runtime,
-    ...verifyParams,
-    deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
-  });
+  return pluginMetadataSnapshot!.run(() =>
+    verifySetupInferenceConfigImpl({
+      runtime,
+      ...verifyParams,
+      deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
+    }),
+  );
 }
 
 type SuccessfulRunParams = {
@@ -562,6 +595,7 @@ function activateCodexSetup(params: Omit<TestSetupInferenceActivationParams, "ki
       ensureCodexRuntimePlugin: mockCodexRuntimeInstall(),
       runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+      refreshPluginRegistryForPreparedConfig: vi.fn(async () => {}) as never,
       ...params.deps,
     },
   });
@@ -614,15 +648,20 @@ function createConfigTransformHarness(
       followUp: { mode: "auto", requiresRestart: false },
     };
   });
-  const readSnapshot = vi.fn(async () => ({
-    exists: true as const,
-    valid: true as const,
-    path: "/tmp/openclaw.json",
-    issues: [],
-    config: state.runtimeConfig,
-    sourceConfig: state.sourceConfig,
-    runtimeConfig: state.runtimeConfig,
-  }));
+  const readSnapshot = vi.fn(async () =>
+    createConfigFileSnapshot({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      raw: JSON.stringify(state.sourceConfig),
+      parsed: state.sourceConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+      sourceConfig: state.sourceConfig,
+      runtimeConfig: state.runtimeConfig,
+    }),
+  );
   return {
     transform,
     readSnapshot,
@@ -748,6 +787,7 @@ describe("detectSetupInference", () => {
       expect.objectContaining({
         candidates: [],
         manualProviders: [expect.objectContaining({ id: "fixture-api-key" })],
+        nativeSessionCatalogPreferenceRequired: true,
       }),
     );
   });
@@ -1027,7 +1067,7 @@ describe("detectSetupInference", () => {
     ]);
   });
 
-  it("lists provider-owned sign-ins in CLI order without compatibility aliases", () => {
+  it("lists manual-only provider sign-ins in the human picker in CLI order", () => {
     const choices: ProviderAuthChoiceMetadata[] = [
       {
         pluginId: "google",
@@ -1131,6 +1171,13 @@ describe("detectSetupInference", () => {
         featured: true,
       },
       {
+        id: "xai-device-code",
+        brandId: "xai",
+        label: "xAI device code",
+        kind: "device-code",
+        featured: false,
+      },
+      {
         id: "github-copilot",
         brandId: "github-copilot",
         label: "GitHub Copilot",
@@ -1173,6 +1220,11 @@ describe("detectSetupInference", () => {
     ];
 
     expect(listSetupInferencePrepareOptions(choices)).toEqual([
+      {
+        id: "hidden",
+        brandId: "hidden",
+        label: "Hidden",
+      },
       {
         id: "lmstudio",
         brandId: "lmstudio",
@@ -1512,6 +1564,7 @@ async function runCodexSetupWithFinalConfig(params: {
       readConfigFileSnapshot: readConfigFileSnapshot as never,
       transformConfigWithPendingPluginInstalls: transformConfig as never,
       refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+      refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
     },
   });
   return { result, persistedConfig, refreshPluginRegistry, transformConfig };
@@ -1665,6 +1718,18 @@ describe("activateSetupInference", () => {
         ...params.deps,
       },
     });
+  }
+
+  function mockProtectedStorageReleaseFailure(releaseError: Error) {
+    return vi
+      .spyOn(providerAuthPersistence, "stageProviderAuthProfilesForPersistence")
+      .mockImplementationOnce(async ({ profiles }) => ({
+        profiles: [...profiles],
+        rollback: vi.fn(async () => {}),
+        commit: vi.fn(async () => {
+          throw releaseError;
+        }),
+      }));
   }
 
   it("surfaces an invalid existing config without probing or persisting", async () => {
@@ -2067,6 +2132,7 @@ describe("activateSetupInference", () => {
     const stateDir = await suiteTempRootTracker.make("case");
     await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const configHarness = createPreRosterConfigTransformHarness();
     const events: string[] = [];
     const ensureCodex = vi.fn(
       async (params: {
@@ -2084,7 +2150,10 @@ describe("activateSetupInference", () => {
         beforePersistentEffect: () => {
           events.push("lock");
         },
-        deps: { ensureCodexRuntimePlugin: ensureCodex as never },
+        deps: {
+          ensureCodexRuntimePlugin: ensureCodex as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        },
       });
 
       expect(result.ok).toBe(true);
@@ -2576,33 +2645,6 @@ describe("activateSetupInference", () => {
     });
   });
 
-  it("returns an auth failure when the verified owner drifts during persistence", async () => {
-    const configHarness = createPreRosterConfigTransformHarness();
-    const result = await activateSetupInference({
-      kind: "openai-api-key",
-      deps: {
-        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
-        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
-        // The real revalidation throws when the current route owner no longer
-        // matches the probe credential (e.g. a Codex-imported OAuth profile
-        // outranking the probed env key). The ladder needs a failure result.
-        createSystemAgentVerifiedInferenceBinding: vi.fn(async () => {
-          throw new Error(
-            "The successful inference credential is no longer the active route owner.",
-          );
-        }) as never,
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      status: "auth",
-      error: expect.stringContaining("verified inference owner changed"),
-    });
-    expect(result).not.toHaveProperty("disposition");
-    expect(configHarness.current()).toEqual({});
-  });
-
   it("revalidates a stable CLI runtime owner at the config commit boundary", async () => {
     const configHarness = createPreRosterConfigTransformHarness();
     const resolveCliRuntimeOwnerFingerprint = vi.fn(async () => "test-runtime-owner");
@@ -2689,6 +2731,10 @@ describe("activateSetupInference", () => {
       status: "auth",
       error: expect.stringContaining("active route owner"),
     });
+    expect(result).not.toHaveProperty("disposition");
+    expect(result).toMatchObject({
+      error: expect.stringContaining("verified inference owner changed"),
+    });
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(configHarness.current()).toEqual({});
   });
@@ -2710,6 +2756,7 @@ describe("activateSetupInference", () => {
         ensureCodexRuntimePlugin: ensureCodexRuntimePlugin as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
         runCliAgent: runCliAgent as never,
       },
     });
@@ -3212,6 +3259,9 @@ describe("activateSetupInference", () => {
       id: "local-test",
       label: "Local Test Provider",
       pluginId: "local-test",
+      normalizeModelId: () => {
+        throw new Error("Detected model is already canonical");
+      },
       auth: [
         {
           id: "local",
@@ -3300,21 +3350,61 @@ describe("activateSetupInference", () => {
   });
 
   it.each([
-    { name: "API-key", authKind: "api_key" as const, credentialType: "api_key" as const },
-    { name: "token", authKind: "token" as const, credentialType: "token" as const },
+    {
+      name: "API-key",
+      authKind: "api_key" as const,
+      credentialType: "api_key" as const,
+      metadata: "fresh",
+    },
+    {
+      name: "token",
+      authKind: "token" as const,
+      credentialType: "token" as const,
+      metadata: "existing",
+    },
+    {
+      name: "API-key",
+      authKind: "api_key" as const,
+      credentialType: "api_key" as const,
+      metadata: "empty starter",
+    },
   ])(
-    "uses a provider-owned $name method and persists it after a passing test",
-    async ({ authKind, credentialType }) => {
+    "uses a provider-owned $name method with $metadata metadata after a passing test",
+    async ({ authKind, credentialType, metadata }) => {
       const stateDir = await suiteTempRootTracker.make("case");
       const agentDir = path.join(stateDir, "agent");
-      const initialConfig = {
-        agents: { list: [{ id: "main", default: true, agentDir }] },
+      const selectedModel = "canonical-fixture-model";
+      const selectedModelRef = `groq/${selectedModel}`;
+      const existingDefault =
+        metadata === "fresh"
+          ? {}
+          : { streaming: true, params: { temperature: 0.7, maxTokens: 256 } };
+      const existingAgent =
+        metadata === "fresh" ? {} : { codeMode: false, params: { temperature: 0.8, topP: 0.6 } };
+      const selectedMetadata =
+        metadata === "empty starter"
+          ? {}
+          : { alias: "selected-fixture", params: { temperature: 0.2 } };
+      const selectedAgentMetadata =
+        metadata === "empty starter" ? {} : { params: { temperature: 0.3 } };
+      const initialConfig: OpenClawConfig = {
+        agents: {
+          defaults: { models: metadata === "fresh" ? {} : { [selectedModelRef]: existingDefault } },
+          list: [
+            {
+              id: "main",
+              default: true,
+              agentDir,
+              models: metadata === "fresh" ? {} : { [selectedModelRef]: existingAgent },
+            },
+          ],
+        },
         auth: {
           profiles: {
             "groq:legacy": { provider: "groq", mode: credentialType },
           },
         },
-      } satisfies OpenClawConfig;
+      };
       // Custom agent directories must be bound to their configured owner before
       // the shared per-agent database is created.
       resolveAgentDir(initialConfig, "main");
@@ -3338,13 +3428,23 @@ describe("activateSetupInference", () => {
                 : { type: "token" as const, provider: "groq", token: ctx.opts?.token ?? "" },
           },
         ],
-        defaultModel: "groq/llama-3.3-70b-versatile",
-        configPatch: { agents: { defaults: { models: { "groq/llama-3.3-70b-versatile": {} } } } },
+        defaultModel: "groq/starter-fixture-alias",
+        configPatch: {
+          agents: {
+            defaults: { models: { "groq/starter-fixture-alias": selectedMetadata } },
+            entries: { main: { models: { "groq/starter-fixture-alias": selectedAgentMetadata } } },
+          },
+        },
       }));
       const provider: ProviderPlugin = {
         id: "groq",
         label: "Groq",
         pluginId: "groq",
+        normalizeModelId({ modelId }) {
+          return modelId === "starter-fixture-alias" && this.id === "groq"
+            ? selectedModel
+            : modelId;
+        },
         auth: [
           {
             id: "api-key",
@@ -3365,7 +3465,7 @@ describe("activateSetupInference", () => {
       }));
       const runEmbeddedAgent = vi.fn(
         async (params: SuccessfulRunParams & { authProfileId?: string }) =>
-          successfulRun("groq", "llama-3.3-70b-versatile", params),
+          successfulRun("groq", selectedModel, params),
       );
       const configHarness = createConfigTransformHarness(initialConfig);
 
@@ -3382,7 +3482,7 @@ describe("activateSetupInference", () => {
           },
         });
 
-        expect(result).toMatchObject({ ok: true, modelRef: "groq/llama-3.3-70b-versatile" });
+        expect(result).toMatchObject({ ok: true, modelRef: selectedModelRef });
         expect(resolvePluginProviders).toHaveBeenCalledWith(
           expect.objectContaining({
             config: expect.objectContaining({
@@ -3408,7 +3508,7 @@ describe("activateSetupInference", () => {
           expect.objectContaining({
             agentId: "main",
             provider: "groq",
-            model: "llama-3.3-70b-versatile",
+            model: selectedModel,
             authProfileId: activatedProfileId,
             agentDir: expect.stringContaining("setup-inference-test-"),
             authProfileStateMode: "read-only",
@@ -3419,7 +3519,7 @@ describe("activateSetupInference", () => {
           plugins: { entries: { groq: { enabled: true } } },
           agents: {
             defaults: {
-              model: `groq/llama-3.3-70b-versatile@${activatedProfileId}`,
+              model: `${selectedModelRef}@${activatedProfileId}`,
             },
           },
           auth: {
@@ -3428,6 +3528,31 @@ describe("activateSetupInference", () => {
             },
           },
         });
+        for (const config of [
+          runEmbeddedAgent.mock.calls[0]?.[0].config,
+          configHarness.current(),
+        ]) {
+          expect({
+            defaults: config?.agents?.defaults?.models,
+            agent: config?.agents?.entries?.main?.models,
+          }).toEqual({
+            defaults: {
+              [selectedModelRef]: {
+                ...existingDefault,
+                ...selectedMetadata,
+                params: { ...existingDefault.params, ...selectedMetadata.params },
+              },
+            },
+            agent: {
+              [selectedModelRef]: {
+                ...existingAgent,
+                ...selectedAgentMetadata,
+                params: { ...existingAgent.params, ...selectedAgentMetadata.params },
+                agentRuntime: { id: "openclaw" },
+              },
+            },
+          });
+        }
         expect(readInMemoryAuthProfileStore(agentDir).profiles[activatedProfileId]).toMatchObject(
           credentialType === "api_key"
             ? { type: "api_key", provider: "groq", key: "test-groq-key" }
@@ -3947,6 +4072,126 @@ describe("activateSetupInference", () => {
       expect(profileId).toBeDefined();
       expect(currentConfig.auth?.profiles?.[profileId!]).toMatchObject({ provider: "groq" });
       expect(currentConfig.agents?.defaults?.model).toContain(`@${profileId}`);
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("preserves indeterminate activation guidance when protected storage release fails", async () => {
+    const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
+    resolveAgentDir(initialConfig, "main");
+    const releaseError = new Error("simulated protected release failure");
+    let currentConfig: OpenClawConfig = initialConfig;
+    const readConfigFileSnapshot = vi.fn(async () => ({
+      exists: true,
+      valid: true,
+      config: currentConfig,
+      sourceConfig: currentConfig,
+      runtimeConfig: currentConfig,
+    }));
+    const transformConfig = vi.fn(async (params: { transform: Function }) => {
+      const transformed = await params.transform(initialConfig, {
+        snapshot: {
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        },
+        previousHash: null,
+        attempt: 0,
+      });
+      currentConfig = {
+        ...transformed.nextConfig,
+        agents: {
+          ...transformed.nextConfig.agents,
+          defaults: {
+            ...transformed.nextConfig.agents?.defaults,
+            params: { temperature: 0.25 },
+          },
+        },
+      };
+      throw new Error("simulated post-write failure after concurrent edit");
+    });
+    mockProtectedStorageReleaseFailure(releaseError);
+
+    try {
+      const failure = await activateGroqSetup({
+        apiKey: "candidate-key",
+        deps: {
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
+          transformConfigWithPendingPluginInstalls: transformConfig as never,
+        },
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({
+        message: expect.stringMatching(
+          /credential was retained.*run openclaw doctor --fix before retrying.*protected storage could not be released/i,
+        ),
+      });
+      const profileId = Object.keys(readInMemoryAuthProfileStore(agentDir).profiles).find((id) =>
+        id.startsWith("groq:setup-"),
+      );
+      expect(profileId).toBeDefined();
+      expect(currentConfig.auth?.profiles?.[profileId!]).toMatchObject({ provider: "groq" });
+      expect(readInMemoryAuthProfileStore(agentDir).profiles[profileId!]).toMatchObject({
+        key: "candidate-key",
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("preserves a committed activation error when protected storage release fails", async () => {
+    const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
+    resolveAgentDir(initialConfig, "main");
+    const primaryError = new Error("simulated committed post-write failure");
+    const releaseError = new Error("simulated protected release failure");
+    let currentConfig: OpenClawConfig = initialConfig;
+    const readConfigFileSnapshot = vi.fn(async () => ({
+      exists: true,
+      valid: true,
+      config: currentConfig,
+      sourceConfig: currentConfig,
+      runtimeConfig: currentConfig,
+    }));
+    const transformConfig = vi.fn(async (params: { transform: Function }) => {
+      const transformed = await params.transform(initialConfig, {
+        snapshot: {
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        },
+        previousHash: null,
+        attempt: 0,
+      });
+      currentConfig = transformed.nextConfig;
+      throw primaryError;
+    });
+    mockProtectedStorageReleaseFailure(releaseError);
+
+    try {
+      const failure = await activateGroqSetup({
+        apiKey: "candidate-key",
+        deps: {
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
+          transformConfigWithPendingPluginInstalls: transformConfig as never,
+        },
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({
+        message: expect.stringContaining(
+          "activation committed despite a post-write error, but protected storage could not be released",
+        ),
+      });
+      const profileId = Object.keys(currentConfig.auth?.profiles ?? {}).find((id) =>
+        id.startsWith("groq:setup-"),
+      );
+      expect(profileId).toBeDefined();
+      expect(currentConfig.agents?.defaults?.model).toContain(`@${profileId}`);
+      expect(readInMemoryAuthProfileStore(agentDir).profiles[profileId!]).toMatchObject({
+        key: "candidate-key",
+      });
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
@@ -4666,6 +4911,7 @@ describe("activateSetupInference", () => {
         markRetainedManagedNpmInstall: markRetainedInstall,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
     expect(result).toMatchObject({ ok: true, gatewayRestartRequired: true });
@@ -4673,6 +4919,7 @@ describe("activateSetupInference", () => {
     expect(ensureCodex).toHaveBeenCalledOnce();
     expect(ensureCodex).toHaveBeenCalledWith(
       expect.objectContaining({
+        reviewOfficialArtifacts: true,
         cfg: expect.objectContaining({
           agents: expect.objectContaining({
             defaults: { model: { primary: "openai/gpt-5.4" } },
@@ -4745,7 +4992,6 @@ describe("activateSetupInference", () => {
       expect.not.objectContaining({ afterWrite: expect.anything() }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: persistedConfig,
       reason: "source-changed",
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
@@ -4882,6 +5128,7 @@ describe("activateSetupInference", () => {
         readConfigFileSnapshot: configHarness.readSnapshot as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
@@ -5066,7 +5313,6 @@ describe("activateSetupInference", () => {
       );
     } finally {
       clearCurrentPluginMetadataSnapshot();
-      pluginMetadataSnapshot?.rebindForCurrentEnv();
     }
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
     expect(ownerArtifactRegistry).toBe(stagedRegistry);
@@ -5182,6 +5428,66 @@ describe("activateSetupInference", () => {
     expect(persistedConfig.plugins?.installs).toBeUndefined();
   });
 
+  it.each([false, true])(
+    "honors native discovery %s through selected-agent Codex installation",
+    async (enabled) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { default: true }, research: {} } },
+        plugins: {
+          entries: {
+            anthropic: { config: { sessionCatalog: { enabled: false } } },
+            codex: { config: { sessionCatalog: { enabled: false } } },
+          },
+        },
+      };
+      const persistence = createConfigTransformHarness(config);
+      const assertPreference = (cfg: OpenClawConfig) => {
+        for (const pluginId of ["anthropic", "codex"]) {
+          expect(cfg.plugins?.entries?.[pluginId]?.config).toMatchObject({
+            sessionCatalog: { enabled },
+          });
+        }
+      };
+      const ensureCodex = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => {
+        assertPreference(cfg);
+        expect(cfg.plugins?.installs?.codex).toBeUndefined();
+        return {
+          ok: true as const,
+          required: true,
+          cfg: {
+            ...cfg,
+            plugins: {
+              ...cfg.plugins,
+              installs: {
+                codex: {
+                  source: "npm" as const,
+                  spec: "@openclaw/codex",
+                  installPath: "/tmp/plugins/codex-consent-fixture",
+                },
+              },
+            },
+          },
+        };
+      });
+      const result = await activateCodexSetup({
+        agentId: "research",
+        nativeSessionCatalogsEnabled: enabled,
+        deps: {
+          readConfigFileSnapshot: persistence.readSnapshot,
+          ensureCodexRuntimePlugin: ensureCodex,
+          transformConfigWithPendingPluginInstalls: persistence.transform as never,
+          markRetainedManagedNpmInstall: vi.fn(async () => true),
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(ensureCodex).toHaveBeenCalledOnce();
+      expect(persistence.transform).toHaveBeenCalledOnce();
+      assertPreference(persistence.current());
+      expect(persistence.current().agents?.entries?.research?.model).toBeDefined();
+      expect(persistence.current().agents?.entries?.main?.model).toBeUndefined();
+    },
+  );
+
   it("does not run or persist when the codex runtime install fails", async () => {
     const runEmbeddedAgent = vi.fn();
     const transformConfig = vi.fn();
@@ -5196,6 +5502,7 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5231,6 +5538,7 @@ describe("activateSetupInference", () => {
         clearPluginMetadataLifecycleCaches: clearMetadata,
         invalidatePluginRuntimeDiscoveryAfterConfigMutation: clearDiscovery as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5246,7 +5554,6 @@ describe("activateSetupInference", () => {
     expect(clearMetadata).toHaveBeenCalledTimes(2);
     expect(clearDiscovery).toHaveBeenCalledTimes(2);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: {},
       reason: "source-changed",
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
@@ -5288,6 +5595,7 @@ describe("activateSetupInference", () => {
           clearPluginMetadataLifecycleCaches: vi.fn(),
           invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
           refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+          refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
           createTempDir: async () => {
             tempDir = await suiteTempRootTracker.make("case");
             return tempDir;
@@ -5402,6 +5710,7 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5441,6 +5750,7 @@ describe("activateSetupInference", () => {
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
           refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+          refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
         },
       });
 
@@ -5575,6 +5885,7 @@ describe("activateSetupInference", () => {
       transformConfigWithPendingPluginInstalls: transformConfig as never,
       readConfigFileSnapshot: readConfigFileSnapshot as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+      refreshPluginRegistryForPreparedConfig: vi.fn(async () => {}) as never,
       readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
       markRetainedManagedNpmInstall: markRetained,
       clearLoadInstalledPluginIndexInstallRecordsCache: clearInstallRecords,
@@ -5698,6 +6009,7 @@ describe("resolvePersistentApplyInference", () => {
     const execution = {
       runner: "embedded" as const,
       runConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      sourceConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
       modelLabel: "openai/gpt-5.5",
       provider: "openai",
       model: "gpt-5.5",

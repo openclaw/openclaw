@@ -17,7 +17,7 @@ import {
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import {
-  heartbeatLog,
+  heartbeatLog as log,
   resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatResponseToolPrompt,
   type HeartbeatConfig,
@@ -39,8 +39,6 @@ import {
   type SystemEvent,
 } from "./system-events.js";
 
-const log = heartbeatLog;
-
 export function truncateHeartbeatPreview(value: string | undefined): string | undefined {
   return value ? truncateUtf16Safe(value, 200) : undefined;
 }
@@ -60,19 +58,24 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   heartbeatScratchContent?: string;
 };
 
-export function shouldPreflightExecEventWake(
+/**
+ * Terminal no-op preflight (empty scratch, consumed exec events) must resolve
+ * before retryable busy guards; wakes carrying heartbeat tasks keep deferral.
+ */
+export function shouldPreflightWakeBeforeBusy(
   source: HeartbeatWakeSource | undefined,
   scheduledEveryMs: number | undefined,
   scheduledTaskCount: number,
 ): boolean {
   return (
-    source === "exec-event" &&
-    !(
-      typeof scheduledEveryMs === "number" &&
-      Number.isSafeInteger(scheduledEveryMs) &&
-      scheduledEveryMs > 0
-    ) &&
-    scheduledTaskCount === 0
+    scheduledTaskCount === 0 &&
+    (source === "interval" ||
+      (source === "exec-event" &&
+        !(
+          typeof scheduledEveryMs === "number" &&
+          Number.isSafeInteger(scheduledEveryMs) &&
+          scheduledEveryMs > 0
+        )))
   );
 }
 

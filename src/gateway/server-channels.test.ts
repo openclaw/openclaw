@@ -2423,6 +2423,7 @@ describe("server-channels auto restart", () => {
     const server = createTestGatewayServer({
       resolvedAuth: AUTH_NONE,
       overrides: {
+        getRuntimeConfig: () => ({}),
         handlePluginRequest: createGatewayPluginRequestHandler({
           registry,
           log: createSubsystemLogger("gateway/webhook-reload-test"),
@@ -2437,7 +2438,10 @@ describe("server-channels auto restart", () => {
       throw new Error("expected a TCP listener");
     }
     const read = async () => {
-      const response = await fetch(`http://127.0.0.1:${address.port}${route.path}`);
+      // Fake timers hold Undici's idle-socket validation; route handoff does not require reuse.
+      const response = await fetch(`http://127.0.0.1:${address.port}${route.path}`, {
+        headers: { Connection: "close" },
+      });
       return {
         status: response.status,
         retryAfter: response.headers.get("retry-after"),

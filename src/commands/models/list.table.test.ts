@@ -42,7 +42,6 @@ describe("printModelTable", () => {
         local: false,
         available: true,
         tags: [],
-        missing: false,
       },
     ];
 
@@ -52,8 +51,16 @@ describe("printModelTable", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("prints effective and native context values when a runtime cap differs", () => {
+  it("prints context caps with sanitized tags in their original order", () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
+    const tags = [
+      "\u001b[31mdefault\u001b[0m",
+      "fallback#2",
+      "img-fallback#1",
+      "alias:a\tb",
+      "unknown",
+      "default",
+    ];
     const rows: ModelRow[] = [
       {
         key: "openai/gpt-5.5",
@@ -63,8 +70,7 @@ describe("printModelTable", () => {
         contextTokens: 272_000,
         local: false,
         available: true,
-        tags: [],
-        missing: false,
+        tags,
       },
     ];
 
@@ -73,7 +79,17 @@ describe("printModelTable", () => {
     // Decimal windows render in decimal K: 272000 -> "272k", 400000 -> "400k".
     expect(runtime.log.mock.calls).toEqual([
       ["Model                                      Input      Ctx         Local Auth  Tags"],
-      ["openai/gpt-5.5                             text+image 272k/400k   no    yes   "],
+      [
+        "openai/gpt-5.5                             text+image 272k/400k   no    yes   default,fallback#2,img-fallback#1,alias:a\\tb,unknown,default",
+      ],
+    ]);
+    expect(rows[0]?.tags).toEqual([
+      "\u001b[31mdefault\u001b[0m",
+      "fallback#2",
+      "img-fallback#1",
+      "alias:a\tb",
+      "unknown",
+      "default",
     ]);
   });
 
@@ -90,7 +106,6 @@ describe("printModelTable", () => {
         local: false,
         available: true,
         tags: [],
-        missing: false,
       },
     ];
 

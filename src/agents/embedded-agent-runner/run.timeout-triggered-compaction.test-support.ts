@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
@@ -71,11 +72,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "timeout recovery complete" }]);
     mockedRunEmbeddedAttempt
       .mockImplementationOnce(async (params) => {
-        params.onUserMessagePersisted?.({
-          role: "user",
-          content: "hello",
-          timestamp: 1,
-        });
+        params.onUserMessagePersisted?.(makeUserMessage("hello", 1));
         return makeAttemptResult({
           timedOut: true,
           lastAssistant: { usage: { input: 160_000 } } as never,
@@ -110,7 +107,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       sessionTarget: successor,
     });
     expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt).toContain(
-      "Continue from the current transcript",
+      "Continue the current task from the existing transcript",
     );
     expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt).not.toBe(session.runParams.prompt);
     const compactParams = mockedCompactDirect.mock.calls[0]?.[0] as CompactParams | undefined;

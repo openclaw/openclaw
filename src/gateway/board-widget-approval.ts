@@ -37,5 +37,13 @@ export async function resolveBoardWidgetApproval(params: {
     }),
     { kind: "board-widget", name, declared, agent: { id: agentId, sessionKey } },
   );
-  return review.decision === "allow-once" && review.risk === "low" ? "granted" : "rejected";
+  switch (review.decision) {
+    case "allow-once":
+      return review.risk === "low" ? "granted" : "rejected";
+    case "deny":
+    case "ask":
+      return "rejected";
+    default:
+      throw new Error("Unsupported widget review decision", { cause: review satisfies never });
+  }
 }

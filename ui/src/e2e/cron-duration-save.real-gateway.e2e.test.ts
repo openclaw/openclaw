@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type WaSelect from "@awesome.me/webawesome/dist/components/select/select.js";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -14,6 +13,7 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import type { CronJob } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
@@ -54,6 +54,183 @@ const suite = createControlUiE2eSuite({
   },
 });
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+let catalogInstance: OpenClawTestInstance | undefined;
+const catalogModels = (id: string) => [
+  { id: "anchor", name: "Anchor" },
+  { id, name: id },
+];
+const catalogSuite = createControlUiE2eSuite({
+  name: "Automation catalog publication with a real Gateway",
+  startServerBeforeBrowser: true,
+  async startServer() {
+    const owner = await createOpenClawTestInstance({
+      name: "automation-catalog-publication",
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+      config: {
+        gateway: { controlUi: { enabled: true } },
+        cron: { enabled: false },
+        agents: { defaults: { model: "fixture/anchor" } },
+        models: {
+          providers: {
+            fixture: {
+              api: "openai-completions",
+              apiKey: "synthetic-catalog-key",
+              baseUrl: "http://127.0.0.1:9/v1",
+              models: catalogModels("retiring"),
+            },
+          },
+        },
+      },
+    });
+    catalogInstance = owner;
+    try {
+      await owner.startGateway();
+      return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
+    } catch (error) {
+      await owner.cleanup();
+      throw error;
+    }
+  },
+});
+
+catalogSuite.define(() => {
+  it("keeps an open automation draft current through real catalog publication and read recovery", async () => {
+    const owner = catalogInstance;
+    if (!owner) {
+      throw new Error("Catalog Gateway fixture was not started");
+    }
+    const handoff = await owner.cli(["dashboard", "--json"]);
+    expect(handoff.code).toBe(0);
+    const browserUrl = requireRecord(JSON.parse(handoff.stdout)).browserUrl;
+    if (typeof browserUrl !== "string") {
+      throw new Error("Dashboard did not return a browser handoff");
+    }
+    const url = new URL("cron", browserUrl);
+    url.hash = new URL(browserUrl).hash;
+    const frames: unknown[] = [];
+    const catalogRequests = new Set<string>();
+    const commands: unknown[] = [];
+    let rejectCatalogReplies = false;
+    const rejected = new Set<string>();
+    const publish = async (id: string) => {
+      const args = [
+        "config",
+        "set",
+        "models.providers.fixture.models",
+        JSON.stringify(catalogModels(id)),
+        "--strict-json",
+        "--replace",
+      ];
+      const result = await owner.cli(args);
+      commands.push({ args, ...result });
+      expect(result.code, result.stderr).toBe(0);
+    };
+    try {
+      await catalogSuite.withPage(
+        {
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1280 },
+          recordVideo: { dir: catalogSuite.artifactDir },
+        },
+        async ({ page }) => {
+          await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
+            const server = socket.connectToServer();
+            socket.onMessage((message) => {
+              const frame = requireRecord(JSON.parse(message.toString()));
+              if (frame.type === "req" && frame.method !== "connect") {
+                frames.push({ direction: "sent", frame });
+                if (frame.method === "models.list" && typeof frame.id === "string") {
+                  catalogRequests.add(frame.id);
+                }
+              }
+              server.send(message);
+            });
+            server.onMessage((message) => {
+              const frame = requireRecord(JSON.parse(message.toString()));
+              const catalogReply = typeof frame.id === "string" && catalogRequests.has(frame.id);
+              if (
+                catalogReply ||
+                frame.event === "config.changed" ||
+                frame.event === "chat.metadata.changed"
+              ) {
+                frames.push({
+                  direction: "received",
+                  frame,
+                  transportFailure: catalogReply && rejectCatalogReplies,
+                });
+              }
+              // Inject failure after observing the real reply. Notifications and recovery
+              // still come from the Gateway; no synthetic catalog or event replaces them.
+              if (catalogReply && rejectCatalogReplies && typeof frame.id === "string") {
+                rejected.add(frame.id);
+                socket.send(
+                  JSON.stringify({
+                    type: "res",
+                    id: frame.id,
+                    ok: false,
+                    error: { code: "UNAVAILABLE", message: "Catalog transport unavailable" },
+                  }),
+                );
+              } else {
+                socket.send(message);
+              }
+            });
+          });
+          await page.goto(url.toString());
+          await waitForControlUiGatewayReady(page);
+          await page.locator('[data-test-id="cron-new-task"]').click();
+          await page.locator("#cron-name").fill("Retain this draft");
+          await page.locator("#cron-payload-text").fill("Do not submit this draft");
+          const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
+          await expect
+            .poll(() => picker.locator('[role="option"][data-value="retiring"]').count())
+            .toBe(1);
+          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          await publish("published");
+          await expect
+            .poll(() => picker.locator('[role="option"][data-value="published"]').count())
+            .toBe(1);
+          expect(await picker.locator('[role="option"][data-value="retiring"]').count()).toBe(0);
+          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+
+          rejectCatalogReplies = true;
+          await publish("held");
+          await expect.poll(() => rejected.size).toBeGreaterThan(0);
+          const error = page.locator(".cron-error-banner");
+          await error.waitFor({ state: "visible" });
+          expect(await error.textContent()).toContain("Catalog transport unavailable");
+          expect(await picker.locator('[role="option"][data-value="published"]').count()).toBe(1);
+          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
+
+          rejectCatalogReplies = false;
+          await publish("recovered");
+          await expect
+            .poll(() => picker.locator('[role="option"][data-value="recovered"]').count())
+            .toBe(1);
+          await error.waitFor({ state: "hidden" });
+          expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
+          expect(await page.locator("#cron-payload-text").inputValue()).toBe(
+            "Do not submit this draft",
+          );
+          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+        },
+      );
+    } finally {
+      const redact = (text: string) =>
+        text
+          .replaceAll(owner.gatewayToken, "[synthetic token]")
+          .replaceAll(owner.hookToken, "[synthetic token]");
+      await fs.writeFile(
+        path.join(catalogSuite.artifactDir, "publication.json"),
+        redact(JSON.stringify({ frames, commands }, null, 2)),
+      );
+      await fs.writeFile(path.join(catalogSuite.artifactDir, "gateway.log"), redact(owner.logs()));
+    }
+  }, 120_000);
+});
+
 const requireRecord = createRequireRecord("record", "expected-object-value");
 type CliJson = (args: string[]) => Promise<Record<string, unknown>>;
 type ServedAsset = { path: string; status: number; sha256?: string; error?: string };
@@ -267,26 +444,18 @@ async function seedAlertJob(cliJson: CliJson, name: string, failureAlert: CronJo
   return { id, stored };
 }
 
-async function pickerValue(picker: Locator) {
-  return picker.evaluate((element) => {
-    // SAFETY: Callers locate only registered wa-select controls rendered by the cron form.
-    return (element as WaSelect).value;
-  });
-}
-
 async function choosePicker(picker: Locator, value: string) {
-  await picker.click();
-  await picker.locator(`wa-option[value="${value}"]`).click();
+  await selectPickerValue(picker, value);
   await expect.poll(() => pickerValue(picker)).toBe(value);
 }
 
 async function readAlertFields(page: Page) {
-  const mode = page.locator("#cron-failure-alert-delivery-mode");
+  const mode = page.locator("openclaw-select-picker:has(#cron-failure-alert-delivery-mode)");
   return {
     after: await page.locator("#cron-failure-alert-after").inputValue(),
     cooldown: await page.locator("#cron-failure-alert-cooldown-seconds").inputValue(),
     mode: await pickerValue(mode),
-    modeLabel: await mode.locator('input[role="combobox"]').inputValue(),
+    modeLabel: await mode.locator(".picker-select__trigger .picker-select__label").textContent(),
   };
 }
 
@@ -441,23 +610,27 @@ suite.define(() => {
         });
         await page.locator("#cron-failure-alert-after").fill("");
         await page.locator("#cron-failure-alert-cooldown-seconds").fill("");
-        const deliveryMode = page.locator("#cron-failure-alert-delivery-mode");
-        await deliveryMode.click();
+        const deliveryMode = page.locator(
+          "openclaw-select-picker:has(#cron-failure-alert-delivery-mode)",
+        );
+        await deliveryMode.locator(".picker-select__trigger").click();
         await capture(page, "real-alert-clear-choice", {
-          options: await deliveryMode.locator("wa-option").evaluateAll((options) =>
+          options: await deliveryMode.locator('[role="option"]').evaluateAll((options) =>
             options.map((option) => ({
-              value: option.getAttribute("value"),
+              value: option.getAttribute("data-value"),
               label: option.textContent?.trim(),
             })),
           ),
         });
-        const inheritOption = deliveryMode.locator('wa-option[value=""]');
+        const inheritOption = deliveryMode.locator('[role="option"][data-value=""]');
         await inheritOption.waitFor({ state: "visible" });
         expect(await inheritOption.textContent()).toContain("Inherit global setting");
         await inheritOption.click();
         await expect.poll(() => pickerValue(deliveryMode)).toBe("");
         await expect
-          .poll(() => deliveryMode.locator('input[role="combobox"]').inputValue())
+          .poll(() =>
+            deliveryMode.locator(".picker-select__trigger .picker-select__label").textContent(),
+          )
           .toBe("Inherit global setting");
         const cleared = await submitCronForm(evidence, cliJson, "cron.update");
         expect(cleared.request.params).toMatchObject({
@@ -469,7 +642,7 @@ suite.define(() => {
           includeSkipped: true,
         });
         await capture(page, "real-alert-cleared", cleared);
-        const policyMode = page.locator("#cron-failure-alert-mode");
+        const policyMode = page.locator("openclaw-select-picker:has(#cron-failure-alert-mode)");
         await choosePicker(policyMode, "inherit");
         const inherited = await submitCronForm(evidence, cliJson, "cron.update");
         expect(inherited.request.params).toMatchObject({ patch: { failureAlert: null } });

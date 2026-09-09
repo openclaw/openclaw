@@ -116,7 +116,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.agentToAgent.allow":
     "Agent ids or * patterns that may take part in cross-agent calls; the requesting and target agent must both match. Cross-agent access is on by default, and omitted or empty allow permits every pair. Set an explicit list to restrict access; blank entries deny.",
   "tools.updatePlan":
-    "Unified `progress_card` status tool for durable plans and narrative notes. Enabled by default; set false to opt out.",
+    "Unified `progress_card` status tool for durable plans and narrative notes in parent sessions. Enabled by default; set false to opt out. Always unavailable to subagents.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Supported local runtimes use structured Tool Search automatically when unset. Set false to disable it, true for the code bridge, or use the object form to choose a mode.",
   "tools.toolSearch.enabled":
@@ -170,15 +170,16 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.subagents":
     "Tool policy wrapper for spawned subagents to restrict or expand tool availability compared to parent defaults. Use this to keep delegated agent capabilities scoped to task intent.",
   "tools.subagents.tools":
-    "Allow/deny tool policy applied to spawned subagent runtimes for per-subagent hardening. Keep this narrower than parent scope when subagents run semi-autonomous workflows.",
+    "Allow/deny tool policy applied to spawned subagent runtimes. Keep this narrower than parent scope. Parent-owned tools such as progress_card are always denied, including through allow/alsoAllow.",
   "tools.sandbox":
     "Tool policy wrapper for sandboxed agent executions so sandbox runs can have distinct capability boundaries. Use this to enforce stronger safety in sandbox contexts.",
   "tools.sandbox.tools":
     "Allow/deny tool policy applied when agents run in sandboxed execution environments. Keep policies minimal so sandbox tasks cannot escalate into unnecessary external actions.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
   "gateway.auth.token":
-    "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
-  "gateway.auth.password": "Required for Tailscale funnel.",
+    "Shared secret selected by gateway.auth.mode=token, the default for new local onboarding. Clients may send it in either auth.token or auth.password. Non-loopback binds require an enabled authentication mode.",
+  "gateway.auth.password":
+    "Shared secret selected by gateway.auth.mode=password. Clients may send it in either auth.token or auth.password. Password mode is required for Tailscale Funnel.",
   "agents.defaults.sandbox.browser.network":
     'Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Use the dedicated default or a custom bridge network; "none" is unsupported because browser control requires published CDP ports.',
   "agents.entries.*.sandbox.browser.network":
@@ -296,7 +297,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.workerRuns.isolation":
     'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine and never falls back to host execution.',
   "nodeHost.workerRuns.containerImage":
-    'Optional Node 22+ image for container-isolated workers (default: "node:22-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
+    'Optional Node 24.16+ or 26.1+ image for container-isolated workers (default: "node:24.19.0-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":
@@ -500,7 +501,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "skills.load.watch":
     "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
   "skills.workshop.autonomous.mode":
-    'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals and runs daily scanner-gated cleanup that can rewrite or drop eligible writable skills. Default: "auto".',
+    'Controls background learning: "off" keeps only the suggestion nudge, "propose" creates pending proposals, and "auto" applies captured proposals and runs weekly review of Workshop-owned skills using ordinary file edits. Default: "auto".',
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":

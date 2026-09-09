@@ -308,6 +308,8 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   cwd?: string;
   /** How duplicate message idempotency keys are detected before append. */
   idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
+  /** Reject the append when the transcript changed since the caller loaded it. */
+  expectedMutationAt?: number | null;
   /** Provider/channel message payload to persist. */
   message: TMessage;
   /** Testable timestamp override for the generated transcript entry. */
@@ -751,6 +753,8 @@ export type SessionMessageCutMutationParams = {
   sessionStoreKey?: string;
   storePath?: string;
   targetKey?: string;
+  /** Distinct repository owner prepared by the fork lifecycle before transcript commit. */
+  repositoryWorkspaceId?: string;
 };
 
 export type SessionBranchSummary = {
@@ -844,8 +848,10 @@ export type RestoreSessionFromCompactionCheckpointParams = {
 export type SessionEntryCreateWithTranscriptContext = {
   /** Current entry under the requested key before creation, if any. */
   existingEntry?: SessionEntry;
-  /** Current entries snapshot for validation rules such as label uniqueness. */
-  sessionEntries: Record<string, SessionEntry>;
+  /** Exact normalized target from the same snapshot, distinct from an alias-resolved entry. */
+  targetEntry?: SessionEntry;
+  /** Detached sibling-label facts; excludes the exact normalized target only. */
+  isLabelInUse: (label: string) => boolean;
 };
 
 export type SessionEntryCreateWithTranscriptResult<TError = string> =

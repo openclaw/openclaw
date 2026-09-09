@@ -7,12 +7,19 @@ import { triageCommand } from "./triage.js";
 import { createTriageRuntime, withTriageTerminal } from "./triage.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
+  confirm: mocks.confirm,
+}));
 const mocks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+  agentExecCommand: vi.fn(),
   collectDoctorFindings: vi.fn(),
   runUpdateRepairLoop: vi.fn(),
   runUtf8CommandWithTimeout: vi.fn(),
   resolveGatewayInstallEntrypoint: vi.fn(),
 }));
+vi.mock("./agent-exec.js", () => ({ agentExecCommand: mocks.agentExecCommand }));
 vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
 vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: mocks.runUpdateRepairLoop,
@@ -32,6 +39,7 @@ describe("triage --run", () => {
   let stateDir: string;
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.confirm.mockResolvedValue(true);
     stateDir = tempDirs.make("openclaw-triage-run-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
@@ -54,6 +62,34 @@ describe("triage --run", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  it("confirms an interactive owned update continuation before embedded execution", async () => {
+    await fs.writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
+    );
+    mocks.confirm.mockResolvedValue(false);
+    mocks.agentExecCommand.mockResolvedValue({ exitCode: 0 });
+    const runtime = createTriageRuntime();
+    await withTriageTerminal(true, () =>
+      triageCommand(
+        runtime,
+        { noExport: true },
+        {
+          signal: new AbortController().signal,
+          assertCurrent: vi.fn(),
+          failure: { kind: "update", phase: "build", error: "install failed", gateway: "preserve" },
+        },
+      ),
+    );
+    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+    expect(runtime.log.mock.calls.flat().join("\n")).toContain(
+      "the embedded OpenClaw agent using your configured model",
+    );
+    expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("gpt-5.6-luna");
+    expect(runtime.log).toHaveBeenCalledWith("Ready-to-run agent handoffs:");
   });
 
   it("keeps the onboarding hint when embedded repair has no usable inference", async () => {

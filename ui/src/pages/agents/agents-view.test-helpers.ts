@@ -1,7 +1,20 @@
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import type { renderAgentFiles } from "./panels-status-files.ts";
 import type { renderAgents } from "./view.ts";
 
 type AgentsViewProps = Parameters<typeof renderAgents>[0];
+type AgentFilesProps = Parameters<typeof renderAgentFiles>[0];
+
+export const inertAgentFileControls = {
+  agentFileConflict: null,
+  onLoadFiles: () => undefined,
+  onSelectFile: () => undefined,
+  onFileDraftChange: () => undefined,
+  onFileReset: () => undefined,
+  onFileSave: () => undefined,
+  onFileReload: () => undefined,
+  onFileOverwrite: () => undefined,
+} satisfies Partial<AgentFilesProps>;
 
 export function createAgentViewTestProps(
   overrides: Partial<AgentsViewProps> = {},
@@ -58,11 +71,16 @@ export function createAgentViewTestProps(
       contents: {},
       drafts: {},
       saving: false,
+      conflict: null,
     },
     agentIdentityLoading: false,
     agentIdentityError: null,
     agentIdentityById: {},
     identityDraft: { name: null, emoji: null, avatar: null },
+    identityAvatarLoader: {
+      resolve: (url) => url,
+      imageErrorHandler: () => () => undefined,
+    },
     identitySaving: false,
     identityError: null,
     agentSkills: {
@@ -94,7 +112,7 @@ export function createAgentViewTestProps(
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
     modelCatalog: [],
-    modelCatalogError: null,
+    modelCatalogStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     pinnedAgentIds: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
@@ -105,13 +123,15 @@ export function createAgentViewTestProps(
     onFileDraftChange: () => undefined,
     onFileReset: () => undefined,
     onFileSave: () => undefined,
+    onFileReload: () => undefined,
+    onFileOverwrite: () => undefined,
     onToolsProfileChange: () => undefined,
     onToolsOverridesChange: () => undefined,
     onConfigReload: () => undefined,
     onConfigSave: () => undefined,
     onModelChange: () => undefined,
     onModelFallbacksChange: () => undefined,
-    onModelCatalogRetry: () => undefined,
+    onModelCatalogOpen: () => undefined,
     onChannelsRefresh: () => undefined,
     onCronRefresh: () => undefined,
     onCronLoadMore: () => undefined,

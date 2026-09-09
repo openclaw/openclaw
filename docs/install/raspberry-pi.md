@@ -60,7 +60,8 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
     sudo apt update && sudo apt upgrade -y
     sudo apt install -y git curl build-essential
 
-    # Set timezone (important for cron and reminders)
+    # Set your timezone (important for cron and reminders).
+    # Replace America/Chicago with your own IANA zone (`timedatectl list-timezones`).
     sudo timedatectl set-timezone America/Chicago
     ```
 
@@ -137,7 +138,7 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
 **Enable module compile cache** -- Speeds up repeated CLI invocations on lower-power Pi hosts. `OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, avoiding extra process handoffs and keeping PID tracking simple on small hosts:
 
 ```bash
-grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' # pragma: allowlist secret
+grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF'
 export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
 mkdir -p /var/tmp/openclaw-compile-cache
 export OPENCLAW_NO_RESPAWN=1

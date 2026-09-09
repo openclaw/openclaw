@@ -22,7 +22,7 @@ Provider plugins can contribute cache-aware guidance without replacing the OpenC
 - inject a **stable prefix** above the prompt cache boundary
 - inject a **dynamic suffix** below the prompt cache boundary
 
-Use provider-owned contributions for model-family-specific tuning. Reserve the legacy `before_prompt_build` hook for compatibility or truly global prompt changes.
+Use provider-owned contributions for model-family-specific tuning; they have been the recommended path since v2026.4.5. Reserve the `before_prompt_build` hook, which is still supported, for compatibility or truly global prompt changes.
 
 The built-in GPT-5-family prompt contribution (`resolveGpt5SystemPromptContribution`) uses this mechanism: a `stablePrefix` behavior contract (execution policy, tool discipline, output contract, completion contract) plus an optional `interaction_style` override for a friendlier tone. For OpenAI-family routes, `plugins.entries.openai.config.personality` controls that style layer: `"friendly"` is the default, `"on"` aliases `"friendly"`, and `"off"` removes only the friendly override; the stable behavior contract remains.
 
@@ -33,8 +33,8 @@ The prompt is compact, with fixed sections:
 - **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance. When `progress_card` is enabled (`tools.updatePlan`, on by default), its own description explains how to maintain one durable plan and status note, keep at most one step `in_progress`, and skip routine updates that do not change the picture.
 - **Execution Bias**: act in-turn on actionable requests, continue until done or blocked, recover from weak tool results, check mutable state live, and verify before finalizing.
 - **Promised Work**: promising future, background, delegated, or continued work creates follow-through ownership: arrange an available completion or watch path before ending the turn, proactively return with the result or a concrete blocker, and never treat progress (like `running`) as completion.
-- **Safety**: short guardrail reminder against power-seeking behavior or bypassing oversight, plus credential handling: no secrets or authentication/pairing codes in transcripts; use host-owned masked entry or safe external setup.
-- **Runtime Context**: stable guidance for all providers, immediately after Safety and above the cache boundary. Messages delimited by `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>` and `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>` carry runtime context for the user request they follow, not user-authored text. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message. Carriers themselves hold only the delimited body, so this instruction is not repeated per turn.
+- **Safety**: short guardrail reminder against power-seeking behavior or bypassing oversight, plus private delivery of short-lived login codes in groups and a terminal setup route when no control tools are available.
+- **Runtime Context**: stable guidance for all providers, immediately after Safety and above the cache boundary. Messages delimited by `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>` and `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>` carry runtime context for the user request they follow, not user-authored text. This includes compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. Each available capability emits a current snapshot, including `none` when empty, which supersedes older snapshots. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message. Carriers themselves hold only the delimited body, so this instruction is not repeated per turn.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Control**: inspect config with `gateway` (`config.get` / `config.schema.lookup`); request restart, config, channel, plugin, agent, and model/provider changes through `openclaw` when available. Delegated changes follow [effective permissions](/gateway/permission-modes#delegated-setup-and-repair). Owner-requested updates use the `gateway` action `update.run` only on explicit user request, with automatic restart and a completion or failure notice. Without `gateway`, direct the user to the OpenClaw owner, `openclaw update` in a terminal, or the Control UI. Never update OpenClaw or stop/restart its Gateway service through chat shell commands; do not invent CLI commands.
 - **Workspace**: working directory (`agents.defaults.workspace`).
@@ -45,10 +45,10 @@ The prompt is compact, with fixed sections:
 - **Assistant Output Directives**: compact attachment, voice-note, and reply-tag syntax.
 - **UI Presentation** (when presentation tools are available): compact widget, dashboard, and portal routing; verify the actual delivered surface.
 - **Collapsible Details** (when supported): teaches the model to keep optional depth in `<details>` disclosures while leaving the primary answer and required actions visible.
-- **Runtime**: host, OS, node, model, repo root (when detected), and session identity (one line). Reasoning effort travels through provider controls instead of this prompt, so changing effort does not rewrite the cached instructions. Use `/status` to inspect the selected effort.
+- **Runtime**: host, OS, node, model, repo root (when detected), and session identity (one line). Git co-author trailers appear here only when a shared session has someone to credit. Active exec sessions travel in the Runtime Context carrier. Reasoning effort travels through provider controls; its Ultra orchestration guidance stays below the cache boundary. Use `/status` to inspect the selected effort.
 - **Reasoning**: current visibility level plus the `/reasoning` toggle hint.
 
-Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (**UI Presentation**, Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
+Large stable content (including **Project Context** and static **Memory Recall** instructions) stays above the internal prompt cache boundary. Volatile per-turn sections (**UI Presentation**, Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Runtime**, **Project Memory** facts, channel-specific ACP hints, delegation/orchestration mode, and the current elevated level) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. Exec, subagent, and media facts use the later Runtime Context carrier to preserve the conversation-history prefix too; their capability-based instructions stay in the system prompt. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
 
 Tooling also carries long-running-work guidance:
 
@@ -64,12 +64,18 @@ Tooling also carries long-running-work guidance:
 
 At the `ultra` thinking level, a **Proactive Sub-Agent Orchestration** section is also added when `sessions_spawn` is available: it tells the model to parallelize independent investigation, implementation, and verification through sub-agents, keep simple or tightly coupled work local, give each sub-agent a bounded objective, and synthesize results before replying.
 
-Credential guidance is shared with native Codex developer instructions. When
-`secrets` is actually callable, including deferred and Code Mode surfaces, it
-teaches metadata-first discovery, task-needed masked requests, and returned store
-SecretRefs for supported config fields. Named-tool guidance disappears when the
-tool is filtered or disabled. Gateway egress additionally needs an enabled proxy
-and allowed hosts; there is no plaintext fallback. See [Secrets](/tools/secrets).
+The `secrets` tool description teaches metadata-first discovery, task-needed
+masked requests, and returned store SecretRefs for supported config fields.
+Setup tool descriptions route credential collection through masked flows.
+The **Safety** section directs user-requested login or pairing codes and
+verification URLs from group conversations to the requesting user in private,
+followed by a group acknowledgment without the code or URL. When neither
+`openclaw` nor `gateway` is available, it directs
+channel, provider, and credential setup to `openclaw channels add <channel>` or
+`openclaw configure` in a terminal, where prompts mask secrets. Tokens, API keys,
+and passwords are not collected in chat. This credential guidance also appears
+in Codex and Copilot prompts, based on their callable control tools.
+See [Secrets](/tools/secrets).
 
 UI presentation guidance is shared with native Codex developer instructions.
 It includes only current callable tools, including deferred and Code Mode tools;
@@ -85,6 +91,26 @@ delivered interaction or say it is unverified. Tool descriptions and linked docs
 own the detailed sandbox, permission, and server-setup instructions.
 
 Safety guardrails in the system prompt are advisory, not enforcement. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable prompt guardrails by design.
+
+Gateway-owned prompt assembly carries context provenance separately from message text.
+Context producers distinguish runtime instructions from conversation data and
+heartbeat outcomes. In new sessions, model projection escapes internal-context
+delimiter mentions in inbound text and quotes context data without changing the
+stored user transcript. Matching text never promotes a message into runtime
+context. This is prompt hardening, not an authorization boundary or a guarantee
+against prompt injection.
+
+The transcript header selects this projection: new sessions use version 4;
+existing version 3 sessions retain their previous projection across restarts.
+Branches and restored history keep the source version, as do reset boundaries
+and compaction within an existing transcript. Adoption leaves retained history
+untouched; Doctor repairs legacy headerless history with version 3. Unknown projection versions are
+rejected before model submission. Provider message roles remain unchanged to
+preserve retained-thinking prefix compatibility. Cloud-worker prompt assembly
+uses a separate launch contract and still needs this hardening; see
+[the cloud-worker follow-up](https://github.com/openclaw/openclaw/issues/140666).
+
+Resumed room CLI turns retain new thread notes, system events, and MCP App context.
 
 On channels with native approval cards/buttons, the prompt tells the agent to rely on that UI first, and to include a manual `/approve` command only when the tool result says chat approvals are unavailable or manual approval is the only path.
 
@@ -102,7 +128,7 @@ For channel auto-reply runs, OpenClaw omits the generic **Silent Replies** secti
 
 ## Prompt snapshots
 
-OpenClaw keeps committed prompt snapshots for the Codex runtime happy path under `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/`. They render selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack for Telegram direct, Discord group, and heartbeat turns: a pinned Codex `gpt-5.5` model prompt fixture, the Codex happy-path permission developer text, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, user turn input, and references to dynamic tool specs.
+OpenClaw keeps committed prompt snapshots for the Codex runtime happy path under `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/`. They render selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack for Telegram direct, Discord group, and heartbeat turns: a pinned Codex `gpt-5.5` model prompt fixture, the Codex happy-path permission developer text, parent-local request instructions, OpenClaw developer instructions, native collaboration-mode instructions, user turn input, and references to dynamic tool specs.
 
 Refresh the pinned Codex model prompt fixture with `pnpm prompt:snapshots:sync-codex-model`. By default it looks for `$CODEX_HOME/models_cache.json`, then `~/.codex/models_cache.json`, then the maintainer checkout convention `~/code/codex/codex-rs/models-manager/models.json`; if none exist it exits without changing the committed fixture. Pass `--catalog <path>` to refresh from a specific `models_cache.json` or `models.json` file.
 
@@ -121,7 +147,7 @@ Agent identity, instructions, and memory are resolved from the configured agent 
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present
 
-On the native Codex harness, OpenClaw avoids repeating stable workspace files in every user turn. Codex loads the execution folder's `AGENTS.md`, including its `## Tools` section, through native project-doc discovery, so OpenClaw does not inject that file again. When execution uses another folder, OpenClaw adds the configured agent workspace's bounded `AGENTS.md` snapshot to the thread-level developer instructions so native Codex sub-agents inherit it. `SOUL.md`, `IDENTITY.md`, and `USER.md` remain turn-scoped collaboration developer instructions and intentionally do not flow to native sub-agents. `MEMORY.md` content is not pasted into every native Codex turn either: when memory tools are available for the agent workspace, Codex turns get a small workspace-memory note directing the model to `memory_search` or `memory_get`. If tools are disabled or memory search is unavailable, `MEMORY.md` falls back to the normal bounded turn-context path. `BOOTSTRAP.md` keeps the normal turn-context role.
+On the native Codex harness, OpenClaw avoids repeating stable workspace files in every user turn. Codex loads the execution folder's `AGENTS.md`, including its `## Tools` section, through native project-doc discovery, so OpenClaw does not inject that file again. When execution uses another folder, OpenClaw adds the configured agent workspace's bounded `AGENTS.md` snapshot to the thread-level developer instructions so native Codex sub-agents inherit it. On the managed bundled stdio app-server, `SOUL.md`, `IDENTITY.md`, and `USER.md` are appended to parent-only model request instructions rather than native history, so newly delivered persona does not automatically flow to native subagents. External and Desktop connections retain the legacy collaboration carrier with an explicit availability warning; older history is preserved. `MEMORY.md` content is not pasted into every native Codex turn either: when memory tools are available for the agent workspace, Codex turns get a small workspace-memory note directing the model to `memory_search` or `memory_get`. If tools are disabled or memory search is unavailable, `MEMORY.md` falls back to the normal bounded turn-context path. `BOOTSTRAP.md` keeps the normal turn-context role.
 
 Heartbeat monitor scratch is not a bootstrap file. The heartbeat runner appends it only to the scheduled heartbeat user message; normal turns do not receive it, and the system prompt contains no heartbeat-specific section.
 
@@ -166,7 +192,7 @@ See [Timezones](/concepts/timezone) and [Date & Time](/date-time) for full behav
 
 When eligible skills exist, OpenClaw injects a compact `<available_skills>` list (`formatSkillsForPrompt`) with the **file path** for each skill. The prompt instructs the model to use `read` to load the SKILL.md at the listed location (workspace, managed, or bundled). If no skills are eligible, the Skills section is omitted.
 
-Native Codex turns receive this list as turn-scoped collaboration developer instructions instead of per-turn user input, except lightweight cron turns that preserve the exact scheduled prompt. Other harnesses keep the normal prompt section.
+Managed native Codex turns receive this list through parent-local model request instructions instead of per-turn user input, except lightweight cron turns that preserve the exact scheduled prompt. Other harnesses keep the normal prompt section.
 
 The location can point at a nested skill, such as `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt uses the flat skill name from `SKILL.md` frontmatter.
 

@@ -5,12 +5,25 @@ import {
   codeModeRetentionEntrypoint,
 } from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
-import { cliRecoveryEntrypoints } from "../../src/cli/cli-entrypoint.test-support.ts";
+import {
+  cliRecoveryEntrypoints,
+  gatewayDirectStopEntrypoints,
+  stateDirGatewayFixtureEntrypoint,
+} from "../../src/cli/cli-entrypoint.test-support.ts";
+import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { sessionListCacheRetentionEntrypoint } from "../../src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts";
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
+import {
+  triageTestRuntimeEntrypoints,
+  triageMaintenanceRuntimeEntrypoints,
+} from "../../src/infra/triage-runtime.test-support.ts";
 import { nodeHostConfigRuntimeEntrypoint } from "../../src/node-host/config-runtime.test-support.ts";
+import {
+  mcpProviderCatalogEntrypoint,
+  publishedSdkBridgeEntrypoints,
+} from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
@@ -25,10 +38,17 @@ export const vitestWorkerBuildEntries = {
   ...runtimeProcessBuildEntries,
   ...Object.fromEntries(
     [
+      ...Object.values(triageTestRuntimeEntrypoints),
+      ...Object.values(triageMaintenanceRuntimeEntrypoints),
       codeModeRetentionEntrypoint,
       codeModeDescriptionRetentionEntrypoint,
       ...cliCompactionBackendEntrypoints,
+      ...publishedSdkBridgeEntrypoints,
+      mcpProviderCatalogEntrypoint,
       ...Object.values(cliRecoveryEntrypoints),
+      ...Object.values(gatewayDirectStopEntrypoints),
+      stateDirGatewayFixtureEntrypoint,
+      ...Object.values(doctorConfigRuntimeEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
       ...Object.values(tuiPtyRuntimeEntrypoints),
       ...Object.values(sessionTitleRetentionEntrypoints),

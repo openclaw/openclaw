@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
@@ -12,10 +13,17 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
+import {
+  LegacyPluginSdkResourceHost,
+  bindLegacyPluginSdkResourceHost,
+  getLegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
@@ -219,6 +227,7 @@ function createLookUpTableForTest(params: {
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.manifestRegistry?.plugins ?? []),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -281,7 +290,11 @@ function createTestLog() {
 }
 
 function createTestContext(label: string): GatewayRequestContext {
-  return bindTestAgentTurns({ label } as unknown as GatewayRequestContext);
+  const config = {};
+  return bindTestAgentTurns({
+    label,
+    getRuntimeConfig: () => config,
+  } as unknown as GatewayRequestContext);
 }
 
 function bindTestAgentTurns(context: GatewayRequestContext): GatewayRequestContext {
@@ -702,12 +715,24 @@ describe("loadGatewayPlugins", () => {
     const context = createTestContext("same-context-distinct-owners");
     const closingResolver = vi.fn(() => context);
     const otherResolver = vi.fn(() => context);
+    const closingSdkHost = new LegacyPluginSdkResourceHost();
+    const otherSdkHost = new LegacyPluginSdkResourceHost();
+    const foreignSdkHost = new LegacyPluginSdkResourceHost();
+    bindLegacyPluginSdkResourceHost(closingResolver, closingSdkHost);
+    bindLegacyPluginSdkResourceHost(otherResolver, otherSdkHost);
+    const databases = [new DatabaseSync(":memory:"), new DatabaseSync(":memory:")];
+    const inspections = databases.map((database) => {
+      const inspection = new PluginRegistryInspectionResources();
+      inspection.attach(createEmptyPluginRegistry());
+      inspection.register("sdk-wrapper", { id: "native", dispose: () => database.close() });
+      return inspection;
+    });
     const operations: import("../auto-reply/reply/reply-run-registry.js").ReplyOperation[] = [];
     const runtimes: ReturnType<ServerPluginsModule["loadGatewayPlugins"]>[] = [];
     try {
-      for (const [name, resolver] of [
-        ["closing", closingResolver],
-        ["other", otherResolver],
+      for (const [name, resolver, sdkHost, inspection] of [
+        ["closing", closingResolver, closingSdkHost, inspections[0]!],
+        ["other", otherResolver, otherSdkHost, inspections[1]!],
       ] as const) {
         const sessionKey = `agent:main:plugin-${name}`;
         await replaceSessionEntry(
@@ -733,6 +758,9 @@ describe("loadGatewayPlugins", () => {
           throw new Error("Expected bound channel dispatch");
         }
         dispatchReplyFromConfig.mockImplementationOnce(async () => {
+          const selectedHost = getLegacyPluginSdkResourceHost();
+          expect(selectedHost).toBe(sdkHost);
+          selectedHost.adopt(inspection, inspection.retain());
           const admission = await admitReplyTurn({
             sessionKey,
             sessionId: name,
@@ -746,7 +774,8 @@ describe("loadGatewayPlugins", () => {
           operations.push(admission.operation);
           return { counts: {}, queuedFinal: false };
         });
-        await dispatch({} as Parameters<typeof dispatch>[0]);
+        await foreignSdkHost.run(() => dispatch({} as Parameters<typeof dispatch>[0]));
+        await inspection.release();
       }
       const capturedResolver = gatewayRequestScopeModule.getGatewayContextResolver(operations[0]!);
       expect(capturedResolver?.()).toBe(context);
@@ -755,7 +784,19 @@ describe("loadGatewayPlugins", () => {
       closingResolver.mockImplementation(() => {
         throw new Error("Retired resolver must not be invoked");
       });
+      closingResolver.mockClear();
       otherResolver.mockClear();
+      await closingSdkHost.close();
+      expect(databases[0]!.isOpen).toBe(false);
+      expect(databases[1]!.isOpen).toBe(true);
+      foreignSdkHost.run(() =>
+        gatewayRequestScopeModule.withPluginRuntimeGatewayContextResolver(capturedResolver, () => {
+          const selectedHost = getLegacyPluginSdkResourceHost();
+          expect(selectedHost).toBe(closingSdkHost);
+          expect(() => selectedHost.assertOpen()).toThrow("SDK resource host is closed");
+        }),
+      );
+      expect(closingResolver).not.toHaveBeenCalled();
       const admissions = captureGatewaySessionWorkAdmissions(closingResolver);
       const aborted = captureGatewayReplyRunRestartAbort(closingResolver)(() => {});
       expect({
@@ -776,6 +817,17 @@ describe("loadGatewayPlugins", () => {
     } finally {
       operations.forEach((operation) => operation.complete());
       runtimes.forEach((runtime) => runtime.retireGatewayRuntimeBindings());
+      await Promise.allSettled([
+        closingSdkHost.close(),
+        otherSdkHost.close(),
+        foreignSdkHost.close(),
+        ...inspections.map((inspection) => inspection.release()),
+      ]);
+      for (const database of databases) {
+        if (database.isOpen) {
+          database.close();
+        }
+      }
       await Promise.resolve();
       closeOpenClawAgentDatabasesForTest();
       await fs.rm(stateDir, { recursive: true, force: true });
@@ -1528,6 +1580,33 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedParams()).toEqual({ to: "+15550001234" });
     expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
+  test.each([
+    { pluginId: "community-plugin", reason: /Plugin "community-plugin" is neither\./ },
+    { pluginId: "missing-plugin", reason: /Plugin "missing-plugin" is neither\./ },
+    { pluginId: undefined, reason: /This call carries no plugin identity\./ },
+  ])("explains the Gateway refusal for plugin identity $pluginId", async ({ pluginId, reason }) => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), { id: "community-plugin", origin: "global" }),
+    );
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-refused"));
+    const runtime = createRuntimeFromLastGatewayLoad();
+
+    const request = pluginId
+      ? gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId, pluginOrigin: "global" },
+          () => runtime.gateway.request("sessions.list", {}),
+        )
+      : runtime.gateway.request("sessions.list", {});
+
+    await expect(request).rejects.toThrow(reason);
+    await expect(request).rejects.toThrow("bundled or trusted official plugins");
+    await expect(request).rejects.toThrow(
+      "https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-gateway",
+    );
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
   test("lets trusted official plugins request explicit Gateway scopes", async () => {

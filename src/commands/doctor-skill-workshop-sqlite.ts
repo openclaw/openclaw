@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { assertWorkspaceStateMigrationReady } from "../agents/workspace-legacy-state.js";
 import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -16,6 +17,8 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { movePathWithCopyFallback } from "../infra/replace-file.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import type { MigrationMessages } from "../infra/state-migrations.types.js";
+import { transitionPendingSkillProposalToStale } from "../skills/workshop/apply-transition.js";
 import { reconcileInterruptedSkillProposalApply } from "../skills/workshop/reconcile-transition.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
@@ -24,6 +27,7 @@ import {
   updateProposal,
 } from "../skills/workshop/store-sqlite-record.js";
 import {
+  SkillProposalDraftMissingError,
   hashSkillProposalContent,
   importLegacySkillProposal,
   readSkillProposal,
@@ -44,7 +48,9 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   listPendingLegacyCollectionBackupRoots,
+  listWorkspaceOwnerAgentIds,
   migrateLegacyCollectionBackups,
+  type LegacyCollectionBackupRoot,
 } from "./doctor-skill-workshop-collection-backups.js";
 import {
   classifyWorkshopRelocation,
@@ -73,9 +79,7 @@ const MAX_RECORD_BYTES = 1024 * 1024;
 const MAX_ROLLBACK_BYTES = 128 * 1024 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
 
-type MigrationResult = {
-  changes: string[];
-  warnings: string[];
+type MigrationResult = MigrationMessages & {
   detected: number;
   migrated: number;
 };
@@ -86,12 +90,15 @@ type WorkshopRelocationResult = {
   staleProposals: number;
   migratedBackupRoots: number;
   warnings: string[];
+  recoverableWarningCount: number;
 };
 
 export type LegacyWorkshopMigrationInspection = {
   externalProposalCount: number;
   externalProposalCountsByAgent: Record<string, number>;
+  externalProposalDetails?: string[];
   legacyBackupRootCount: number;
+  preservedLegacyBackupRootCount: number;
 };
 
 async function readJson(rootDir: Root, relativePath: string, maxBytes: number): Promise<unknown> {
@@ -141,18 +148,35 @@ export async function inspectLegacySkillWorkshopMigration(params: {
       counts[ownerAgentId] = (counts[ownerAgentId] ?? 0) + 1;
       return counts;
     }, {}),
+    ...(external.length > 0
+      ? {
+          externalProposalDetails: external
+            .toSorted((left, right) => left.record.id.localeCompare(right.record.id))
+            .slice(0, 20)
+            .map(({ record, ownerAgentId, unconfiguredOwnerAgentId }) =>
+              truncateWithMarker(
+                `${record.id}: ${record.target.skillDir} (owner: ${ownerAgentId ?? unconfiguredOwnerAgentId ?? "unknown"})`,
+                2000,
+                { marker: "…", reserve: 1, trimEnd: true },
+              ),
+            ),
+        }
+      : {}),
     legacyBackupRootCount: backups.length,
+    preservedLegacyBackupRootCount: backups.filter((backup) => "warning" in backup).length,
   };
 }
 
 async function relocateLegacyWorkshopTargets(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  retireMissingDrafts: boolean,
+  backupRoots: readonly LegacyCollectionBackupRoot[],
 ): Promise<WorkshopRelocationResult> {
   const database = openOpenClawStateDatabase({ env });
-  const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
-    database.db,
-  );
+  const kysely = getNodeSqliteKysely<
+    Pick<OpenClawStateDatabase, "skill_workshop_proposals" | "skill_workshop_proposal_rollbacks">
+  >(database.db);
   // Planning must not initialize optional Workshop tables or indexes on a no-op
   // startup. Actual proposal writes retain their feature-owned schema ensure.
   const readRows = () =>
@@ -164,12 +188,50 @@ async function relocateLegacyWorkshopTargets(
       : [];
   const deferredSources = new Set<string>();
   const recoveryWarnings: string[] = [];
+  let missingDraftsRetired = 0;
   // Settle writes while their proposal and rollback still name the same files.
   // Recovery can establish a create's ownership or restore a partial update.
   for (const row of readRows()) {
     const record = parseSkillProposalRow(row);
     if (!record || record.status !== "pending") {
       continue;
+    }
+    if (retireMissingDrafts) {
+      try {
+        await readSkillProposalBundle(record, { config, env });
+      } catch (error) {
+        if (!(error instanceof SkillProposalDraftMissingError)) {
+          recoveryWarnings.push(
+            `Could not inspect Skill Workshop proposal ${record.id}: ${String(error)}`,
+          );
+          deferredSources.add(resolveCanonicalWorkspacePath(record.target.skillDir));
+          continue;
+        }
+        // Any rollback row can describe an interrupted write. Keep it pending
+        // for recovery rather than treating its missing draft as abandoned work.
+        const rollback = executeSqliteQueryTakeFirstSync(
+          database.db,
+          kysely
+            .selectFrom("skill_workshop_proposal_rollbacks")
+            .select("proposal_id")
+            .where("proposal_id", "=", record.id),
+        );
+        if (rollback) {
+          recoveryWarnings.push(
+            `Skill Workshop proposal ${record.id} has a missing draft and unfinished apply recovery; restore its draft before retrying Doctor.`,
+          );
+          deferredSources.add(resolveCanonicalWorkspacePath(record.target.skillDir));
+          continue;
+        }
+        transitionPendingSkillProposalToStale({
+          record,
+          reason:
+            "Proposal draft is missing. Metadata and remaining files were preserved for recovery.",
+          input: { config, env, eventActor: { type: "system" } },
+        });
+        missingDraftsRetired += 1;
+        continue;
+      }
     }
     const workspaceDir = resolveLegacyWorkshopWorkspaceDir(record.target.skillDir, config, env);
     const { ownerAgentId } = inferOwnerAgentId({
@@ -188,7 +250,11 @@ async function relocateLegacyWorkshopTargets(
       continue;
     }
     try {
-      assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir], env });
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs: [workspaceDir],
+        env,
+        operation: "doctor",
+      });
       const sourceStat = await readLegacyWorkshopSourceStat(workspaceDir, record.target.skillDir);
       if (sourceStat?.isSymbolicLink()) {
         continue;
@@ -287,15 +353,16 @@ async function relocateLegacyWorkshopTargets(
   }
   persistUpdates(plan.updates);
   await finishWorkshopWorkspaceRelocations(env);
-  const backupMigration = await migrateLegacyCollectionBackups(config, env);
+  const backupMigration = await migrateLegacyCollectionBackups(config, env, backupRoots);
   const updates = [...plan.updates, ...plan.moves.flatMap((move) => move.updates)];
   const staleProposals = updates.filter((update) => update.record.status === "stale").length;
   return {
     movedSkills: plan.moves.filter((move) => move.operation === "move").length,
     retargetedProposals: updates.length - staleProposals,
-    staleProposals,
+    staleProposals: staleProposals + missingDraftsRetired,
     migratedBackupRoots: backupMigration.migrated,
     warnings: [...recoveryWarnings, ...plan.warnings, ...backupMigration.warnings],
+    recoverableWarningCount: backupMigration.recoverableWarningCount,
   };
 }
 
@@ -343,12 +410,43 @@ async function verifyImportedProposal(
   }
 }
 
-async function migrateProposal(params: {
+type PreparedLegacyProposal = {
+  record: SkillProposalRecord;
+  ownerAgentId: string;
+};
+
+async function readLegacyProposalArtifacts(
+  stateRoot: Root,
+  record: SkillProposalRecord,
+): Promise<SkillProposalRollback | undefined> {
+  const rollback = await readLegacyRollback(stateRoot, record.id);
+  const draft = await stateRoot
+    .read(`${PROPOSALS_DIR}/${record.id}/PROPOSAL.md`, {
+      hardlinks: "reject",
+      maxBytes: MAX_RECORD_BYTES,
+      symlinks: "reject",
+    })
+    .catch((error: unknown) => {
+      // Missing drafts must not quarantine a bundle that still owns apply recovery.
+      if (rollback && isMissingPathError(error)) {
+        throw new Error(
+          "Legacy bundle has a missing draft and unfinished apply recovery; restore its draft before retrying Doctor.",
+        );
+      }
+      throw error;
+    });
+  if (hashSkillProposalContent(draft.buffer.toString("utf8")) !== record.draftHash) {
+    throw new Error("proposal draft hash does not match proposal metadata");
+  }
+  return rollback;
+}
+
+async function prepareLegacyProposal(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   proposalId: string;
   stateRoot: Root;
-}): Promise<void> {
+}): Promise<PreparedLegacyProposal | { warning: string }> {
   const proposalDir = `${PROPOSALS_DIR}/${params.proposalId}`;
   const record = validateSkillProposalRecord(
     await readJson(params.stateRoot, `${proposalDir}/proposal.json`, MAX_RECORD_BYTES),
@@ -359,39 +457,53 @@ async function migrateProposal(params: {
   if (record.value.id !== params.proposalId) {
     throw new Error("invalid proposal metadata");
   }
-  const draft = await params.stateRoot.read(`${proposalDir}/PROPOSAL.md`, {
-    hardlinks: "reject",
-    maxBytes: MAX_RECORD_BYTES,
-    symlinks: "reject",
-  });
-  if (hashSkillProposalContent(draft.buffer.toString("utf8")) !== record.value.draftHash) {
-    throw new Error("proposal draft hash does not match proposal metadata");
-  }
-  const rollback = await readLegacyRollback(params.stateRoot, params.proposalId);
+  const rollback = await readLegacyProposalArtifacts(params.stateRoot, record.value);
+  const workspaceDir = resolveLegacyWorkshopWorkspaceDir(
+    record.value.target.skillDir,
+    params.config,
+    params.env,
+  );
   const owner = inferOwnerAgentId({
     config: params.config,
     env: params.env,
     record: record.value,
-    workspaceDir: resolveLegacyWorkshopWorkspaceDir(
-      record.value.target.skillDir,
-      params.config,
-      params.env,
-    ),
+    workspaceDir,
   });
   if (!owner.ownerAgentId) {
-    throw new Error(
-      owner.unconfiguredOwnerAgentId
-        ? `owning agent "${owner.unconfiguredOwnerAgentId}" is not configured; legacy metadata was retained for manual recovery`
-        : "owning agent could not be inferred; legacy metadata was retained for manual recovery",
-    );
+    if (rollback) {
+      throw new Error(
+        `Legacy bundle has unfinished apply recovery at ${path.join(resolveStateDir(params.env), proposalDir, "rollback.json")}; resolve its owning agent and recover the retained apply before retrying Doctor.`,
+      );
+    }
+    const candidates = workspaceDir
+      ? listWorkspaceOwnerAgentIds(params.config, params.env, workspaceDir).toSorted()
+      : [];
+    const reason = owner.unconfiguredOwnerAgentId
+      ? `owning agent "${owner.unconfiguredOwnerAgentId}" is not configured`
+      : "owning agent could not be inferred";
+    return {
+      warning: `Preserved Skill Workshop proposal ${path.join(resolveStateDir(params.env), proposalDir)} for manual review: ${reason}; target ${record.value.target.skillDir} (candidate agents: ${candidates.join(", ") || "none"}). Review the retained metadata and configured workspace ownership before retrying Doctor.`,
+    };
   }
+  return { record: record.value, ownerAgentId: owner.ownerAgentId };
+}
+
+async function migrateProposal(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateRoot: Root;
+  prepared: PreparedLegacyProposal;
+}): Promise<void> {
+  const { record, ownerAgentId } = params.prepared;
+  const proposalDir = `${PROPOSALS_DIR}/${record.id}`;
+  const rollback = await readLegacyProposalArtifacts(params.stateRoot, record);
   importLegacySkillProposal({
-    record: record.value,
+    record,
     rollback,
-    ownerAgentId: owner.ownerAgentId,
+    ownerAgentId,
     store: { env: params.env },
   });
-  await verifyImportedProposal(params.config, params.env, record.value, rollback);
+  await verifyImportedProposal(params.config, params.env, record, rollback);
   if (rollback) {
     await params.stateRoot.remove(`${proposalDir}/rollback.json`);
   }
@@ -462,6 +574,22 @@ async function importLegacySkillProposalSidecars(params: {
     .toSorted((left, right) => left.localeCompare(right));
   const warnings: string[] = [];
   const changes: string[] = [];
+  let recoverableWarningCount = 0;
+  const prepared = new Map<
+    string,
+    PreparedLegacyProposal | { warning: string } | { error: unknown }
+  >();
+  // Resolve every sidecar's ownership before the first import or artifact retirement.
+  for (const proposalId of proposalIds) {
+    try {
+      prepared.set(
+        proposalId,
+        await prepareLegacyProposal({ config: params.config, env, proposalId, stateRoot }),
+      );
+    } catch (error) {
+      prepared.set(proposalId, { error });
+    }
+  }
   const database = openOpenClawStateDatabase({ env });
   const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
     database.db,
@@ -469,11 +597,20 @@ async function importLegacySkillProposalSidecars(params: {
   let migrated = 0;
   for (const proposalId of proposalIds) {
     const proposalDir = `${PROPOSALS_DIR}/${proposalId}`;
+    const proposal = prepared.get(proposalId)!;
+    if ("warning" in proposal) {
+      warnings.push(proposal.warning);
+      recoverableWarningCount += 1;
+      continue;
+    }
     try {
+      if ("error" in proposal) {
+        throw proposal.error;
+      }
       await migrateProposal({
         config: params.config,
         env,
-        proposalId,
+        prepared: proposal,
         stateRoot,
       });
       migrated += 1;
@@ -524,6 +661,9 @@ async function importLegacySkillProposalSidecars(params: {
   return {
     changes,
     warnings,
+    ...(warnings.length > 0 && warnings.length === recoverableWarningCount
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
     detected: proposalIds.length,
     migrated,
   };
@@ -532,6 +672,7 @@ async function importLegacySkillProposalSidecars(params: {
 export async function migrateLegacySkillWorkshopProposals(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  retireMissingDrafts?: boolean;
 }): Promise<MigrationResult> {
   const env = params.env ?? process.env;
   // Plain Doctor can reach automatic migration without its repair scope.
@@ -540,8 +681,14 @@ export async function migrateLegacySkillWorkshopProposals(params: {
     databasePath: resolveOpenClawStateSqlitePath(env),
   });
   try {
+    const backupRoots = await listPendingLegacyCollectionBackupRoots(params.config, env);
     const sidecars = await importLegacySkillProposalSidecars({ config: params.config, env });
-    const relocation = await relocateLegacyWorkshopTargets(params.config, env);
+    const relocation = await relocateLegacyWorkshopTargets(
+      params.config,
+      env,
+      params.retireMissingDrafts === true,
+      backupRoots,
+    );
     if (
       relocation.movedSkills > 0 ||
       relocation.retargetedProposals > 0 ||
@@ -552,9 +699,18 @@ export async function migrateLegacySkillWorkshopProposals(params: {
         `Relocated ${relocation.movedSkills} Skill Workshop skill${relocation.movedSkills === 1 ? "" : "s"}, retargeted ${relocation.retargetedProposals} proposal${relocation.retargetedProposals === 1 ? "" : "s"}, marked ${relocation.staleProposals} stale, and migrated ${relocation.migratedBackupRoots} legacy collection backup root${relocation.migratedBackupRoots === 1 ? "" : "s"}.`,
       );
     }
+    const warnings = [...sidecars.warnings, ...relocation.warnings];
+    const recoverableWarningCount =
+      (sidecars.warningDisposition === "recoverable" ? sidecars.warnings.length : 0) +
+      relocation.recoverableWarningCount;
     return {
-      ...sidecars,
-      warnings: [...sidecars.warnings, ...relocation.warnings],
+      changes: sidecars.changes,
+      detected: sidecars.detected,
+      migrated: sidecars.migrated,
+      warnings,
+      ...(warnings.length > 0 && warnings.length === recoverableWarningCount
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
     };
   } finally {
     coordinator.release();

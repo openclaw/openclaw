@@ -21,6 +21,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import {
   applyChatPendingInputs,
+  buildPendingInputItems,
   getChatPendingInputs,
   loadChatPendingInputs,
 } from "./chat-pending-inputs.ts";
@@ -107,6 +108,21 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it("shows a durable receipt while an accepted input waits for workspace sync", () => {
+    const queued = { ...input, state: "queued" as const };
+
+    const items = buildPendingInputItems([queued], undefined, [], ["run-queued"]);
+
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "notice",
+          text: "Received · waiting for workspace sync",
+        }),
+      ]),
+    );
+  });
+
   it("keeps cached local submissions available after pane remount", async () => {
     const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
     const runId = "cached-delivery";
@@ -132,7 +148,7 @@ describe("server-owned pending input display", () => {
     expect(remounted.chatMessages).toHaveLength(1);
   });
 
-  it.each(["pending", "consumed", "canonical", "canonical-first"])(
+  it.each(["pending", "pending-first", "consumed", "canonical", "canonical-first"])(
     "keeps a %s delivered source retired when its terminal is replayed",
     async (receipt) => {
       const host = makeChatHost({ sessionKey, currentSessionId: sessionId });
@@ -144,6 +160,8 @@ describe("server-owned pending input display", () => {
       };
       if (receipt === "canonical-first") {
         reduceChatSessionProjection(host, { type: "snapshotLoaded", messages: [canonical] });
+      } else if (receipt === "pending-first") {
+        applyChatPendingInputs(host, { items: [{ ...input, runId }], total: 1 });
       }
       const scope = await retainDeliveredUserTurn(host, {
         id: runId,
@@ -153,7 +171,10 @@ describe("server-owned pending input display", () => {
         text: "Collected input",
         createdAt: 1,
       });
-      if (receipt === "pending" || receipt === "consumed") {
+      if (receipt === "pending-first") {
+        expect(host.chatMessages).toEqual([]);
+        applyChatPendingInputs(host, { items: [], total: 0 });
+      } else if (receipt === "pending" || receipt === "consumed") {
         const inputReceipt: ChatInputReceipts[number] =
           receipt === "pending"
             ? { runId, state: receipt }
@@ -172,6 +193,26 @@ describe("server-owned pending input display", () => {
       expect(listStoredChatOutboxes(host)).toEqual([]);
     },
   );
+
+  it("keeps a local delivery fallback when custody belongs to a replaced physical session", async () => {
+    const host = makeChatHost({ sessionKey, currentSessionId: sessionId });
+    applyChatPendingInputs(host, page);
+    host.currentSessionId = "replacement-session";
+
+    await retainDeliveredUserTurn(host, {
+      id: "current-session-delivery",
+      sendRunId: input.runId,
+      sessionKey,
+      sessionId: host.currentSessionId,
+      text: "Current session input",
+      createdAt: 1,
+    });
+
+    expect(host.chatMessages).toHaveLength(1);
+    expect(host.chatMessages[0]).toMatchObject({
+      content: [{ type: "text", text: "Current session input" }],
+    });
+  });
 
   it("does not share receipt queries between panes with different provisional sources", async () => {
     const response = createDeferred<unknown>();
@@ -655,7 +696,7 @@ describe("server-owned pending input display", () => {
   );
 
   it.each(["text", "blob"])(
-    "retires browser retry custody while keeping accepted %s input separate from history",
+    "retains accepted %s input and attachment bytes until consumption, without duplicating display",
     async (kind) => {
       if (kind === "blob") {
         installOutboxBrowserStorage();
@@ -740,21 +781,17 @@ describe("server-owned pending input display", () => {
         loadChatComposerSnapshot(host, sessionKey)?.queue[0]?.attachments?.[0]?.dataUrl,
       ).toBeUndefined();
       await loadChatHistory(host);
-      expect(readChatQueueForScope(host, sessionKey)).toEqual([]);
-      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(readChatQueueForScope(host, sessionKey)).toHaveLength(1);
+      expect(listStoredChatOutboxes(host)[0]?.queue).toHaveLength(1);
       expect(host.chatMessages).toEqual(history);
       expect(getChatPendingInputs(host)?.page).toEqual(acceptedPage);
+      expect(cleanup).not.toHaveBeenCalled();
       if (reference && payloadOwner) {
-        await vi.waitFor(async () => {
-          expect(await outboxPayloadStore.readOutboxPayload(payloadOwner, reference)).toEqual({
-            status: "failed",
-            reason: "missing",
-          });
-        });
-        expect(cleanup).toHaveBeenCalledTimes(1);
-        expect(cleanup).toHaveBeenCalledWith([reference]);
-      } else {
-        expect(cleanup).not.toHaveBeenCalled();
+        const retained = await outboxPayloadStore.readOutboxPayload(payloadOwner, reference);
+        expect(retained.status).toBe("ready");
+        if (retained.status === "ready") {
+          expect(Buffer.from(await retained.value[0]!.blob.arrayBuffer())).toEqual(imageBytes);
+        }
       }
       const items = buildChatItems({
         paneId: "pending-pane",
@@ -779,10 +816,28 @@ describe("server-owned pending input display", () => {
       expect(items).toContainEqual(
         expect.objectContaining({
           kind: "notice",
-          text: expect.stringContaining("will not run automatically"),
+          text: expect.stringContaining("will resume"),
         }),
       );
       expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+      applyChatPendingInputs(
+        host,
+        { items: [], total: 0 },
+        {
+          receipts: [{ runId: input.runId!, state: "consumed", consumedByEventId: "aggregate" }],
+        },
+      );
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      if (reference && payloadOwner) {
+        await vi.waitFor(async () => {
+          expect(await outboxPayloadStore.readOutboxPayload(payloadOwner, reference)).toEqual({
+            status: "failed",
+            reason: "missing",
+          });
+        });
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(cleanup).toHaveBeenCalledWith([reference]);
+      }
     },
   );
 

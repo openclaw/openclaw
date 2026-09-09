@@ -73,7 +73,7 @@ let sidecars: GatewayPostReadySidecarHandle[] = [];
 beforeEach(async () => {
   vi.stubEnv("OPENAI_API_KEY", "");
   state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-  resetPreparedModelRuntimeHarness(state);
+  await resetPreparedModelRuntimeHarness(state);
   mocks.configuredAgentIds = ["main"];
   mocks.authStorage.getAll.mockReturnValue({
     openai: {
@@ -197,7 +197,7 @@ async function expectAvailable(
   const [metadata, modelsList] = await Promise.all([
     lifecycle.read({ agentId: "main" }),
     buildModelsListResult({
-      context: activeContext,
+      source: { kind: "gateway", context: activeContext },
       agentId: "main",
       params: { view: "configured" },
       preloadedCatalog: {
@@ -305,8 +305,11 @@ describe("gateway chat metadata lifecycle composition", () => {
             return evaluateEntry(entry, variants);
           });
         const builds = mocks.buildPreparedModelCatalogSnapshot.mock.calls.length;
-        const request = {
-          context: { ...context, getRuntimeConfig: () => nativeConfig },
+        const request: Parameters<typeof buildModelsListResult>[0] = {
+          source: {
+            kind: "gateway",
+            context: { ...context, getRuntimeConfig: () => nativeConfig },
+          },
           agentId: "main",
           params: { view: "configured", preparedOnly: true },
           preloadedOnly: true,
@@ -459,7 +462,7 @@ describe("gateway chat metadata lifecycle composition", () => {
           });
           await expect(
             buildModelsListResult({
-              context: nativeContext,
+              source: { kind: "gateway", context: nativeContext },
               agentId: "main",
               params: { view: "configured", preparedOnly: true },
               preloadedOnly: true,
@@ -541,7 +544,10 @@ describe("gateway chat metadata lifecycle composition", () => {
               }),
           });
           const retained = await prepareModelsListResult({
-            context: { ...nativeContext, loadGatewayModelCatalogSnapshot: loader },
+            source: {
+              kind: "gateway",
+              context: { ...nativeContext, loadGatewayModelCatalogSnapshot: loader },
+            },
             agentId: "main",
             params: { view: "configured", preparedOnly: true },
           });

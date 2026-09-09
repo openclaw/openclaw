@@ -347,7 +347,7 @@ The web Control UI has a **Tasks** page in the sidebar with live active and rece
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent, with running work, stop controls, and a finished section. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
 
-Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header.
+Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header. Session label and category edits preserve task pagination when session access stays the same. Sharing, role, and session identity changes can still require a fresh page.
 
 Select a task to replace the list with a compact detail view inside the rail; use the back button to return to the list. The detail view shows the bounded input prompt, latest output or error summary, timing, and current tool activity. Subagent details stay in the rail rather than opening their child conversation in the main chat pane; linked-session actions remain available for task runtimes intended for direct inspection. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
 
@@ -377,7 +377,7 @@ Set `OPENCLAW_STATE_DIR` to move the whole state root (default `~/.openclaw`) el
 
 The registry loads into memory on first use and persists every write back to SQLite, so records survive gateway restarts. WAL growth stays bounded through SQLite's default autocheckpoint threshold plus periodic `PASSIVE` checkpoints. After a checkpoint completes, the next commit resets the WAL and applies a 64 MiB `journal_size_limit` ceiling, so a reader cannot leave the file parked at a pathological high-water mark until restart. Shutdown and explicit maintenance checkpoints use `TRUNCATE` so normal closes reclaim WAL space without making the background sweeper wait on active readers.
 
-Legacy sidecar stores from older installs (`tasks/runs.sqlite`, `flows/registry.sqlite`) are imported into the shared database by `openclaw doctor`.
+If a `tasks/runs.sqlite` or `flows/registry.sqlite` sidecar store is present under the state root, `openclaw doctor` imports its rows into the shared database. New installs never create these files.
 
 ### Automatic maintenance
 
@@ -447,3 +447,5 @@ flow content into the generic decision-fact table.
 - [Heartbeat](/gateway/heartbeat) - periodic main-session turns
 - [Automations](/automation/cron-jobs) - scheduling background work
 - [Task Flow](/automation/taskflow) - flow orchestration above tasks
+- [Sub-agents](/tools/subagents) - child agents spawned from a session
+- [Music generation](/tools/music-generation) - generate music via `music_generate` across the supported provider workflows

@@ -3,6 +3,42 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  connection: {
+    access: {
+      title: "Connection",
+      descriptionOffline: "Not connected.",
+      connectedTo: "Connected to {host}",
+      tick: "{tick} tick",
+      auth: {
+        none: "no auth",
+        token: "token auth",
+        password: "password auth",
+        trustedProxy: "proxy auth",
+      },
+      status: {
+        connected: "Connected",
+        offline: "Offline",
+      },
+      gatewayUrl: "Gateway URL",
+      gatewayUrlHint: "Use wss:// when the Gateway sits behind HTTPS or Tailscale Serve.",
+      secret: "Gateway secret",
+      secretPlaceholder: "Paste the token or type the password",
+      setupCodeHint:
+        "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
+      secretHint: "Tokens are saved for this tab after connecting. Passwords are never stored.",
+      tokenHint: "This Gateway expects its token. Saved for this tab after connecting.",
+      passwordHint: "This Gateway expects its password. Passwords are never stored.",
+      trustedProxy: "Authenticated via trusted proxy.",
+      trustedProxyStatus: "Trusted proxy",
+      sessionKey: "Default session",
+      sessionKeyHint: "Session opened after connecting.",
+      unsavedHint: "Unsaved changes apply when you connect.",
+      lastError: "Last error",
+      showSecret: "Show secret",
+      hideSecret: "Hide secret",
+      toggleSecretVisibility: "Toggle secret visibility",
+    },
+  },
   cloudWorkersPage: {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
     sectionTitle: "Profiles",
@@ -20,6 +56,7 @@ const enSettings = {
     providerFact: "Provider: {provider}",
     backendFact: "Crabbox backend: {backend}",
     classFact: "Class: {value}",
+    operatingSystemFact: "Operating system: {value}",
     ttlFact: "Max lifetime: {value}",
     idleFact: "Idle stop: {value}",
     desktopFact: "Desktop: {value}",
@@ -28,8 +65,12 @@ const enSettings = {
       profileId: "Profile ID",
       profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
       backend: "Crabbox backend",
-      backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
+      backendHelp: "The backend passed to Crabbox, such as AWS, Azure, or Hetzner.",
       backendPlaceholder: "hetzner",
+      operatingSystem: "Operating system",
+      operatingSystemHelp:
+        "Options come from this profile's advertised operating systems. Choose Provider default to clear a saved target, including one no longer advertised.",
+      providerDefault: "Provider default",
       machineClass: "Machine class",
       machineClassHelp:
         "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
@@ -44,7 +85,7 @@ const enSettings = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Warm a direct or coordinator-backed AWS worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Linux only. Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
@@ -57,7 +98,9 @@ const enSettings = {
         "Use a profile ID that starts with a letter or number and contains only letters, numbers, hyphens, or underscores.",
       profileExists: "Choose another profile ID; this one already exists.",
       profileMissing: "This profile changed or was removed. Reload the page and try again.",
-      backend: "Enter a Crabbox backend, such as aws or hetzner.",
+      backend: "Enter a Crabbox backend, such as aws, azure, or hetzner.",
+      target:
+        "Use an operating system ID of up to 64 characters without surrounding spaces, or choose Provider default.",
       machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
@@ -69,7 +112,7 @@ const enSettings = {
   modelProviders: {
     title: "Configured providers",
     configureModels: "Configure Models",
-    subtitle: "Model providers with auth, plan, quota, and cost data.",
+    subtitle: "Providers and credentials for the selected agent.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
@@ -105,6 +148,28 @@ const enSettings = {
       envKeyNamed: "API key from environment ({name})",
       profileKey: "API key profiles: {count}",
       none: "Not configured",
+    },
+    profiles: {
+      title: "Provider profiles",
+      accountOne: "1 account",
+      accounts: "{count} accounts",
+      reorderHint: "Drag to set your preferred account order.",
+      reorder: "Reorder {account}, position {position}",
+      priority: "Priority {position}",
+      automaticOrder: "Account selection is automatic.",
+      priorityManagedByProvider: "Priority is managed by provider configuration.",
+      priorityManagedByAuth: "Priority is managed by auth.order.",
+      partialOrder: "Priority is inherited or managed across provider routes.",
+      partialStoredOrder: "Clear the custom order before changing priority.",
+      resetOrder: "Clear custom order",
+      resetOrderHint:
+        "Remove this agent's custom priority and use the default order. Accounts stay connected.",
+      addAccount: "Add account",
+      lastUsed: "Last used {time} ago",
+      sourceConfig: "Provider config",
+      sourceExternal: "External CLI",
+      sourceInherited: "Shared credential",
+      sourceSaved: "Saved in OpenClaw",
     },
     apiKey: {
       label: "API key",
@@ -146,7 +211,9 @@ const enSettings = {
     },
     logout: {
       action: "Log out",
-      confirm: "Log out of {provider}? Saved OAuth and token profiles will be removed.",
+      actionFor: "Log out {account}",
+      confirm:
+        "Remove the saved sign-in for {provider} from OpenClaw? You can add this account again later.",
       loggingOut: "Logging out…",
       done: "Logged out.",
     },
@@ -161,8 +228,9 @@ const enSettings = {
       saved: "Provider {provider} added.",
     },
     defaults: {
-      title: "Defaults",
-      subtitle: "Applies across all providers and models where applicable.",
+      title: "Global defaults",
+      subtitle:
+        "Model and behavior defaults for all agents. Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
       primary: "Model",
       utility: "Utility Model",
       utilityHelpLabel: "About the utility model",
@@ -176,14 +244,17 @@ const enSettings = {
       noFallback: "No fallback model",
       selectModel: "Select a model",
       noModels: "Configure a provider before selecting default models.",
+      discoveringMore: "Discovering more models…",
+      discoverFailed: "More models could not be discovered.",
+      retryDiscover: "Retry",
       thinkingHelpLabel: "About thinking defaults",
       thinkingHelp:
-        "Sets the default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
+        "Sets the global default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
       thinkingDefaultHelp:
         "Uses the selected model's thinking policy instead of saving a global thinking override.",
       fastModeHelpLabel: "About fast mode defaults",
       fastModeHelp:
-        "Sets the default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
+        "Sets the global default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
       fastModeDefaultHelp:
         "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
       saved: "Defaults saved.",
@@ -267,6 +338,20 @@ const enSettings = {
       recoveryActions: "Recovery",
       checkStatus: "Check status",
       retryUpdate: "Retry update",
+      reportFailure: "Report update failure",
+      reportOwnerRequired:
+        "Reporting requires a connected Gateway owner with administrator access.",
+      reportResult: "Failure report",
+      reportSubmitting: "Submitting report…",
+      reportCreated: "GitHub issue created",
+      reportFallback: "GitHub CLI submission was unavailable. Use the prefilled issue link.",
+      reportPending: "GitHub issue submission may have completed. Do not submit this report again.",
+      reportRetryable: "No GitHub issue submission was started. This report can be retried.",
+      reportDuplicate: "This update attempt was already reported.",
+      reportError: "The report could not be prepared or submitted.",
+      openIssue: "Open GitHub issue",
+      openPrefilledIssue: "Open prefilled issue",
+      savedReport: "Saved report",
       troubleshoot: "Troubleshoot updates",
       cliFallback: "CLI fallback",
       showCliFallback: "Show terminal commands",
@@ -274,12 +359,21 @@ const enSettings = {
   },
   configPage: {
     deviceSettings: {
-      appOnly: "These settings are only available inside the OpenClaw Mac app.",
-      loading: "Waiting for settings from the Mac app…",
+      appOnly: "These settings are only available inside the OpenClaw app.",
+      loading: "Waiting for settings from the app…",
       intro: "App behavior and capabilities on this Mac.",
+      introIos: "App behavior and capabilities on this device.",
       permissionsIntro: "macOS access for notifications, capture, voice, and device context.",
+      permissionsIntroIos: "Device access for notifications, capture, voice, and personal data.",
       app: "App",
+      appearance: "Appearance",
+      appearanceModes: { system: "System", light: "Light", dark: "Dark" },
+      notificationsEnabled: "Notifications",
+      notificationsEnabledHint: "Deliver notifications on this device.",
       showDockIcon: "Show Dock icon",
+      iconStyle: "Dock icon",
+      iconStyleHint:
+        "Original uses your Mac’s icon style. Other designs follow light/dark mode while OpenClaw runs.",
       showDockIconHint:
         "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
       iconAnimations: "Icon animations",
@@ -298,6 +392,18 @@ const enSettings = {
       canvasHint: "Allow the agent to show and control the Canvas panel.",
       camera: "Allow Camera",
       cameraHint: "Allow the agent to capture a photo or short video via the built-in camera.",
+      keepAwake: "Keep awake",
+      keepAwakeHint: "Keep the screen awake while OpenClaw is active.",
+      healthSummary: "Health summaries",
+      healthSummaryHint: "Allow the agent to request a health summary from this device.",
+      device: "Device",
+      panels: {
+        diagnostics: "Diagnostics",
+        licenses: "Licenses",
+        about: "About",
+        watch: "Apple Watch",
+      },
+      openPanel: "Open…",
       computerControl: "Allow Computer Control",
       computerControlHint:
         "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
@@ -309,6 +415,19 @@ const enSettings = {
       peekabooBridgeHint:
         "Allow signed tools to drive UI automation via Peekaboo Bridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       browser: "Browser",
+      chromeExtension: "Chrome extension",
+      chromeExtensionSetup: "Set up Chrome on this Mac",
+      chromeExtensionHint:
+        "Prepare the OpenClaw extension on this Mac, then approve it in Chrome. This does not install on a remote Gateway.",
+      chromeExtensionPreparing: "Preparing Chrome…",
+      chromeExtensionPending:
+        "Native host registered and installation requested. Open Chrome and approve OpenClaw; restart Chrome if the request has not appeared. Use the Store link if you previously removed it.",
+      chromeExtensionStoreRequired:
+        "Native host registered. Add OpenClaw from the Chrome Web Store to finish setup.",
+      chromeExtensionInstalled:
+        "Native host registered and extension found. Open the extension to check its connection; installation alone does not verify a connection.",
+      chromeExtensionFailed:
+        "Setup could not finish. Install the OpenClaw CLI on this Mac and run openclaw browser extension install for details.",
       browserImport: "Browser logins",
       browserImportHint:
         "Copy cookies from a Chrome-family profile into an isolated managed profile.",
@@ -334,8 +453,10 @@ const enSettings = {
       systemAccess: "System access",
       grant: "Grant…",
       openSystemSettings: "Open System Settings…",
+      openSettings: "Open Settings",
       permissionStatuses: {
         granted: "Granted",
+        limited: "Limited",
         denied: "Denied",
         notDetermined: "Not determined",
         unavailable: "Unavailable",
@@ -364,6 +485,13 @@ const enSettings = {
           title: "Automation (Terminal)",
           hint: "Control Terminal for automation actions; other apps request access separately.",
         },
+        contacts: { title: "Contacts", hint: "Access contacts when requested by the agent." },
+        calendars: {
+          title: "Calendars",
+          hint: "Access calendar events when requested by the agent.",
+        },
+        reminders: { title: "Reminders", hint: "Access reminders when requested by the agent." },
+        photos: { title: "Photos", hint: "Access photos you allow this app to use." },
       },
       location: "Location",
       locationAccess: "Location access",
@@ -371,6 +499,8 @@ const enSettings = {
       locationModes: { off: "Off", whileUsing: "While using", always: "Always" },
       preciseLocation: "Precise location",
       preciseLocationHint: "Always may require System Settings to approve background location.",
+      preciseLocationReadOnlyHint: "Manage precise location access in Settings.",
+      preciseLocationStatuses: { enabled: "Enabled", disabled: "Disabled" },
       privacy: "Privacy",
       activePresence: "Active computer presence",
       activePresenceHint:
@@ -381,6 +511,11 @@ const enSettings = {
       wakeEnabled: "Voice Wake",
       unsupported:
         "Voice Wake is unavailable on this Mac. It requires macOS 26 or newer and on-device recognition for the selected language.",
+      unsupportedDevice: "Voice Wake is unavailable on this device.",
+      talkEnabled: "Talk mode",
+      talkButtonEnabled: "Show Talk button",
+      talkBackgroundEnabled: "Talk in the background",
+      speakerphoneEnabled: "Use speakerphone",
       wakeTriggersTalkMode: "Wake triggers Talk Mode",
       pushToTalkEnabled: "Hold Right Option to talk",
       talkShiftToStopEnabled: "Shift to stop",
@@ -443,6 +578,7 @@ const enSettings = {
       notifications: "Notifications",
       talk: "Talk",
       tts: "Voice",
+      transcripts: "Meeting capture",
       commands: "Commands",
       hooks: "Hooks",
       bindings: "Bindings",
@@ -685,6 +821,7 @@ export const registerSettingsEnglish = Object.assign(
     en.modelProviders = enSettings.modelProviders;
     // Extend the shared objects: eager save/update copy and existing readers survive.
     en.cloudWorkersPage = enSettings.cloudWorkersPage;
+    Object.assign(en.connection, enSettings.connection);
     Object.assign(en.configPage, enSettings.configPage);
     Object.assign(en.configView, enSettings.configView);
     Object.assign(en.updates, enSettings.updates);

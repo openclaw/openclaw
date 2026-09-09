@@ -1,8 +1,6 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createControlUiMockBootstrapConfig,
   controlUiSessionUrl,
@@ -11,7 +9,10 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -22,7 +23,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const STORAGE_KEY = "openclaw:control-ui:community-invite";
-const captureVideo = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 async function traceInviteMounts(page: Page) {
   await page.addInitScript(() => {
@@ -85,7 +85,7 @@ suite.define(() => {
     type LayoutWindow = Window & {
       sidebarInviteFirstLayout?: { invitationHeight: number; sidebarHeight: number };
     };
-    const artifactDir = createControlUiE2eArtifactDir("sidebar-invite-repair-first-layout");
+
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -127,6 +127,7 @@ suite.define(() => {
       observer.observe(document, { childList: true, subtree: true });
     });
     await installMockGateway(page, {
+      communityInviteDismissed: false,
       methodResponses: {
         "sessions.list": sessionsListResponse(
           Array.from({ length: 13 }, (_, index) =>
@@ -170,10 +171,6 @@ suite.define(() => {
       const before = await row.boundingBox();
       expect(before).not.toBeNull();
       await artworkRequest;
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(artifactDir, "before-artwork.png"),
-      });
       await settleSidebarIdleWork(page);
       releaseArtwork();
       await page.locator(".invite__art").evaluate((image: HTMLImageElement) => image.decode());
@@ -187,10 +184,6 @@ suite.define(() => {
       ).toBeCloseTo(initial.sidebarHeight, 2);
       await row.getByRole("button", { name: "Open session menu" }).click();
       await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(artifactDir, "after-artwork-menu.png"),
-      });
     } finally {
       releaseArtwork();
       await suite.closeBrowserContext(context);
@@ -200,7 +193,6 @@ suite.define(() => {
   it.each(["pointer", "keyboard", "drag", "touch"] as const)(
     "defers a late invitation during %s interaction without blocking navigation",
     async (interaction) => {
-      const artifactDir = createControlUiE2eArtifactDir(`sidebar-invite-repair-${interaction}`);
       await suite.withPage(
         {
           locale: "en-US",
@@ -221,6 +213,7 @@ suite.define(() => {
             await page.bringToFront();
           }
           const gateway = await installMockGateway(page, {
+            communityInviteDismissed: false,
             methodResponses: {
               "sessions.list": sessionsListResponse(
                 Array.from({ length: 13 }, (_, index) =>
@@ -307,10 +300,6 @@ suite.define(() => {
             expect(await card.count()).toBe(0);
             if (interaction === "drag") {
               expect(await row.getAttribute("class")).toContain("sidebar-recent-session--dragging");
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, "pending.png"),
-              });
               await page.keyboard.press("Escape");
               await page.mouse.up();
               await page.mouse.move(900, 450);
@@ -331,11 +320,11 @@ suite.define(() => {
                 await menu.click();
               }
               await page.getByRole("menuitem", { name: "Move to group" }).waitFor();
+              await page.locator("openclaw-session-menu wa-dropdown-item:focus").waitFor();
+              // A background render must not admit new geometry while a popover owns focus.
+              await gateway.emitGatewayEvent("presence", { presence: [] });
+              await settleSidebarIdleWork(page);
               expect(await card.count()).toBe(0);
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, "pending-menu.png"),
-              });
               if (interaction === "touch") {
                 await composer.tap();
               } else {
@@ -353,10 +342,6 @@ suite.define(() => {
             }
             await card.locator("img").evaluate((image: HTMLImageElement) => image.decode());
             expect(await card.isVisible()).toBe(true);
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, "admitted.png"),
-            });
             if (dismissalWriter) {
               await refreshPolicy(false);
               await card.waitFor({ state: "detached" });
@@ -386,17 +371,15 @@ suite.define(() => {
   );
 
   it("honors deployment policy before showing and preserves browser dismissals", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("community-invite-policy");
     const viewport = { height: 900, width: 1280 };
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport,
-      ...(captureVideo ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
     });
     const page = await context.newPage();
     const mountedInvites = await traceInviteMounts(page);
-    await installMockGateway(page);
+    await installMockGateway(page, { communityInviteDismissed: false });
     let communityInvite = false;
     let releaseBootstrap!: () => void;
     const bootstrapReady = new Promise<void>((resolve) => {
@@ -424,7 +407,6 @@ suite.define(() => {
       expect(await card.count()).toBe(0);
       expect(await mountedInvites()).toBe(0);
       expect(imageRequests).toEqual([]);
-      await page.screenshot({ path: path.join(artifactDir, "01-awaiting-policy.png") });
       const bootstrapResponse = page.waitForResponse(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
       releaseBootstrap();
       await bootstrapResponse;
@@ -443,7 +425,6 @@ suite.define(() => {
       }
       expect(petBox.height).toBe(52);
       expect(Math.abs(petBox.y + petBox.height - footerBox.y - 3)).toBeLessThan(0.5);
-      await page.screenshot({ path: path.join(artifactDir, "02-disabled.png") });
 
       communityInvite = true;
       await page.reload();
@@ -453,7 +434,6 @@ suite.define(() => {
       await expect
         .poll(() => card.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
-      await page.screenshot({ path: path.join(artifactDir, "03-enabled.png") });
       await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
       await card.waitFor({ state: "detached" });
       const dismissal = await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY);
@@ -471,7 +451,6 @@ suite.define(() => {
           dismissal,
         );
       }
-      await page.screenshot({ path: path.join(artifactDir, "04-dismissal-preserved.png") });
     } finally {
       releaseBootstrap();
       await suite.closeBrowserContext(context);
@@ -479,13 +458,9 @@ suite.define(() => {
   });
 
   it("shows immediately, survives Join, and stays dismissed across gateway connections on one origin", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
-    await installMockGateway(page);
+    await installMockGateway(page, { communityInviteDismissed: false });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat/main`);
@@ -523,7 +498,7 @@ suite.define(() => {
       expect(await card.count()).toBe(0);
 
       const otherGatewayPage = await context.newPage();
-      await installMockGateway(otherGatewayPage);
+      await installMockGateway(otherGatewayPage, { communityInviteDismissed: false });
       const otherGatewayUrl = new URL(`${suite.server.baseUrl}chat/main`);
       otherGatewayUrl.hash = new URLSearchParams({
         gatewayUrl: "ws://127.0.0.1:29991/another-gateway",
@@ -531,7 +506,9 @@ suite.define(() => {
       await otherGatewayPage.goto(otherGatewayUrl.href);
       const confirmation = otherGatewayPage.locator("openclaw-gateway-url-confirmation");
       await confirmation.waitFor({ state: "visible" });
-      await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+      await confirmation
+        .getByRole("button", { name: "Switch to 127.0.0.1:29991", exact: true })
+        .click();
       await otherGatewayPage.locator("openclaw-app-sidebar").waitFor();
       expect(await otherGatewayPage.locator(".community-invite-card").count()).toBe(0);
     } finally {
@@ -540,13 +517,9 @@ suite.define(() => {
   });
 
   it("does not mount the workspace invite in Settings", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
-    await installMockGateway(page);
+    await installMockGateway(page, { communityInviteDismissed: false });
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
@@ -559,13 +532,11 @@ suite.define(() => {
   });
 
   it("dismisses for this page and reports when the preference cannot be saved", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("community-invite-storage-failure");
     const viewport = { height: 900, width: 1280 };
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport,
-      ...(captureVideo ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
     });
     const page = await context.newPage();
     const mountedInvites = await traceInviteMounts(page);
@@ -578,7 +549,7 @@ suite.define(() => {
         setItem(storageKey, value);
       };
     }, STORAGE_KEY);
-    await installMockGateway(page);
+    await installMockGateway(page, { communityInviteDismissed: false });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat/main`);
@@ -591,7 +562,6 @@ suite.define(() => {
         .waitFor();
       expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
       expect(await mountedInvites()).toBe(1);
-      await page.screenshot({ path: path.join(artifactDir, "01-dismissed-with-warning.png") });
 
       await page.keyboard.press("Control+Shift+,");
       await waitForControlUiSettingsTakeover(page);
@@ -601,20 +571,15 @@ suite.define(() => {
       expect(await card.count()).toBe(0);
       expect(await mountedInvites()).toBe(1);
       expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
-      await page.screenshot({ path: path.join(artifactDir, "02-hidden-after-settings.png") });
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("hides after a malformed cross-tab state update", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
-    await installMockGateway(page);
+    await installMockGateway(page, { communityInviteDismissed: false });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat/main`);

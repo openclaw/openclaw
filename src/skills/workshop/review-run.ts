@@ -6,30 +6,30 @@ import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admissi
 
 const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop", maxConcurrent: 1 });
 
-/** All Workshop reviewers share admission, model locking, and background capacity. */
+/** Experience reviews retain admission, model locking, and background capacity. */
 export async function runSkillWorkshopReview(
   params: RunEmbeddedAgentParams & {
     agentId: string;
     config: OpenClawConfig;
-    reviewKind: "experience" | "history-scan" | "collection-review";
   },
 ) {
-  const { reviewKind, ...runParams } = params;
   const restartSignal = getGatewayRestartDrainSignal();
   const abortSignal = params.abortSignal
     ? AbortSignal.any([restartSignal, params.abortSignal])
     : restartSignal;
   abortSignal.throwIfAborted();
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    params.config,
-    params.runId,
-    params.agentId,
-    `skill-workshop.${reviewKind}`,
-  );
+  const preparedRunAdmission =
+    params.preparedRunAdmission ??
+    prepareSystemAgentRunAdmission(
+      params.config,
+      params.runId,
+      params.agentId,
+      "skill-workshop.experience",
+    );
   try {
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     return await runEmbeddedAgent({
-      ...runParams,
+      ...params,
       preparedRunAdmission,
       abortSignal,
       lane: reviews.lane,
@@ -39,7 +39,7 @@ export async function runSkillWorkshopReview(
       modelSelectionLocked: true,
       modelFallbacksOverride: [],
       disableTrajectory: true,
-      skillWorkshopProposalOnly: true,
+      skillWorkshopProposalOnly: params.skillWorkshopProposalOnly ?? true,
       cleanupBundleMcpOnRunEnd: true,
       verboseLevel: "off",
     });

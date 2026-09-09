@@ -26,6 +26,7 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
+import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { SessionProgressCardController } from "../../components/session-progress-card-controller.ts";
 import type {
   BoardCommandEvent,
@@ -295,12 +296,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       if (!state || this.isCurrentSessionArchived(state)) {
         return undefined;
       }
-      const identity = resolveUiConversationIdentity(state, state.sessionKey);
-      const session = !identity.agentId ? getAcceptedChatHistorySession(state) : undefined;
-      // Raw retained panes follow their accepted history owner, never the selected assistant.
-      return session && parseAgentSessionKey(session.key)
-        ? resolveUiConversationIdentity(state, session.key)
-        : identity;
+      return this.resolveChatReadTarget();
     },
   });
   protected readonly questionPromptState = createQuestionPromptState(() => {
@@ -309,6 +305,25 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   });
   protected questionPrompts: QuestionPrompt[] = [];
   protected state: ChatPageHost | undefined;
+
+  protected resolveChatReadTarget(): ReturnType<typeof resolveUiConversationIdentity> | undefined {
+    const state = this.state;
+    if (!state) {
+      return undefined;
+    }
+    const identity = resolveUiConversationIdentity(state, state.sessionKey);
+    if (identity.agentId) {
+      return identity;
+    }
+    const session = getAcceptedChatHistorySession(state);
+    // Raw retained panes follow their accepted history owner, never the selected assistant.
+    if (session && parseAgentSessionKey(session.key)) {
+      return resolveUiConversationIdentity(state, session.key);
+    }
+    return session?.agentId && (session.key === "global" || session.key === "unknown")
+      ? { sessionKey: session.key, agentId: session.agentId }
+      : undefined;
+  }
 
   protected isCurrentSessionArchived(state: ChatPageHost): boolean {
     return (
@@ -347,6 +362,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerPlacementRestartingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
+  protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
   @litState() protected resetConfirmationOpen = false;
   protected deferredSessionHydrationRequestVersion = 0;
@@ -520,6 +536,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly typingTimers = new Map<string, number>();
   protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
+  protected githubRepo: MarkdownRenderOptions["githubRepo"] = null;
   protected sessionPullRequestsRateLimited = false;
   protected sessionPullRequestsExpanded = false;
   protected githubPublication: GitHubPublicationBinding | null = null;
@@ -601,7 +618,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       );
   }
 
-  protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
+  protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): boolean;
   protected abstract commitSidebarLayout(layout: SidebarLayout): void;
   protected abstract refreshSwarmRoster(): void;
   protected abstract resolveBoardProvider(): BoardProvider;

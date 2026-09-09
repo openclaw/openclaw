@@ -5,7 +5,9 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -15,10 +17,13 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../utils.js";
+import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
 import {
   createWorkspaceStateIdentity,
+  resolveCanonicalWorkspacePath,
   resolveWorkspaceStateAliases,
   resolveWorkspaceStateIdentity,
+  WorkspaceAliasRepointedError,
   type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 
@@ -83,6 +88,7 @@ export type WorkspaceStateSnapshot = {
 };
 
 type WorkspaceStateDeletionPlan = {
+  cacheRoot: string;
   lexicalAlias: WorkspaceStateIdentity;
   currentCanonicalIdentity: WorkspaceStateIdentity;
   pathEntryExisted: boolean;
@@ -97,7 +103,10 @@ type WorkspaceStateDatabase = Pick<
   | "migration_sources"
 >;
 
-type WorkspaceStateDatabaseHandle = Pick<ReturnType<typeof openOpenClawStateDatabase>, "db">;
+type WorkspaceStateDatabaseHandle = Pick<
+  ReturnType<typeof openOpenClawStateDatabase>,
+  "db" | "path"
+>;
 
 function workspacePathEntryExists(workspaceDir: string): boolean {
   try {
@@ -143,17 +152,22 @@ function resolveWorkspaceIdentityFromDatabase(params: {
     if (rowIdentity.workspaceKey !== row.workspace_key) {
       throw new Error("workspace path alias target is invalid");
     }
+    // A repointed alias can also resolve to an already initialized workspace.
+    // Report the repairable alias failure before the two owners look like corruption.
+    if (
+      workspacePathEntryExists(params.workspaceDir) &&
+      rowIdentity.workspaceKey !== canonicalIdentity.workspaceKey
+    ) {
+      throw new WorkspaceAliasRepointedError({
+        aliasPath: aliases[0]!.workspacePath,
+        storedWorkspacePath: rowIdentity.workspacePath,
+        currentWorkspacePath: canonicalIdentity.workspacePath,
+      });
+    }
     if (storedIdentity && storedIdentity.workspaceKey !== rowIdentity.workspaceKey) {
       throw new Error("workspace path aliases resolve to conflicting state");
     }
     storedIdentity = rowIdentity;
-  }
-  if (
-    storedIdentity &&
-    workspacePathEntryExists(params.workspaceDir) &&
-    storedIdentity.workspaceKey !== canonicalIdentity.workspaceKey
-  ) {
-    throw new Error("workspace path alias points to a different current target");
   }
   const existingAliasKeys = new Set(rows.map((row) => row.alias_key));
   return {
@@ -165,7 +179,7 @@ function resolveWorkspaceIdentityFromDatabase(params: {
   };
 }
 
-function registerWorkspacePathAliases(params: {
+export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
   database: WorkspaceStateDatabaseHandle;
   identity: WorkspaceStateIdentity;
   aliases: readonly WorkspaceStateIdentity[];
@@ -216,7 +230,7 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
       aliases.set(alias.workspaceKey, alias);
     }
   }
-  registerWorkspacePathAliases({
+  registerWorkspaceStateAliasIdentitiesInTransaction({
     database: params.database,
     identity: params.identity,
     aliases: [...aliases.values()],
@@ -224,7 +238,7 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
   });
 }
 
-function readSnapshotFromDatabase(params: {
+export function readWorkspaceStateSnapshotFromDatabase(params: {
   identity: WorkspaceStateIdentity;
   database: WorkspaceStateDatabaseHandle;
 }): WorkspaceStateSnapshot {
@@ -243,7 +257,12 @@ function readSnapshotFromDatabase(params: {
     throw new Error("workspace state key collision");
   }
   if (setupRow?.version != null && setupRow.version !== WORKSPACE_SETUP_STATE_VERSION) {
-    throw new Error("workspace setup state version requires openclaw doctor --fix");
+    throw new Error(
+      formatDoctorStateRepairFailure(
+        `unsupported workspace setup version ${setupRow.version} in ${params.database.path} for ${identity.workspacePath}`,
+        "Use a compatible OpenClaw build that supports this workspace version; preserve the database unchanged.",
+      ),
+    );
   }
   if (setupRow?.version != null) {
     assertCanonicalTimestamp(setupRow.bootstrap_seeded_at, "bootstrap seeded");
@@ -309,7 +328,10 @@ export function readWorkspaceStateSnapshot(
       (database) =>
         runSqliteDeferredTransactionSync(database.db, () => {
           const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
-          return readSnapshotFromDatabase({ identity: resolution.identity, database });
+          return readWorkspaceStateSnapshotFromDatabase({
+            identity: resolution.identity,
+            database,
+          });
         }),
       options,
     );
@@ -326,7 +348,7 @@ export function readWorkspaceStateSnapshot(
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     return {
       resolution,
-      snapshot: readSnapshotFromDatabase({ identity: resolution.identity, database }),
+      snapshot: readWorkspaceStateSnapshotFromDatabase({ identity: resolution.identity, database }),
     };
   });
   if (
@@ -344,9 +366,13 @@ export function readWorkspaceStateSnapshot(
       workspacePathEntryExists(workspaceDir) &&
       currentCanonicalIdentity.workspaceKey !== initial.resolution.identity.workspaceKey
     ) {
-      throw new Error("workspace path alias points to a different current target");
+      throw new WorkspaceAliasRepointedError({
+        aliasPath: currentAliases[0]!.workspacePath,
+        storedWorkspacePath: initial.resolution.identity.workspacePath,
+        currentWorkspacePath: currentCanonicalIdentity.workspacePath,
+      });
     }
-    const snapshot = readSnapshotFromDatabase({
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({
       identity: initial.resolution.identity,
       database: writeDatabase,
     });
@@ -357,7 +383,7 @@ export function readWorkspaceStateSnapshot(
           alias,
         ]),
       );
-      registerWorkspacePathAliases({
+      registerWorkspaceStateAliasIdentitiesInTransaction({
         database: writeDatabase,
         identity: initial.resolution.identity,
         aliases: [...aliases.values()],
@@ -384,7 +410,7 @@ export function mergeWorkspaceSetupState(
   return runOpenClawStateWriteTransaction((database) => {
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     const identity = resolution.identity;
-    const snapshot = readSnapshotFromDatabase({ identity, database });
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
     const bootstrapSeededAt = snapshot.setup.bootstrapSeededAt ?? next.bootstrapSeededAt;
     const setupCompletedAt = snapshot.setup.setupCompletedAt ?? next.setupCompletedAt;
     const merged: WorkspaceSetupState = {
@@ -415,7 +441,7 @@ export function mergeWorkspaceSetupState(
           }),
         ),
     );
-    registerWorkspacePathAliases({
+    registerWorkspaceStateAliasIdentitiesInTransaction({
       database,
       identity,
       aliases: resolution.aliases,
@@ -453,13 +479,13 @@ export function replaceWorkspaceAttestation(params: {
       database,
     });
     const identity = resolution.identity;
-    const snapshot = readSnapshotFromDatabase({ identity, database });
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
     if (
       snapshot.attestation &&
       snapshot.attestation.attestedAtMs > params.attestedAtMs &&
       snapshot.attestation.attestedAtMs <= updatedAtMs
     ) {
-      registerWorkspacePathAliases({
+      registerWorkspaceStateAliasIdentitiesInTransaction({
         database,
         identity,
         aliases: resolution.aliases,
@@ -505,7 +531,7 @@ export function replaceWorkspaceAttestation(params: {
         ),
       );
     }
-    registerWorkspacePathAliases({
+    registerWorkspaceStateAliasIdentitiesInTransaction({
       database,
       identity,
       aliases: resolution.aliases,
@@ -519,8 +545,8 @@ export function replaceWorkspaceAttestation(params: {
 }
 
 function deleteWorkspaceRows(
-  database: ReturnType<typeof openOpenClawStateDatabase>,
-  workspaceKey: string,
+  database: WorkspaceStateDatabaseHandle,
+  { workspaceKey, workspacePath }: WorkspaceStateIdentity,
 ): void {
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
   const receiptRows = executeSqliteQuerySync(
@@ -578,6 +604,9 @@ function deleteWorkspaceRows(
     database.db,
     kysely.deleteFrom("workspace_path_aliases").where("workspace_key", "=", workspaceKey),
   );
+  // Both deletion paths retire the actual stored identity only after the outer
+  // commit; a failed transaction must retain content for the surviving workspace.
+  deferSqlitePostCommitPublication(database.db, () => retireWorkspaceFileCache(workspacePath));
 }
 
 /** The migration owner has verified the same workspace and every relocated byte before this commit. */
@@ -586,7 +615,7 @@ export function retireWorkspaceRelocationAttestation(params: {
   identity: WorkspaceStateIdentity;
   attestedAtMs: number;
 }): boolean {
-  const snapshot = readSnapshotFromDatabase(params);
+  const snapshot = readWorkspaceStateSnapshotFromDatabase(params);
   if (
     snapshot.setupExists ||
     snapshot.attestation?.attestedAtMs !== params.attestedAtMs ||
@@ -613,9 +642,9 @@ export function clearExpiredWorkspaceStateForVanishedWorkspace(
   return runOpenClawStateWriteTransaction((database) => {
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     const identity = resolution.identity;
-    const snapshot = readSnapshotFromDatabase({ identity, database });
+    const snapshot = readWorkspaceStateSnapshotFromDatabase({ identity, database });
     const preserveRecentState = () => {
-      registerWorkspacePathAliases({
+      registerWorkspaceStateAliasIdentitiesInTransaction({
         database,
         identity,
         aliases: resolution.aliases,
@@ -638,7 +667,7 @@ export function clearExpiredWorkspaceStateForVanishedWorkspace(
         return preserveRecentState();
       }
     }
-    deleteWorkspaceRows(database, identity.workspaceKey);
+    deleteWorkspaceRows(database, identity);
     return true;
   });
 }
@@ -647,6 +676,7 @@ export function clearExpiredWorkspaceStateForVanishedWorkspace(
 export function prepareWorkspaceStateDeletion(workspaceDir: string): WorkspaceStateDeletionPlan {
   const aliases = resolveWorkspaceStateAliases(workspaceDir);
   return {
+    cacheRoot: resolveCanonicalWorkspacePath(workspaceDir),
     lexicalAlias: aliases[0]!,
     currentCanonicalIdentity: aliases.at(-1)!,
     pathEntryExisted: workspacePathEntryExists(workspaceDir),
@@ -657,6 +687,7 @@ export function deleteWorkspaceState(plan: WorkspaceStateDeletionPlan): void {
   // Delete-only cleanup must not recreate state after reset/uninstall removed
   // the canonical database successfully or partially.
   if (!existsSync(resolveOpenClawStateSqlitePath())) {
+    retireWorkspaceFileCache(plan.cacheRoot);
     return;
   }
   runOpenClawStateWriteTransaction((database) => {
@@ -695,17 +726,15 @@ export function deleteWorkspaceState(plan: WorkspaceStateDeletionPlan): void {
         workspaceDir: currentCanonicalIdentity.workspacePath,
         database,
       });
-      deleteWorkspaceRows(database, currentResolution.identity.workspaceKey);
-      return;
+      return deleteWorkspaceRows(database, currentResolution.identity);
     }
     if (storedIdentity) {
-      deleteWorkspaceRows(database, storedIdentity.workspaceKey);
-      return;
+      return deleteWorkspaceRows(database, storedIdentity);
     }
     const resolution = resolveWorkspaceIdentityFromDatabase({
       workspaceDir: currentCanonicalIdentity.workspacePath,
       database,
     });
-    deleteWorkspaceRows(database, resolution.identity.workspaceKey);
+    return deleteWorkspaceRows(database, resolution.identity);
   });
 }

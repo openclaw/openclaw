@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -7,11 +8,6 @@ import {
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import {
-  countActiveDescendantRuns,
-  getSessionDisplaySubagentRunByChildSessionKey,
-} from "../agents/subagents/registry/subagent-registry-read.js";
-import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
@@ -48,8 +44,7 @@ import {
   deriveSessionTitle,
   buildStoreChildSessionIndex,
   isFinitePositiveTimestamp,
-  isCurrentSessionChildOwner,
-  shouldKeepStoreOnlyChildLink,
+  resolveSessionChildOwners,
 } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import {
@@ -69,7 +64,6 @@ import type {
 
 // Bound synchronous projection work without repeatedly requeueing cheap prepared rows.
 const SESSIONS_LIST_YIELD_INTERVAL_MS = 12;
-const SESSIONS_LIST_ROW_CONTEXT_THRESHOLD = 10;
 
 const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
@@ -213,16 +207,18 @@ function filterSessionEntries(params: {
   const selectedProfileId = profileReference?.value;
 
   const candidateEntries = visibleEntries.filter(([key, entry]) => {
+    const target = params.targetsBySessionKey?.get(key);
+    const storeKey = target?.storeKey ?? key;
     if (
       isCronRunSessionKey(key) ||
-      (!includeGlobal && key === "global") ||
-      (!includeUnknown && key === "unknown")
+      (!includeGlobal && storeKey === "global") ||
+      (!includeUnknown && storeKey === "unknown")
     ) {
       return false;
     }
-    if (agentId && key !== "global") {
-      const parsed = parseAgentSessionKey(key);
-      if (!parsed || normalizeAgentId(parsed.agentId) !== agentId) {
+    if (agentId && storeKey !== "global") {
+      const ownerAgentId = target?.storeKey ? target.agentId : parseAgentSessionKey(key)?.agentId;
+      if (!ownerAgentId || normalizeAgentId(ownerAgentId) !== agentId) {
         return false;
       }
     }
@@ -230,29 +226,16 @@ function filterSessionEntries(params: {
       return false;
     }
     if (spawnedBy) {
-      if (key === "unknown" || key === "global") {
+      if (storeKey === "unknown" || storeKey === "global") {
         return false;
       }
       const filterRowContext = resolveSessionListRowContext(params);
-      const latest = filterRowContext
-        ? filterRowContext.subagentRuns.getDisplaySubagentRun(key)
-        : getSessionDisplaySubagentRunByChildSessionKey(key);
-      const keepSpawned = latest
-        ? isCurrentSessionChildOwner({
-            entry,
-            ownerSessionKey: spawnedBy,
-            controllerSessionKey:
-              normalizeOptionalString(latest.controllerSessionKey) ||
-              normalizeOptionalString(latest.requesterSessionKey),
-          }) &&
-          shouldKeepSubagentRunChildLink(latest, {
-            activeDescendants: filterRowContext
-              ? filterRowContext.subagentRuns.countActiveDescendantRuns(key)
-              : countActiveDescendantRuns(key),
-            now,
-          })
-        : shouldKeepStoreOnlyChildLink(entry, now) &&
-          (entry.spawnedBy === spawnedBy || entry.parentSessionKey === spawnedBy);
+      const keepSpawned = resolveSessionChildOwners({
+        key,
+        entry,
+        now,
+        subagentRuns: filterRowContext?.subagentRuns,
+      }).includes(spawnedBy);
       if (!keepSpawned) {
         return false;
       }
@@ -463,23 +446,19 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     ownerFirstActorId: params.ownerFirstActorId,
     projectActiveRun: params.projectActiveRun,
   });
-  // The two registry caches can differ after an external worker write. Preserve
-  // live child reads where the existing short-list path did not prepare a snapshot.
-  const usePreparedChildReads =
-    Boolean(rowContext) ||
-    hasSpawnedByFilter ||
-    filteredSessionKeys.size > 0 ||
-    selection.entries.length > SESSIONS_LIST_ROW_CONTEXT_THRESHOLD;
-  const sharedRowContext =
-    usePreparedChildReads || selection.entries.length > 0 ? getRowContext() : undefined;
+  // Filtering, child links, and row display share one registry snapshot per response.
+  const sharedRowContext = selection.entries.length > 0 ? getRowContext() : undefined;
   const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
   const storeChildSessionsByKey = buildStoreChildSessionIndex({
     store,
-    keys: selection.entries.map(([key]) => key),
+    keys: [
+      ...new Set(
+        selection.entries.map(([key]) => params.targetsBySessionKey.get(key)?.storeKey ?? key),
+      ),
+    ],
     now,
-    subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
+    subagentRuns: sharedRowContext?.subagentRuns,
     excludedChildKeys: filteredSessionKeys,
-    requireCurrentController: !usePreparedChildReads,
   });
   populateSessionListAcpMetadata({
     cfg,
@@ -544,7 +523,7 @@ function buildSessionsListResult(
   };
 }
 
-export function resolveSessionsListDefaultsAgentId(
+function resolveSessionsListDefaultsAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
 ): string {
@@ -571,7 +550,7 @@ export function filterAndSortSessionEntries(
 
 /** Projects lightweight list rows while sharing the event loop with other requests. */
 export async function listSessionsFromStoreAsync(
-  params: ListSessionsFromStoreParams,
+  params: ListSessionsFromStoreParams & { workStartedAt?: number },
 ): Promise<SessionsListResult> {
   // Pin the active plugin-registry workspace dir for the duration of this
   // call so per-row metadata lookups use a stable memo key. Without this pin,
@@ -579,7 +558,7 @@ export async function listSessionsFromStoreAsync(
   // between rows, the memo never hits, and each row triggers a full
   // loadPluginMetadataSnapshot scan (~100 ms).
   return withPinnedActivePluginRegistryWorkspaceDir(async () => {
-    let workStartedAt = performance.now();
+    let workStartedAt = params.workStartedAt ?? performance.now();
     const { cfg, store, targetsBySessionKey } = params;
     const list = prepareSessionList(params);
     const sessions: GatewaySessionRow[] = [];
@@ -589,27 +568,36 @@ export async function listSessionsFromStoreAsync(
         if (!entry.sessionId || (!list.includeDerivedTitles && !list.includeLastMessage)) {
           return [];
         }
+        const target = expectDefined(targetsBySessionKey.get(key), "transcript row target");
         return [
           {
-            ...expectDefined(targetsBySessionKey.get(key), "transcript row target").storeTarget,
+            ...target.storeTarget,
             sessionEntry: entry,
             sessionId: entry.sessionId,
-            sessionKey: key,
+            sessionKey: target.storeKey ?? key,
           },
         ];
       });
     const transcriptFields = readScopedSessionTitleFieldsFromTranscriptBatch(transcriptScopes);
+    // Consume synchronous sharing facts and capture transcripts before yielding.
+    // Loading and preparation can spend the budget even for zero or one row.
+    if (performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS) {
+      await yieldToEventLoop();
+      workStartedAt = performance.now();
+    }
     let transcriptFieldIndex = 0;
     for (let i = 0; i < list.entries.length; i++) {
       const [key, entry] = expectDefined(list.entries[i], "entries entry at i");
+      const target = expectDefined(targetsBySessionKey.get(key), "session row owner");
       const includeTranscriptFields = i < list.transcriptFieldRows;
       const row = buildGatewaySessionRow({
         cfg,
-        storePath: list.storePath,
+        storePath: target.storeTarget.storePath, // Aggregate paths are display-only.
         store,
-        key,
+        modelSource: target.modelSource,
+        key: target.storeKey ?? key,
         entry,
-        agentId: expectDefined(targetsBySessionKey.get(key), "session row owner").agentId,
+        agentId: target.agentId,
         modelCatalog: params.modelCatalog,
         now: list.now,
         includeDerivedTitles: false,
@@ -620,6 +608,7 @@ export async function listSessionsFromStoreAsync(
         skipTranscriptUsageFallback: true,
         lightweightListRow: true,
       });
+      row.key = key;
       if (
         entry?.sessionId &&
         includeTranscriptFields &&
@@ -642,9 +631,7 @@ export async function listSessionsFromStoreAsync(
         i + 1 < list.entries.length &&
         performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS
       ) {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await yieldToEventLoop();
         // Waiting behind other work is not projection work; start the next budget on resume.
         workStartedAt = performance.now();
       }

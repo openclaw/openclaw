@@ -1,5 +1,5 @@
 import { iterateAnsiSegments } from "./ansi-sequences.js";
-import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
+import { iterateGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { createDisplayStringFormatter } from "./display-string.js";
 import { sanitizeTerminalText } from "./safe-text.js";
 
@@ -201,22 +201,6 @@ function applySgrSequence(active: Map<SgrCategory, string>, value: string): void
   }
 }
 
-type ActiveSgr = { close: string; open: string };
-
-function activeSgrAfter(tokens: readonly AnsiToken[]): ActiveSgr[] {
-  const active = new Map<SgrCategory, string>();
-  for (const token of tokens) {
-    if (token.kind === "ansi") {
-      applySgrSequence(active, token.value);
-    }
-  }
-  return SGR_CATEGORIES.flatMap(({ category, reset }) => {
-    const open = active.get(category);
-    const parsed = open ? parseSgrSequence(open) : undefined;
-    return open && parsed ? [{ close: sgrSequence(parsed.introducer, String(reset)), open }] : [];
-  });
-}
-
 type Osc8Link = { params: string; uri: string };
 
 function parseOsc8Sequence(value: string): Osc8Link | undefined {
@@ -252,20 +236,6 @@ function parseOsc8Sequence(value: string): Osc8Link | undefined {
   };
 }
 
-function activeOsc8After(tokens: readonly AnsiToken[]): Osc8Link | undefined {
-  let active: Osc8Link | undefined;
-  for (const token of tokens) {
-    if (token.kind !== "ansi") {
-      continue;
-    }
-    const link = parseOsc8Sequence(token.value);
-    if (link) {
-      active = link.uri === "" ? undefined : link;
-    }
-  }
-  return active;
-}
-
 function wrapLine(text: string, width: number): string[] {
   if (width <= 0) {
     return [text];
@@ -281,36 +251,47 @@ function wrapLine(text: string, width: number): string[] {
     ch === " " || ch === "/" || ch === "-" || ch === "_" || ch === ".";
   let skipNextLf = false;
   let hasChar = false;
+  let logicalLineHasOutput = false;
 
   const buf: AnsiToken[] = [];
   let bufVisible = 0;
   let lastBreakIndex: number | null = null;
 
-  const bufToString = (slice?: AnsiToken[]) => (slice ?? buf).map((t) => t.value).join("");
-
-  const pushLine = (value: string) => {
-    const cleaned = value.replace(/\s+$/, "");
-    if (visibleWidth(cleaned) === 0) {
-      return;
-    }
-    lines.push(cleaned);
-  };
-
+  // A soft wrap can empty the buffer before a newline without creating a blank logical line.
   const flushAt = (breakAt: number | null) => {
-    if (buf.length === 0) {
-      return;
-    }
     // Keep the suffix in its buffer: long zero-width runs can exceed the argument
     // limit of a spread-based copy even when their visible width is small.
     const left = breakAt == null || breakAt <= 0 ? buf : buf.splice(0, breakAt);
-    const activeSgr = activeSgrAfter(left);
-    const activeOsc8 = activeOsc8After(left);
+    // Only the emitted prefix determines continuation state; the buffered suffix
+    // belongs to the next line.
+    const content: string[] = [];
+    const sgr = new Map<SgrCategory, string>();
+    let activeOsc8: Osc8Link | undefined;
+    for (const token of left) {
+      content.push(token.value);
+      if (token.kind !== "ansi") {
+        continue;
+      }
+      applySgrSequence(sgr, token.value);
+      const link = parseOsc8Sequence(token.value);
+      if (link) {
+        activeOsc8 = link.uri === "" ? undefined : link;
+      }
+    }
+    const activeSgr = SGR_CATEGORIES.flatMap(({ category, reset }) => {
+      const open = sgr.get(category);
+      const parsed = open ? parseSgrSequence(open) : undefined;
+      return open && parsed ? [{ close: sgrSequence(parsed.introducer, String(reset)), open }] : [];
+    });
     const closeOsc8 = activeOsc8 ? `${ESC}]8;;${BEL}` : "";
     const openOsc8 = activeOsc8 ? `${ESC}]8;${activeOsc8.params};${activeOsc8.uri}${BEL}` : "";
     const closeSgr = activeSgr.map((state) => state.close).join("");
 
+    if (bufVisible > 0 || !logicalLineHasOutput) {
+      lines.push(`${content.join("")}${closeOsc8}${closeSgr}`.trimEnd());
+      logicalLineHasOutput = true;
+    }
     if (breakAt == null || breakAt <= 0) {
-      pushLine(`${bufToString()}${closeOsc8}${closeSgr}`);
       buf.length = 0;
       if (openOsc8) {
         buf.push({ kind: "ansi", value: openOsc8, width: 0 });
@@ -323,7 +304,6 @@ function wrapLine(text: string, width: number): string[] {
       return;
     }
 
-    pushLine(`${bufToString(left)}${closeOsc8}${closeSgr}`);
     if (openOsc8) {
       buf.unshift({ kind: "ansi", value: openOsc8, width: 0 });
     }
@@ -352,9 +332,10 @@ function wrapLine(text: string, width: number): string[] {
         return;
       }
       // CRLF is one grapheme; separated CR/LF may retain intervening ANSI controls.
-      skipNextLf = ch === "\r";
       if (ch === "\n" || ch === "\r" || ch === "\r\n") {
+        skipNextLf = ch === "\r";
         flushAt(buf.length);
+        logicalLineHasOutput = false;
         return;
       }
       // Soft-wrap remainders reuse the width measured when each token entered the buffer.
@@ -372,8 +353,12 @@ function wrapLine(text: string, width: number): string[] {
 
     buf.push(token);
     bufVisible += token.width;
-    if (token.kind === "char" && isBreakChar(token.value)) {
-      lastBreakIndex = buf.length;
+    if (token.kind === "char") {
+      // Discarded leading spacing must not interrupt a separated CR/LF pair.
+      skipNextLf = false;
+      if (isBreakChar(token.value)) {
+        lastBreakIndex = buf.length;
+      }
     }
   };
 
@@ -400,7 +385,7 @@ function wrapLine(text: string, width: number): string[] {
       acceptToken({ kind: "ansi", value, width: 0 });
       continue;
     }
-    for (const grapheme of splitGraphemes(value)) {
+    for (const grapheme of iterateGraphemes(value)) {
       acceptToken({ kind: "char", value: grapheme, width: 0 });
     }
   }
@@ -409,7 +394,10 @@ function wrapLine(text: string, width: number): string[] {
     return [text];
   }
 
-  flushAt(buf.length);
+  // A trailing newline or reopened style is not another physical row.
+  if (bufVisible > 0) {
+    flushAt(buf.length);
+  }
   return lines.length > 0 ? lines : [""];
 }
 

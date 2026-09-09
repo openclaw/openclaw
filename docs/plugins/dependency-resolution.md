@@ -212,6 +212,17 @@ be declared in the root OpenClaw package's `dependencies` or
 `optionalDependencies`, because the root package ships their runtime.
 External plugins keep their runtime dependencies plugin-local.
 
+Package verification uses build-generated
+`dist/runtime-dependency-ownership.json` to identify chunks used only by
+plugins. Each entry binds a chunk filename and SHA-256 hash to its owning
+plugins; every owner must declare the dependency in its bundled or installed
+`@openclaw/<id>` package manifest. Root imports, including root references to
+otherwise plugin-owned chunks, still require root dependency declarations.
+Missing metadata or changed chunk bytes cannot grant a plugin exemption.
+Rebuilt releases, including `2026.7.33`, use this same generated artifact;
+package versions and generated source-region comments do not grant ownership.
+This verification does not change Node's runtime dependency resolution.
+
 In source checkouts, use `pnpm install` followed by `pnpm build`. OpenClaw
 prefers `dist/extensions`, then `dist-runtime/extensions`, and falls back to
 `extensions` when neither built tree is available. pnpm owns the source dependency
@@ -247,6 +258,9 @@ node scripts/lib/plugin-npm-runtime-build.mjs --prepare-native-import extensions
 This requires existing root SDK output in `dist/plugin-sdk` and the selected
 package's standalone runtime output. If the package output is missing, build
 it first with `node scripts/lib/plugin-npm-runtime-build.mjs extensions/<package>`.
+The standalone build runs the selected package's asset build command and copies
+its declared `openclaw.build.staticAssets` into `dist`, including for new packages
+that are not yet tracked by Git. Missing declared source files fail the build.
 The preparation command does not rebuild either output or execute plugin code.
 It only links the checkout as `node_modules/openclaw` for a real immediate
 source package that declares `openclaw` in `peerDependencies` or `dependencies`.

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
+import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -66,13 +67,7 @@ export type CronFormState = {
   wakeMode: "next-heartbeat" | "now";
   // System-owned payloads are always payloadLocked; the form only
   // displays it, never submits it.
-  payloadKind:
-    | "systemEvent"
-    | "agentTurn"
-    | "command"
-    | "script"
-    | "heartbeat"
-    | "skillCollectionReview";
+  payloadKind: CronPayload["kind"];
   payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
@@ -203,6 +198,8 @@ export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {
+  // Read admission belongs to the page; accepted mutation chains remain independent.
+  canRefresh?: () => boolean;
   client: GatewayBrowserClient | null;
   connected: boolean;
   cronLoading: boolean;
@@ -237,8 +234,6 @@ export type CronState = {
   // only the current filtered/paged table cache.
   cronEditingJob: CronJob | null;
   cronCloningJob: CronJob | null;
-  cronEditingJobId: string | null;
-  cronEditingConfigRevision: string | null;
   cronRunsJobId: string | null;
   cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
@@ -253,12 +248,6 @@ export type CronState = {
   cronRunsQuery: string;
   cronRunsSortDir: CronSortDir;
   cronBusy: boolean;
-};
-
-export type CronModelSuggestionsState = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  cronModelSuggestions: string[];
 };
 
 export function createInitialCronState(
@@ -295,8 +284,6 @@ export function createInitialCronState(
     cronFieldErrors: {},
     cronEditingJob: null,
     cronCloningJob: null,
-    cronEditingJobId: null,
-    cronEditingConfigRevision: null,
     cronRunsJobId: null,
     cronRunsLoadingMore: false,
     cronRuns: [],
@@ -438,7 +425,7 @@ export async function loadCronStatus(
   opts?: { coalesce?: boolean },
 ): Promise<void> {
   const client = state.client;
-  if (!client || !state.connected) {
+  if (!client || !state.connected || state.canRefresh?.() === false) {
     return;
   }
   const active = activeCronStatusRequests.get(state);
@@ -470,39 +457,6 @@ export async function loadCronStatus(
       activeCronStatusRequests.delete(state);
     }
     request.queued?.resolve(reload ? loadCronStatus(state, opts) : undefined);
-  }
-}
-
-export async function loadCronModelSuggestions(
-  state: CronModelSuggestionsState,
-  agentId: string | null,
-) {
-  if (!state.client || !state.connected || !agentId) {
-    return;
-  }
-  try {
-    const res = await state.client.request("models.list", {
-      agentId,
-      view: "configured",
-      preparedOnly: true,
-    });
-    const models = (res as { models?: unknown[] } | null)?.models;
-    if (!Array.isArray(models)) {
-      state.cronModelSuggestions = [];
-      return;
-    }
-    const ids = models
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") {
-          return "";
-        }
-        const id = (entry as { id?: unknown }).id;
-        return typeof id === "string" ? id.trim() : "";
-      })
-      .filter(Boolean);
-    state.cronModelSuggestions = sortUniqueStrings(ids);
-  } catch {
-    state.cronModelSuggestions = [];
   }
 }
 
@@ -712,7 +666,7 @@ export async function loadCronJobsPage(
   state: CronState,
   opts?: { append?: boolean; tableFilters?: boolean },
 ) {
-  if (!state.client || !state.connected) {
+  if (!state.client || !state.connected || state.canRefresh?.() === false) {
     return;
   }
   const append = opts?.append === true;
@@ -816,8 +770,6 @@ function clearCronEditState(state: CronState) {
   state.cronError = null;
   state.cronEditingJob = null;
   state.cronCloningJob = null;
-  state.cronEditingJobId = null;
-  state.cronEditingConfigRevision = null;
 }
 
 function clearCronRunsPage(state: CronState) {
@@ -900,18 +852,19 @@ function parseStaggerSchedule(
   };
 }
 
-function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
+function isReadOnlyCronPayload(payload: CronPayload | null, declarationKey?: string): boolean {
   return (
     payload?.kind === "command" ||
     payload?.kind === "script" ||
-    isSystemOwnedCronPayloadKind(payload?.kind)
+    isSystemOwnedCronPayloadKind(payload?.kind) ||
+    isSystemMonitorDeclaration(declarationKey)
   );
 }
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = getCronJobPayload(job);
-  const payloadLocked = isReadOnlyCronPayload(payload);
+  const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
   }
@@ -1197,7 +1150,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
 
     const editingJob = state.cronEditingJob;
     const expectedConfigRevision = editingJob
-      ? requireCronConfigRevision(state.cronEditingConfigRevision)
+      ? requireCronConfigRevision(editingJob.configRevision)
       : undefined;
     const sourceJob = editingJob ?? state.cronCloningJob;
     const sourcePayload = sourceJob ? getCronJobPayload(sourceJob) : null;
@@ -1209,7 +1162,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
           : sourceJob.schedule
         : buildCronSchedule(form);
     const preserveLockedPayload = Boolean(
-      editingJob && form.payloadLocked && isReadOnlyCronPayload(sourcePayload),
+      editingJob &&
+      form.payloadLocked &&
+      isReadOnlyCronPayload(sourcePayload, sourceJob?.declarationKey),
     );
     const payload = preserveLockedPayload
       ? undefined
@@ -1478,7 +1433,7 @@ export async function loadCronRuns(
   opts?: { append?: boolean; coalesce?: boolean },
 ): Promise<CronRunsLoadStatus> {
   const client = state.client;
-  if (!client || !state.connected) {
+  if (!client || !state.connected || state.canRefresh?.() === false) {
     return "skipped";
   }
   const scope = state.cronRunsScope;
@@ -1613,8 +1568,6 @@ function setCronEditState(state: CronState, job: CronJob, form: CronFormState) {
   state.cronError = null;
   state.cronEditingJob = job;
   state.cronCloningJob = null;
-  state.cronEditingJobId = job.id;
-  state.cronEditingConfigRevision = job.configRevision ?? null;
   state.cronRunsJobId = job.id;
   state.cronForm = form;
   state.cronFieldErrors = validateCronForm(form);

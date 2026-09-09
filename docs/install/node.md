@@ -7,7 +7,7 @@ read_when:
   - "npm install -g fails with permissions or PATH issues"
 ---
 
-OpenClaw requires **Node 22.22.3+, Node 24.15+, or Node 25.9+** (which includes Node 26) with a WAL-reset-safe linked SQLite library. **Node 26 is the recommended runtime** — it starts the Gateway noticeably faster and uses less memory than Node 24. The installer provisions Node 26 on macOS and the supported Node 24 LTS line on Linux when Node is missing; CI and release workflows also pin Node 24. On RPM-based Linux, the installer preserves a supported distro-owned Node package that links unsafe SQLite and uses a user-space Node runtime for OpenClaw instead. Node 22 remains supported via its LTS line. Node 23 is unsupported. The [installer script](/install#alternative-install-methods) detects and installs Node automatically — use this page when you want to set up Node yourself (versions, PATH, global installs).
+OpenClaw requires **Node 24.16+ or Node 26.1+** with a WAL-reset-safe linked SQLite library. **Node 26 is the recommended runtime** — it starts the Gateway noticeably faster and uses less memory than Node 24. The installer provisions Node 26 on macOS and the supported Node 24 LTS line on Linux when Node is missing; CI and release workflows also pin Node 24. On RPM-based Linux, the installer preserves a supported distro-owned Node package that links unsafe SQLite and uses a user-space Node runtime for OpenClaw instead. Node 22, 23, and 25 are unsupported. The [installer script](/install#recommended-installer-script) detects and installs Node automatically — use this page when you want to set up Node yourself (versions, PATH, global installs).
 
 ## Check your version
 
@@ -15,7 +15,23 @@ OpenClaw requires **Node 22.22.3+, Node 24.15+, or Node 25.9+** (which includes 
 node -v
 ```
 
-`v26` (any release) is the recommended default. `v24.15.0` or newer 24.x remains fully supported (and is what CI pins); `v22.22.3` or newer 22.x is the supported Node 22 LTS path; Node `v25.9.0+` is also supported. Node 23 is unsupported. If Node is missing or outside the supported range, pick an install method below.
+`v26.1.0` or newer is the recommended default. `v24.16.0` or newer 24.x is also supported and is the LTS line used by CI. Node 22, 23, 25, Node 24 before 24.16.0, and Node 26 before 26.1.0 are unsupported. If Node is missing or outside this range, pick an install method below.
+
+Upgrade Node before updating OpenClaw to avoid SQLite TEXT truncation. See [Node.js compatibility](/install/node-compatibility) for the SQLite safety floors and macOS/ARMv7 support limits.
+
+### Update from the CLI
+
+If you run `openclaw` with an incompatible Node.js in an interactive terminal, the CLI offers:
+
+```text
+Update NodeJS: Y/N [N]:
+```
+
+Enter **Y** to download a compatible Node.js for OpenClaw and retry the same command. The download is checksum-verified and stored under `~/.openclaw/tools/cli-node` (or the home selected by `OPENCLAW_HOME`). The Node.js installation does not replace system Node.js, change shell settings, reinstall OpenClaw, or repair/restart Gateway services. The retried command keeps its normal behavior.
+
+Later CLI invocations reuse that runtime when the active Node.js is incompatible. A supported active Node.js still takes precedence. Enter **N**, press Enter, or cancel to leave your installation unchanged and see manual upgrade instructions.
+
+Automatic installation supports macOS, Windows, and glibc-based Linux on x64/ARM64. Alpine/musl and other architectures need manual installation. Non-interactive, CI, JSON, and `--yes` invocations never prompt or install Node.js. Commands that require an exact process identity, such as `hooks relay` and `webhooks gmail run`, also require a compatible Node.js on their existing execution path.
 
 ## Install Node
 

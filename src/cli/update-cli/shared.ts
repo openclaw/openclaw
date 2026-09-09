@@ -1,5 +1,4 @@
 // Shared update command primitives for channel resolution, install roots, and subprocess steps.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,9 +17,9 @@ import {
   createGlobalInstallEnv,
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
-  type CommandRunner,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import { runStep } from "../../infra/update-runner-command.js";
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -31,7 +30,12 @@ import { isJsonOutputModeActive } from "../json-output-mode.js";
 
 export type UpdateCommandOptions = {
   /** Internal orchestration context, shared across update phases and child processes. */
-  run?: { runId: string; env: NodeJS.ProcessEnv };
+  run?: {
+    runId: string;
+    env: NodeJS.ProcessEnv;
+    /** Prepared before replacement; never load the old authority graph after activation. */
+    requesterAuthority?: UpdateRequesterAuthority;
+  };
   acceptCapabilities?: boolean;
   json?: boolean;
   restart?: boolean;
@@ -67,8 +71,9 @@ export class UpdatePreMutationError extends Error {
   constructor(
     readonly reason: string,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "UpdatePreMutationError";
   }
 }
@@ -247,11 +252,18 @@ type GitCheckoutResult = {
   step: UpdateStepResult | null;
 };
 
+type StagedGitCheckout = (
+  root: string,
+  publish: () => Promise<string>,
+  targetRoot: string,
+) => Promise<void>;
+
 async function cloneGitCheckoutTransactionally(params: {
   dir: string;
   timeoutMs: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
+  useStagedCheckout?: StagedGitCheckout;
 }): Promise<GitCheckoutResult> {
   const parentDir = path.dirname(params.dir);
   await fs.mkdir(parentDir, { recursive: true });
@@ -276,62 +288,70 @@ async function cloneGitCheckoutTransactionally(params: {
       return { checkoutDir: targetDir, step: result };
     }
 
-    if (!preserveDir) {
-      try {
-        await fs.lstat(targetDir);
-      } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-        await fs.rename(stagingDir, targetDir);
-        return { checkoutDir: targetDir, step: result };
-      }
-    }
-
-    if (!preserveDir) {
-      throw new Error(
-        `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
-      );
-    }
-
-    const expectedEntries = preserveDir ? [path.basename(stagingDir)] : [];
-    const destinationEntries = await fs.readdir(targetDir);
-    if (destinationEntries.toSorted().join("\0") !== expectedEntries.toSorted().join("\0")) {
-      throw new Error(
-        `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
-      );
-    }
-
-    const entries = (await fs.readdir(stagingDir)).toSorted((a, b) =>
-      a === ".git" ? 1 : b === ".git" ? -1 : 0,
-    );
-    const moved: string[] = [];
-    let publishError: { value: unknown } | undefined;
-    try {
-      for (const entry of entries) {
-        await fs.rename(path.join(stagingDir, entry), path.join(targetDir, entry));
-        moved.push(entry);
-      }
-    } catch (error) {
-      publishError = { value: error };
-    }
-    if (publishError) {
-      const rollbackErrors: unknown[] = [];
-      for (const entry of moved.toReversed()) {
+    const publish = async (): Promise<string> => {
+      if (!preserveDir) {
         try {
-          await fs.rename(path.join(targetDir, entry), path.join(stagingDir, entry));
-        } catch (rollbackError) {
-          rollbackErrors.push(rollbackError);
+          await fs.lstat(targetDir);
+        } catch (error) {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+          await fs.rename(stagingDir, targetDir);
+          return targetDir;
         }
       }
-      if (rollbackErrors.length > 0) {
-        cleanupStaging = false;
-        throw new AggregateError(
-          [publishError.value, ...rollbackErrors],
-          `Could not publish or fully roll back the cloned checkout at ${targetDir}; recovery files remain at ${stagingDir}`,
+
+      if (!preserveDir) {
+        throw new Error(
+          `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
         );
       }
-      throw publishError.value;
+
+      const expectedEntries = preserveDir ? [path.basename(stagingDir)] : [];
+      const destinationEntries = await fs.readdir(targetDir);
+      if (destinationEntries.toSorted().join("\0") !== expectedEntries.toSorted().join("\0")) {
+        throw new Error(
+          `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+        );
+      }
+
+      const entries = (await fs.readdir(stagingDir)).toSorted((a, b) =>
+        a === ".git" ? 1 : b === ".git" ? -1 : 0,
+      );
+      const moved: string[] = [];
+      let publishError: { value: unknown } | undefined;
+      try {
+        for (const entry of entries) {
+          await fs.rename(path.join(stagingDir, entry), path.join(targetDir, entry));
+          moved.push(entry);
+        }
+      } catch (error) {
+        publishError = { value: error };
+      }
+      if (publishError) {
+        const rollbackErrors: unknown[] = [];
+        for (const entry of moved.toReversed()) {
+          try {
+            await fs.rename(path.join(targetDir, entry), path.join(stagingDir, entry));
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError);
+          }
+        }
+        if (rollbackErrors.length > 0) {
+          cleanupStaging = false;
+          throw new AggregateError(
+            [publishError.value, ...rollbackErrors],
+            `Could not publish or fully roll back the cloned checkout at ${targetDir}; recovery files remain at ${stagingDir}`,
+          );
+        }
+        throw publishError.value;
+      }
+      return targetDir;
+    };
+    if (params.useStagedCheckout) {
+      await params.useStagedCheckout(stagingDir, publish, targetDir);
+    } else {
+      await publish();
     }
     return { checkoutDir: targetDir, step: result };
   } finally {
@@ -347,6 +367,7 @@ export async function ensureGitCheckout(params: {
   timeoutMs: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
+  useStagedCheckout?: StagedGitCheckout;
 }): Promise<GitCheckoutResult> {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
@@ -356,6 +377,7 @@ export async function ensureGitCheckout(params: {
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
+      useStagedCheckout: params.useStagedCheckout,
     });
   }
 
@@ -373,6 +395,7 @@ export async function ensureGitCheckout(params: {
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
+      useStagedCheckout: params.useStagedCheckout,
     });
   }
 
@@ -392,11 +415,9 @@ export async function resolveGlobalManager(params: {
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
 }): Promise<GlobalInstallManager> {
-  const runCommand = createGlobalCommandRunner();
-
   if (params.installKind === "package") {
     const detected = await detectGlobalInstallManagerForRoot(
-      runCommand,
+      runCommandWithTimeout,
       params.root,
       params.timeoutMs,
     );
@@ -408,7 +429,10 @@ export async function resolveGlobalManager(params: {
     return detected;
   }
 
-  const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);
+  const byPresence = await detectGlobalInstallManagerByPresence(
+    runCommandWithTimeout,
+    params.timeoutMs,
+  );
   return byPresence ?? "npm";
 }
 
@@ -420,57 +444,84 @@ const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
 export async function tryWriteCompletionCache(
   root: string,
   jsonMode: boolean,
+  timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
     return "skipped";
   }
 
-  const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
-    cwd: root,
-    env: {
-      ...process.env,
-      [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
-    },
-    encoding: "utf-8",
-    timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
-  });
-
-  if (result.error) {
-    if (!jsonMode) {
-      const err = result.error as NodeJS.ErrnoException;
-      const reason =
-        err.code === "ETIMEDOUT"
-          ? `timed out after ${COMPLETION_CACHE_WRITE_TIMEOUT_MS / 1000}s`
-          : String(result.error);
-      defaultRuntime.log(
-        theme.warn(
-          `Completion cache update failed: ${reason}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-        ),
-      );
+  let failure: string;
+  try {
+    const result = await runCommandWithTimeout(
+      [resolveNodeRunner(), binPath, "completion", "--write-state"],
+      {
+        cwd: root,
+        env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
+        input: "",
+        timeoutMs,
+        killProcessTree: true,
+      },
+    );
+    if (result.code === 0) {
+      return "completed";
     }
-    return "failed";
+    failure =
+      result.termination === "timeout"
+        ? `timed out after ${timeoutMs / 1000}s`
+        : result.stderr.trim();
+  } catch (error) {
+    failure = String(error);
   }
-
-  if (result.status !== 0) {
-    if (!jsonMode) {
-      const stderr = (result.stderr ?? "").trim();
-      const detail = stderr ? ` (${stderr})` : "";
-      defaultRuntime.log(
-        theme.warn(
-          `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-        ),
-      );
-    }
-    return "failed";
+  if (!jsonMode) {
+    defaultRuntime.log(
+      theme.warn(
+        `Completion cache update failed${failure ? `: ${failure}` : ""}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+      ),
+    );
   }
-  return "completed";
+  return "failed";
 }
 
-/** Adapter used by global-install detection helpers to execute bounded subprocess probes. */
-export function createGlobalCommandRunner(): CommandRunner {
-  return async (argv, options) => {
-    const res = await runCommandWithTimeout(argv, options);
-    return { stdout: res.stdout, stderr: res.stderr, code: res.code };
-  };
+export async function confirmUpdateDowngrade(params: {
+  opts: UpdateCommandOptions;
+  currentVersion: string | null;
+  targetVersion: string | null;
+  tag: string;
+}): Promise<boolean> {
+  const { confirm, isCancel } = await import("@clack/prompts");
+  const { finishUpdateRun } = await import("../../infra/update-run-ledger.js");
+  const { stylePromptMessage } =
+    await import("../../../packages/terminal-core/src/prompt-style.js");
+  const { opts, currentVersion, targetVersion, tag } = params;
+  const run = opts.run!;
+  if (!process.stdin.isTTY || opts.json) {
+    finishUpdateRun(
+      run.runId,
+      { status: "skipped", reason: "downgrade-confirmation-required" },
+      { env: run.env },
+    );
+    defaultRuntime.error(
+      "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+    );
+    defaultRuntime.exit(1);
+    return false;
+  }
+
+  const targetLabel = targetVersion ?? `${tag} (unknown)`;
+  const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
+  const ok = await confirm({
+    message: stylePromptMessage(message),
+    initialValue: false,
+  });
+  if (isCancel(ok) || !ok) {
+    finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
+    if (!opts.json) {
+      defaultRuntime.log(theme.muted("Update cancelled."));
+    }
+    defaultRuntime.exit(0);
+    return false;
+  }
+
+  return true;
 }

@@ -22,7 +22,6 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
     exclude: [
       "src/gateway/gateway.test.ts",
       "src/gateway/server.startup-matrix-migration.integration.test.ts",
-      "src/gateway/sessions-history-http.test.ts",
       ...gatewayMethodsIsolatedTestFiles,
       ...gatewayServerIsolatedTestFiles,
     ],

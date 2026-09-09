@@ -324,16 +324,7 @@ function countJsonlLines(filePath: string): number {
 }
 
 function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
-  const normalizedTarget = path.resolve(targetPath);
-  const normalizedRoot = path.resolve(rootPath);
-  const rootToken = path.parse(normalizedRoot).root;
-  if (normalizedRoot === rootToken) {
-    return normalizedTarget.startsWith(rootToken);
-  }
-  return (
-    normalizedTarget === normalizedRoot ||
-    normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
-  );
+  return isPathUnderRootWithPathOps(targetPath, rootPath, path);
 }
 
 const tryResolveRealPath = safeRealpathSync;
@@ -735,7 +726,7 @@ export function detectStateIntegrityHealthIssues(
     ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
     : undefined;
   const storePath = agentId
-    ? resolveSessionStorePathCore(cfg.session?.store, { agentId })
+    ? resolveSessionStorePathCore(cfg.session?.store, { agentId, env })
     : undefined;
   const storeDir = storePath ? path.dirname(storePath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);

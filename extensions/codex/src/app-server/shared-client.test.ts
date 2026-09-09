@@ -8,13 +8,14 @@ import { SemVer } from "semver";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
-import type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
+import type { CodexAppServerAuthHandoff, CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { createClientHarness } from "./test-support.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -35,7 +36,7 @@ const mocks = vi.hoisted(() => ({
       agentDir?: string;
       authProfileId?: string;
       config?: unknown;
-    }): Promise<void> => undefined,
+    }): Promise<CodexAppServerAuthHandoff | undefined> => undefined,
   ),
   resolveCodexAppServerAuthProfileIdForAgent: vi.fn(
     (params?: { authProfileId?: string }) => params?.authProfileId,
@@ -76,14 +77,21 @@ vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.bridgeCodexAppServerStartOptions,
   reconcileCodexComputerUseStartArtifacts: mocks.reconcileCodexComputerUseStartArtifacts,
-  resolveCodexAppServerAuthProfileIdForAgent: mocks.resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerAuthProfileStore: mocks.resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerPreparedAuthProfileSnapshot:
     mocks.resolveCodexAppServerPreparedAuthProfileSnapshot,
   refreshCodexAppServerAuthTokens: mocks.refreshCodexAppServerAuthTokens,
-  resolveCodexAppServerFallbackApiKeyCacheKey: mocks.resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerHomeDir: (agentDir: string) =>
     path.join(path.resolve(agentDir), "codex-home"),
+}));
+
+vi.mock("./auth-profile.js", () => ({
+  resolveCodexAppServerAuthProfileIdForAgent: mocks.resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerAuthProfileStore: mocks.resolveCodexAppServerAuthProfileStore,
+}));
+
+vi.mock("./auth-cache-key.js", () => ({
+  fingerprintTokenAuthProfileCacheKey: (accessToken: string) => `token:${accessToken}`,
+  resolveCodexAppServerFallbackApiKeyCacheKey: mocks.resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey: mocks.resolveCodexAppServerPreparedApiKeyCacheKey,
 }));
 
@@ -102,7 +110,8 @@ vi.mock("./desktop-generation.js", () => ({
   waitForCodexDesktopGeneration: mocks.waitForCodexDesktopGeneration,
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-registration")>()),
   resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
 }));
 
@@ -130,7 +139,6 @@ let releaseCodexAppServerClientLease: typeof import("./shared-client.js").releas
 let resolveCodexNativeConfigFenceKey: typeof import("./shared-client.js").resolveCodexNativeConfigFenceKey;
 let resolveCodexAppServerSpawnIdentity: typeof import("./shared-client.js").resolveCodexAppServerSpawnIdentity;
 let retireSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").retireSharedCodexAppServerClientIfCurrent;
-let retireSharedCodexAppServerClientsBeforeDesktopGeneration: typeof import("./shared-client.js").retireSharedCodexAppServerClientsBeforeDesktopGeneration;
 let waitForCodexAppServerClientDesktopGenerationDrain: typeof import("./shared-client.js").waitForCodexAppServerClientDesktopGenerationDrain;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
 let withLeasedCodexAppServerClientStartSelectionRetry: typeof import("./shared-client.js").withLeasedCodexAppServerClientStartSelectionRetry;
@@ -233,8 +241,8 @@ function clientStartCall(startSpy: unknown) {
 
 function deferNextAuthProfileApplication(): () => void {
   let release: () => void = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = () => resolve();
+  const gate = new Promise<CodexAppServerAuthHandoff | undefined>((resolve) => {
+    release = () => resolve(undefined);
   });
   mocks.applyCodexAppServerAuthProfile.mockReturnValueOnce(gate);
   return release;
@@ -280,7 +288,6 @@ describe("shared Codex app-server client", () => {
       resolveCodexNativeConfigFenceKey,
       resolveCodexAppServerSpawnIdentity,
       retireSharedCodexAppServerClientIfCurrent,
-      retireSharedCodexAppServerClientsBeforeDesktopGeneration,
       waitForCodexAppServerClientDesktopGenerationDrain,
       resetSharedCodexAppServerClientForTests,
       withLeasedCodexAppServerClientStartSelectionRetry,
@@ -526,6 +533,42 @@ describe("shared Codex app-server client", () => {
     expect(retained?.client).toBe(client);
     retained?.release();
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+  });
+
+  it.each([
+    {
+      version: "2026.7.1",
+      create: () => ({ clients: new Map(), leasedReleases: new WeakMap() }),
+    },
+    {
+      version: "2026.9.1",
+      create: () => ({
+        clients: new Map(),
+        liveClients: new Set(),
+        isolatedClients: new Set(),
+        entriesByClient: new WeakMap(),
+        leasedReleases: new WeakMap(),
+        desktopGenerationDrainChecks: new Set(),
+      }),
+    },
+  ])("does not adopt shared client state from published $version", async ({ create }) => {
+    // A plugin update inside a container restarts the gateway in-process, so the
+    // new plugin build starts with the previous build's globalThis. This is the
+    // slot name and record shape every build before the keyed slot wrote.
+    const legacySlot = Symbol.for("openclaw.codexAppServerClientState");
+    const legacyState = create();
+    const globalState = globalThis as Record<symbol, unknown>;
+    globalState[legacySlot] = legacyState;
+    try {
+      const harness = createAutoInitializingClientHarness();
+      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+      const client = await getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+
+      expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+      expect(legacyState.clients.size).toBe(0);
+    } finally {
+      delete globalState[legacySlot];
+    }
   });
 
   it.each([
@@ -1915,6 +1958,11 @@ describe("shared Codex app-server client", () => {
   it("registers persisted profile refresh for isolated app-server startup", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const authHandoff = {
+      accessFingerprint: "token:startup-access",
+      chatgptAccountId: "persisted-account",
+    };
+    mocks.applyCodexAppServerAuthProfile.mockResolvedValueOnce(authHandoff);
 
     const clientPromise = createIsolatedCodexAppServerClient({
       timeoutMs: 1000,
@@ -1940,6 +1988,7 @@ describe("shared Codex app-server client", () => {
     expect(mocks.refreshCodexAppServerAuthTokens).toHaveBeenCalledWith({
       agentDir: "/tmp/openclaw-persisted-agent",
       authProfileId: "openai:persisted",
+      authHandoff,
       previousAccountId: "persisted-account",
       config: undefined,
     });

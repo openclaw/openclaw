@@ -22,7 +22,7 @@ for results, cancel work, or inspect Gateway resources.
   guide pins the verified stable `2026.8.1` packages and explains how package and
   wire versions affect compatibility. If your
   app supervises the Gateway as a child process, also read
-  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
+  [Embedding OpenClaw](/gateway/embedding).
 </Note>
 
 <Note>
@@ -35,7 +35,7 @@ for results, cancel work, or inspect Gateway resources.
 | Surface                                                       | Status          | Use it for                                                                                    |
 | ------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
 | [Gateway client guide](/gateway/clients#install-the-packages) | Stable packages | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
-| [Embedding guide](https://docs.openclaw.ai/gateway/embedding) | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Embedding guide](/gateway/embedding)                         | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
 | [Gateway protocol](/gateway/protocol)                         | Ready           | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
 | [Gateway RPC reference](/reference/rpc)                       | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
 | [`openclaw agent`](/cli/agent)                                | Ready           | One-shot script integration when shelling out to the CLI is enough.                           |
@@ -53,6 +53,12 @@ For agent runs, start with the `agent` RPC and pair it with `agent.wait` for a
 terminal result. For durable conversation state, use the `sessions.*` methods.
 For UI integrations, subscribe to Gateway events and render only the event
 families your app understands.
+
+`agent.wait` can return `status: "pending"` while a turn is queued. A timeout
+response without terminal metadata means the wait expired; continue waiting or
+consume lifecycle events. Terminal `status: "error"` can represent cancellation:
+`stopReason: "superseded"` means a newer session writer replaced the run. Preserve
+that reason when presenting the result.
 
 ## Cooperative host suspension
 
@@ -264,9 +270,13 @@ transports, or control the hosting platform. The host must fence its ingress
 before preparation and remains responsible for wake, snapshot/freeze, and
 stop. `activeCount` is the aggregate tracked-work count, while `blockers`
 contains the non-zero category counts and bounded task details. This is not a
-general process-quiescence barrier. A `background-exec` blocker is aggregate
-only: command text, process IDs, output, and session or scope identifiers never
-cross the protocol. Channel health, maintenance, cache refresh, established
+general process-quiescence barrier. The process registry's `background-exec` entry
+is aggregate only. Durable background exec tasks also use `background-exec`
+and retain their bounded `task` metadata; other task kinds remain `task`.
+A process can contribute to both counts. This classification does not change
+`activeCount` or readiness, and adds no command text, output, operating system
+process IDs, or session or scope identifiers. Channel health, maintenance,
+cache refresh, established
 plugin WebSocket sessions, and unregistered plugin-owned background work can
 remain active.
 The hosting platform must freeze or snapshot the full process tree and its
@@ -278,7 +288,7 @@ contract.
   plugin and project idempotent full snapshots to the external host adapter.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
-  projection](/plugins/hooks#safe-external-cron-projection).
+  projection](/plugins/hooks/lifecycle#safe-external-cron-projection).
 </Tip>
 
 ## App code vs plugin code
@@ -305,8 +315,8 @@ plugins loaded by OpenClaw.
 
 ## Related
 
-- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
-- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
+- [Building a Gateway client](/gateway/clients)
+- [Embedding OpenClaw](/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
 - [Gateway RPC reference](/reference/rpc)
 - [CLI agent command](/cli/agent)

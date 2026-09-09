@@ -181,6 +181,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     execOverrides: params.run.execOverrides,
     bashElevated: params.run.bashElevated,
     timeoutMs: params.run.timeoutMs,
+    runTimeoutOverrideMs: params.run.runTimeoutOverrideMs,
     runId: params.runId,
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,

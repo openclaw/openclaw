@@ -69,15 +69,18 @@ async function queryUsage(options: {
 }): Promise<SessionsUsageResult> {
   return await withTempDir("usage-owner-", async (stateDir) =>
     withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const store = Object.fromEntries(options.rows.map(({ key, entry }) => [key, entry]));
+      const loadSessionEntry = (key: string) => store[key];
       const fixtureStore = {
         durableTargets: [],
         storePath: "(multiple)",
-        store: Object.fromEntries(options.rows.map(({ key, entry }) => [key, entry])),
+        store,
         targetsBySessionKey: new Map(
-          options.rows.map(({ key, agentId }) => [
+          options.rows.map(({ key, agentId, entry }) => [
             key,
             {
               agentId,
+              modelSource: { entry, loadSessionEntry },
               storeTarget: {
                 agentId,
                 storePath: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),

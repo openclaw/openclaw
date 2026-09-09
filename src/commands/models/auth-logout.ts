@@ -100,14 +100,18 @@ export async function modelsAuthLogoutCommand(
     logConfigUpdated(runtime);
   }
 
-  const removed = await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] });
+  const removed = await removeAuthProfilesAcrossOwnerStores({
+    cfg,
+    agentDir,
+    profileIds: [profileId],
+  });
   if (!removed) {
     throw new Error(
       `Failed to remove auth profile "${profileId}"; the auth store lock may be busy. Wait a moment and retry.`,
     );
   }
 
-  await refreshRunningGatewayAuthState(agentId);
+  await refreshRunningGatewayAuthState(agentId, runtime);
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Removed auth profile: ${description}`);

@@ -8,7 +8,7 @@ import {
 import { prepareEmbeddedSessionState } from "./session-preparation.js";
 
 vi.mock("../embedded-agent-runner/runs.js", () => ({
-  resolveEmbeddedAgentRunProgressState: () => undefined,
+  resolveEmbeddedAgentSessionProgressState: () => undefined,
 }));
 vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: () => undefined,
@@ -59,7 +59,7 @@ it.each([false, true])(
         lifecycleGeneration,
         runId,
         workspaceDir: "/workspace",
-        executionSkillsDir: "/workspace/skills",
+        executionWorkspaceDir: "/workspace",
         watchSkills: false,
         isNewSession: false,
         isSubagentLaneTurn: false,

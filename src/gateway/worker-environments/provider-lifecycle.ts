@@ -6,6 +6,7 @@ import {
   WorkerProviderError,
   type WorkerExecutionMode,
   type WorkerLease,
+  type WorkerNodeRuntimeIdentity,
   type WorkerProfile,
   type WorkerProvider,
 } from "../../plugins/types.js";
@@ -26,6 +27,7 @@ import {
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import {
   normalizeWorkerMachineOptions,
+  normalizeWorkerOperatingSystems,
   requireProviderOperationTimeoutMs,
   requireWorkerLease,
   requireWorkerLeaseStatus,
@@ -95,6 +97,17 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     const provider = options.resolveProvider(profile.provider);
     return normalizeWorkerMachineOptions(
       await provider?.listMachineOptions?.(requireWorkerProfile(profile.settings ?? {})),
+    );
+  };
+
+  const listOperatingSystems = async (profileId: string) => {
+    const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
+    if (!profile) {
+      return undefined;
+    }
+    const provider = options.resolveProvider(profile.provider);
+    return normalizeWorkerOperatingSystems(
+      await provider?.listOperatingSystems?.(requireWorkerProfile(profile.settings ?? {})),
     );
   };
 
@@ -208,12 +221,16 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   };
 
   const finishProvision = async (
-    record: WorkerEnvironmentRecord,
+    initialRecord: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     preparedInstallation?: WorkerInstallationArtifact,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
+    nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity,
   ) => {
+    let record = initialRecord;
     let lease: WorkerLease;
+    let attemptOpen = true;
+    let preparationComplete = false;
     let executionMode: WorkerExecutionMode | undefined;
     let enrollmentOperation: ReturnType<typeof nodeProvisioning.createEnrollmentOperation>;
     let projectOperation: ReturnType<typeof createWorkerProjectPreparation> | undefined;
@@ -245,16 +262,19 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         typeof record.profileSnapshot.machineClass === "string"
           ? record.profileSnapshot.machineClass
           : undefined;
+      const os =
+        typeof record.profileSnapshot.os === "string" ? record.profileSnapshot.os : undefined;
       enrollmentOperation = nodeProvisioning.createEnrollmentOperation(
         record,
         provider,
         cancellation?.signal,
         preparedInstallation,
+        nodeRuntimeIdentity,
       );
       const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
       if (project) {
         if (
-          !provider.supportsProjectPreparation?.(profile, machineClass) ||
+          !provider.supportsProjectPreparation?.(profile, machineClass, os) ||
           !options.projectNamespace
         ) {
           throw new Error("Worker provider cannot resume its prepared project contract");
@@ -277,14 +297,21 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         });
       }
       const provisionOptions =
-        machineClass || executionMode || enrollmentOperation || projectOperation || cancellation
+        machineClass ||
+        os ||
+        executionMode ||
+        enrollmentOperation ||
+        projectOperation ||
+        cancellation
           ? {
               ...(machineClass ? { machineClass } : {}),
+              ...(os ? { os } : {}),
               ...(executionMode ? { executionMode } : {}),
               ...(enrollmentOperation
                 ? {
                     beginNodeEnrollment: enrollmentOperation.begin,
                     prepareNodeRuntime: enrollmentOperation.prepareRuntime,
+                    nodeRuntimeIdentity,
                   }
                 : {}),
               ...(cancellation ? { signal: cancellation.signal } : {}),
@@ -292,12 +319,31 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
             }
           : undefined;
       cancellation?.assertActive();
-      const provision = () => {
-        const current = requireCurrentOwner(record);
-        if (options.isStopping() || current.destroyRequestedAtMs !== null) {
-          throw new Error("Worker provisioning operation is closed");
+      const provision = async () => {
+        const assertCurrent = () => {
+          cancellation?.assertActive();
+          const current = requireCurrentOwner(record);
+          if (!attemptOpen || options.isStopping() || current.destroyRequestedAtMs !== null) {
+            throw new Error("Worker provisioning operation is closed");
+          }
+        };
+        assertCurrent();
+        const preparedProvision = await provider.prepareProvision?.(
+          profile,
+          record.provisionOperationId,
+          provisionOptions,
+        );
+        assertCurrent();
+        if (provider.prepareProvision && typeof preparedProvision !== "function") {
+          throw new Error("Worker provider preparation must return an allocation operation");
         }
-        return provider.provision(profile, record.provisionOperationId, provisionOptions);
+        // Preparation and allocation share one timeout and settlement owner. Only a
+        // fresh requested row proves there was no earlier allocation to clean up.
+        record = record.state === "requested" ? move(record, "provisioning") : record;
+        preparationComplete = true;
+        return preparedProvision
+          ? preparedProvision()
+          : provider.provision(profile, record.provisionOperationId, provisionOptions);
       };
       lease = requireWorkerLease(
         await callProvider(
@@ -314,16 +360,22 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       // provider error looks permanent. Keep it available for canonical teardown.
       cancellation?.assertActive();
       const detail = boundedError(error);
-      if (
-        error instanceof WorkerProviderError ||
-        options.isServiceError(error, "invalid_profile")
-      ) {
+      const permanent =
+        error instanceof WorkerProviderError || options.isServiceError(error, "invalid_profile");
+      if (record.state === "requested" || (preparationComplete && permanent)) {
         move(record, "failed", { lastError: detail });
-        throw serviceError("invalid_profile", `Worker provider rejected profile: ${detail}`);
+        throw serviceError(
+          permanent ? "invalid_profile" : "provider_failure",
+          permanent
+            ? `Worker provider rejected profile: ${detail}`
+            : `Worker provider preparation failed: ${detail}`,
+        );
       }
       saveError(record, error);
       throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
     } finally {
+      // A replay keeps its durable owner after timeout; this invocation must still close.
+      attemptOpen = false;
       projectOperation?.close();
       enrollmentOperation?.close();
     }
@@ -397,11 +449,13 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     }
     try {
       let installation: WorkerInstallationArtifact | undefined;
-      await nodeProvisioning.prepare(record, provider, signal);
+      const preparedNode = await nodeProvisioning.prepare(record, provider, signal);
+      installation = preparedNode?.installation;
       cancellation?.assertActive();
       if (
         record.state === "requested" &&
         record.destroyRequestedAtMs === null &&
+        !installation &&
         provider.provisionBeforeInstallation !== true
       ) {
         try {
@@ -419,8 +473,13 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         }
         cancellation?.assertActive();
       }
-      const provisioning = record.state === "requested" ? move(record, "provisioning") : record;
-      return await finishProvision(provisioning, provider, installation, cancellation);
+      return await finishProvision(
+        record,
+        provider,
+        installation,
+        cancellation,
+        preparedNode?.identity,
+      );
     } finally {
       cancellation?.close();
     }
@@ -644,6 +703,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     destroy,
     identityResolverFor,
     listMachineOptions,
+    listOperatingSystems,
     providerFor,
     reconcileRecord,
   };

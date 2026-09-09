@@ -12,6 +12,7 @@ import {
   resolveSourceReplyPolicy,
   normalizeAssistantFinalDeliveryText,
 } from "./agent-runner-core.js";
+import { scheduleReplySessionMaintenance } from "./agent-runner-maintenance.js";
 import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
@@ -160,6 +161,7 @@ export async function completeReplyAgentRun(input: {
     // recovering here would duplicate that message.
     const recovery = resolveStrandedReplyRecovery({
       base: followupRun,
+      payloads: finalPayloads,
       finalText: assistantFinalText,
       sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
       sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
@@ -278,5 +280,6 @@ export async function completeReplyAgentRun(input: {
   const result = returnWithQueuedFollowupDrain(
     finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
   );
+  scheduleReplySessionMaintenance({ context, accounting, sessionEntry: activeSessionEntry });
   return result;
 }

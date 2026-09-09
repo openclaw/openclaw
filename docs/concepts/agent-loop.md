@@ -236,3 +236,4 @@ settlement, or ownerless state.
 - [Compaction](/concepts/compaction) - how long conversations are summarized
 - [Exec Approvals](/tools/exec-approvals) - approval gates for shell commands
 - [Thinking](/tools/thinking) - thinking/reasoning level configuration
+- [Agent runtimes](/concepts/agent-runtimes) - alternate harness runtimes that drive this loop

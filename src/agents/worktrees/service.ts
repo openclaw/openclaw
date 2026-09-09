@@ -7,6 +7,7 @@ import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { normalizeGitPathForFilesystem, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -33,6 +34,7 @@ import {
   requireGit,
   requireGitBuffer,
   runGit,
+  WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
 } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
@@ -79,13 +81,13 @@ import type {
 export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
+const BRANCH_INVENTORY_MAX_OUTPUT_BYTES = 256 * 1024;
+const BRANCH_SUGGESTIONS_PER_KIND = 100;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const WORKTREE_CREATE_LEASE_SCOPE = "core:managed-worktrees:create";
 const WORKTREE_CREATE_LEASE_MS = 60_000;
 const WORKTREE_CREATE_LEASE_WAIT_MS = 5 * 60_000;
-// Materializing a checkout gets extra time without extending other Git commands or setup.
-const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 
 /** Removal aborted because snapshot loss was not permitted. */
 export class WorktreeSnapshotError extends Error {
@@ -261,12 +263,16 @@ async function resolveRepositoryFromRealPath(
     }
     throw new WorktreeRepositoryError(`not a git checkout: ${requestedLabel}`);
   }
-  const sourceRoot = await fs.realpath(rootResult.stdout.trim());
+  const sourceRoot = await fs.realpath(normalizeGitPathForFilesystem(rootResult.stdout.trim()));
   const headResult = await runGit(sourceRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
   if (headResult.code !== 0) {
-    throw new WorktreeRepositoryError(`git checkout has no commits: ${requestedLabel}`);
+    throw new WorktreeRepositoryError(
+      `git checkout has no commits: ${requestedLabel}. Create an initial commit, then retry.`,
+    );
   }
-  const commonRaw = await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]);
+  const commonRaw = normalizeGitPathForFilesystem(
+    await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]),
+  );
   const commonDir = await fs.realpath(
     path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
   );
@@ -286,6 +292,55 @@ async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> 
     throw new Error(`repository does not exist: ${repoRoot}`);
   });
   return await resolveRepositoryFromRealPath(requested, repoRoot);
+}
+
+type RepositoryBranchRef = {
+  ref: string;
+  branchName: string;
+  branch: ManagedWorktreeBranch;
+};
+
+async function listRepositoryBranchRefs(
+  repoRoot: string,
+  pattern: string,
+  count: number,
+): Promise<RepositoryBranchRef[]> {
+  const result = await runGit(
+    repoRoot,
+    [
+      "-c",
+      "core.warnAmbiguousRefs=true",
+      "for-each-ref",
+      `--count=${count}`,
+      "--sort=refname",
+      "--format=%(refname)%00%(refname:short)",
+      pattern,
+    ],
+    { maxOutputBytes: BRANCH_INVENTORY_MAX_OUTPUT_BYTES },
+  );
+  const output = requireGitCommandOutput("git for-each-ref", result);
+  const branches: RepositoryBranchRef[] = [];
+  for (const line of output.trim().split("\n")) {
+    const [ref, name] = line.split("\0");
+    if (!ref || !name) {
+      continue;
+    }
+    if (ref.startsWith("refs/heads/")) {
+      branches.push({
+        ref,
+        branchName: ref.slice("refs/heads/".length),
+        branch: { name, kind: "local" },
+      });
+    } else if (ref.startsWith("refs/remotes/")) {
+      const remoteRef = ref.slice("refs/remotes/".length);
+      const slash = remoteRef.indexOf("/");
+      const branchName = remoteRef.slice(slash + 1);
+      if (slash > 0 && branchName && branchName !== "HEAD") {
+        branches.push({ ref, branchName, branch: { name, kind: "remote" } });
+      }
+    }
+  }
+  return branches;
 }
 
 async function canonicalPathKey(target: string): Promise<string> {
@@ -593,7 +648,13 @@ async function snapshotWorktree(
       throw new Error("nested git repositories cannot be snapshotted losslessly");
     }
     commitGuard?.();
-    await prepareSnapshotIndex(stateEnv, record, snapshotPaths, provisionedPaths, env);
+    const { missing, tracked } = await prepareSnapshotIndex(
+      stateEnv,
+      record,
+      snapshotPaths,
+      provisionedPaths,
+      env,
+    );
     const provisionedState = await snapshotProvisionedFiles(
       stateEnv,
       record.id,
@@ -601,6 +662,21 @@ async function snapshotWorktree(
       provisionedPaths,
       commitGuard,
     );
+    const missingPaths: Buffer[] = [];
+    const trackedPaths: Buffer[] = [];
+    const addedPaths: Buffer[] = [];
+    for (const [key, entry] of snapshotPaths) {
+      if (missing.has(key)) {
+        missingPaths.push(entry);
+      } else if (tracked.has(key)) {
+        trackedPaths.push(entry);
+      } else {
+        addedPaths.push(entry);
+      }
+    }
+    // Update indexed paths before additions that can replace their file/directory shape.
+    // Missing entries are processed from the index tail to avoid shifting later entries.
+    missingPaths.sort((left, right) => Buffer.compare(right, left));
     // This index came from a tree, so it has no checkout-local skip-worktree
     // bits and update-index is independent of the source worktree's sparse cone.
     commitGuard?.();
@@ -612,7 +688,10 @@ async function snapshotWorktree(
         input:
           snapshotPaths.size > 0
             ? Buffer.concat(
-                [...snapshotPaths.values()].flatMap((entry) => [entry, Buffer.from([0])]),
+                [...missingPaths, ...trackedPaths, ...addedPaths].flatMap((entry) => [
+                  entry,
+                  Buffer.from([0]),
+                ]),
               )
             : Buffer.alloc(0),
       },
@@ -667,7 +746,7 @@ async function prepareSnapshotIndex(
   snapshotPaths: ReadonlyMap<string, Buffer>,
   provisioned: readonly string[],
   indexEnv: NodeJS.ProcessEnv,
-): Promise<void> {
+): Promise<{ missing: ReadonlySet<string>; tracked: ReadonlySet<string> }> {
   const headPaths = splitNullBuffer(
     await requireGitBuffer(record.path, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]),
   );
@@ -681,6 +760,11 @@ async function prepareSnapshotIndex(
     true,
   );
   await requireGit(record.path, ["read-tree", "HEAD"], { env: indexEnv });
+  const tracked = new Set(
+    splitNullBuffer(
+      await requireGitBuffer(record.path, ["ls-files", "--cached", "-z"], { env: indexEnv }),
+    ).map(gitPathKey),
+  );
   // Compare against the same fresh index used by the writer: source-index flags
   // can hide edits, while an unrefreshed HEAD index falsely marks unchanged blobs.
   const changed = new Set(
@@ -702,7 +786,6 @@ async function prepareSnapshotIndex(
       ),
     ).map(gitPathKey),
   );
-  const tracked = new Set(headPaths.map(gitPathKey));
   const unique = new Map(
     [...snapshotPaths].filter(([key]) => changed.has(key) || !tracked.has(key)),
   );
@@ -710,6 +793,7 @@ async function prepareSnapshotIndex(
     unique.set(gitPathKey(Buffer.from(value)), Buffer.from(value));
   }
   const provisionedKeys = new Set(provisioned.map((value) => gitPathKey(Buffer.from(value))));
+  const missing = new Set<string>();
   let gitBytes = 0,
     provisionedBytes = 0;
   for (const [key, value] of unique) {
@@ -724,9 +808,14 @@ async function prepareSnapshotIndex(
       if (!isMissingPathError(error)) {
         throw error;
       }
+      if (tracked.has(key)) {
+        missing.add(key);
+      }
     }
   }
-  const commonDir = await requireGit(record.repoRoot, ["rev-parse", "--git-common-dir"]);
+  const commonDir = normalizeGitPathForFilesystem(
+    await requireGit(record.repoRoot, ["rev-parse", "--git-common-dir"]),
+  );
   requireWorktreeDiskSpace(
     [
       { path: path.resolve(record.repoRoot, commonDir), bytes: 2 * gitBytes + metadataBytes },
@@ -736,6 +825,7 @@ async function prepareSnapshotIndex(
     "worktree safety snapshot",
     true,
   );
+  return { missing, tracked };
 }
 
 export class ManagedWorktreeService {
@@ -900,7 +990,16 @@ export class ManagedWorktreeService {
     params.commitGuard?.();
     this.requireAllocationSpace(worktreePath, repository);
     params.commitGuard?.();
-    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
+    if (params.checkoutCommit && !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.checkoutCommit)) {
+      throw new Error("Worktree checkout commit is invalid");
+    }
+    const base = params.checkoutCommit
+      ? {
+          gitOperand: params.checkoutCommit,
+          recordRef: params.baseRef ?? params.checkoutCommit,
+          remote: false,
+        }
+      : await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
     const gitBytes = Math.max(
       await estimateWorktreeGitBytes(repository.repoRoot, base.gitOperand),
       base.remote ? await estimateWorktreeGitBytes(repository.repoRoot, "HEAD") : 0,
@@ -1075,75 +1174,73 @@ export class ManagedWorktreeService {
     } else {
       repository = await resolveRepository(repoRoot);
     }
-    // Keyed by short branch name; the stored name is always a resolvable base
-    // ref, so remote-only branches keep their remote-qualified form
-    // (origin/feature-a) instead of a bare name git cannot resolve.
-    const branches = new Map<string, ManagedWorktreeBranch>();
-    const remoteRaw = await runGit(repository.repoRoot, [
-      "for-each-ref",
-      "--format=%(refname)",
-      "refs/remotes",
-    ]);
-    if (remoteRaw.code === 0) {
-      for (const refname of remoteRaw.stdout.split("\n")) {
-        const trimmed = refname.trim();
-        if (!trimmed.startsWith("refs/remotes/")) {
-          continue;
+    // Keep canonical refs for identity and Git's strict short names for selection.
+    // A branch named like a tag may need heads/ or remotes/ to remain unambiguous.
+    const branches = new Map<string, RepositoryBranchRef>();
+    let branchesUnavailable = false;
+    for (const prefix of ["refs/remotes/", "refs/heads/"]) {
+      try {
+        for (const entry of await listRepositoryBranchRefs(
+          repository.repoRoot,
+          prefix,
+          BRANCH_SUGGESTIONS_PER_KIND,
+        )) {
+          // Local branches win collisions with the same logical remote branch name.
+          branches.set(entry.branchName, entry);
         }
-        const withoutPrefix = trimmed.slice("refs/remotes/".length);
-        const slash = withoutPrefix.indexOf("/");
-        if (slash <= 0) {
-          continue;
-        }
-        const shortName = withoutPrefix.slice(slash + 1);
-        // remote HEAD symrefs are pointers, not selectable branches.
-        if (!shortName || shortName === "HEAD") {
-          continue;
-        }
-        branches.set(shortName, { name: withoutPrefix, kind: "remote" });
-      }
-    }
-    const localRaw = await runGit(repository.repoRoot, [
-      "for-each-ref",
-      "--format=%(refname:short)",
-      "refs/heads",
-    ]);
-    if (localRaw.code === 0) {
-      for (const line of localRaw.stdout.split("\n")) {
-        const name = line.trim();
-        if (name) {
-          branches.set(name, { name, kind: "local" });
-        }
+      } catch {
+        // Never parse partial output or invalidate the already verified checkout.
+        branchesUnavailable = true;
       }
     }
     const remoteHead = await runGit(repository.repoRoot, [
       "symbolic-ref",
       "--quiet",
-      "--short",
       "refs/remotes/origin/HEAD",
     ]);
-    const defaultShort =
-      remoteHead.code === 0
-        ? remoteHead.stdout.trim().replace(/^origin\//, "") || undefined
-        : undefined;
-    const head = await runGit(repository.repoRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-    const headBranch = head.code === 0 ? head.stdout.trim() || undefined : undefined;
-    const defaultBranch = defaultShort
-      ? (branches.get(defaultShort)?.name ?? defaultShort)
+    const defaultRef = remoteHead.code === 0 ? remoteHead.stdout.trim() : undefined;
+    const head = await runGit(repository.repoRoot, ["symbolic-ref", "--quiet", "HEAD"]);
+    const headRef = head.code === 0 ? head.stdout.trim() : undefined;
+    const resolveBranch = async (ref: string | undefined) => {
+      if (!ref) {
+        return undefined;
+      }
+      const known = [...branches.values()].find((entry) => entry.ref === ref);
+      if (known) {
+        return known;
+      }
+      try {
+        // Patterns can match descendants; only the exact priority ref is eligible.
+        return (await listRepositoryBranchRefs(repository.repoRoot, ref, 1)).find(
+          (entry) => entry.ref === ref,
+        );
+      } catch {
+        branchesUnavailable = true;
+        return undefined;
+      }
+    };
+    const localDefaultRef = defaultRef?.startsWith("refs/remotes/origin/")
+      ? `refs/heads/${defaultRef.slice("refs/remotes/origin/".length)}`
       : undefined;
-    // Deterministic picker ordering: default base first, current checkout next, rest alphabetical.
-    const rank = (shortName: string) =>
-      shortName === defaultShort ? 0 : shortName === headBranch ? 1 : 2;
-    const sorted = [...branches.entries()]
-      .toSorted(
-        ([aShort, a], [bShort, b]) => rank(aShort) - rank(bShort) || a.name.localeCompare(b.name),
-      )
-      .map(([, branch]) => branch);
+    // Priority refs must survive the inventory bound and use the same disambiguation.
+    const defaultEntry =
+      (await resolveBranch(localDefaultRef)) ?? (await resolveBranch(defaultRef));
+    const headEntry = await resolveBranch(headRef);
+    for (const entry of [defaultEntry, headEntry]) {
+      if (entry) {
+        branches.set(entry.branchName, entry);
+      }
+    }
+    const rank = (entry: RepositoryBranchRef) =>
+      entry.ref === defaultEntry?.ref ? 0 : entry.ref === headEntry?.ref ? 1 : 2;
     return {
-      branches: sorted,
-      ...(defaultBranch ? { defaultBranch } : {}),
-      ...(headBranch ? { headBranch } : {}),
+      branches: [...branches.values()]
+        .toSorted((a, b) => rank(a) - rank(b) || a.branch.name.localeCompare(b.branch.name))
+        .map((entry) => entry.branch),
+      ...(defaultEntry ? { defaultBranch: defaultEntry.branch.name } : {}),
+      ...(headEntry ? { headBranch: headEntry.branch.name } : {}),
       ...(options.includeRepositoryStatus ? { repositoryStatus: "git" as const } : {}),
+      ...(branchesUnavailable ? { branchesUnavailable: true } : {}),
     };
   }
 
@@ -1303,7 +1400,28 @@ export class ManagedWorktreeService {
     );
     const gitBytes = await estimateWorktreeGitBytes(record.repoRoot, record.snapshotRef);
     this.requireAllocationSpace(record.path, repository, 2 * (gitBytes + provisionedBytes));
-    const parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+    let parent: string;
+    try {
+      parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+    } catch (error) {
+      const shallow = await runGit(record.repoRoot, ["rev-parse", "--is-shallow-repository"]);
+      if (shallow.code !== 0 || shallow.stdout.trim() !== "true") {
+        throw error;
+      }
+      const snapshot = await runGit(record.repoRoot, [
+        "rev-parse",
+        "--verify",
+        `${record.snapshotRef}^{commit}`,
+      ]);
+      if (snapshot.code !== 0) {
+        throw error;
+      }
+      // Origin cannot deepen a local-only snapshot that a later fetch made shallow.
+      throw new Error(
+        `Cannot restore snapshot ${snapshot.stdout.trim()} in ${record.repoRoot}: shallow clone boundary; run \`git fetch --unshallow\` in ${record.repoRoot}. If the snapshot remains shallow, recover its parent from the original repository before retrying.`,
+        { cause: error },
+      );
+    }
     params.commitGuard?.();
     await fs.mkdir(path.dirname(record.path), { recursive: true });
     params.commitGuard?.();

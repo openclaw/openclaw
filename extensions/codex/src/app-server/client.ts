@@ -9,7 +9,8 @@ import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/erro
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
-import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import type { CodexAppServerStartOptions } from "./config-contracts.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { resolveDynamicToolServerRequestTimeoutMs } from "./dynamic-tool-execution.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
@@ -19,6 +20,7 @@ import {
   type CodexAppServerRequestResult,
   type CodexInitializeParams,
   type CodexInitializeResponse,
+  isJsonObject,
   isRpcResponse,
   type CodexServerNotification,
   type JsonValue,
@@ -33,6 +35,7 @@ import {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
   hasCodexAppServerNaturalExit,
+  type CodexAppServerCloseResult,
   type CodexAppServerTransport,
 } from "./transport.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -221,6 +224,7 @@ export class CodexAppServerClient {
   private modelCatalogRevision = 0;
   private closed = false;
   private transportExited = false;
+  private nativeExecutionObserved = false;
   private closeError: Error | undefined;
   private serverVersion: string | undefined;
   private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
@@ -233,6 +237,8 @@ export class CodexAppServerClient {
       }) => Promise<() => void>)
     | undefined;
   private stderrTail = "";
+  private readonly privateTransportSecrets = new Set<string>();
+  private privateStderrPending = "";
   private pendingParse:
     | {
         text: string;
@@ -248,7 +254,8 @@ export class CodexAppServerClient {
     this.lines.on("error", (error) => this.closeWithError(toStringifiedError(error)));
     child.stdout.on("error", (error) => this.closeWithError(toStringifiedError(error)));
     child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (text: string) => {
+    child.stderr.on("data", (chunk: string) => {
+      const text = this.redactPrivateStderr(chunk);
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
       const trimmed = text.trim();
       if (trimmed) {
@@ -688,10 +695,16 @@ export class CodexAppServerClient {
       try {
         // Config-fence waits and overload retries can outlive the caller's
         // ownership. Revalidate before each physical write, without an await.
+        // The guard can narrow params, so serialize only after it returns.
         options.assertCurrent?.();
-        mayHaveWritten = true;
-        onWriteStateChange?.(true);
-        this.writeMessage(message, (error) => rejectPending(error));
+        this.writeMessage(
+          message,
+          (error) => rejectPending(error),
+          () => {
+            mayHaveWritten = true;
+            onWriteStateChange?.(true);
+          },
+        );
       } catch (error) {
         rejectPending(toStringifiedError(error));
       }
@@ -749,9 +762,12 @@ export class CodexAppServerClient {
   async closeAndWait(options?: {
     exitTimeoutMs?: number;
     forceKillDelayMs?: number;
-  }): Promise<boolean> {
+  }): Promise<CodexAppServerCloseResult> {
     this.markClosed(new Error("codex app-server client is closed"));
-    return await closeCodexAppServerTransportAndWait(this.child, options);
+    const result = await closeCodexAppServerTransportAndWait(this.child, options);
+    // Codex can discard terminal handles before OS cleanup. Later ancestry
+    // containment cannot discharge a command whose descendants already reparented.
+    return this.nativeExecutionObserved ? { ...result, cleanup: "uncertain" } : result;
   }
 
   /** Closes this transport and runs cleanup only after physical process exit. */
@@ -770,10 +786,7 @@ export class CodexAppServerClient {
     }
     this.child.once("exit", runOnExit);
     try {
-      if (await this.closeAndWait()) {
-        this.child.off?.("exit", runOnExit);
-        runOnExit();
-      }
+      await this.closeAndWait();
     } catch (closeError) {
       embeddedAgentLog.warn("codex app-server shutdown after indeterminate request failed", {
         closeError,
@@ -782,24 +795,71 @@ export class CodexAppServerClient {
     }
   }
 
-  private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
+  private writeMessage(
+    message: RpcRequest | RpcResponse,
+    onError?: (error: Error) => void,
+    beforeWrite?: () => void,
+  ): void {
     if (this.closed) {
       return;
     }
     const id = "id" in message ? message.id : undefined;
     const method = "method" in message ? message.method : undefined;
-    this.child.stdin.write(
-      `${stringifyCodexAppServerMessage(message)}\n`,
-      (error?: Error | null) => {
-        if (error) {
-          embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
-          onError?.(error);
+    const frame = stringifyCodexAppServerMessage(message);
+    // Reject locally before declaring a possible write. Images count toward the
+    // transport frame limit even though Codex's text-input limit excludes them.
+    if (this.child.maxFrameBytes && Buffer.byteLength(frame) > this.child.maxFrameBytes) {
+      throw new Error(
+        "Codex request exceeds the transport frame limit; reduce attached images or context.",
+      );
+    }
+    beforeWrite?.();
+    if (method === "command/exec") {
+      this.nativeExecutionObserved = true;
+    }
+    this.child.stdin.write(`${frame}\n`, (error?: Error | null) => {
+      if (error) {
+        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+        onError?.(error);
+      }
+    });
+  }
+
+  /** Protect private loopback route capabilities before native diagnostics can mention them. */
+  protectPrivateTransportSecret(secret: string): void {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(secret) || this.privateTransportSecrets.size >= 8) {
+      if (!this.privateTransportSecrets.has(secret)) {
+        throw new Error("Invalid private Codex transport capability");
+      }
+    }
+    this.privateTransportSecrets.add(secret);
+  }
+
+  private redactPrivateText(text: string): string {
+    let redacted = text;
+    for (const secret of this.privateTransportSecrets) {
+      redacted = redacted.replaceAll(secret, "[REDACTED]");
+    }
+    return redacted;
+  }
+
+  private redactPrivateStderr(chunk: string): string {
+    const text = this.redactPrivateText(this.privateStderrPending + chunk);
+    let held = 0;
+    // A capability can span arbitrary pipe chunks. Retain only a possible token prefix.
+    for (const secret of this.privateTransportSecrets) {
+      for (let length = 1; length < secret.length; length++) {
+        if (text.endsWith(secret.slice(0, length))) {
+          held = Math.max(held, length);
         }
-      },
-    );
+      }
+    }
+    this.privateStderrPending = held ? text.slice(-held) : "";
+    return held ? text.slice(0, -held) : text;
   }
 
   private handleLine(line: string): void {
+    // Live RPC values remain exact; the canonical presentation boundary redacts diagnostics.
     const rawLine = line.endsWith("\r") ? line.slice(0, -1) : line;
     if (this.pendingParse) {
       this.handlePendingParseLine(rawLine);
@@ -886,6 +946,14 @@ export class CodexAppServerClient {
       pending.reject(new CodexAppServerRpcError(response.error, pending.method));
       return;
     }
+    if (
+      pending.method === "thread/backgroundTerminals/list" &&
+      isJsonObject(response.result) &&
+      Array.isArray(response.result.data) &&
+      response.result.data.length > 0
+    ) {
+      this.nativeExecutionObserved = true;
+    }
     pending.resolve(response.result);
   }
 
@@ -969,6 +1037,20 @@ export class CodexAppServerClient {
   }
 
   private handleNotification(notification: CodexServerNotification): void {
+    const params = notification.params;
+    if (
+      notification.method === "item/commandExecution/outputDelta" ||
+      notification.method === "item/commandExecution/terminalInteraction" ||
+      (isJsonObject(params) &&
+        ((isJsonObject(params.item) && params.item.type === "commandExecution") ||
+          (isJsonObject(params.turn) &&
+            Array.isArray(params.turn.items) &&
+            params.turn.items.some(
+              (item) => isJsonObject(item) && item.type === "commandExecution",
+            ))))
+    ) {
+      this.nativeExecutionObserved = true;
+    }
     if (notification.method === "account/updated") {
       this.modelCatalogRevision += 1;
     }

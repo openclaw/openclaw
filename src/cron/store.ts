@@ -3,9 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
@@ -38,6 +41,8 @@ import {
   repairCronRuntimeAuthorityRows,
   replaceCronRuntimeAuthorityRows,
 } from "./store/runtime-authority-store.js";
+import { tryParseJsonObject } from "./store/scalar-codec.js";
+import type { CronJobRow } from "./store/schema.js";
 import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
 import type {
   CronQuarantinedJob,
@@ -102,32 +107,68 @@ export function resolveCronJobsStorePathFromConfig(
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
 export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  const database = openOpenClawStateDatabase().db;
-  const rows = loadCronRows(database, storeKey);
-  const jobsFingerprint = fingerprintCronJobRows(rows);
+  return loadMutableCronStore(storePath);
+}
+
+function isRetiredCollectionReview(row: CronJobRow): boolean {
+  return (
+    row.payload_kind === "skillCollectionReview" ||
+    asRecord(tryParseJsonObject(row.job_json)?.payload).kind === "skillCollectionReview"
+  );
+}
+
+function loadMutableCronStore(storePath: string): LoadedCronStore {
+  return loadCronStoreFromDatabase(
+    openOpenClawStateDatabase().db,
+    cronStoreKey(path.resolve(storePath)),
+    false,
+  );
+}
+
+function loadCronStoreFromDatabase(
+  database: DatabaseSync,
+  storeKey: string,
+  readOnly: boolean,
+): LoadedCronStore {
+  let rows = loadCronRows(database, storeKey);
+  const retiredIds = new Set(rows.filter(isRetiredCollectionReview).map((row) => row.job_id));
+  if (readOnly) {
+    // Hide retired jobs before validation; the next mutable load owns durable deletion.
+    rows = rows.filter((row) => !retiredIds.has(row.job_id));
+  } else if (retiredIds.size > 0) {
+    // Retire generated jobs before runtime validation, including databases already
+    // on v16. Gateway convergence recreates them with the isolated agent-turn target.
+    const removed = runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const current = loadCronRows(db, storeKey, retiredIds).filter(isRetiredCollectionReview);
+        for (const row of current) {
+          deleteCronJobRowInDatabase(db, storeKey, row.job_id);
+        }
+        return current.length;
+      },
+      {},
+      { operationLabel: "cron.retire-collection-review" },
+    );
+    if (removed > 0) {
+      noteCronJobsStoreCommit(storeKey);
+    }
+    rows = loadCronRows(database, storeKey);
+  }
+  const loaded = loadedCronStoreFromRows(rows);
   if (rows.length > 0) {
-    const loaded = loadedCronStoreFromRows(rows);
     const authority = loadCronRuntimeAuthorities({
       db: database,
       storeKey,
       jobs: loaded.store.jobs,
     });
-    repairLoadedCronRuntimeAuthority({
-      storeKey,
-      jobIds: authority.repairJobIds,
-    });
-    return { ...loaded, jobsFingerprint };
+    if (!readOnly) {
+      repairLoadedCronRuntimeAuthority({
+        storeKey,
+        jobIds: authority.repairJobIds,
+      });
+    }
   }
-  return {
-    store: { version: 1, jobs: [] },
-    configJobs: [],
-    configJobIndexes: [],
-    configJobRuntimeEntries: [],
-    invalidConfigRows: [],
-    jobsFingerprint,
-  };
+  return readOnly ? loaded : { ...loaded, jobsFingerprint: fingerprintCronJobRows(rows) };
 }
 
 export class CronJobsStoreChangedError extends Error {
@@ -211,21 +252,30 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
   }
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
-  const db = openNodeSqliteDatabase(statePath, { readOnly: true });
+  // Preserve the caller's source artifacts without changing ordinary cron read admission.
+  const prepared = isArtifactPreservingStateRead()
+    ? prepareSqliteReadOnlyLocationSync(statePath)
+    : undefined;
+  let loaded = emptyLoadedCronStore();
+  let snapshotRemoved = true;
   try {
-    if (!tableExists(db, "cron_jobs")) {
-      return emptyLoadedCronStore();
+    const db = openNodeSqliteDatabase(prepared?.location ?? statePath, { readOnly: true });
+    try {
+      if (tableExists(db, "cron_jobs")) {
+        loaded = loadCronStoreFromDatabase(db, storeKey, true);
+      }
+    } finally {
+      db.close();
     }
-    const rows = loadCronRows(db, storeKey);
-    if (rows.length > 0) {
-      const loaded = loadedCronStoreFromRows(rows);
-      loadCronRuntimeAuthorities({ db, storeKey, jobs: loaded.store.jobs });
-      return loaded;
-    }
-    return emptyLoadedCronStore();
   } finally {
-    db.close();
+    if (prepared) {
+      snapshotRemoved = prepared.cleanup();
+    }
   }
+  if (!snapshotRemoved) {
+    throw new Error("Cron read-only state snapshot cleanup failed.");
+  }
+  return loaded;
 }
 
 /** Loads only the persisted cron job store payload. */
@@ -235,24 +285,7 @@ export async function loadCronJobsStore(storePath: string): Promise<CronStoreFil
 
 /** Synchronously loads only the persisted cron job store payload. */
 export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  const database = openOpenClawStateDatabase().db;
-  const rows = loadCronRows(database, storeKey);
-  if (rows.length > 0) {
-    const loaded = loadedCronStoreFromRows(rows);
-    const authority = loadCronRuntimeAuthorities({
-      db: database,
-      storeKey,
-      jobs: loaded.store.jobs,
-    });
-    repairLoadedCronRuntimeAuthority({
-      storeKey,
-      jobIds: authority.repairJobIds,
-    });
-    return loaded.store;
-  }
-  return { version: 1, jobs: [] };
+  return loadMutableCronStore(storePath).store;
 }
 
 type SaveCronStoreOptions = {

@@ -17,7 +17,7 @@ OpenClaw connects to Zalo ClawBot through the catalog-listed external `@zalo-pla
 ## Prerequisites
 
 - Node.js >= 22
-- [OpenClaw](https://docs.openclaw.ai/install) installed (`openclaw` CLI available)
+- [OpenClaw](/install) installed (`openclaw` CLI available)
 - A Zalo account on a mobile device to scan the login QR code
 
 ## Install with onboard (recommended)

@@ -148,12 +148,9 @@ actor GatewayConnection: Observable {
         case setHeartbeats = "set-heartbeats"
         case systemEvent = "system-event"
         case health
-        case channelsStatus = "channels.status"
         case configGet = "config.get"
         case configSet = "config.set"
         case configPatch = "config.patch"
-        case configSchema = "config.schema"
-        case configSchemaLookup = "config.schema.lookup"
         case wizardStart = "wizard.start"
         case wizardNext = "wizard.next"
         case wizardCancel = "wizard.cancel"
@@ -161,9 +158,6 @@ actor GatewayConnection: Observable {
         case talkConfig = "talk.config"
         case talkMode = "talk.mode"
         case talkSpeak = "talk.speak"
-        case webLoginStart = "web.login.start"
-        case webLoginWait = "web.login.wait"
-        case channelsLogout = "channels.logout"
         case modelsList = "models.list"
         case agentsList = "agents.list"
         case agentIdentityGet = "agent.identity.get"
@@ -171,10 +165,6 @@ actor GatewayConnection: Observable {
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
         case skillsStatus = "skills.status"
-        case skillsSearch = "skills.search"
-        case skillsDetail = "skills.detail"
-        case skillsInstall = "skills.install"
-        case skillsUpdate = "skills.update"
         case voicewakeGet = "voicewake.get"
         case voicewakeSet = "voicewake.set"
         case nodePairApprove = "node.pair.approve"
@@ -186,12 +176,6 @@ actor GatewayConnection: Observable {
         case execApprovalResolve = "exec.approval.resolve"
         case approvalResolve = "approval.resolve"
         case cronList = "cron.list"
-        case cronRuns = "cron.runs"
-        case cronRun = "cron.run"
-        case cronRemove = "cron.remove"
-        case cronUpdate = "cron.update"
-        case cronAdd = "cron.add"
-        case cronStatus = "cron.status"
     }
 
     private let endpointProvider: EndpointProvider
@@ -239,10 +223,9 @@ actor GatewayConnection: Observable {
     /// Unbound operations capture this before their first suspension. Shutdown
     /// advances it so delayed config and retry work cannot recreate a route.
     private var shutdownGeneration: UInt64 = 0
-    // Callback work keeps the physical socket epoch that decoded it. Retiring
-    // that epoch prevents delayed pushes from entering a replacement socket.
-    var activeSocketGeneration: UInt64?
-    private var lastRetiredSocketGeneration: UInt64?
+    /// Callback work keeps the physical socket epoch that decoded it. Retiring
+    /// that epoch prevents delayed pushes from entering a replacement socket.
+    private(set) var socketGenerationState = GatewaySocketGenerationState()
 
     private var subscribers: [UUID: AsyncStream<PushDelivery>.Continuation] = [:]
     var realtimeTalkSubscribers: [
@@ -261,7 +244,7 @@ actor GatewayConnection: Observable {
         // Retirement clears authority before changing any other actor state.
         // Only a fully admitted handshake may replace that terminal publication.
         guard self.lastSnapshot != nil, let connection = self.configuredConnection,
-              let socketGeneration = self.activeSocketGeneration
+              let socketGeneration = self.socketGenerationState.activeGeneration
         else { return }
         let endpoint = connection.endpoint
         let lease = ServerLease(
@@ -773,7 +756,7 @@ extension GatewayConnection {
     func captureServerLease() async -> ServerLease? {
         guard let route = await self.captureRoute(),
               let client = self.configuredConnection?.client,
-              let socketGeneration = self.activeSocketGeneration
+              let socketGeneration = self.socketGenerationState.activeGeneration
         else { return nil }
         let lease = ServerLease(
             route: route,
@@ -1120,7 +1103,7 @@ extension GatewayConnection {
         self.retirePublication(disconnection: disconnection, retiresRoute: true)
         self.routeGeneration &+= 1
         self.finishRealtimeTalkSubscribers()
-        self.resetSocketGeneration()
+        self.socketGenerationState = GatewaySocketGenerationState()
         self.lastSnapshot = nil
         self.resetCanvasPluginSurfaceState()
         let client = self.configuredConnection?.client
@@ -1140,7 +1123,7 @@ extension GatewayConnection {
         socketGeneration: UInt64)
     {
         guard routeGeneration == self.routeGeneration,
-              admitSocketGeneration(socketGeneration)
+              self.socketGenerationState.admit(socketGeneration)
         else { return }
         broadcast(push)
     }
@@ -1153,7 +1136,7 @@ extension GatewayConnection {
         socketGeneration: UInt64)
     {
         guard routeGeneration == self.routeGeneration,
-              admitSocketGeneration(socketGeneration)
+              self.socketGenerationState.admit(socketGeneration)
         else { return }
         self.lastSnapshot = snapshot
         self.installCanvasPluginSurfaceURL(from: snapshot)
@@ -1174,39 +1157,10 @@ extension GatewayConnection {
 }
 
 extension GatewayConnection {
-    private func admitSocketGeneration(_ socketGeneration: UInt64) -> Bool {
-        if let lastRetiredSocketGeneration,
-           socketGeneration <= lastRetiredSocketGeneration
-        {
-            return false
-        }
-        if let activeSocketGeneration {
-            return socketGeneration == activeSocketGeneration
-        }
-        activeSocketGeneration = socketGeneration
-        return true
-    }
-
     private func retireSocketGeneration(_ socketGeneration: UInt64, reason: String) -> Bool {
-        if let lastRetiredSocketGeneration,
-           socketGeneration <= lastRetiredSocketGeneration
-        {
-            return false
-        }
-        if let activeSocketGeneration,
-           socketGeneration != activeSocketGeneration
-        {
-            return false
-        }
+        guard self.socketGenerationState.accepts(socketGeneration) else { return false }
         self.retirePublication(disconnection: .disconnected(reason), retiresRoute: false)
-        activeSocketGeneration = nil
-        lastRetiredSocketGeneration = socketGeneration
-        return true
-    }
-
-    private func resetSocketGeneration() {
-        self.activeSocketGeneration = nil
-        self.lastRetiredSocketGeneration = nil
+        return self.socketGenerationState.retire(socketGeneration)
     }
 
     #if DEBUG
@@ -1295,7 +1249,7 @@ extension GatewayConnection {
               endpoint.config.token == config.token,
               endpoint.config.password == config.password,
               let client = self.configuredConnection?.client,
-              let socketGeneration = activeSocketGeneration,
+              let socketGeneration = self.socketGenerationState.activeGeneration,
               controlUiRouteIsLive(
                   endpoint: endpoint,
                   client: client,
@@ -1345,7 +1299,7 @@ extension GatewayConnection {
             endpoint: endpoint,
             shutdownGeneration: self.shutdownGeneration) == true &&
             self.configuredConnection?.client === client &&
-            self.activeSocketGeneration == socketGeneration &&
+            self.socketGenerationState.activeGeneration == socketGeneration &&
             self.lastSnapshot != nil
     }
 
@@ -1367,18 +1321,14 @@ extension GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    func connectionSummary() -> (connected: Bool, gatewayVersion: String?) {
+        guard case .connected = self.connectionPublication.value else { return (false, nil) }
+        return (true, self.cachedGatewayVersion())
+    }
+
     func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {
         guard await self.isCurrentServerLease(lease) else { return nil }
         return self.cachedGatewayVersion()
-    }
-
-    func snapshotPaths() -> (configPath: String?, stateDir: String?) {
-        guard let snapshot = lastSnapshot else { return (nil, nil) }
-        let configPath = snapshot.snapshot.configpath?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let stateDir = snapshot.snapshot.statedir?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (
-            configPath?.isEmpty == false ? configPath : nil,
-            stateDir?.isEmpty == false ? stateDir : nil)
     }
 
     func subscribe(bufferingNewest: Int = 100) -> AsyncStream<PushDelivery> {
@@ -1457,7 +1407,7 @@ extension GatewayConnection {
         for (_, continuation) in self.subscribers {
             continuation.yield(delivery)
         }
-        if let socketGeneration = self.activeSocketGeneration {
+        if let socketGeneration = self.socketGenerationState.activeGeneration {
             var terminatedSubscriberIDs: [UUID] = []
             for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
                 switch continuation.yield(delivery) {

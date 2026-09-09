@@ -1,6 +1,17 @@
 import type { JsonObject, JsonValue } from "./protocol-json.js";
 
 /** Current Codex marketplace, app, skill, hook, and config wire contracts. */
+export type CodexExperimentalFeatureListParams = {
+  cursor?: string | null;
+  limit?: number | null;
+  threadId?: string | null;
+};
+
+export type CodexExperimentalFeatureListResponse = {
+  data: Array<{ name: string; enabled: boolean }>;
+  nextCursor?: string | null;
+};
+
 export type CodexPluginSummary = {
   id: string;
   remotePluginId?: string | null;

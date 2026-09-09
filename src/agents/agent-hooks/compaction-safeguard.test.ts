@@ -16,6 +16,8 @@ import {
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { jsonResult } from "../tools/common.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
@@ -1113,17 +1115,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("preserves the most recent user/assistant messages", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "older ask", timestamp: 1 },
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "older answer" }],
-        timestamp: 2,
-      }),
+      castAgentMessage(timestampedTextAssistant("older answer", 2)),
       { role: "user", content: "recent ask", timestamp: 3 },
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "recent answer" }],
-        timestamp: 4,
-      }),
+      castAgentMessage(timestampedTextAssistant("recent answer", 4)),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -1166,11 +1160,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         content: [{ type: "text", text: "recent result" }],
         timestamp: 6,
       }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "recent final answer" }],
-        timestamp: 7,
-      }),
+      castAgentMessage(timestampedTextAssistant("recent final answer", 7)),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -1202,11 +1192,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const split = splitPreservedRecentTurns({
       messages: [
         { role: "user", content: "older ask", timestamp: 1 },
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "text", text: "older answer" }],
-          timestamp: 2,
-        }),
+        castAgentMessage(timestampedTextAssistant("older answer", 2)),
         { role: "user", content: "recent ask", timestamp: 3 },
         castAgentMessage({
           role: "assistant",
@@ -1220,11 +1206,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           content: [{ type: "text", text: "recent raw output" }],
           timestamp: 5,
         }),
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "text", text: "recent final answer" }],
-          timestamp: 6,
-        }),
+        castAgentMessage(timestampedTextAssistant("recent final answer", 6)),
       ],
       recentTurnsPreserve: 1,
     });
@@ -1259,11 +1241,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
             timestamp: index + 3,
           }),
         ),
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "text", text: "terminal answer survives" }],
-          timestamp: 33,
-        }),
+        castAgentMessage(timestampedTextAssistant("terminal answer survives", 33)),
       ],
       recentTurnsPreserve: 1,
     });
@@ -1327,11 +1305,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("does not add non-text placeholders for text-only content blocks", () => {
     const section = preservedTurnsText([
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "plain text reply" }],
-        timestamp: 1,
-      }),
+      castAgentMessage(timestampedTextAssistant("plain text reply", 1)),
     ]);
 
     expect(section).toContain("- Assistant: plain text reply");
@@ -1341,46 +1315,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("caps preserved tail when user turns are below preserve target", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "single user prompt", timestamp: 1 },
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-1" }],
-        timestamp: 2,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-2" }],
-        timestamp: 3,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-3" }],
-        timestamp: 4,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-4" }],
-        timestamp: 5,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-5" }],
-        timestamp: 6,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-6" }],
-        timestamp: 7,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-7" }],
-        timestamp: 8,
-      }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "assistant-8" }],
-        timestamp: 9,
-      }),
+      castAgentMessage(timestampedTextAssistant("assistant-1", 2)),
+      castAgentMessage(timestampedTextAssistant("assistant-2", 3)),
+      castAgentMessage(timestampedTextAssistant("assistant-3", 4)),
+      castAgentMessage(timestampedTextAssistant("assistant-4", 5)),
+      castAgentMessage(timestampedTextAssistant("assistant-5", 6)),
+      castAgentMessage(timestampedTextAssistant("assistant-6", 7)),
+      castAgentMessage(timestampedTextAssistant("assistant-7", 8)),
+      castAgentMessage(timestampedTextAssistant("assistant-8", 9)),
     ];
 
     const split = splitPreservedRecentTurns({
@@ -2256,14 +2198,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "stop",
             timestamp: 1,
           },
@@ -2341,14 +2276,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           api: model.api,
           provider: model.provider,
           model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "error",
           errorMessage: "Cannot convert undefined or null to object",
           timestamp: 1,
@@ -3655,11 +3583,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         ],
         timestamp: 3,
       }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "metric checked" }],
-        timestamp: 4,
-      }),
+      castAgentMessage(timestampedTextAssistant("metric checked", 4)),
     ];
     const event = {
       preparation: {
@@ -3965,11 +3889,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           { role: "user", content: "older context", timestamp: 1 },
           castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
-          castAgentMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "latest assistant reply" }],
-            timestamp: 4,
-          }),
+          castAgentMessage(timestampedTextAssistant("latest assistant reply", 4)),
         ],
         turnPrefixMessages: [
           { role: "user", content: "prefix request that was split out", timestamp: 0 },
@@ -4028,11 +3948,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "latest user ask", timestamp: 1 },
-          castAgentMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "latest assistant reply" }],
-            timestamp: 2,
-          }),
+          castAgentMessage(timestampedTextAssistant("latest assistant reply", 2)),
         ],
         turnPrefixMessages: [],
         firstKeptEntryId: "entry-1",
@@ -4285,11 +4201,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           { role: "user", content: "older context", timestamp: 1 },
           castAgentMessage({ role: "assistant", content: "older reply", timestamp: 2 }),
           { role: "user", content: "latest ask status", timestamp: 3 },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "latest assistant reply" }],
-            timestamp: 4,
-          } as AgentMessage,
+          timestampedTextAssistant("latest assistant reply", 4) as AgentMessage,
         ],
         turnPrefixMessages: [
           { role: "user", content: "prefix request that was split out", timestamp: 0 },
@@ -5088,88 +5000,6 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
-  });
-
-  it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
-    expect(
-      testing.isRealConversationMessage(
-        {
-          role: "toolResult",
-          toolCallId: "t1",
-          toolName: "exec",
-          content: [{ type: "text", text: "done" }],
-        } as AgentMessage,
-        [
-          { role: "user", content: "<b>HEARTBEAT_OK</b>" } as AgentMessage,
-          {
-            role: "toolResult",
-            toolCallId: "t1",
-            toolName: "exec",
-            content: [{ type: "text", text: "done" }],
-          } as AgentMessage,
-        ],
-        1,
-      ),
-    ).toBe(false);
-
-    expect(
-      testing.isRealConversationMessage(
-        {
-          role: "toolResult",
-          toolCallId: "t2",
-          toolName: "exec",
-          content: [{ type: "text", text: "done" }],
-        } as AgentMessage,
-        [
-          { role: "user", content: "please inspect the repo" } as AgentMessage,
-          {
-            role: "toolResult",
-            toolCallId: "t2",
-            toolName: "exec",
-            content: [{ type: "text", text: "done" }],
-          } as AgentMessage,
-        ],
-        1,
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat assistant-only tool calls as meaningful conversation", () => {
-    expect(
-      testing.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-      } as AgentMessage),
-    ).toBe(false);
-  });
-
-  it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
-    expect(
-      testing.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "checking" }],
-      } as AgentMessage),
-    ).toBe(false);
-
-    expect(
-      testing.hasMeaningfulConversationContent(
-        castAgentMessage({
-          role: "assistant",
-          content: [{ type: "reasoning", summary: [] }],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
-    expect(
-      testing.hasMeaningfulConversationContent(
-        castAgentMessage({
-          role: "assistant",
-          content: "<b>HEARTBEAT_OK</b>",
-        }),
-      ),
-    ).toBe(false);
   });
 });
 

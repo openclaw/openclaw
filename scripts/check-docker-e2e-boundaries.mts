@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import packageJson from "../package.json" with { type: "json" };
-import { laneResources, laneWeight } from "./lib/docker-e2e-plan.mts";
+import { laneResources, lanesNeedOpenClawPackage, laneWeight } from "./lib/docker-e2e-plan.mts";
 import {
   allReleasePathLanes,
   mainLanes,
@@ -21,6 +21,7 @@ const packageScripts = new Set(Object.keys(packageJson.scripts ?? {}));
 const livePackageBackedLanes = new Set([
   "install-e2e-anthropic",
   "install-e2e-openai",
+  "live-anthropic-cache",
   "live-codex-npm-plugin",
   "live-mcp-code-mode-gateway",
   "live-plugin-tool",
@@ -76,7 +77,7 @@ function isPathWithin(parent: string, candidate: string) {
 }
 
 for (const relativePath of walk("scripts/e2e")) {
-  if (!/\.(?:sh|ts|mjs|js)$/u.test(relativePath)) {
+  if (!/\.(?:sh|ts|mts|mjs|js)$/u.test(relativePath)) {
     continue;
   }
   const text = readText(relativePath);
@@ -112,6 +113,8 @@ function validateUniqueLanes(label: string, lanes: readonly (typeof mainLanes)[n
 function validateLane(label: string, lane: (typeof mainLanes)[number]) {
   const resources = laneResources(lane);
   const sourceCheckoutImageLane = sourceCheckoutImageLanes.has(lane.name);
+  const needsPackage = lanesNeedOpenClawPackage([lane]);
+  const localImageBuild = sourceCheckoutImageLane || (needsPackage && !lane.e2eImageKind);
   if (!lane.name || typeof lane.name !== "string") {
     errors.push(`${label}: Docker E2E lane is missing a string name`);
   }
@@ -128,15 +131,17 @@ function validateLane(label: string, lane: (typeof mainLanes)[number]) {
       `${label}: Docker E2E lane '${lane.name}' has invalid image kind '${invalidImageKind}'`,
     );
   }
-  if (lane.live && lane.e2eImageKind && !livePackageBackedLanes.has(lane.name)) {
+  if (lane.live && needsPackage && !livePackageBackedLanes.has(lane.name)) {
     errors.push(`${label}: live Docker E2E lane '${lane.name}' must not require a package image`);
   }
-  if (!lane.live && !lane.e2eImageKind && !sourceCheckoutImageLane) {
-    errors.push(`${label}: package Docker E2E lane '${lane.name}' must declare an e2e image kind`);
-  }
-  if (sourceCheckoutImageLane && !/\bOPENCLAW_SKIP_DOCKER_BUILD=0\b/u.test(lane.command)) {
+  if (!lane.live && !needsPackage && !sourceCheckoutImageLane) {
     errors.push(
-      `${label}: source-checkout Docker E2E lane '${lane.name}' must force a local image build`,
+      `${label}: package Docker E2E lane '${lane.name}' must request package preparation`,
+    );
+  }
+  if (localImageBuild && !/\bOPENCLAW_SKIP_DOCKER_BUILD=0\b/u.test(lane.command)) {
+    errors.push(
+      `${label}: locally built Docker E2E lane '${lane.name}' must force a local image build`,
     );
   }
   if (laneWeight(lane) < 1) {

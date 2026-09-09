@@ -4,8 +4,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import { flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
+import { createApplicationOverlays } from "./overlays.ts";
 import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
-import type { UpdateProgress } from "./update-confirmation.ts";
+import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
+import { updateRunHarness } from "./update-run.test-support.ts";
 
 /** Drives the dialog the way the shell does: one live lifecycle stream. */
 function createProgressStream(
@@ -61,7 +64,6 @@ function installNativeBridge(): ReturnType<typeof vi.fn> {
 
 function startUpdate(
   overrides: {
-    startGatewayUpdate?: () => void;
     updateAvailable?: UpdateAvailable | null;
     updateSchedule?: UpdateScheduleState | null;
     viaNativeApp?: boolean;
@@ -73,7 +75,7 @@ function startUpdate(
     ...(overrides.watchUpdateProgress
       ? { watchUpdateProgress: overrides.watchUpdateProgress }
       : {}),
-    startGatewayUpdate: overrides.startGatewayUpdate ?? startGatewayUpdate,
+    startGatewayUpdate,
     updateAvailable:
       overrides.updateAvailable === undefined ? UPDATE_AVAILABLE : overrides.updateAvailable,
     updateSchedule: overrides.updateSchedule ?? null,
@@ -138,21 +140,62 @@ it("shows the git target when no package version is available", async () => {
   await settled;
 });
 
-it("states a git distance once instead of labelling it as an available version", async () => {
-  const { settled } = startUpdate({
-    updateAvailable: { channel: "dev", currentVersion: "2026.8.1", latestVersion: "2026.8.1" },
-    updateSchedule: {
-      target: { commitsBehind: 246, kind: "git" },
-    } as unknown as UpdateScheduleState,
-  });
-  const { modal } = await getRenderedModalDialog(document.body);
+it.each([
+  { cachedBehind: 246, git: undefined, expectedDistance: "246 commits behind" },
+  {
+    cachedBehind: 1,
+    git: { status: "behind", commitsBehind: 50 },
+    expectedDistance: "50 commits behind",
+  },
+  {
+    cachedBehind: 246,
+    git: { status: "behind", commitsBehind: 1 },
+    expectedDistance: "1 commit behind",
+  },
+  {
+    cachedBehind: 1,
+    git: { status: "diverged", commitsAhead: 2, commitsBehind: 50 },
+    expectedDistance: "50 commits behind",
+  },
+  {
+    cachedBehind: undefined,
+    git: { status: "behind", commitsBehind: 50 },
+    expectedDistance: "50 commits behind",
+  },
+] as const)(
+  "states $expectedDistance using the checkout comparison when present ($git)",
+  async ({ cachedBehind, git, expectedDistance }) => {
+    const { settled } = startUpdate({
+      updateAvailable: {
+        channel: "dev",
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.1",
+        commitsBehind: cachedBehind,
+      },
+      updateSchedule: {
+        channel: "dev",
+        autoEnabled: false,
+        install: { kind: "git", git },
+        target:
+          cachedBehind === undefined
+            ? undefined
+            : {
+                commitsBehind: cachedBehind,
+                kind: "git",
+                upstreamRef: "origin/main",
+                upstreamSha: "abc1234",
+              },
+      },
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
 
-  expect(modal.textContent).toContain("Installed v2026.8.1 · 246 commits behind");
-  expect(modal.textContent).not.toContain("Available 246");
+    expect(modal.textContent).toContain(`Installed v2026.8.1 · ${expectedDistance}`);
+    expect(modal.textContent).not.toContain(`Available ${expectedDistance}`);
 
-  findButton("Cancel").click();
-  await settled;
-});
+    findButton("Cancel").click();
+    await settled;
+  },
+);
 
 it("keeps a repeated request from stacking a second confirmation or update", async () => {
   const first = startUpdate();
@@ -352,73 +395,27 @@ it("keeps the failure visible until the operator explicitly opens its review act
   expect(stream.stopped).toBe(true);
 });
 
-/**
- * Retry after a failure: the shell keeps the previous attempt's banner until an
- * accepted run clears it, and producers replay the current snapshot as their
- * subscribe-time emit. `accepted: false` models `overlays.runUpdate` refusing
- * the request (disconnected, already running, no admin), which leaves the
- * banner in place.
- */
-function createRetryStream(options: { accepted: boolean }) {
-  let progress: UpdateProgress = {
-    run: null,
-    busy: false,
-    connected: true,
+it.each([
+  { name: "an empty snapshot", failure: null },
+  {
+    name: "a retained failure",
     failure: "The update failed at install: ENOSPC: no space left on device, write.",
-  };
-  let emit: ((next: UpdateProgress) => void) | null = null;
-  return {
-    startGatewayUpdate: () => {
-      if (!options.accepted) {
-        return;
-      }
-      progress = { run: null, busy: true, connected: true, failure: null };
-      emit?.(progress);
-    },
-    watchUpdateProgress: (listener: (next: UpdateProgress) => void) => {
-      emit = listener;
-      listener(progress);
-      return () => {};
-    },
-  };
-}
-
-it("reports a refused retry as unanswered rather than as the old failure", async () => {
+  },
+])("reports an unaccepted update after $name as unanswered", async ({ failure }) => {
+  // Auto-advance lets the modal animate while the admission deadline is fast-forwarded.
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
-    const stream = createRetryStream({ accepted: false });
-    const { settled } = startUpdate({
-      startGatewayUpdate: stream.startGatewayUpdate,
-      watchUpdateProgress: stream.watchUpdateProgress,
-    });
-    const { modal } = await getRenderedModalDialog(document.body);
-
-    findButton("Update and restart").click();
-    await Promise.resolve();
-    // The refused request must not inherit the previous error as its outcome.
-    expect(modal.textContent).not.toContain("ENOSPC");
-
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(modal.textContent).toContain("The update request went unanswered");
-    findButton("Close").click();
-    await settled;
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
-it("reports a request the Gateway never accepted instead of spinning forever", async () => {
-  // Auto-advancing keeps the modal's own animation frames running while the
-  // grace deadline is fast-forwarded.
-  vi.useFakeTimers({ shouldAdvanceTime: true });
-  try {
-    const stream = createProgressStream();
+    const stream = createProgressStream({ run: null, busy: false, connected: true, failure });
     const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
     const { modal } = await getRenderedModalDialog(document.body);
 
     findButton("Update and restart").click();
-    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve();
+    if (failure) {
+      expect(modal.textContent).not.toContain("ENOSPC");
+    }
 
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(modal.textContent).toContain("The update request went unanswered");
     findButton("Close").click();
     await settled;
@@ -426,3 +423,93 @@ it("reports a request the Gateway never accepted instead of spinning forever", a
     vi.useRealTimers();
   }
 });
+
+it.each([
+  { status: "running", entry: "existing" },
+  { status: "failed", entry: "existing" },
+  { status: "succeeded", entry: "existing" },
+  { status: "running", entry: "started" },
+] as const)(
+  "keeps the $status report and exposes read recovery for a $entry run",
+  async ({ status, entry }) => {
+    const run = createUpdateRunFixture({
+      status,
+      phase: status === "running" ? "verifying" : "finished",
+      finishedAtMs: status === "running" ? null : 4_000,
+      reason: status === "failed" ? "build-failed" : null,
+    });
+    let admitted = entry === "existing";
+    let rejectRunReads = false;
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "update.run") {
+        admitted = true;
+        return { runId: run.runId };
+      }
+      if (method === "update.runs.get") {
+        if (rejectRunReads) {
+          throw new Error("Run status read failed");
+        }
+        return { run };
+      }
+      return method === "update.status" && admitted
+        ? { [status === "running" ? "activeRun" : "lastRun"]: run }
+        : {};
+    });
+    const harness = updateRunHarness(request);
+    const overlays = createApplicationOverlays(harness.gateway);
+    let operation: Promise<void> | undefined;
+    let settled: Promise<void> | undefined;
+    try {
+      await overlays.refreshUpdateStatus();
+      settled = confirmAndStartUpdateRuntime({
+        ...(entry === "existing" ? { existingRun: run } : {}),
+        startGatewayUpdate: () => {
+          operation = overlays.runUpdate();
+        },
+        onCheckStatus: () => overlays.refreshUpdateStatus(),
+        watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
+        updateAvailable: UPDATE_AVAILABLE,
+        updateSchedule: null,
+        viaNativeApp: false,
+      });
+      const { modal } = await getRenderedModalDialog(document.body);
+      if (entry === "started") {
+        findButton("Update and restart").click();
+        await flushMicrotasks();
+        await operation;
+      }
+      rejectRunReads = true;
+      harness.emitEvent("update.run.changed", { ...run, updatedAtMs: run.updatedAtMs + 1 });
+      await flushMicrotasks();
+      const view = modal.querySelector<
+        HTMLElement & { run: unknown; updateComplete: Promise<boolean> }
+      >("openclaw-update-run-view")!;
+      await view.updateComplete;
+      expect(modal.textContent).toContain("Run status read failed");
+      expect(view.run).toEqual(run);
+      const check = findButton("Check status");
+      expect(check.disabled).toBe(false);
+      if (status === "running") {
+        expect(
+          [...modal.querySelectorAll("button")].some(
+            (button) => button.textContent?.trim() === "Retry update",
+          ),
+        ).toBe(false);
+      }
+      check.click();
+      await flushMicrotasks();
+      expect(modal.textContent).not.toContain("Run status read failed");
+      expect(view.run).toEqual(run);
+      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
+        entry === "started" ? 1 : 0,
+      );
+    } finally {
+      document.body
+        .querySelector("openclaw-modal-dialog")
+        ?.dispatchEvent(new Event("modal-cancel"));
+      await settled;
+      await operation;
+      overlays.dispose();
+    }
+  },
+);

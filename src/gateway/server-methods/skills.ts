@@ -24,6 +24,7 @@ import {
   validateSkillsSkillCardParams,
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
+  validateSkillsWorkshopReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
@@ -51,6 +52,7 @@ import {
 import { installSkill } from "../../skills/lifecycle/install.js";
 import { installUploadedSkillArchive } from "../../skills/lifecycle/upload-install.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
+import { ensureSkillsWatcher } from "../../skills/runtime/refresh.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import {
   collectClawHubVerdictTargets,
@@ -76,6 +78,10 @@ import {
 } from "../../skills/workshop/service.js";
 import { PROPOSAL_DRAFT_FILE } from "../../skills/workshop/store-record.js";
 import type { SkillProposalReadResult, SkillProposalRecord } from "../../skills/workshop/types.js";
+import {
+  listWritableWorkshopSkillSummaries,
+  readWritableWorkshopSkill,
+} from "../../skills/workshop/workspace-skill-read.js";
 import { authorizeSessionSharingTarget, resolveSessionSharingTarget } from "../session-sharing.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
 import { skillProposalHistoryHandlers } from "./skills-proposal-history.js";
@@ -268,6 +274,11 @@ export const skillsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    ensureSkillsWatcher({
+      workspaceDir: resolved.workspaceDir,
+      config: resolved.cfg,
+      agentId: resolved.agentId,
+    });
     const report = buildRemoteAwareWorkspaceSkillStatus(
       resolved,
       target?.entry.skillLibrarySelections,
@@ -436,8 +447,37 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond,
       context,
       validate: validateSkillsProposalsListParams,
-      run: (_parsedParams, resolved) =>
-        listSkillProposals({ config: resolved.cfg, agentId: resolved.agentId }),
+      run: async (_parsedParams, resolved) => {
+        const options = { config: resolved.cfg, agentId: resolved.agentId };
+        const manifest = await listSkillProposals(options);
+        return {
+          ...manifest,
+          installedSkills: listWritableWorkshopSkillSummaries(options).map(
+            ({ name, skillKey, description }) => ({ name, skillKey, description }),
+          ),
+        };
+      },
+    });
+  },
+  "skills.workshop.read": async ({ params, respond, context }) => {
+    await runSkillsProposalWorkspaceHandler({
+      method: "skills.workshop.read",
+      rawParams: params,
+      respond,
+      context,
+      validate: validateSkillsWorkshopReadParams,
+      run: async (parsedParams, resolved) => {
+        const skill = await readWritableWorkshopSkill(parsedParams.name, {
+          config: resolved.cfg,
+          agentId: resolved.agentId,
+        });
+        return {
+          name: skill.skillName,
+          skillKey: skill.skillKey,
+          description: skill.description,
+          content: skill.content,
+        };
+      },
     });
   },
   "skills.proposals.events.list": async ({ params, respond, context }) => {
@@ -470,15 +510,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           config: resolved.cfg,
         });
         if (!proposal) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Skill proposal not found: ${parsedParams.proposalId}`,
-            ),
-          );
-          return SKILL_PROPOSAL_RESPONSE_HANDLED;
+          throw new Error(`Skill proposal not found: ${parsedParams.proposalId}`);
         }
         return projectGatewaySkillProposalReadResult(proposal);
       },
@@ -589,26 +621,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
           config: resolved.cfg,
         });
         if (!proposal) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Skill proposal not found: ${parsedParams.proposalId}`,
-            ),
-          );
-          return SKILL_PROPOSAL_RESPONSE_HANDLED;
+          throw new Error(`Skill proposal not found: ${parsedParams.proposalId}`);
         }
         if (proposal.record.status !== "pending") {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Skill proposal is not pending: ${parsedParams.proposalId}`,
-            ),
-          );
-          return SKILL_PROPOSAL_RESPONSE_HANDLED;
+          throw new Error(`Skill proposal is not pending: ${parsedParams.proposalId}`);
         }
         assertExpectedRevisionHash(proposal.revisionHash, expectedRevisionHash);
         await forwardSkillWorkshopRevisionToChatSend(opts, {

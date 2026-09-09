@@ -51,8 +51,13 @@ describe("session placement startup", () => {
   it.each([
     {
       name: "profile",
-      target: { kind: "profile", profileId: "aws", machineClass: "fast" } as const,
-      expectedTarget: { profileId: "aws", machineClass: "fast" },
+      target: {
+        kind: "profile",
+        profileId: "aws",
+        os: "windows/wsl2",
+        machineClass: "fast",
+      } as const,
+      expectedTarget: { profileId: "aws", os: "windows/wsl2", machineClass: "fast" },
     },
     {
       name: "device",

@@ -86,38 +86,6 @@ describe("update run projection", () => {
     },
   );
 
-  it("never reports unknown verification as passed and preserves every oracle outcome", () => {
-    expect(projectUpdateRun(run()).oracles.every((oracle) => oracle.state === "pending")).toBe(
-      true,
-    );
-    const view = projectUpdateRun(
-      run({
-        phase: "verifying",
-        verification: {
-          serviceRunning: true,
-          versionMatch: false,
-          pluginErrors: [],
-          channelsReady: false,
-          inferenceProbe: "skipped",
-        },
-      }),
-    );
-    expect(view.oracles).toEqual([
-      { name: "service", state: "pass" },
-      { name: "version", state: "fail" },
-      { name: "plugins", state: "pass" },
-      { name: "channels", state: "fail" },
-      { name: "inference", state: "warn" },
-    ]);
-    expect(
-      projectUpdateRun(
-        run({ verification: { pluginErrors: ["Load failed"], inferenceProbe: "failed" } }),
-      )
-        .oracles.filter((oracle) => oracle.state === "fail")
-        .map((oracle) => oracle.name),
-    ).toEqual(["plugins", "inference"]);
-  });
-
   it("selects live details ahead of a later completed step and bounds the visible tail", () => {
     const view = projectUpdateRun(
       run({
@@ -164,7 +132,6 @@ describe("update run view", () => {
         versionMatch: true,
         channelsReady: true,
         pluginErrors: [],
-        inferenceProbe: "passed",
       },
       steps: [
         { step: "staging", status: "completed" },
@@ -174,10 +141,8 @@ describe("update run view", () => {
     await element.updateComplete;
     const report = element.querySelector('[aria-label="Update report"]');
     expect(report?.textContent).toContain("✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).");
-    expect(report?.textContent).toContain(
-      "service running; version verified; channels ready; inference passed",
-    );
-    expect(element.querySelectorAll('[data-state="pass"]')).toHaveLength(5);
+    expect(report?.textContent).toContain("service running; version verified; channels ready");
+    expect(element.querySelectorAll('[data-state="pass"]')).toHaveLength(4);
     expect(element.querySelector('[data-step="repairing"]')).toBeNull();
   });
 

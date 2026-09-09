@@ -288,57 +288,6 @@ function requireCreateSessionConfig(sdk: FakeSdk): Record<string, unknown> {
   return expectDefined(sdk.createSession.mock.calls[0]?.[0], "Copilot createSession config");
 }
 
-function expectTranscriptCredentialSafety(instructions: string): void {
-  const credentialGuidance = instructions
-    .split("\n")
-    .filter((line) => /credentials?|secrets?|authentication|pairing codes?/iu.test(line));
-
-  expect(
-    credentialGuidance.some(
-      (line) =>
-        /(?:never|do not)/iu.test(line) &&
-        /(?:ask for|request)/iu.test(line) &&
-        /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-    ),
-  ).toBe(true);
-  expect(
-    credentialGuidance.some(
-      (line) =>
-        /(?:never|do not)/iu.test(line) &&
-        /(?:echo|repeat)/iu.test(line) &&
-        /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-    ),
-  ).toBe(true);
-  expect(
-    credentialGuidance.some(
-      (line) =>
-        /(?:never|do not)/iu.test(line) &&
-        /(?:place|put|include)/iu.test(line) &&
-        /(?:recommend|suggest)/iu.test(line) &&
-        /(?:command(?:-line)?|arguments?)/iu.test(line) &&
-        /urls?/iu.test(line) &&
-        /shell/iu.test(line) &&
-        /(?:variable|interpolat)/iu.test(line),
-    ),
-  ).toBe(true);
-  expect(
-    credentialGuidance.some(
-      (line) =>
-        /(?:never|do not)/iu.test(line) &&
-        /(?:ask|request)/iu.test(line) &&
-        /(?:report|share|provide)/iu.test(line) &&
-        /(?:authentication|pairing)/iu.test(line) &&
-        /codes?/iu.test(line) &&
-        /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-    ),
-  ).toBe(true);
-  expect(
-    credentialGuidance.some(
-      (line) => /(?:masked|secure)/iu.test(line) && /(?:entry|input|setup|wizard)/iu.test(line),
-    ),
-  ).toBe(true);
-}
-
 function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
   return expectDefined(sdk.resumeSession.mock.calls[0]?.[1], "Copilot resumeSession config");
 }
@@ -2526,18 +2475,6 @@ describe("runCopilotAttempt", () => {
       expect(cfg.systemMessage?.content).toContain(rendered);
     });
 
-    it("adds transcript credential safety when the loader returns no instructions", async () => {
-      const sdk = makeFakeSdk();
-      const pool = makeFakePool(sdk);
-
-      await runCopilotAttempt(makeParams(), { pool });
-
-      const cfg = requireCreateSessionConfig(sdk) as {
-        systemMessage?: { content?: string };
-      };
-      expectTranscriptCredentialSafety(cfg.systemMessage?.content ?? "");
-    });
-
     it("sends the final appended developer instructions to the SDK and llm_input", async () => {
       const sdk = makeFakeSdk();
       const llmInput = vi.fn();
@@ -2729,7 +2666,6 @@ describe("runCopilotAttempt", () => {
       expect(cfg.systemMessage).toBeDefined();
       expect(cfg.systemMessage?.mode).toBe("append");
       expect(cfg.systemMessage?.content).toContain(rendered);
-      expectTranscriptCredentialSafety(cfg.systemMessage?.content ?? "");
     });
   });
 

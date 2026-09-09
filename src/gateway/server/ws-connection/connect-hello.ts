@@ -41,6 +41,7 @@ import {
 import { formatError } from "../../server-utils.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
+import { shouldScheduleBackgroundHealthRefresh } from "../health-refresh-admission.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
 import { broadcastPresenceSnapshot } from "../presence-events.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
@@ -156,6 +157,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+        GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
         GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
         GATEWAY_SERVER_CAPS.SESSION_SCOPED_CHAT_METADATA,
         GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
@@ -175,6 +177,7 @@ export async function sendGatewayHello(
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
     auth: {
+      method: authMethod,
       role,
       scopes,
       ...(recoveryScope ? { recoveryScope } : {}),
@@ -404,9 +407,11 @@ export async function sendGatewayHello(
   // Post-connect refresh only needs a cached/config snapshot for UI state;
   // live channel probes here pulled slow Discord/Telegram HTTP checks into
   // reply-adjacent websocket handshakes.
-  void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
-    logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
-  );
+  if (shouldScheduleBackgroundHealthRefresh(refreshHealthSnapshot, Date.now())) {
+    void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
+      logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
+    );
+  }
   const client = context.handler.getClient();
   if (
     client?.presenceKey &&

@@ -265,6 +265,44 @@ describe("canonical image presentation handoff", () => {
     },
   );
 
+  it.each(["inline", "metadata", "loaded"] as const)(
+    "keeps the displayed %s upload when the session workspace arrives",
+    async (stage) => {
+      const fixture = await createCanonicalImageTranscript(undefined, undefined, "initial receipt");
+      if (stage !== "inline") {
+        fixture.publish();
+      }
+      if (stage === "loaded") {
+        fixture.requests[0]?.resolve(mediaMetadataResponse(true, "before-workspace"));
+        await flushDeferredRowPrune();
+        fixture.displayed[0]?.dispatchEvent(new Event("load"));
+      }
+
+      fixture.props.selectedSession = {
+        key: fixture.props.sessionKey,
+        kind: "direct",
+        permissionMode: "workspace",
+        sessionRoot: "/worktrees/image-upload",
+        spawnedCwd: "/worktrees/image-upload",
+      };
+      fixture.renderPane();
+      expectSameImageNodes(fixture.images(), fixture.displayed);
+      expect(fixture.container.querySelector('[aria-busy="true"]')).toBeNull();
+
+      if (stage === "inline") {
+        fixture.publish();
+        expectSameImageNodes(fixture.images(), fixture.displayed);
+      } else {
+        expect(fixture.requests).toHaveLength(2);
+      }
+      // The retained pixels do not suppress the new policy's access check.
+      fixture.requests.at(-1)?.resolve(mediaMetadataResponse(false));
+      await flushDeferredRowPrune();
+      expect(fixture.images()).toHaveLength(0);
+      expect(fixture.container.textContent).toContain("Attachment removed");
+    },
+  );
+
   it.each([
     {
       name: "different canonical ID with identical text and send key",
@@ -496,7 +534,7 @@ describe("canonical image presentation handoff", () => {
     },
   );
 
-  it.each(["removal", "auth", "replacement", "disconnect"] as const)(
+  it.each(["removal", "auth", "replacement", "connection epoch"] as const)(
     "retires a pending native image on %s and ignores its late load and error",
     async (change) => {
       const fixture = await createCanonicalImageTranscript();
@@ -515,14 +553,12 @@ describe("canonical image presentation handoff", () => {
           { path: `media://inbound/${crypto.randomUUID()}.png`, contentType: "image/png" },
         ]);
       } else {
-        fixture.root().setConnected(false);
+        fixture.props.connectionEpoch = 2;
+        fixture.renderPane();
       }
       displayed.dispatchEvent(new Event("load"));
       displayed.dispatchEvent(new Event("error"));
       await flushDeferredRowPrune();
-      if (change === "disconnect") {
-        fixture.root().setConnected(true);
-      }
       expect(fixture.images()).toHaveLength(0);
     },
   );

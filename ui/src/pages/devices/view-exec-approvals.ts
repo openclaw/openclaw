@@ -19,7 +19,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
   type NativeExecApprovalsSnapshot,
-} from "../../lib/nodes/index.ts";
+} from "../../lib/nodes/page-operations.ts";
 import {
   resolveConfigAgents as resolveSharedConfigAgents,
   resolveNodeTargets,

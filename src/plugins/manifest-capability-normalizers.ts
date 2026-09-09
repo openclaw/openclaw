@@ -4,6 +4,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
+  PluginManifest,
   PluginManifestCapabilityProviderAuthSignal,
   PluginManifestCapabilityProviderConfigSignal,
   PluginManifestCapabilityProviderMetadata,
@@ -21,7 +22,37 @@ import type {
   PluginManifestSecretInputPath,
   PluginManifestToolMetadata,
   PluginManifestToolProfile,
+  PluginManifestTranscriptSource,
 } from "./manifest-types.js";
+
+/** Endpoint restrictions constrain a provider alias without changing stored credential identity. */
+export function normalizeManifestProviderAuthAliases(
+  value: unknown,
+): PluginManifest["providerAuthAliases"] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const aliases: NonNullable<PluginManifest["providerAuthAliases"]> = Object.create(null);
+  for (const [key, entry] of Object.entries(value)) {
+    const alias = normalizeOptionalString(key);
+    if (!alias || isBlockedObjectKey(alias)) {
+      continue;
+    }
+    if (typeof entry === "string") {
+      const provider = normalizeOptionalString(entry);
+      if (provider) {
+        aliases[alias] = provider;
+      }
+    } else if (isRecord(entry)) {
+      const provider = normalizeOptionalString(entry.provider);
+      const baseUrls = normalizeTrimmedStringList(entry.baseUrls);
+      if (provider && baseUrls.length > 0) {
+        aliases[alias] = { provider, baseUrls };
+      }
+    }
+  }
+  return Object.keys(aliases).length > 0 ? aliases : undefined;
+}
 
 function isPluginToolProfile(profile: string): profile is PluginManifestToolProfile {
   return (
@@ -83,7 +114,7 @@ export function normalizeManifestMcpServers(
 
 function normalizeNamedMetadataRecord<T>(
   value: unknown,
-  normalizeEntry: (entry: Record<string, unknown>) => T | undefined,
+  normalizeEntry: (entry: Record<string, unknown>, id: string) => T | undefined,
 ): Record<string, T> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -92,12 +123,40 @@ function normalizeNamedMetadataRecord<T>(
   for (const [rawId, rawEntry] of Object.entries(value)) {
     const id = normalizeOptionalString(rawId) ?? "";
     const entry =
-      !id || isBlockedObjectKey(id) || !isRecord(rawEntry) ? undefined : normalizeEntry(rawEntry);
+      !id || isBlockedObjectKey(id) || !isRecord(rawEntry)
+        ? undefined
+        : normalizeEntry(rawEntry, id);
     if (entry) {
       normalized[id] = entry;
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+export function normalizeManifestTranscriptSources(
+  value: unknown,
+  ownedProviders: readonly string[] = [],
+): Record<string, PluginManifestTranscriptSource> | undefined {
+  const locatorKeys = ["accountId", "guildId", "channelId", "meetingUrl"] as const;
+  return normalizeNamedMetadataRecord(value, (entry, id) => {
+    if (!ownedProviders.includes(id)) {
+      return undefined;
+    }
+    const name = normalizeOptionalString(entry.name);
+    const raw = entry.autoStart;
+    const autoStart: PluginManifestTranscriptSource["autoStart"] =
+      isRecord(raw) &&
+      Object.entries(raw).every(
+        ([key, mode]) =>
+          locatorKeys.some((locator) => locator === key) &&
+          (mode === "optional" || mode === "required"),
+      )
+        ? Object.fromEntries(Object.entries(raw))
+        : undefined;
+    return name || autoStart
+      ? { ...(name ? { name } : {}), ...(autoStart ? { autoStart } : {}) }
+      : undefined;
+  });
 }
 
 const MEDIA_UNDERSTANDING_CAPABILITIES = new Set(["image", "audio", "video"]);

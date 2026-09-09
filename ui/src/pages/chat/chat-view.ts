@@ -11,7 +11,6 @@ import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
@@ -25,7 +24,6 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import "../../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { retryChatHistoryLoad } from "./chat-history.ts";
 import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -66,6 +64,7 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onFocusComposer"
+  | "onAddToChat"
   | "onOpenSession"
   | "onSend"
 > &
@@ -90,7 +89,7 @@ export type ChatProps = Omit<
     ) => void | Promise<void>;
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
-    swarmSessions?: readonly GatewaySessionRow[];
+    swarm?: Parameters<typeof renderChatSwarmProgress>[0];
     focusMode?: boolean;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
@@ -205,6 +204,14 @@ export function renderChat(props: ChatProps) {
         onDiscardQueuedMessage: props.onQueueRemove,
         onCompanionPrefill:
           props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
+        onAddToChat:
+          props.canSend && !props.suggestionComposer
+            ? (question) => {
+                const draft = props.getDraft?.() ?? props.draft;
+                props.onDraftChange(draft ? `${draft}\n\n${question}` : question);
+                requestUpdate();
+              }
+            : undefined,
         onOpenSession: props.onSessionSelect,
         onFocusComposer: () =>
           chatSection
@@ -247,21 +254,24 @@ export function renderChat(props: ChatProps) {
     taskSuggestionTray === nothing
       ? nothing
       : html`<div class="chat-gutter-stack">${taskSuggestionTray}</div>`;
-  const scrollToBottomButton =
-    props.showNewMessages && props.onScrollToBottom
-      ? html`
-          <div class="chat-scroll-to-bottom-wrap">
-            <button
-              class="chat-scroll-to-bottom"
-              type="button"
-              @click=${() => props.onScrollToBottom?.({ smooth: true })}
-              aria-label=${t("chat.actions.scrollToLatest")}
-            >
-              ${icons.arrowDown}
-            </button>
-          </div>
-        `
-      : nothing;
+  // Keep the affordance mounted so visibility changes can finish their exit transition.
+  const scrollToBottomButton = props.onScrollToBottom
+    ? html`
+        <div class="chat-scroll-to-bottom-wrap">
+          <button
+            class="chat-scroll-to-bottom"
+            data-visible=${Boolean(props.showNewMessages)}
+            type="button"
+            ?inert=${!props.showNewMessages}
+            aria-hidden=${!props.showNewMessages}
+            @click=${() => props.onScrollToBottom?.({ smooth: true })}
+            aria-label=${t("chat.actions.scrollToLatest")}
+          >
+            ${icons.arrowDown}
+          </button>
+        </div>
+      `
+    : nothing;
   const historyState = props.historyState;
   const historyLoadState = historyState ? getChatHistoryLoadState(historyState) : undefined;
   const historyFailed =
@@ -287,7 +297,12 @@ export function renderChat(props: ChatProps) {
       <button
         class="btn btn--sm"
         type="button"
-        @click=${() => historyState && retryChatHistoryLoad(historyState)}
+        @click=${() => {
+          if (historyState && getChatHistoryLoadState(historyState).phase === "failed") {
+            props.onRefresh();
+            historyState.requestUpdate?.();
+          }
+        }}
       >
         ${t("common.retry")}
       </button>
@@ -430,10 +445,7 @@ export function renderChat(props: ChatProps) {
                     onResolve: (suggestion, resolution) =>
                       props.onResolveSessionSuggestion?.(suggestion, resolution),
                   })}
-                  ${renderChatSwarmProgress({
-                    sessions: props.swarmSessions ?? [],
-                    sessionKey: props.sessionKey,
-                  })}
+                  ${props.swarm ? renderChatSwarmProgress(props.swarm) : nothing}
                   <openclaw-plugin-contributions
                     .kind=${"composer"}
                     .sessionKey=${props.sessionKey}

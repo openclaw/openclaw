@@ -1202,6 +1202,7 @@ describe("Claude session catalog", () => {
       kind: "node",
       nodeId: "node-a",
       command: CLAUDE_TERMINAL_RESUME_COMMAND,
+      uploadPathStyle: "native",
       cwd: "/work/on-node",
     });
     await expect(provider?.continueSession?.({ hostId: "node:node-a", threadId })).resolves.toEqual(
@@ -3108,6 +3109,7 @@ describe("Claude session catalog", () => {
       kind: "node",
       nodeId: "paired-node",
       command: CLAUDE_TERMINAL_START_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ cwd: "/work/new-session" }),
       cwd: "/work/new-session",
       title: "claude",

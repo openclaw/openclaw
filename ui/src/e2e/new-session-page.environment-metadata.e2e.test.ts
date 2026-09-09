@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  tooltipTitleText,
+} from "./control-ui-e2e-suite.test-support.ts";
 import {
   WORKSPACE,
   captureDeviceRuntimeUiProof,
@@ -18,11 +21,7 @@ const updateIssue = {
 
 suite.define(() => {
   it("offers paired devices to every model whose runtime explicitly supports them", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "anthropic/claude-sonnet-4-6",
@@ -108,7 +107,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("chat.metadata");
+      await gateway.waitForRequest("models.list");
       await gateway.waitForRequest("environments.list");
       const whereTrigger = page.locator("#new-session-where-trigger");
       const where = page.locator("wa-popover.new-session-page__where-popover");
@@ -173,11 +172,7 @@ suite.define(() => {
   });
 
   it("renders authoritative device eligibility and exact live capacity", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,

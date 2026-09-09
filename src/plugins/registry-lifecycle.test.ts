@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginRegistryHandle } from "./loader.js";
+import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   activatePluginRecordLifecycleEpoch,
@@ -37,6 +38,7 @@ function captureActivation(registry: PluginRegistry) {
 }
 
 afterEach(() => resetPluginRuntimeStateForTest());
+afterEach(resetPluginLoaderTestStateForTest);
 
 describe("plugin registry retirement notifications", () => {
   it.each(["retire", "activate"] as const)(

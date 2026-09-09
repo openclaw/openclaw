@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
@@ -29,6 +30,7 @@ import {
   terminateGatewayProcessTree,
 } from "./schtasks-process.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
@@ -37,6 +39,7 @@ import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
+  GatewayServiceReadOptions,
   GatewayServiceRestartResult,
 } from "./service-types.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
@@ -134,7 +137,7 @@ export async function launchFallbackTaskScript(
       options: {
         cwd: command.workingDirectory || undefined,
         detached: true,
-        env: { ...process.env, ...command.environment },
+        env: mergeProcessEnv([process.env, command.environment]),
         stdio: "ignore",
         windowsHide: true,
       },
@@ -144,7 +147,6 @@ export async function launchFallbackTaskScript(
   }
   // Preserve native missing-script errors before testing the actual cmd.exe access contract.
   await (await fs.open(scriptPath, "r")).close();
-  const scriptEnv = { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath };
   // libuv uses backup semantics, so privileged Node opens can bypass the DACL that cmd enforces.
   const scriptProbe = spawnSync(
     getWindowsPowerShellExePath(),
@@ -158,7 +160,7 @@ export async function launchFallbackTaskScript(
       ).toString("base64"),
     ],
     {
-      env: scriptEnv,
+      env: { ...resolveServiceManagerEnv(), OPENCLAW_TASK_SCRIPT: scriptPath },
       stdio: "ignore",
       windowsHide: true,
     },
@@ -174,7 +176,7 @@ export async function launchFallbackTaskScript(
     argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
     options: {
       detached: true,
-      env: scriptEnv,
+      env: { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath },
       stdio: "ignore",
       windowsHide: true,
       windowsVerbatimArguments: true,
@@ -419,15 +421,19 @@ export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Pro
 
 export async function readScheduledTaskRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+  opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
-  const probe = probeScheduledTaskState(resolveTaskName(env));
+  const probe = probeScheduledTaskState(resolveTaskName(env), opts?.timeoutMs);
   if (probe.status === "missing") {
     return (await isStartupEntryInstalled(env))
       ? resolveFallbackRuntime(env)
       : { status: "stopped", missingUnit: true };
   }
   if (probe.status === "unknown") {
-    return { ...createServiceRuntimeInspectionFailure(probe.detail), missingUnit: false };
+    return {
+      ...createServiceRuntimeInspectionFailure(probe.detail, probe.timeoutMs),
+      missingUnit: false,
+    };
   }
   // State owns current activity; LastTaskResult is history and can describe an older run.
   const status =

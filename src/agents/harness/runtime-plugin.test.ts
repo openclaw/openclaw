@@ -53,6 +53,31 @@ function installedProviderRecord(
   };
 }
 
+function createMemoryPlanMetadataSnapshot() {
+  const manifestRegistry = makeRegistry(
+    ["memory-core", "memory-lancedb"].map((id) => ({
+      id,
+      channels: [],
+      origin: "bundled" as const,
+    })),
+  );
+  for (const plugin of manifestRegistry.plugins) {
+    plugin.kind = "memory";
+  }
+  const snapshot = createPluginMetadataSnapshot({ manifestRegistry });
+  snapshot.index.plugins = manifestRegistry.plugins.map((plugin) =>
+    Object.assign(installedProviderRecord(plugin.id), {
+      origin: plugin.origin,
+      rootDir: plugin.rootDir,
+      manifestPath: plugin.manifestPath,
+      manifestHash: plugin.id,
+      enabled: true,
+      startup: { sidecar: false, memory: true, agentHarnesses: [] },
+    }),
+  );
+  return restorePluginMetadataSnapshot(snapshot);
+}
+
 function attachPreparedPluginFacts(
   pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
   config: OpenClawConfig,
@@ -438,6 +463,7 @@ describe("harness runtime plugins", () => {
 
   it("force-activates a default-disabled harness owner selected for a run", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: {},
       workspaceDir: "/tmp/workspace",
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
@@ -451,6 +477,7 @@ describe("harness runtime plugins", () => {
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai"]);
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["openai"] } },
       workspaceDir: "/tmp/workspace",
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "openclaw" }],
@@ -550,6 +577,7 @@ describe("harness runtime plugins", () => {
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
     mocks.resolveManifestActivationPlan.mockReturnValueOnce({ entries: [] });
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["openai"] } },
       workspaceDir: "/tmp/workspace",
       selections: [{ provider: "openai", modelId: "gpt-5" }],
@@ -561,6 +589,7 @@ describe("harness runtime plugins", () => {
 
   it("includes and enables the context-engine owner in the prepared load plan", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { slots: { contextEngine: "custom-context-engine" } } },
       workspaceDir: "/tmp/workspace",
       basePluginIds: [],
@@ -624,6 +653,7 @@ describe("harness runtime plugins", () => {
       const plan = resolveAgentRuntimePluginLoadPlan({
         config,
         workspaceDir: "/tmp/workspace",
+        metadataSnapshot: createMemoryPlanMetadataSnapshot(),
         selections: [],
       });
 
@@ -678,6 +708,7 @@ describe("harness runtime plugins", () => {
 
   it("keeps standalone activation unrestricted when no complete startup base exists", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: {
         plugins: {
           entries: { "custom-context-engine": { enabled: true } },
@@ -699,6 +730,7 @@ describe("harness runtime plugins", () => {
       entries: [{ pluginId: "custom-harness-plugin", origin: "workspace" }],
     });
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["custom-harness-plugin"] } },
       workspaceDir: "/tmp/workspace",
       selections: [
@@ -712,6 +744,7 @@ describe("harness runtime plugins", () => {
 
   it("preserves startup-scoped plugins when selected owners synthesize an allowlist", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { slots: { memory: "memory-core" } } },
       workspaceDir: "/tmp/workspace",
       basePluginIds: ["telegram"],
@@ -724,6 +757,7 @@ describe("harness runtime plugins", () => {
 
   it("does not restore stale startup plugins excluded by a restrictive reload allowlist", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["codex"] } },
       workspaceDir: "/tmp/workspace",
       basePluginIds: ["telegram"],
@@ -738,6 +772,7 @@ describe("harness runtime plugins", () => {
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai"]);
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
     const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
       config: { plugins: { allow: ["codex"] } },
       workspaceDir: "/tmp/workspace",
       selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],

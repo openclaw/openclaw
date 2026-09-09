@@ -19,6 +19,7 @@ import {
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import {
+  renderChatAbortAction,
   renderChatPrimaryActions,
   renderComposerDictationStatus,
 } from "./chat-composer-controls.ts";
@@ -197,7 +198,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           </button>
           ${
             props.disabledBanner.kind === "composer-replacement" && showAbortableUi
-              ? renderChatPrimaryActions(runControlsProps)
+              ? renderChatAbortAction(runControlsProps)
               : nothing
           }
         </div>
@@ -272,31 +273,24 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? nothing
     : renderChatRunStatusIndicator(composerRunStatus);
   const fallbackStatus = renderFallbackIndicator(props.fallbackStatus);
-  const progressCard =
-    props.progressCard || props.progressCardError
-      ? html`<div class="agent-chat__progress-float">
-          ${props.progressCardError ? html`<div class="callout info" role="status">${props.progressCardError}</div>` : nothing}
-          ${
-            props.progressCard
-              ? renderSessionProgressCard(
-                  props.progressCard,
-                  "composer",
-                  props.onDismissProgressCard,
-                  activeSession?.status,
-                  activeSession?.startedAt,
-                  activeSession?.endedAt,
-                  props.runActive,
-                  props.collapseTaskProgress,
-                  {
-                    activeRunId: props.runId,
-                    completedRunId:
-                      props.runStatus?.phase === "done" ? props.runStatus.runId : null,
-                  },
-                )
-              : nothing
-          }
-        </div>`
-      : nothing;
+  const progressCard = props.progressCard
+    ? html`<div class="agent-chat__progress-float">
+        ${renderSessionProgressCard(
+          props.progressCard,
+          "composer",
+          props.onDismissProgressCard,
+          activeSession?.status,
+          activeSession?.startedAt,
+          activeSession?.endedAt,
+          props.runActive,
+          props.collapseTaskProgress,
+          {
+            activeRunId: props.runId,
+            completedRunId: props.runStatus?.phase === "done" ? props.runStatus.runId : null,
+          },
+        )}
+      </div>`
+    : nothing;
   const queue = renderChatQueue({
     queue: props.queue,
     offline: props.offline,
@@ -352,7 +346,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             `
           : nothing
       }
-      ${disabledBanner} ${progressCard} ${queue} ${goalCard}
+      ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing} ${progressCard}
+      ${queue} ${goalCard}
       ${
         showComposerInput
           ? html`<div
@@ -572,7 +567,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
               </div>
             </div> `
-          : nothing
+          : props.disabledBanner?.kind === "composer-replacement"
+            ? disabledBanner
+            : nothing
       }
       ${composerUnderlaps}
     </div>

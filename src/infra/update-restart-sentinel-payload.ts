@@ -1,9 +1,5 @@
 // Builds restart sentinel payloads for update handoff reporting.
-import {
-  buildRestartSuccessContinuation,
-  formatDoctorNonInteractiveHint,
-  type RestartSentinelPayload,
-} from "./restart-sentinel.js";
+import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 // Update restart sentinel payloads carry update result details across a process
@@ -14,6 +10,7 @@ export type UpdateRestartSentinelMeta = {
   /** Internal helper fact: when the owning service stop was issued. */
   serviceStoppedAtMs?: number;
   root?: string;
+  target?: string;
   sessionKey?: string;
   deliveryContext?: {
     channel?: string;
@@ -40,11 +37,13 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
 }
 
 function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["recovery"] {
-  const recovery = result.recovery;
+  if (!result.recovery) {
+    return undefined;
+  }
+  const recovery = { ...result.recovery };
   // Restored runtimes parse this object strictly, so persist only the pre-update shape.
-  return recovery?.serviceRestartSafe === false
-    ? { serviceRestartSafe: false, reason: recovery.reason }
-    : recovery;
+  delete recovery.packageRollbackVerified;
+  return recovery;
 }
 
 /** Build the restart sentinel payload written after update runs. */
@@ -56,13 +55,10 @@ export function buildUpdateRestartSentinelPayload(params: {
   const result = normalizeControlPlaneUpdateResult(params.result);
   const recovery = resolvePersistedRecovery(result);
   const { meta } = params;
-  const continuation =
-    result.status === "ok"
-      ? buildRestartSuccessContinuation({
-          sessionKey: meta.sessionKey,
-          continuationMessage: meta.continuationMessage,
-        })
-      : null;
+  const continuationMessage = result.status === "ok" ? meta.continuationMessage?.trim() : undefined;
+  const continuation: RestartSentinelPayload["continuation"] = continuationMessage
+    ? { kind: "agentTurn", message: continuationMessage }
+    : null;
   return {
     kind: "update",
     status: result.status,
@@ -77,6 +73,7 @@ export function buildUpdateRestartSentinelPayload(params: {
       ...(meta.runId || result.runId ? { runId: meta.runId ?? result.runId } : {}),
       mode: result.mode,
       ...(meta.root || result.root ? { root: meta.root ?? result.root } : {}),
+      ...(meta.target ? { target: meta.target } : {}),
       ...(meta.handoffId ? { handoffId: meta.handoffId } : {}),
       ...(recovery ? { recovery } : {}),
       before: result.before ?? null,
@@ -86,6 +83,7 @@ export function buildUpdateRestartSentinelPayload(params: {
         command: step.command,
         cwd: step.cwd,
         durationMs: step.durationMs,
+        ...(step.advisory ? { advisory: true } : {}),
         log: {
           stdoutTail: step.stdoutTail ?? null,
           stderrTail: step.stderrTail ?? null,

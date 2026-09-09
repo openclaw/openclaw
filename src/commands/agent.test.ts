@@ -10,14 +10,14 @@ import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { executionIdentity } from "../agents/agent-command-execution-identity.js";
 import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
-import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
+import * as authProfileStoreModule from "../agents/auth-profiles/store-runtime.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
-import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
@@ -85,12 +85,17 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => {
+vi.mock("../agents/auth-profiles/store.js", async (importOriginal) => {
+  return {
+    ...(await importOriginal<typeof import("../agents/auth-profiles/store.js")>()),
+    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+  };
+});
+vi.mock("../agents/auth-profiles/store-runtime.js", () => {
   const createEmptyStore = () => ({ version: 1, profiles: {} });
   return {
     ensureAuthProfileStore: vi.fn(createEmptyStore),
     ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
     loadAuthProfileStore: vi.fn(createEmptyStore),
     loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
     loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),
@@ -538,7 +543,7 @@ async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
 
 function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalog>): void {
   vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(entries);
-  vi.mocked(loadPreparedModelCatalog).mockResolvedValueOnce(entries);
+  vi.mocked(readPreparedModelCatalog).mockResolvedValueOnce(entries);
 }
 
 function installThinkingTestProviders(channels: Parameters<typeof createTestRegistry>[0] = []) {
@@ -593,7 +598,7 @@ beforeEach(() => {
   runtimeSnapshotModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
-  vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
+  vi.mocked(readPreparedModelCatalog).mockResolvedValue([]);
   vi.mocked(loadEnabledClaudeBundleCommands).mockReturnValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
@@ -782,7 +787,9 @@ describe("agentCommand", () => {
         );
 
         expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-        expect(result?.payloads).toEqual([{ text, mediaUrl: null }]);
+        expect(result?.payloads).toEqual([
+          { text, mediaUrl: null, ...(meta.error ? { isError: true } : {}) },
+        ]);
         expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
         expect(readAgentRunTerminalOutcome(rawResult)).toBeUndefined();
         expect(readAgentRunTerminalError(rawResult)).toBeUndefined();
@@ -878,7 +885,7 @@ describe("agentCommand", () => {
 
       expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
-          executionSkillsDir: path.join(executionWorkspace, "skills"),
+          executionWorkspaceDir: executionWorkspace,
         }),
       );
     });
@@ -994,7 +1001,7 @@ describe("agentCommand", () => {
 
       expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
-          executionSkillsDir: path.join(canonicalWorkspace, "skills"),
+          executionWorkspaceDir: canonicalWorkspace,
         }),
       );
     });
@@ -1775,7 +1782,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(loadPreparedModelCatalog).not.toHaveBeenCalled();
+      expect(readPreparedModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
       const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
         .calls[0]?.[0];

@@ -23,7 +23,6 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
   type WorkerSessionTurnClaim,
-  type WorkerWorkspaceResultConflict,
 } from "./placement-record.js";
 import {
   ensureLocal,
@@ -57,9 +56,13 @@ import {
   createPlacementWorkspaceResultOps,
   hasCurrentWorkspaceResultClaim,
   hasWorkerWorkspacePendingResult,
+  readWorkerWorkspaceReconcilingSessionIds,
 } from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
-import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
+import {
+  projectWorkspaceResultConflict,
+  type WorkerWorkspaceResultConflict,
+} from "./workspace-conflicts.js";
 
 const RETIRABLE_PLACEMENT_STATES = ["local", "requested", "reclaimed", "failed"] as const;
 
@@ -173,6 +176,13 @@ export function createWorkerSessionPlacementStore(
         }
       }
       return records;
+    },
+
+    getWorkspaceResultReconcilingSessionIds(sessionIds: readonly string[]): ReadonlySet<string> {
+      const normalizedIds = [
+        ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
+      ];
+      return readWorkerWorkspaceReconcilingSessionIds(read(), normalizedIds);
     },
 
     retireSessionPlacement(input: WorkerSessionPlacementRetirement): void {

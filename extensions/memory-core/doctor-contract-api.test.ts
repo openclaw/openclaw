@@ -586,7 +586,7 @@ describe("memory-core doctor dreaming migration", () => {
       .entries();
     expect(cursors).toHaveLength(1);
     expect(cursors[0]?.value).toEqual({ kind: "cursor", lastSequence: 1 });
-    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${eventPath}.migrated`);
   });
 
   it("keeps identical events recreated by an older writer as a new archive generation", async () => {
@@ -611,8 +611,8 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("events.jsonl.migrated.2"),
     ]);
     await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toHaveLength(2);
-    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${eventPath}.migrated.2`)).resolves.toBeUndefined();
+    await fs.access(`${eventPath}.migrated`);
+    await fs.access(`${eventPath}.migrated.2`);
   });
 
   it("recovers appends written through an open legacy descriptor after archival", async () => {
@@ -663,7 +663,7 @@ describe("memory-core doctor dreaming migration", () => {
     ).resolves.toMatchObject([{ query: "after recovery generation" }]);
   });
 
-  it("fails closed when a checkpointed host event archive changes other than by append", async () => {
+  it("warns without importing when a checkpointed host event archive changes other than by append", async () => {
     const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
     const archivedPath = `${eventPath}.migrated`;
     await fs.writeFile(
@@ -691,14 +691,47 @@ describe("memory-core doctor dreaming migration", () => {
       "utf8",
     );
 
+    const laterSource = `${JSON.stringify({
+      type: "memory.recall.recorded",
+      timestamp: "2026-07-01T00:00:00.000Z",
+      query: "later generation",
+      resultCount: 0,
+      results: [],
+    })}\n`;
+    await fs.writeFile(eventPath, laterSource);
     const result = await migration.migrateLegacyState(migrationParams());
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([expect.stringContaining("changed other than by append")]);
+    expect(result).toMatchObject({ warningDisposition: "recoverable" });
     await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toMatchObject([
       { query: "original archive row" },
     ]);
     await expect(fs.readFile(archivedPath, "utf8")).resolves.toContain("rewritten archive row");
+    await expect(fs.readFile(eventPath, "utf8")).resolves.toBe(laterSource);
+
+    const invalidWorkspace = path.join(rootDir, "invalid-workspace");
+    const invalidPath = path.join(invalidWorkspace, "memory", ".dreams", "events.jsonl");
+    await fs.mkdir(path.dirname(invalidPath), { recursive: true });
+    await fs.writeFile(invalidPath, "invalid JSON\n");
+    const mixed = await migration.migrateLegacyState(
+      migrationParams({
+        agents: {
+          list: [
+            { id: "main", workspace: workspaceDir },
+            { id: "invalid", workspace: invalidWorkspace },
+          ],
+        },
+      }),
+    );
+    expect(mixed).not.toHaveProperty("warningDisposition");
+    expect(mixed.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("changed other than by append"),
+        expect.stringContaining("Skipped malformed Memory Core host event"),
+      ]),
+    );
+    await expect(fs.readFile(invalidPath, "utf8")).resolves.toBe("invalid JSON\n");
   });
 
   it("orders and limits migrated host events by archive generation", async () => {
@@ -789,7 +822,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("invalid rows still require repair"),
     ]);
     await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([]);
-    await expect(fs.access(eventPath)).resolves.toBeUndefined();
+    await fs.access(eventPath);
     await expect(fs.access(`${eventPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -815,7 +848,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("invalid rows still require repair"),
     ]);
     await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([]);
-    await expect(fs.access(eventPath)).resolves.toBeUndefined();
+    await fs.access(eventPath);
 
     await fs.writeFile(
       archivedPath,
@@ -870,7 +903,7 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toMatchObject([
       { query: "stable after repair" },
     ]);
-    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${eventPath}.migrated`);
   });
 
   it("preserves legacy host event append order when timestamps move backward", async () => {
@@ -945,17 +978,38 @@ describe("memory-core doctor dreaming migration", () => {
       await expect(
         readMemoryHostEventRecords({ workspaceDir: workspaceAlias, env }),
       ).resolves.toMatchObject([{ query: "canonical alias" }]);
-      await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+      await fs.access(`${eventPath}.migrated`);
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects legacy host events beneath symlinked workspace parents",
-    async () => {
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "ignores symlinked memory with no legacy sources (dreams directory: %s)",
+    async (hasDreamsDirectory) => {
+      const sharedMemory = path.join(rootDir, "shared-memory");
+      await fs.mkdir(hasDreamsDirectory ? path.join(sharedMemory, ".dreams") : sharedMemory, {
+        recursive: true,
+      });
+      await fs.rm(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.symlink(sharedMemory, path.join(workspaceDir, "memory"));
+
+      await expect(hostEventsMigration().detectLegacyState(migrationParams())).resolves.toBeNull();
+      await expect(hostEventsMigration().migrateLegacyState(migrationParams())).resolves.toEqual({
+        changes: [],
+        warnings: [],
+      });
+      expect((await fs.lstat(path.join(workspaceDir, "memory"))).isSymbolicLink()).toBe(true);
+    },
+  );
+
+  it
+    .runIf(process.platform !== "win32")
+    .each(["events.jsonl", "events.jsonl.migrated", ".events.jsonl.doctor-importing"])(
+    "rejects legacy host events beneath symlinked workspace parents: %s",
+    async (fileName) => {
       const externalMemoryDir = await fs.mkdtemp(
         path.join(os.tmpdir(), "openclaw-memory-core-external-events-"),
       );
-      const externalEventPath = path.join(externalMemoryDir, ".dreams", "events.jsonl");
+      const externalEventPath = path.join(externalMemoryDir, ".dreams", fileName);
       try {
         await fs.rm(path.join(workspaceDir, "memory"), { recursive: true });
         await fs.mkdir(path.dirname(externalEventPath), { recursive: true });
@@ -979,10 +1033,12 @@ describe("memory-core doctor dreaming migration", () => {
 
         expect(result.changes).toEqual([]);
         expect(result.warnings).toEqual([
-          expect.stringContaining(path.join(workspaceDir, "memory", ".dreams", "events.jsonl")),
+          expect.stringContaining(path.join(workspaceDir, "memory", ".dreams", fileName)),
         ]);
         expect(result.warnings[0]).toContain("memory.search.extraPaths");
         expect(result.warnings[0]).toContain("regular files and directories");
+        expect(result.warnings[0]).toContain("FsSafeError: path alias escape blocked");
+        expect(result).not.toHaveProperty("warningDisposition");
         await expect(hostEventsMigration().detectLegacyState(migrationParams())).resolves.toEqual({
           preview: result.warnings.map((warning) => `- ${warning}`),
         });
@@ -1050,8 +1106,8 @@ describe("memory-core doctor dreaming migration", () => {
     expect(afterRepeated).toHaveLength(10_000);
     expect(afterRepeated[0]).toMatchObject({ query: "oversized-3" });
     expect(afterRepeated.at(-1)).toMatchObject({ query: "newer recreated generation" });
-    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${eventPath}.migrated.2`)).resolves.toBeUndefined();
+    await fs.access(`${eventPath}.migrated`);
+    await fs.access(`${eventPath}.migrated.2`);
   });
 
   it("resumes a partially committed host event import before archiving the source", async () => {
@@ -1100,7 +1156,7 @@ describe("memory-core doctor dreaming migration", () => {
     const recovered = await readMemoryHostEventRecords({ workspaceDir, env });
     expect(recovered).toHaveLength(events.length);
     expect(recovered).toMatchObject(events);
-    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${eventPath}.migrated`);
     await expect(hostEventsMigration().migrateLegacyState(migrationParams())).resolves.toEqual({
       changes: [],
       warnings: [],
@@ -1131,7 +1187,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([expect.stringContaining("no room for its workspace cursor")]);
-    await expect(fs.access(eventPath)).resolves.toBeUndefined();
+    await fs.access(eventPath);
     await expect(fs.access(`${eventPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -1193,7 +1249,7 @@ describe("memory-core doctor dreaming migration", () => {
       .openPluginStateKeyedStore({ namespace: "memory-host.events", maxEntries: 10_000 })
       .entries();
     expect(entries).toEqual([]);
-    await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${eventPath}.migrated`);
   });
 
   it("migrates and recovers persistent legacy dreaming state", async () => {
@@ -1304,11 +1360,11 @@ describe("memory-core doctor dreaming migration", () => {
     ]);
 
     configureMemoryCoreDreamingState(context().openPluginStateKeyedStore);
-    await expect(fs.access(`${dailyPath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${sessionPath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${recallPath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${phasePath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(lockPath)).resolves.toBeUndefined();
+    await fs.access(`${dailyPath}.migrated`);
+    await fs.access(`${sessionPath}.migrated`);
+    await fs.access(`${recallPath}.migrated`);
+    await fs.access(`${phasePath}.migrated`);
+    await fs.access(lockPath);
 
     const daily = await dreamingTesting.readDailyIngestionState(workspaceDir);
     expect(daily.files["memory/2026-04-05.md"]?.mtimeMs).toBe(1);
@@ -1432,7 +1488,7 @@ describe("memory-core doctor dreaming migration", () => {
     expect(result.warnings).toEqual([
       expect.stringContaining("Skipped Memory Core short-term recall import"),
     ]);
-    await expect(fs.access(recallPath)).resolves.toBeUndefined();
+    await fs.access(recallPath);
     await expect(fs.access(`${recallPath}.migrated`)).rejects.toThrow();
     configureMemoryCoreDreamingState(context().openPluginStateKeyedStore);
     const recall = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
@@ -1507,7 +1563,7 @@ describe("memory-core doctor dreaming migration", () => {
       chunks: [{ id: "chunk-1", text: "remember this" }],
       cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("removes an empty legacy memory sidecar placeholder without warning", async () => {
@@ -1614,7 +1670,7 @@ describe("memory-core doctor dreaming migration", () => {
     // WAL companion's state is unknown (ELOOP).  No removal change and no
     // crash — the migration should skip the empty-sidecar cleanup path.
     expect(result.changes).toEqual([]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
   });
 
   it("preserves the main sidecar when a companion stat fails with EACCES", async () => {
@@ -1642,7 +1698,7 @@ describe("memory-core doctor dreaming migration", () => {
 
       // Fail-closed: the migration must NOT remove the main file.
       expect(result.changes).toEqual([]);
-      await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+      await fs.access(legacyPath);
     } finally {
       vi.restoreAllMocks();
     }
@@ -1665,7 +1721,7 @@ describe("memory-core doctor dreaming migration", () => {
     expect(result.warnings).toEqual([
       "Skipped Memory Core legacy memory index import for agent main because the sidecar schema is not a legacy memory index",
     ]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
   });
 
   it("creates migrated FTS tables with the configured legacy tokenizer", async () => {
@@ -1692,7 +1748,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(readMemoryFtsSql(agentPath)).toContain("tokenize='trigram case_sensitive 0'");
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("migrates retired configured legacy memory sidecar paths", async () => {
@@ -1733,7 +1789,7 @@ describe("memory-core doctor dreaming migration", () => {
       chunks: [{ id: "chunk-1", text: "remember this" }],
       cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("migrates all retired configured legacy memory sidecar paths", async () => {
@@ -1796,8 +1852,8 @@ describe("memory-core doctor dreaming migration", () => {
         .chunks.map((chunk) => String(chunk.id))
         .toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(["chunk-defaults", "chunk-top"]);
-    await expect(fs.access(`${defaultsPath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${topLevelPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${defaultsPath}.migrated`);
+    await fs.access(`${topLevelPath}.migrated`);
   });
 
   it("does not infer agent ownership from configured sidecar filenames", async () => {
@@ -1844,7 +1900,7 @@ describe("memory-core doctor dreaming migration", () => {
       { id: "chunk-1", text: "remember this" },
     ]);
     await expect(fs.access(sharedAgentPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("ignores transient memory SQLite files when discovering default sidecars", async () => {
@@ -1909,7 +1965,7 @@ describe("memory-core doctor dreaming migration", () => {
         cache: [{ provider: "openai", hash: "chunk-hash" }],
       });
     }
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("restores legacy sidecar vector rows for vector-backed search", async () => {
@@ -1926,7 +1982,7 @@ describe("memory-core doctor dreaming migration", () => {
     );
     const rows = await searchMigratedVectorRows(agentPath);
     expect(rows.map((row) => row.id)).toEqual(["chunk-1"]);
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("archives empty legacy vector sidecars when sqlite-vec cannot load", async () => {
@@ -1963,7 +2019,7 @@ describe("memory-core doctor dreaming migration", () => {
       "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("leaves malformed legacy vector sidecars retryable", async () => {
@@ -1990,7 +2046,7 @@ describe("memory-core doctor dreaming migration", () => {
     expect(result.changes).toEqual([
       "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
     ]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
@@ -2033,7 +2089,7 @@ describe("memory-core doctor dreaming migration", () => {
     });
     const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
     expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
@@ -2069,7 +2125,7 @@ describe("memory-core doctor dreaming migration", () => {
     ]);
     const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
     expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("copies custom vector sidecars to the canonical retry path when sqlite-vec cannot load", async () => {
@@ -2122,8 +2178,8 @@ describe("memory-core doctor dreaming migration", () => {
         "openclaw-agent.sqlite",
       )}`,
     ]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-    await expect(fs.access(retryPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
+    await fs.access(retryPath);
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
@@ -2190,8 +2246,8 @@ describe("memory-core doctor dreaming migration", () => {
         "openclaw-agent.sqlite",
       )}`,
     ]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-    await expect(fs.access(alternateRetryPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
+    await fs.access(alternateRetryPath);
 
     const retryEntriesBefore = (await fs.readdir(path.join(stateDir, "memory")))
       .filter((entry) => entry.startsWith("main.retry-"))
@@ -2230,7 +2286,7 @@ describe("memory-core doctor dreaming migration", () => {
       cache: [],
     });
     await expect(fs.access(legacyPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("archives conflicting custom derived indexes without creating a retry copy", async () => {
@@ -2273,7 +2329,7 @@ describe("memory-core doctor dreaming migration", () => {
     expect(retryPreview).toBeNull();
     await expect(fs.access(legacyPath)).rejects.toThrow();
     await expect(fs.access(retryPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("copies custom sidecars to the retry path when canonical database setup fails", async () => {
@@ -2319,8 +2375,8 @@ describe("memory-core doctor dreaming migration", () => {
     expect(retryPreview?.preview).toEqual([
       `- Memory Core legacy memory index: ${retryPath} -> ${agentPath}`,
     ]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-    await expect(fs.access(retryPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
+    await fs.access(retryPath);
   });
 
   it("keeps canonical metadata and archives a conflicting derived legacy index", async () => {
@@ -2341,7 +2397,7 @@ describe("memory-core doctor dreaming migration", () => {
       { id: "canonical-other-chunk", text: "canonical unrelated memory" },
     ]);
     await expect(fs.access(legacyPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
 
     const secondRun = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
     expect(secondRun).toEqual({ changes: [], warnings: [] });
@@ -2375,7 +2431,7 @@ describe("memory-core doctor dreaming migration", () => {
       cache: [],
     });
     await expect(fs.access(legacyPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("merges legacy sidecar rows into a non-empty canonical index when rows do not conflict", async () => {
@@ -2405,7 +2461,7 @@ describe("memory-core doctor dreaming migration", () => {
     });
     const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
     expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("retains an exact canonical FTS row without duplicating it", async () => {
@@ -2424,7 +2480,7 @@ describe("memory-core doctor dreaming migration", () => {
     ]);
     const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
     expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("keeps canonical cache collisions while importing remaining legacy rows", async () => {
@@ -2494,7 +2550,7 @@ describe("memory-core doctor dreaming migration", () => {
       },
     ]);
     await expect(fs.access(legacyPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
 
     const secondRun = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
     expect(secondRun).toEqual({ changes: [], warnings: [] });
@@ -2580,7 +2636,7 @@ describe("memory-core doctor dreaming migration", () => {
         },
       ]);
       await expect(fs.access(legacyPath)).rejects.toThrow();
-      await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+      await fs.access(`${legacyPath}.migrated`);
     },
   );
 
@@ -2599,7 +2655,7 @@ describe("memory-core doctor dreaming migration", () => {
       ),
     ]);
     expect(result.changes).toEqual([]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
@@ -2618,7 +2674,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     await expect(fs.access(legacyPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("leaves legacy vector sidecars in place when vector rows have no chunk", async () => {
@@ -2640,7 +2696,7 @@ describe("memory-core doctor dreaming migration", () => {
       ),
     ]);
     expect(result.changes).toEqual([]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await fs.access(legacyPath);
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
@@ -2678,7 +2734,7 @@ describe("memory-core doctor dreaming migration", () => {
       cache: [],
     });
     await expect(fs.access(legacyPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("keeps canonical vector metadata and archives a conflicting derived legacy index", async () => {
@@ -2699,7 +2755,7 @@ describe("memory-core doctor dreaming migration", () => {
       { id: "canonical-other-chunk", text: "canonical unrelated memory" },
     ]);
     await expect(fs.access(legacyPath)).rejects.toThrow();
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${legacyPath}.migrated`);
   });
 
   it("removes retired QMD workspace homes without following model or home symlinks", async () => {
@@ -2819,7 +2875,7 @@ describe("memory-core doctor dreaming migration", () => {
       fs.access(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     for (const filePath of ignoredPaths) {
-      await expect(fs.access(filePath)).resolves.toBeUndefined();
+      await fs.access(filePath);
     }
     await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
     await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({

@@ -94,20 +94,20 @@ describe("read-only SQLite session retention projection", () => {
       const sharedSessionId = "retention-shared-owner";
       writeFixtureEntry({
         storePath,
-        sessionKey: "agent:main:eligible-oldest",
+        sessionKey: "agent:main:subagent:eligible-oldest",
         sessionId: "eligible-oldest",
         updatedAt: 1,
       });
       writeFixtureEntry({
         storePath,
-        sessionKey: "agent:main:eligible-shared-a",
+        sessionKey: "agent:main:subagent:eligible-shared-a",
         sessionId: "eligible-shared-a",
         updatedAt: 2,
         usageFamilySessionIds: [sharedSessionId],
       });
       writeFixtureEntry({
         storePath,
-        sessionKey: "agent:main:eligible-shared-b",
+        sessionKey: "agent:main:subagent:eligible-shared-b",
         sessionId: "eligible-shared-b",
         updatedAt: 3,
         usageFamilySessionIds: [sharedSessionId],
@@ -200,9 +200,9 @@ describe("read-only SQLite session retention projection", () => {
     try {
       assertIsolatedStateEnvironment(state.stateDir);
       const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const parentKey = "agent:main:lineage-parent";
-      const spawnerKey = "agent:main:lineage-spawner";
-      const childKey = "agent:main:lineage-child";
+      const parentKey = "agent:main:subagent:lineage-parent";
+      const spawnerKey = "agent:main:subagent:lineage-spawner";
+      const childKey = "agent:main:subagent:lineage-child";
       writeFixtureEntry({
         storePath,
         sessionKey: parentKey,

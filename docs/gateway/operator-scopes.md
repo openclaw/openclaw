@@ -408,3 +408,8 @@ shared-secret bearer auth, even if a caller sends narrower declared scopes.
 Identity-bearing modes, such as trusted proxy auth or private-ingress `none`,
 can still honor explicit declared scopes. Use separate Gateways for real trust
 boundary separation.
+
+## Related
+
+- [Trusted proxy auth](/gateway/trusted-proxy-auth) — how a trusted proxy supplies the operator identity these scopes attach to
+- [Gateway protocol](/gateway/protocol) — the methods these scopes authorize

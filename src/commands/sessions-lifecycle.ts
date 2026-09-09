@@ -9,6 +9,7 @@ import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -47,7 +48,7 @@ type SessionsLifecycleResult = {
   worktreePreserved?: PreservedSessionWorktree;
 };
 
-type SessionsListRow = Pick<SessionRow, "key" | "sessionId" | "archived" | "isMain">;
+type SessionsListRow = Pick<SessionRow, "key" | "sessionId" | "agentId" | "archived" | "isMain">;
 
 type SessionsListResult = {
   sessions?: SessionsListRow[];
@@ -148,6 +149,7 @@ function outputLifecycleResults(
   results: SessionsLifecycleResult[],
   runtime: RuntimeEnv,
   json: boolean,
+  deletedSessions?: ReadonlyMap<SessionsLifecycleResult, SessionsListRow>,
 ): void {
   const ok = results.every((result) => result.ok);
   if (json) {
@@ -173,10 +175,20 @@ function outputLifecycleResults(
         case "already_archived":
           runtime.log(`Session ${result.key} is already archived.`);
           break;
-        case "deleted":
+        case "deleted": {
           runtime.log(`Deleted session ${result.key}.`);
-          for (const archived of result.archived ?? []) {
+          const archivedTranscripts = result.archived ?? [];
+          for (const archived of archivedTranscripts) {
             runtime.log(`Archived transcript: ${archived}`);
+          }
+          if (archivedTranscripts.length > 0) {
+            const agentId = deletedSessions?.get(result)?.agentId;
+            runtime.log("Archived transcripts can remain eligible for memory search.");
+            runtime.log(
+              agentId
+                ? `To remove indexed memories for this session, run openclaw memory forget --agent ${quoteCliArg(agentId)} --session ${quoteCliArg(result.key)} on the Gateway host or container using its state and configuration.`
+                : "Run openclaw memory forget on the Gateway host or container using its state and configuration; select the owning agent with --agent and this session with --session.",
+            );
           }
           if (result.worktreePreserved) {
             const preserved = result.worktreePreserved;
@@ -185,6 +197,7 @@ function outputLifecycleResults(
             );
           }
           break;
+        }
         case "would_archive":
           runtime.log(`[dry-run] archive session ${result.key}`);
           break;
@@ -239,6 +252,7 @@ async function runSessionsLifecycleCommand(
   const results = keys.map((key): SessionsLifecycleResult | undefined =>
     key && sessions.has(key) ? undefined : notFoundResult(key, agent),
   );
+  const deletedSessions = new Map<SessionsLifecycleResult, SessionsListRow>();
   const listedTargets = keys.flatMap((key, index) => {
     const session = sessions.get(key);
     return session ? [{ index, session }] : [];
@@ -337,13 +351,16 @@ async function runSessionsLifecycleCommand(
           results[index] = notFoundResult(session.key, agent);
           continue;
         }
-        results[index] = {
+        const result: SessionsLifecycleResult = {
           key: response.key ?? session.key,
           ok: true,
           status: "deleted",
           archived: response.archived ?? [],
           ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
         };
+        results[index] = result;
+        // Distinct listed aliases can return the same canonical key after deletion.
+        deletedSessions.set(result, session);
       }
     } catch (error) {
       results[index] = {
@@ -361,6 +378,7 @@ async function runSessionsLifecycleCommand(
     results.filter((result) => result !== undefined),
     runtime,
     Boolean(opts.json),
+    deletedSessions,
   );
 }
 

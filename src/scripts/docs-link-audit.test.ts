@@ -9,7 +9,7 @@ import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-ma
 import { normalizeRoute } from "../../scripts/lib/docs-published-routes.mts";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
-const { prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
+const { auditDocsLinks, prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
   await import("../../scripts/docs-link-audit.mts");
 
 type AuditCliCase = {
@@ -45,6 +45,116 @@ describe("docs-link-audit", () => {
     expect(md.renderer.render(document.tokens, md.options, document.env)).toContain(
       "&lt;Card href=&quot;/same&quot; title=&quot;Literal&quot; /&gt;",
     );
+  });
+
+  it.each([
+    {
+      name: "published possessive links",
+      source: "## Request today's summary\n\n## The vendor's harness, as a plugin",
+      headings: [
+        ["request-today's-summary", "request-todays-summary"],
+        ["the-vendor's-harness%2C-as-a-plugin", "the-vendors-harness-as-a-plugin"],
+      ],
+      collisions: [],
+    },
+    {
+      name: "normalized duplicates and numbered suffixes before alias reservation",
+      source: "## A-s\n\n## As\n\n## A-s\n\n## A-s-2\n\n## A-s",
+      headings: [
+        ["a-s", null],
+        ["as", "as-2"],
+        ["a-s-1", "as-3"],
+        ["a-s-2", "as-2-1"],
+        ["a-s-3", "as-4"],
+      ],
+      collisions: [{ id: "as", reason: "compatibility alias collision" }],
+    },
+    {
+      name: "percent bytes, underscores and numbered title prefixes",
+      source:
+        "## café 中文 _Über\n\n## café 中文 _Über\n\n## 1. Today\n\n## 1. Today\n\n## 100% ready",
+      headings: [
+        ["caf%C3%A9-%E4%B8%AD%E6%96%87-_%C3%BCber", "café-中文-_über"],
+        ["caf%C3%A9-%E4%B8%AD%E6%96%87-_%C3%BCber-1", "café-中文-_über-2"],
+        ["1.-today", "1-today"],
+        ["1.-today-1", "1-today-2"],
+        ["100%25-ready", "100%-ready"],
+      ],
+      collisions: [],
+    },
+  ])("preserves Mint heading targets for $name", ({ source, headings, collisions }) => {
+    const document = parseDocsDocument(source);
+    expect(
+      document.tokens
+        .filter((token) => token.type === "heading_open")
+        .map((token) => [token.attrGet("id"), token.meta?.anchorAlias ?? null]),
+    ).toEqual(headings);
+    expect(document.collisions).toEqual(collisions);
+    expect(new Set(document.ids).size).toBe(document.ids.length);
+  });
+
+  it.each([
+    {
+      name: "shared heading/Step TOC with an independent Tab counter",
+      source: [
+        "## Today's summary",
+        '<Steps titleSize="h2">',
+        '<Step title="Today\'s summary">one</Step>',
+        '<Step title="Today\'s summary">two</Step>',
+        "</Steps>",
+        "<Tabs>",
+        '<Tab title="Today\'s summary">one</Tab>',
+        '<Tab title="Todays summary">two</Tab>',
+        '<Tab title="Today\'s summary">three</Tab>',
+        "</Tabs>",
+        '<Accordion title="A-s">one</Accordion>',
+        '<Accordion title="As">two</Accordion>',
+        '<ParamField body="a-s">one</ParamField>',
+        '<ResponseField name="as">two</ResponseField>',
+      ],
+      ids: [
+        "today's-summary",
+        "todays-summary",
+        "todays-summary-2",
+        "todays-summary-3",
+        "todays-summary-1",
+        "todays-summary-2-1",
+        "todays-summary-3-1",
+        "as",
+        "as-1",
+        "param-as",
+        "param-as-1",
+      ],
+      collisions: [],
+    },
+    {
+      name: "authored IDs reserved before heading aliases and component IDs",
+      source: [
+        "## Today's summary",
+        '<a id="todays-summary"></a>',
+        '<Tab title="A-s">one</Tab>',
+        '<Tab id="as" title="Explicit">two</Tab>',
+        '<Accordion title="A-s">three</Accordion>',
+        '<ParamField body="a-s">four</ParamField>',
+        '<a id="param-as"></a>',
+      ],
+      ids: ["today's-summary", "todays-summary", "as", "param-as", "as-1", "as-2", "param-as-1"],
+      collisions: [{ id: "todays-summary", reason: "compatibility alias collision" }],
+    },
+    {
+      name: "raw component apostrophes normalized after separators",
+      source: [
+        '<Accordion title="A-s\'s guide">one</Accordion>',
+        '<ParamField body="a-s\'sGuide">two</ParamField>',
+      ],
+      ids: ["as-s-guide", "param-as-s-guide"],
+      collisions: [],
+    },
+  ])("preserves Mint component targets for $name", ({ source, ids, collisions }) => {
+    const document = parseDocsDocument(source.join("\n\n"));
+    expect(document.ids).toEqual(ids);
+    expect(document.collisions).toEqual(collisions);
+    expect(new Set(document.ids).size).toBe(document.ids.length);
   });
 
   it.each<AuditCliCase>([
@@ -322,6 +432,192 @@ describe("docs-link-audit", () => {
       }
     },
   );
+
+  describe("ClawHub routes mirrored from openclaw/clawhub", () => {
+    // /clawhub/** pages are authored upstream and injected by the publisher, so a
+    // checkout without the ClawHub source has the navigation entries but no pages.
+    const buildDocsTree = (
+      tempDirs: string[],
+      link: string,
+      options: { redirects?: Array<{ source: string; destination: string }>; root?: string } = {},
+    ) => {
+      const docsRoot = path.join(
+        options.root ?? makeTempDir(tempDirs, "docs-clawhub-mirror-"),
+        "docs",
+      );
+      fs.mkdirSync(docsRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(docsRoot, "docs.json"),
+        JSON.stringify({
+          navigation: [{ group: "ClawHub", pages: ["clawhub/index", "clawhub/publishing"] }],
+          redirects: options.redirects ?? [{ source: "/tools/clawhub", destination: "/clawhub" }],
+        }),
+      );
+      fs.writeFileSync(path.join(docsRoot, "page.md"), `## Page\n\n[hub](${link})\n`);
+      return docsRoot;
+    };
+
+    it("accepts declared mirrored routes in anchors mode when the source is absent", () => {
+      const tempDirs: string[] = [];
+      try {
+        const result = auditDocsLinks({
+          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing"),
+          allowExternalClawHubRoutes: true,
+          anchors: true,
+        });
+        expect(result.broken).toEqual([]);
+        expect(result.unverifiedMirroredFragments).toBe(0);
+      } finally {
+        cleanupTempDirs(tempDirs);
+      }
+    });
+
+    it("reports fragments into mirrored routes as unverified rather than missing", () => {
+      const tempDirs: string[] = [];
+      try {
+        const result = auditDocsLinks({
+          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source"),
+          allowExternalClawHubRoutes: true,
+          anchors: true,
+        });
+        expect(result.unverifiedMirroredFragments).toBe(1);
+        expect(result.broken).toHaveLength(1);
+        expect(result.broken[0]?.reason).toContain("fragment unverified");
+        expect(result.broken[0]?.reason).toContain("OPENCLAW_DOCS_SYNC_CLAWHUB_REPO");
+      } finally {
+        cleanupTempDirs(tempDirs);
+      }
+    });
+
+    it("leaves fragments into mirrored routes alone in plain mode", () => {
+      const tempDirs: string[] = [];
+      try {
+        // Plain mode has never inspected fragments; the declared route is proof
+        // enough, so the unverifiable fragment must not become a broken link.
+        const result = auditDocsLinks({
+          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source"),
+          allowExternalClawHubRoutes: true,
+        });
+        expect(result.broken).toEqual([]);
+        expect(result.unverifiedMirroredFragments).toBe(0);
+      } finally {
+        cleanupTempDirs(tempDirs);
+      }
+    });
+
+    it("exits clean from the CLI in plain mode for a fragment into a mirrored route", () => {
+      const tempDirs: string[] = [];
+      try {
+        // Nest the fixture so `<root>/../clawhub` cannot accidentally resolve and
+        // turn the allowance off: this run must be the source-absent shape.
+        const fixtureRoot = path.join(makeTempDir(tempDirs, "docs-clawhub-mirror-cli-"), "repo");
+        const home = path.join(fixtureRoot, "home");
+        buildDocsTree(tempDirs, "/clawhub/publishing#package-publish-source", {
+          root: fixtureRoot,
+        });
+        fs.mkdirSync(home, { recursive: true });
+        const result = spawnSync(
+          process.execPath,
+          [fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url))],
+          {
+            cwd: fixtureRoot,
+            encoding: "utf8",
+            env: {
+              PATH: process.env.PATH,
+              HOME: home,
+              USERPROFILE: home,
+              TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+            },
+            timeout: 30_000,
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.stdout).toContain("broken_links=0\n");
+        expect(result.stdout).not.toContain("fragment unverified");
+        expect(result.status).toBe(0);
+      } finally {
+        cleanupTempDirs(tempDirs);
+      }
+    });
+
+    it("reports unverified fragments in redirect destinations into mirrored routes", () => {
+      const tempDirs: string[] = [];
+      try {
+        const result = auditDocsLinks({
+          docsDir: buildDocsTree(tempDirs, "/page", {
+            redirects: [
+              {
+                source: "/tools/clawhub",
+                destination: "/clawhub/publishing#package-publish-source",
+              },
+            ],
+          }),
+          allowExternalClawHubRoutes: true,
+          anchors: true,
+        });
+        expect(result.unverifiedMirroredFragments).toBe(1);
+        expect(result.broken).toHaveLength(1);
+        expect(result.broken[0]?.file).toBe("docs.json");
+        expect(result.broken[0]?.link).toBe("/tools/clawhub");
+        expect(result.broken[0]?.reason).toContain("fragment unverified");
+        expect(result.broken[0]?.reason).toContain("OPENCLAW_DOCS_SYNC_CLAWHUB_REPO");
+      } finally {
+        cleanupTempDirs(tempDirs);
+      }
+    });
+
+    it("keeps mirrored redirect destinations silent in plain mode", () => {
+      const tempDirs: string[] = [];
+      try {
+        const result = auditDocsLinks({
+          docsDir: buildDocsTree(tempDirs, "/page", {
+            redirects: [
+              {
+                source: "/tools/clawhub",
+                destination: "/clawhub/publishing#package-publish-source",
+              },
+            ],
+          }),
+          allowExternalClawHubRoutes: true,
+        });
+        expect(result.broken).toEqual([]);
+        expect(result.unverifiedMirroredFragments).toBe(0);
+      } finally {
+        cleanupTempDirs(tempDirs);
+      }
+    });
+
+    it("still reports undeclared routes under /clawhub as missing", () => {
+      const tempDirs: string[] = [];
+      try {
+        const result = auditDocsLinks({
+          docsDir: buildDocsTree(tempDirs, "/clawhub/not-in-navigation"),
+          allowExternalClawHubRoutes: true,
+          anchors: true,
+        });
+        expect(result.broken).toHaveLength(1);
+        expect(result.broken[0]?.reason).toContain("route/file not found");
+      } finally {
+        cleanupTempDirs(tempDirs);
+      }
+    });
+
+    it("does not accept mirrored routes when the allowance is off", () => {
+      const tempDirs: string[] = [];
+      try {
+        const result = auditDocsLinks({
+          docsDir: buildDocsTree(tempDirs, "/clawhub/publishing"),
+          allowExternalClawHubRoutes: false,
+          anchors: true,
+        });
+        expect(result.broken.some((item) => item.reason.includes("route/file not found"))).toBe(
+          true,
+        );
+      } finally {
+        cleanupTempDirs(tempDirs);
+      }
+    });
+  });
 
   it("normalizes route fragments away", () => {
     expect(normalizeRoute("/plugins/building-plugins#registering-agent-tools")).toBe(

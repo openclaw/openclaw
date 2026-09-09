@@ -490,3 +490,4 @@ owner.
 - [Plugins](/tools/plugin)
 - [Manage plugins](/plugins/manage-plugins)
 - [Sessions](/concepts/session)
+- [Managed worktrees](/concepts/managed-worktrees)

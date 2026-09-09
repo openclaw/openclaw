@@ -3,13 +3,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
   captureCodexSettledTurnFinalizationContext,
@@ -186,6 +187,68 @@ function settledFixture() {
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
   it.each([
+    new Error("private transcript detail"),
+    new Error("Codex settled-turn projection exceeds the item limit: private detail"),
+    Object.assign(new Error("private missing consumer data"), { code: "ENOENT" }),
+  ])("sanitizes unknown consumer failures without classifying their text (%s)", async (error) => {
+    const result = await readCodexNativeHistory({ kind: "empty" }, "session-id", () => {
+      throw error;
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "history_read_failed",
+    });
+  });
+
+  it.each([
+    { incognito: false, reason: "item_limit", count: 201, text: "prior" },
+    { incognito: true, reason: "item_limit", count: 201, text: "prior" },
+    { incognito: false, reason: "field_limit", count: 1, text: "x".repeat(65537) },
+    { incognito: true, reason: "field_limit", count: 1, text: "x".repeat(65537) },
+  ])(
+    "retains $reason in capture diagnostics (incognito=$incognito)",
+    async ({ incognito, reason, count, text }) => {
+      const { marker, sessionTarget } = await writeSqliteSession({ incognito });
+      const { settledMessages } = settledFixture();
+      const extra = Array.from({ length: count }, (_, index) =>
+        attachCodexMirrorIdentity(
+          {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            timestamp: index + 3,
+          } as AgentMessage,
+          `settled:extra:${index}`,
+        ),
+      );
+      settledMessages.splice(1, 0, ...extra);
+      for (const message of settledMessages) {
+        await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
+      }
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+      try {
+        await expect(
+          captureCodexSettledTurnFinalizationContext({
+            ...sessionTarget,
+            sessionTarget,
+            sessionFile: marker,
+            model: "gpt-5.6-luna",
+            settledMessages,
+            mirroredMessages: settledMessages,
+            turnId: "settled",
+          }),
+        ).resolves.toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+          "codex settled-turn finalization context capture failed",
+          { reason },
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it.each([
     { oversized: false, incognito: false },
     { oversized: true, incognito: false },
     { oversized: true, incognito: true },
@@ -214,59 +277,71 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       for (const message of settledMessages) {
         await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
       }
-      const originalParse = JSON.parse;
-      let laterPayloadReads = 0;
-      const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-        if (typeof text === "string" && text.includes(unreadMarker)) {
-          laterPayloadReads += 1;
-        }
-        return originalParse(text, reviver);
+      const captured = await captureCodexSettledTurnFinalizationContext({
+        ...sessionTarget,
+        sessionTarget,
+        sessionFile: marker,
+        model: "gpt-5.6-luna",
+        settledMessages,
+        mirroredMessages: settledMessages,
+        turnId: "settled",
       });
-      try {
-        const captured = await captureCodexSettledTurnFinalizationContext({
-          ...sessionTarget,
-          sessionTarget,
-          sessionFile: marker,
-          model: "gpt-5.6-luna",
-          settledMessages,
-          mirroredMessages: settledMessages,
-          turnId: "settled",
+      {
+        expect(captured).toBeInstanceOf(CodexSettledTurnContext);
+        expect(captured?.data).toContainEqual({
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: upstreamPrompt }],
         });
-        if (oversized) {
-          expect(captured).toBeUndefined();
-        } else {
-          expect(captured).toBeInstanceOf(CodexSettledTurnContext);
-          expect(captured?.data).toContainEqual({
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: upstreamPrompt }],
-          });
-          expect(Object.isFrozen(captured?.data)).toBe(true);
-          expect(captured?.data.at(-1)).toMatchObject({
-            type: "function_call_output",
-            call_id: "sent",
-            output: "Synthetic update sent.",
-          });
-        }
-        // Incognito executes the same worker operation in this process, so this spy observes payload reads.
-        if (incognito) {
-          expect(laterPayloadReads).toBe(0);
-          await expect(fs.access(sessionTarget.storePath)).rejects.toThrow();
-        }
-      } finally {
-        parse.mockRestore();
+        expect(Object.isFrozen(captured?.data)).toBe(true);
+        expect(captured?.data.at(-1)).toMatchObject({
+          type: "function_call_output",
+          call_id: "sent",
+          output: "Synthetic update sent.",
+        });
+      }
+      if (oversized) {
+        expect(captured?.data[0]).toMatchObject({
+          content: [{ text: expect.stringContaining("Earlier conversation was omitted") }],
+        });
+        expect(JSON.stringify(captured?.data)).not.toContain(unreadMarker);
+      }
+      if (incognito) {
+        await expect(fs.access(sessionTarget.storePath)).rejects.toThrow();
       }
     },
   );
 
-  it.each(["rewrite", "append", "other-session"])(
-    "revalidates native evidence after the worker returns (%s)",
-    async (mutation) => {
+  it.each([
+    { mutation: "rewrite", oversized: false, reason: "snapshot_invalidated" },
+    { mutation: "append", oversized: false, reason: "snapshot_invalidated" },
+    { mutation: "other-session", oversized: false, reason: undefined },
+    { mutation: "rewrite", oversized: true, reason: "snapshot_invalidated" },
+    { mutation: "append", oversized: true, reason: "snapshot_invalidated" },
+    { mutation: "other-session", oversized: true, reason: "field_limit" },
+  ])(
+    "revalidates before reporting projection rejection ($mutation, oversized=$oversized)",
+    async ({ mutation, oversized, reason }) => {
       const { marker, sessionTarget } = await writeSqliteSession();
       const { settledMessages } = settledFixture();
+      if (oversized) {
+        settledMessages.splice(
+          1,
+          0,
+          attachCodexMirrorIdentity(
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "x".repeat(65537) }],
+              timestamp: 3,
+            } as AgentMessage,
+            "settled:oversized",
+          ),
+        );
+      }
       for (const message of settledMessages) {
         await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
       }
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
       const readFinished = createDeferred<void>();
       const acceptResult = createDeferred<void>();
       const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(async function (
@@ -323,14 +398,19 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         }
         acceptResult.resolve();
         const captured = await pending;
-        if (mutation === "other-session") {
+        if (reason === undefined) {
           expect(captured).toBeInstanceOf(CodexSettledTurnContext);
         } else {
           expect(captured).toBeUndefined();
+          expect(warn).toHaveBeenCalledWith(
+            "codex settled-turn finalization context capture failed",
+            { reason },
+          );
         }
       } finally {
         acceptResult.resolve();
         spy.mockRestore();
+        warn.mockRestore();
       }
     },
   );
@@ -397,6 +477,38 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ).resolves.toEqual([]);
   });
 
+  it("sanitizes consumer rejection after a missing file is read as empty history", async () => {
+    const existing = await writeSession([]);
+    const sessionFile = path.join(path.dirname(existing), "absent.jsonl");
+    await expect(
+      readCodexNativeHistory({ kind: "file", sessionFile }, "codex-session", () => {
+        throw new Error("private missing-file consumer detail");
+      }),
+    ).resolves.toEqual({ status: "rejected", reason: "history_read_failed" });
+  });
+
+  it("reports an admission for another session without exposing its identifiers", async () => {
+    const { sessionTarget } = await writeSqliteSession();
+    const appended = await appendSessionTranscriptMessageByIdentity({
+      ...sessionTarget,
+      message: { role: "user", content: "private admitted input", timestamp: 3 },
+    });
+    expect(appended?.anchor).toBeDefined();
+    await expect(
+      readCodexNativeHistory(
+        { kind: "sqlite", target: sessionTarget },
+        sessionTarget.sessionId,
+        (messages) => Array.from(messages),
+        {
+          ...appended!.anchor!,
+          sessionId: "private-other-session",
+          logicalTurnId: "private-turn",
+          role: "user",
+        },
+      ),
+    ).resolves.toEqual({ status: "rejected", reason: "access_rejected" });
+  });
+
   it("does not create a database for a missing explicit SQLite session key", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-missing-"));
     tempDirs.push(dir);
@@ -434,6 +546,12 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     tempDirs.push(dir);
     const sessionFile = path.join(dir, "session.jsonl");
     await fs.writeFile(sessionFile, JSON.stringify({ type: "session", id: 42 }) + "\n");
+
+    await expect(
+      readCodexNativeHistory({ kind: "file", sessionFile }, "codex-session", (messages) =>
+        Array.from(messages),
+      ),
+    ).resolves.toEqual({ status: "rejected", reason: "malformed_header" });
 
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),

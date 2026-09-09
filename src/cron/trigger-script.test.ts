@@ -45,7 +45,7 @@ function createPreparedRuntime(config: OpenClawConfig) {
     { config, agentId: "main", sessionKey: "cron:test:trigger" },
   );
   return {
-    tools: [tool],
+    createTools: () => [tool],
     context: { config, agentId: "main", sessionKey: "cron:test:trigger" },
   };
 }
@@ -78,7 +78,7 @@ describe("cron trigger script evaluator", () => {
     let aborts = 0;
     const prepared = createPreparedRuntime(config);
     const gate: AnyAgentTool = {
-      ...prepared.tools[0],
+      ...prepared.createTools()[0],
       name: "gate",
       label: "Gate",
       description: "Wait for the local fixture",
@@ -98,7 +98,7 @@ describe("cron trigger script evaluator", () => {
     };
     const runtime = createCronScriptRuntime({
       config,
-      prepareRuntime: async () => ({ ...prepared, tools: [gate] }),
+      prepareRuntime: async () => ({ ...prepared, createTools: () => [gate] }),
       runHeadless: (params) => {
         context = params.ctx;
         return runCodeModeScriptHeadless(params);
@@ -719,7 +719,10 @@ describe("cron script runtime elapsed-time budgets", () => {
         const preparedRuntime = createPreparedRuntime(config);
         const runtime = createCronScriptRuntime({
           config,
-          prepareRuntime: async () => ({ ...preparedRuntime, tools: [shiftClock, observeClock] }),
+          prepareRuntime: async () => ({
+            ...preparedRuntime,
+            createTools: () => [shiftClock, observeClock],
+          }),
         });
         const sharedScript =
           "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({});";

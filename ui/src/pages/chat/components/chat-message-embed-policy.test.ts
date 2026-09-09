@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { renderStreamGroupParts } from "./chat-message-stream.ts";
 
 describe("assistant message embed policy", () => {
@@ -23,7 +24,7 @@ describe("assistant message embed policy", () => {
                 options,
                 "standalone",
               )
-            : renderGroupedMessage(message, "message", {
+            : renderGroupedMessage(prepareChatMessageRender(message), "message", {
                 ...options,
                 isStreaming: false,
                 showReasoning: false,

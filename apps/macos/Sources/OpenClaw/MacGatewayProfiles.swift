@@ -335,10 +335,24 @@ actor MacGatewayProfileStore {
         return Self.sortedProfiles(stored.map(\.profile)).compactMap { profile in
             guard let item = stored.first(where: { $0.profile.id == profile.id }) else { return nil }
             let token = item.credentials.token?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let password = item.credentials.password?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let browserSession = item.credentials.browserSession
+            let authKind: MacGatewayCatalogProfile.AuthKind? = if browserSession != nil {
+                .browser
+            } else if token?.isEmpty == false {
+                .token
+            } else if password?.isEmpty == false {
+                .password
+            } else {
+                nil
+            }
             return MacGatewayCatalogProfile(
                 profile: profile,
                 canPromote: token?.isEmpty == false,
-                usesBrowserIdentity: item.credentials.browserSession != nil)
+                usesBrowserIdentity: browserSession != nil,
+                browserSessionExpiresAt: browserSession?.expiresAt,
+                authKind: authKind,
+                browserSessionSubject: browserSession?.subject)
         }
     }
 
@@ -560,6 +574,10 @@ actor MacGatewayConnectionFleet {
     struct Binding {
         let connection: GatewayConnection
         let chatStoreID: String
+    }
+
+    func existingConnection(profileID: String) -> GatewayConnection? {
+        self.connections[profileID]?.connection
     }
 
     func connection(profileID: String) async -> GatewayConnection {

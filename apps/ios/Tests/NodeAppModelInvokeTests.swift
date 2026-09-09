@@ -4236,6 +4236,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `enabling Voice Wake during standalone PTT remains suppressed`() async {
+        let previousEnabled = UserDefaults.standard.object(forKey: VoiceWakePreferences.enabledKey)
+        defer {
+            if let previousEnabled {
+                UserDefaults.standard.set(previousEnabled, forKey: VoiceWakePreferences.enabledKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: VoiceWakePreferences.enabledKey)
+            }
+        }
         let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
         appModel.acquirePttVoiceWakeLease(for: "standalone-ptt")
 
@@ -4244,11 +4252,46 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(appModel.voiceWake.statusText == "Paused")
         #expect(!appModel.voiceWake.isListening)
+        #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
 
         appModel.releasePttVoiceWakeLease(for: "standalone-ptt")
         await appModel.voiceWake._test_waitForScheduledStart()
         #expect(appModel.voiceWake.statusText == "Voice Wake isn’t supported on Simulator")
         appModel.voiceWake.stop()
+    }
+
+    @Test @MainActor func `Talk toggle preserves Voice Wake preference and enabled owner state`() async {
+        let keys = [VoiceWakePreferences.enabledKey, "talk.enabled"]
+        let previousValues = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        for key in keys {
+            UserDefaults.standard.set(false, forKey: key)
+        }
+        let appModel = NodeAppModel(talkMode: TalkModeManager())
+        defer {
+            appModel.setVoiceWakeEnabled(false)
+            appModel.setTalkEnabled(false)
+            for (key, previous) in previousValues {
+                if let previous {
+                    UserDefaults.standard.set(previous, forKey: key)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+        }
+
+        appModel.setVoiceWakeEnabled(true)
+        appModel.setTalkEnabled(true)
+        #expect(appModel.talkMode.isEnabled)
+        #expect(appModel.voiceWake.isEnabled)
+        #expect(appModel.voiceWake.statusText == "Paused")
+        #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
+
+        appModel.setTalkEnabled(false)
+        await appModel.voiceWake._test_waitForScheduledStart()
+        #expect(!appModel.talkMode.isEnabled)
+        #expect(appModel.voiceWake.isEnabled)
+        #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
+        #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
     }
 
     @Test @MainActor func `voice note start cannot race an acquired PTT lease`() async {
@@ -6659,6 +6702,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     func `Watch route lease cannot send an expired command as its replacement`() async throws {
         try await withWatchDeliveryFixture { fixture in
             let leaseGate = WatchMessageSendGate()
+            let receipts = AsyncStream<OpenClawWatchChatDeliveryReceipt>
+                .makeStream(bufferingPolicy: .bufferingNewest(8))
+            let sendResult = fixture.messaging.nextSendResult
+            fixture.messaging.sendChatDeliveryReceiptHandler = { receipt in
+                receipts.continuation.yield(receipt)
+                return sendResult
+            }
+            defer {
+                fixture.messaging.sendChatDeliveryReceiptHandler = nil
+                receipts.continuation.finish()
+            }
             var sentCommandIDs: [String] = []
             var sentTexts: [String] = []
             let recordSend: @MainActor @Sendable (String, String) -> Void = { commandID, text in
@@ -6726,8 +6780,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     submittedAtMs: now,
                     body: .quickReply(promptId: "new-prompt", actionId: "new-action", actionLabel: nil, note: nil))
                 try await fixture.coordinator.admit(original)
-                let leaseHeld = await waitForMainActorWork { leaseGate.commandIDs.count == 1 }
-                try #require(leaseHeld)
+                _ = try #require(try await leaseGate.waitForFirstSend())
+                #expect(leaseGate.commandIDs.count == 1)
                 // Advance the journal's existing maintenance clock, not the Gateway or a test-only scheduler.
                 #expect(try await fixture.journal.pruneExpired(nowMs: original.expiresAtMs) == 1)
                 let admitted = try await fixture.coordinator.admit(replacement)
@@ -6736,10 +6790,16 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 #expect(admitted.acceptedRunID == nil)
                 #expect(sentTexts.isEmpty)
                 leaseGate.release()
-                let completed = await waitForMainActorWork {
-                    fixture.messaging.sentChatReceipts.contains {
-                        $0.commandId == replacement.commandId && $0.terminal?.outcome == .forwarded
+                let completed = try await AsyncTimeout.withTimeout(
+                    seconds: 2,
+                    onTimeout: { URLError(.timedOut) })
+                {
+                    for await receipt in receipts.stream
+                        where receipt.commandId == replacement.commandId && receipt.terminal?.outcome == .forwarded
+                    {
+                        return true
                     }
+                    return false
                 }
                 #expect(completed)
                 await stopCoordinator()
@@ -6762,6 +6822,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         retiredDuringRemoval: Bool) async throws
     {
         try await withWatchDeliveryFixture { fixture in
+            let receipts = AsyncStream<OpenClawWatchChatDeliveryReceipt>
+                .makeStream(bufferingPolicy: .bufferingNewest(8))
+            let sendResult = fixture.messaging.nextSendResult
+            fixture.messaging.sendChatDeliveryReceiptHandler = { receipt in
+                receipts.continuation.yield(receipt)
+                return sendResult
+            }
+            defer {
+                fixture.messaging.sendChatDeliveryReceiptHandler = nil
+                receipts.continuation.finish()
+            }
             let command = fixture.command()
             let owner = OpenClawWatchMessageOwner(context: command.context)
             _ = try await fixture.journal.admit(command, nowMs: WatchMessagingPayloadCodec.nowMs())
@@ -6832,7 +6903,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             try await connect(socket(holdingHistory: true))
             let previousRoute = try #require(await fixture.gateway.currentRoute())
             await fixture.coordinator.resume(gatewayStableID: owner.gatewayStableID)
-            try #require(await waitForMainActorWork { historyGate.commandIDs == [command.commandId] })
+            try #require(try await historyGate.waitForFirstSend() == command.commandId)
+            #expect(historyGate.commandIDs == [command.commandId])
             await fixture.gateway.disconnect()
             if retiredDuringRemoval {
                 try fixture.databases.stageGatewayRemoval(gatewayID: owner.gatewayStableID)
@@ -6844,12 +6916,19 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             // Reconnect requests recovery while the previous socket callback is still held.
             await fixture.coordinator.resume(gatewayStableID: owner.gatewayStableID)
             historyGate.release()
-            #expect(await waitForMainActorWork {
-                fixture.messaging.sentChatReceipts.contains {
-                    $0.commandId == command.commandId && $0.terminal?
-                        .outcome == .reply(text: "Recovered after reconnect")
+            let recovered = try await AsyncTimeout.withTimeout(
+                seconds: 2,
+                onTimeout: { URLError(.timedOut) })
+            {
+                for await receipt in receipts.stream
+                    where receipt.commandId == command.commandId && receipt.terminal?
+                    .outcome == .reply(text: "Recovered after reconnect")
+                {
+                    return true
                 }
-            })
+                return false
+            }
+            #expect(recovered)
             #expect(!requests.commandIDs.contains("chat.send"))
             let stored = try #require(try await fixture.journal.entries(owner: owner).first)
             #expect(stored.receipt?.terminal?.outcome == .reply(text: "Recovered after reconnect"))
@@ -7396,7 +7475,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(NodeAppModel.execApprovalEventID(from: AnyCodable(["other": "approval-1"])) == nil)
     }
 
-    @Test @MainActor func `operator gateway resolved event waits for canonical readback`() async throws {
+    @Test @MainActor func `resolved operator event after disconnect preserves approval state`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let notificationCenter = MockBootstrapNotificationCenter()
@@ -7410,6 +7489,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 ],
             ])]
         let appModel = NodeAppModel(notificationCenter: notificationCenter)
+        let gatewayStableID = "test-gateway"
+        appModel.connectedGatewayID = gatewayStableID
         appModel._test_recordPendingWatchExecApprovalRecoveryID(
             "approval-event-resolved",
             gatewayDeviceId: "gateway-device-a")
@@ -7417,16 +7498,45 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
                     id: "approval-event-resolved",
+                    gatewayStableID: gatewayStableID,
                     commandText: "echo clear",
                     agentId: nil,
                     expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
-        await appModel.handleOperatorGatewayServerEvent(EventFrame(
-            type: "event",
-            event: ExecApprovalNotificationBridge.resolvedKind,
-            payload: AnyCodable(["id": "approval-event-resolved"]),
-            seq: nil,
-            stateversion: nil))
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        options.deviceAuthGatewayID = gatewayStableID
+        let operatorSession = appModel.operatorSession
+        let eventRoute: GatewayNodeSessionRoute
+        do {
+            try await operatorSession.connect(
+                url: #require(URL(string: "ws://approval-event-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession()),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            eventRoute = try #require(await operatorSession.currentRoute())
+            await operatorSession.disconnect()
+        } catch {
+            await operatorSession.disconnect()
+            throw error
+        }
+        #expect(await operatorSession.currentRoute() == nil)
+        #expect(!appModel.isOperatorGatewayConnected)
+        #expect(appModel.pendingExecApprovalResolvedPushes.isEmpty)
+
+        // The event subscriber captures its route before delivery; a late event
+        // must retain approval state after that route disconnects, without reconnecting.
+        await appModel.handleOperatorGatewayServerEvent(
+            EventFrame(
+                type: "event",
+                event: ExecApprovalNotificationBridge.resolvedKind,
+                payload: AnyCodable(["id": "approval-event-resolved"]),
+                seq: nil,
+                stateversion: nil),
+            expectedOperatorRoute: eventRoute)
 
         #expect(appModel.pendingExecApprovalPrompt?.id == "approval-event-resolved")
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-event-resolved"])
@@ -7444,6 +7554,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
         appModel.connectedGatewayID = "gateway-a"
+        appModel._test_setExecApprovalPromptFetchFailure("gateway unavailable")
         let gatewayA = ExecApprovalNotificationPrompt(
             approvalId: "shared-approval-id",
             gatewayDeviceId: "gateway-device-a")

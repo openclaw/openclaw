@@ -9,6 +9,7 @@ struct ChatSessionSidebarModelTests {
         key: String,
         displayName: String? = nil,
         label: String? = nil,
+        autoLabel: String? = nil,
         subject: String? = nil,
         sessionId: String? = nil,
         updatedAt: Double? = nil,
@@ -51,6 +52,7 @@ struct ChatSessionSidebarModelTests {
             model: nil,
             contextTokens: nil,
             label: label,
+            autoLabel: autoLabel,
             category: category,
             pinned: pinned,
             pinnedAt: pinnedAt,
@@ -366,6 +368,40 @@ struct ChatSessionSidebarModelTests {
 
         let unnamed = self.entry(key: "agent:main:x")
         #expect(ChatSessionSidebarModel.displayName(for: unnamed) == "x")
+
+        let androidStamp = self.entry(
+            key: "agent:main:node-1234567890ab",
+            displayName: "Generated title",
+            autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+        #expect(ChatSessionSidebarModel.displayName(for: androidStamp) == "Generated title")
+        let unnamedAndroidSession = self.entry(
+            key: "agent:main:node-1234567890ab",
+            autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+        #expect(
+            ChatSessionSidebarModel.displayName(for: unnamedAndroidSession)
+                == "OpenClaw App · Pixel · 1234567890ab")
+
+        for label in [
+            "OpenClaw App",
+            "OpenClaw App · 1234567890ab",
+            "OpenClaw App · Pixel · 1234567890ab",
+            "OpenClaw App · Release planning · 1234567890ab",
+        ] {
+            let manuallyNamed = self.entry(
+                key: "agent:main:node-1234567890ab",
+                displayName: "Generated title",
+                label: label,
+                autoLabel: "OpenClaw App · Pixel · 1234567890ab")
+            #expect(ChatSessionSidebarModel.displayName(for: manuallyNamed) == label)
+        }
+
+        let manualPrefix = self.entry(
+            key: "agent:main:dashboard:fresh",
+            displayName: "Generated title",
+            label: "OpenClaw App · Release planning")
+        #expect(
+            ChatSessionSidebarModel.displayName(for: manualPrefix)
+                == "OpenClaw App · Release planning")
     }
 
     @Test func `delete excludes main aliases and allows ordinary or selected global sessions`() {

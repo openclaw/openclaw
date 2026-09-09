@@ -24,15 +24,14 @@ import { installPluginFromClawHub } from "./clawhub.js";
 import { installPluginFromGitSpec } from "./git-install.js";
 import {
   installWithSourceFallback,
+  NpmChannelResolutionError,
   type PluginInstallSource,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
-import {
-  persistPluginInstall,
-  type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
+import { persistPluginInstall } from "./install-persistence.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import {
@@ -230,10 +229,10 @@ async function persistManagedSourceInstall(params: {
  * does not carry, and answering for them from this boundary would pin plugins
  * the policy never opted in.
  */
-function resolveOfficialManagedInstallSpec(params: {
+async function resolveOfficialManagedInstallSpec(params: {
   request: Extract<ManagedPluginSourceInstallRequest, { source: "official" | "npm" | "clawhub" }>;
   config: OpenClawConfig;
-}): string | null {
+}): Promise<string | null> {
   const { request } = params;
   const trustedSourceLinkedOfficialInstall =
     request.source !== "official" && request.trustedSourceLinkedOfficialInstall === true;
@@ -271,7 +270,7 @@ function resolveOfficialManagedInstallSpec(params: {
           officialPackageName: packageName,
           coreVersion: VERSION,
         })
-      : resolveNpmInstallSpecsForUpdateChannel({
+      : await resolveNpmInstallSpecsForUpdateChannel({
           spec: request.spec,
           updateChannel,
           officialPackageName: packageName,
@@ -352,10 +351,18 @@ async function installManagedPluginSourceUnderLease(
   if (request.source !== "official" && request.source !== "npm" && request.source !== "clawhub") {
     return await installResolvedManagedPluginSource(params, assertOwned);
   }
-  const installSpec = resolveOfficialManagedInstallSpec({
-    request,
-    config: params.snapshot.config,
-  });
+  let installSpec: string | null;
+  try {
+    installSpec = await resolveOfficialManagedInstallSpec({
+      request,
+      config: params.snapshot.config,
+    });
+  } catch (error) {
+    if (!(error instanceof NpmChannelResolutionError)) {
+      throw error;
+    }
+    return { ok: false, error: error.message, code: error.code };
+  }
   if (!installSpec) {
     return await installResolvedManagedPluginSource(params, assertOwned);
   }

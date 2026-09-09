@@ -6,7 +6,10 @@ import type {
   InstalledPluginIndexRecord,
 } from "./installed-plugin-index-types.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
-import type { PluginRegistryDifference } from "./plugin-registry-snapshot.types.js";
+import type {
+  PluginRegistryDifference,
+  PluginRegistryDifferenceFacet,
+} from "./plugin-registry-snapshot.types.js";
 
 export function isContainedPluginPath(
   rootPath: string,
@@ -134,25 +137,34 @@ export function diffPluginRegistryRecords(
     .flatMap((pluginId) => {
       const persistedPlugin = persistedPlugins.get(pluginId);
       const derivedPlugin = derivedPlugins.get(pluginId);
-      const persistedContent = [
-        persistedPlugin
-          ? resolvePluginRegistryRecordContent(persistedPlugin, comparePackageJsonPath)
-          : undefined,
-        persisted.installRecords[pluginId],
-        persisted.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
+      // Name the differing facet: the two source paths are often identical when only
+      // the install record or a diagnostic changed, so sources alone explain nothing.
+      const facets: Array<[PluginRegistryDifferenceFacet, unknown, unknown]> = [
+        [
+          "record",
+          persistedPlugin
+            ? resolvePluginRegistryRecordContent(persistedPlugin, comparePackageJsonPath)
+            : undefined,
+          derivedPlugin
+            ? resolvePluginRegistryRecordContent(derivedPlugin, comparePackageJsonPath)
+            : undefined,
+        ],
+        ["install", persisted.installRecords[pluginId], derived.installRecords[pluginId]],
+        [
+          "diagnostics",
+          persisted.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
+          derived.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
+        ],
       ];
-      const derivedContent = [
-        derivedPlugin
-          ? resolvePluginRegistryRecordContent(derivedPlugin, comparePackageJsonPath)
-          : undefined,
-        derived.installRecords[pluginId],
-        derived.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
-      ];
-      return isDeepStrictEqual(persistedContent, derivedContent)
+      const changed = facets
+        .filter(([, before, after]) => !isDeepStrictEqual(before, after))
+        .map(([facet]) => facet);
+      return changed.length === 0
         ? []
         : [
             {
               pluginId,
+              changed,
               persistedSource: persistedPlugin?.source ?? persistedPlugin?.manifestPath ?? null,
               derivedSource: derivedPlugin?.source ?? derivedPlugin?.manifestPath ?? null,
             },

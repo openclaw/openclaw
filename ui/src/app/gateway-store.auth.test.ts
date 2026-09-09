@@ -8,14 +8,21 @@ import {
   GATEWAY_STORE_TEST_HELLO as HELLO,
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
-import { loadSettings } from "./settings.ts";
+import { loadSettings, persistSessionToken, saveSettings } from "./settings.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
 function stubBuildReloadDocument(href = "http://127.0.0.1:18789/chat/main") {
   const replace = vi.fn<(url: string) => void>();
   const location = Object.assign(new URL(href), { replace });
   vi.stubGlobal("location", location);
-  vi.stubGlobal("window", { location });
+  vi.stubGlobal("window", Object.assign(new EventTarget(), { location }));
+  vi.stubGlobal(
+    "document",
+    Object.assign(new EventTarget(), {
+      documentElement: { getAttribute: () => null },
+      querySelector: () => null,
+    }),
+  );
   const probe = createDeferred<Response>();
   const fetchMock = vi.fn<typeof fetch>(() => probe.promise);
   vi.stubGlobal("fetch", fetchMock);
@@ -30,12 +37,61 @@ describe("createApplicationGateway authentication diagnostics", () => {
     store = createStore();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.gateway.stop();
+    await vi.dynamicImportSettled();
     setAvatarGatewayOrigin(null);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
+
+  it("rejects a different development target before accepting its credentials or opening a client", () => {
+    const configured = store.gateway.connection.gatewayUrl;
+    vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl: configured, proxyPath: "/dev-proxy" });
+    store.gateway.connect({ token: "configured-credential" });
+    store.current().opts.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
+    const connection = { ...store.gateway.connection };
+
+    store.gateway.connect({ gatewayUrl: "wss://other.example", token: "other-credential" });
+    expect(store.clients).toHaveLength(1);
+    expect(store.current().stopped).toBe(1);
+    expect(store.gateway.connection).toEqual(connection);
+    expect(loadSettings().token).toBe("configured-credential");
+    expect(store.gateway.snapshot.phase).toBe("offline");
+    expect(store.gateway.snapshot.lastError).toContain("OPENCLAW_UI_DEV_GATEWAY_URL");
+
+    store.gateway.connect();
+    expect(store.clients).toHaveLength(2);
+    expect(store.current().opts).toMatchObject({ url: configured, token: "configured-credential" });
+  });
+
+  it.each(["token", "password", "trusted-proxy", undefined] as const)(
+    "persists the submitted secret only after a token-mode hello (%s)",
+    (authMode) => {
+      const gatewayUrl = store.gateway.connection.gatewayUrl;
+      const secret = "synthetic-gateway-secret";
+      persistSessionToken(gatewayUrl, "previous-token");
+      const write = vi.spyOn(sessionStorage, "setItem");
+      store.gateway.connect({ token: secret });
+      const retired = store.current();
+      saveSettings({ ...loadSettings(), token: secret });
+      expect(write).not.toHaveBeenCalled();
+      expect(loadSettings().token).toBe("previous-token");
+
+      store.current().opts.onHello?.({ ...HELLO, snapshot: { authMode } });
+      expect(loadSettings().token).toBe(authMode === "token" ? secret : "");
+      expect(store.gateway.connection.token).toBe(secret);
+      if (authMode !== "token") {
+        expect(write).not.toHaveBeenCalled();
+      }
+
+      // Late hello from a replaced client must not persist its submitted secret.
+      store.gateway.connect({ token: "replacement-secret" });
+      retired.opts.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
+      expect(loadSettings().token).toBe(authMode === "token" ? secret : "");
+    },
+  );
 
   function rejectStaleBuild() {
     store.current().opts.onClose?.({
@@ -53,6 +109,66 @@ describe("createApplicationGateway authentication diagnostics", () => {
       willRetry: false,
     });
   }
+
+  it("automatically recovers a rejected old bundle after the document probe briefly fails", async () => {
+    vi.useFakeTimers();
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    store.gateway.start();
+    rejectStaleBuild();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.gateway.snapshot.phase).toBe("reload-required");
+    expect(replace).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBe(
+      "replacement-build",
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the current connection resume build recovery during the probe retry delay", async () => {
+    vi.useFakeTimers();
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    store.gateway.start();
+    rejectStaleBuild();
+    await vi.advanceTimersByTimeAsync(0);
+    store.gateway.connect();
+    rejectStaleBuild();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBe(
+      "replacement-build",
+    );
+  });
+
+  it("retires automatic build recovery when the connection stops between probes", async () => {
+    vi.useFakeTimers();
+    const { replace, fetchMock } = stubBuildReloadDocument();
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 200 }));
+    store.gateway.start();
+    rejectStaleBuild();
+    await vi.advanceTimersByTimeAsync(0);
+    store.gateway.stop();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(replace).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
+  });
 
   it("preserves an unfinished browser handoff across a build recovery reload", async () => {
     const bootstrapToken = "synthetic-owner-bootstrap";

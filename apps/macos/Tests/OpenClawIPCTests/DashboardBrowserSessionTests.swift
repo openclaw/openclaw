@@ -27,14 +27,18 @@ private final class DashboardCookieNavigationObserver: NSObject, WKNavigationDel
 @Suite(.serialized)
 @MainActor
 struct DashboardBrowserSessionTests {
-    private func session(_ token: String, subject: String = "fixture-account") throws -> GatewayBrowserSession {
+    private func session(
+        _ token: String,
+        subject: String = "fixture-account",
+        expiresAt: Date = Date().addingTimeInterval(300)) throws -> GatewayBrowserSession
+    {
         try GatewayBrowserSession(
             origin: #require(URL(string: "https://gateway.example/")),
             issuer: #require(URL(string: "https://identity.cloudflareaccess.com/")),
             audience: "dashboard-fixture",
             subject: subject,
             token: token,
-            expiresAt: Date().addingTimeInterval(300))
+            expiresAt: expiresAt)
     }
 
     @Test func `browser sign-in cookie is installed before the first dashboard navigation`() async throws {
@@ -60,9 +64,12 @@ struct DashboardBrowserSessionTests {
         #expect(cookie.isHTTPOnly)
         #expect(cookie.domain == "gateway.example")
         #expect(controller._testUserScripts.allSatisfy { !$0.source.contains("first-session") })
-        #expect(controller._testLinkBrowserDataStore !== store.dataStore)
-        #expect(!controller._testLinkBrowserDataStore.isPersistent)
-        #expect(await controller._testLinkBrowserDataStore.httpCookieStore.allCookies().isEmpty)
+        try controller.nativeBrowser.open(tabId: "mac-private", url: #require(URL(string: "about:blank")))
+        let readingStore = try #require(controller.nativeBrowser.webView(for: "mac-private"))
+            .configuration.websiteDataStore
+        #expect(readingStore !== store.dataStore)
+        #expect(!readingStore.isPersistent)
+        #expect(await readingStore.httpCookieStore.allCookies().isEmpty)
     }
 
     @Test(arguments: [false, true])
@@ -471,19 +478,20 @@ struct DashboardBrowserSessionTests {
     }
 
     @Test func `expired browser sign-in is terminal and explains how to reconnect`() async throws {
-        let session = try self.session("expired-page")
+        let session = try self.session("expired-page", expiresAt: Date().addingTimeInterval(-1))
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let controller = self.controller(url: session.origin, store: store, lease: store.lease(for: session))
         defer { controller.closeDashboard() }
+        #expect(!controller.hasCurrentBrowserSession)
         controller.invalidateBrowserSession(error: .expired)
         var text = ""
         let deadline = ContinuousClock.now + .seconds(5)
-        while !text.contains("Settings"), ContinuousClock.now < deadline {
+        while !text.contains("Connection"), ContinuousClock.now < deadline {
             text = await (try? controller.webView.evaluateJavaScript("document.body.innerText")) as? String ?? ""
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(text.contains("expired"))
-        #expect(text.contains("Settings"))
+        #expect(text.contains("Connection"))
         #expect(!controller.canDeliverNativeCommands)
     }
 }

@@ -547,7 +547,18 @@ describe("createGatewayKernel", () => {
       kernel.kernel.setGatewayLifetimeSidecars([persistentSidecar, successfulPeer]);
 
       await expect(kernel.closeOnStartupFailure()).rejects.toMatchObject({
-        errors: [{ cause: persistentError }],
+        errors: [
+          {
+            message:
+              "shutdown step failed (gateway lifetime sidecars): persistent sidecar cleanup failed",
+            cause: persistentError,
+          },
+          {
+            message:
+              "shutdown step failed (late sidecar cleanup): persistent sidecar cleanup failed",
+            cause: persistentError,
+          },
+        ],
       });
       expect(persistentStop).toHaveBeenCalledTimes(2);
       expect(successfulPeer.stop).toHaveBeenCalledOnce();
@@ -646,7 +657,7 @@ describe("createGatewayKernel", () => {
         sidecarStartup: "defer",
       });
       expect(kernel.transportBridge.current()).toBeUndefined();
-      await expect(kernel.ensureSandboxHostPort()).rejects.toThrow(
+      await expect(kernel.transportBridge.ensureSandboxHostPort()).rejects.toThrow(
         "Gateway listener must start before the sandbox host",
       );
 
@@ -692,13 +703,6 @@ describe("createGatewayKernel", () => {
           return attributes?.traceName ?? event.name;
         });
       expect(measureNames).toEqual([
-        "state.ownership",
-        "state.runtime-imports",
-        "state.schema-preflight",
-        "runtime.network-imports",
-        "runtime.network-bootstrap",
-        "config.runtime-imports",
-        "config.snapshot",
         "config.snapshot.read",
         "config.snapshot.read.file",
         "config.snapshot.read.hash",
@@ -710,6 +714,13 @@ describe("createGatewayKernel", () => {
         "plugins.metadata.freeze",
         "config.snapshot.read.materialize",
         "config.snapshot.read.observe",
+        "state.ownership",
+        "state.runtime-imports",
+        "state.schema-preflight",
+        "runtime.network-imports",
+        "runtime.network-bootstrap",
+        "config.runtime-imports",
+        "config.snapshot",
         "config.auth",
         "config.auth.snapshot-validate",
         "config.auth.runtime-overrides",

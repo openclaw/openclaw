@@ -198,8 +198,10 @@ function scheduleProviderAuthStatePrewarm(params: {
     if (isStopped()) {
       return;
     }
-    setAuthProfileFailureHook(() => {
-      if (isStopped()) {
+    setAuthProfileFailureHook((reason) => {
+      // Rate-limit cooldowns change profile selection, not credential presence.
+      // Keep the prepared catalog usable instead of rebuilding it after each 429.
+      if (isStopped() || reason === "rate_limit") {
         return;
       }
       clearCurrentProviderAuthState();
@@ -356,6 +358,7 @@ function scheduleRestartSentinelWakeAfterReady(params: {
 
 function scheduleTranscriptsAutoStartSidecar(params: {
   cfg: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
   log: { warn: (msg: string) => void };
   waitForPostReadyWork?: () => Promise<void>;
@@ -369,16 +372,18 @@ function scheduleTranscriptsAutoStartSidecar(params: {
     waitForPostReadyWork: params.waitForPostReadyWork,
     shouldRun: params.shouldRun,
     run: async (isStopped) => {
-      const { createTranscriptsAutoStartService } =
-        await import("../agents/tools/transcripts-tool.js");
+      const { createTranscriptsAutoStartService } = await import("../transcripts/auto-start.js");
       if (isStopped()) {
         return;
       }
-      const service = createTranscriptsAutoStartService({
-        config: params.cfg,
-        stateDir: resolveStateDir(),
-        logger: params.log,
-      });
+      const service = createTranscriptsAutoStartService(
+        {
+          config: params.cfg,
+          stateDir: resolveStateDir(),
+          logger: params.log,
+        },
+        params.getConfig,
+      );
       stopTranscriptsAutoStart = () => service.stop();
       service.start();
     },
@@ -466,7 +471,7 @@ async function hydrateConfiguredExternalCliAuth(params: {
     (await Promise.all([
       import("../agents/agent-scope.js"),
       import("../agents/prepared-model-runtime.configured.js"),
-      import("../agents/auth-profiles/store.js"),
+      import("../agents/auth-profiles/store-runtime.js"),
       import("../agents/auth-profiles/external-cli-discovery.js"),
     ]).then(([scope, configured, store, external]) => ({
       listAgentIds: scope.listAgentIds,
@@ -963,7 +968,7 @@ export async function startGatewaySidecars(params: {
         run: async (isStopped) => {
           const [
             { DEFAULT_MODEL, DEFAULT_PROVIDER },
-            { loadPreparedModelCatalog },
+            { readPreparedModelCatalog },
             { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
           ] = await Promise.all([
             loadAgentDefaultsModule(),
@@ -984,11 +989,9 @@ export async function startGatewaySidecars(params: {
                 defaultProvider: DEFAULT_PROVIDER,
                 defaultModel: DEFAULT_MODEL,
               });
-            const catalog = await loadPreparedModelCatalog({
+            const catalog = await readPreparedModelCatalog({
               config: params.cfg,
               readOnly: true,
-              providerDiscoveryProviderIds: [hooksModelRef.provider],
-              scopedLiveProviderDiscovery: true,
             });
             if (isStopped()) {
               return;
@@ -1099,11 +1102,10 @@ function createDeferredGatewayUpdateCheck(params: {
 
   const stop = () => {
     stopped = true;
-    runWatcher?.stop();
     return (stopPromise ??= (async () => {
       // Fence immediately; a lazy factory that finishes later stops its own
       // owner below. Never join the post-ready barrier during failed startup.
-      const cleanup = owner?.stop();
+      const cleanup = Promise.all([runWatcher?.stop(), owner?.stop()]);
       await ownerReady;
       await cleanup;
       await initialization;
@@ -1195,6 +1197,7 @@ function createDeferredGatewayUpdateCheck(params: {
 export async function startGatewayPostAttachRuntime(
   params: {
     minimalTestGateway: boolean;
+    updateCanary?: boolean;
     cfgAtStart: OpenClawConfig;
     getConfig: () => OpenClawConfig;
     bindHost: string;
@@ -1245,6 +1248,7 @@ export async function startGatewayPostAttachRuntime(
     pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
     getCurrentPluginRegistry?: () => PluginRegistry;
     getCurrentPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
+    getCurrentActivationSourceConfig?: () => OpenClawConfig | null;
     getCronService?: () => PluginServiceCronHost | null | undefined;
     onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
@@ -1267,6 +1271,9 @@ export async function startGatewayPostAttachRuntime(
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
+  // The CLI's hidden capability flag supplies this typed internal handoff.
+  // Rehearsal loads plugins without resuming copied jobs, services, or notices.
+  const candidateCanary = params.updateCanary === true;
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
   const controlUiAssetsSidecar =
@@ -1295,45 +1302,30 @@ export async function startGatewayPostAttachRuntime(
   }
 
   let pluginRegistry = params.pluginRegistry;
-  let startupPluginsLoaded = false;
-  let startupPluginsLoadPromise: Promise<{
-    pluginRegistry: PluginRegistry;
-    gatewayMethods: string[];
-    retireGatewayRuntimeBindings?: () => void;
-  }> | null = null;
   const loadStartupPluginsIfNeeded = async () => {
     if (params.minimalTestGateway || !params.loadStartupPlugins) {
-      return { pluginRegistry, gatewayMethods: [] };
+      return;
     }
-    if (startupPluginsLoaded) {
-      return { pluginRegistry, gatewayMethods: [] };
+    params.onStartupPluginsLoading?.();
+    const loaded = await measureStartup(params.startupTrace, "plugins.runtime-post-bind", () =>
+      params.loadStartupPlugins!(),
+    );
+    await params.pluginRuntimeClaim?.waitForUnblocked();
+    if (params.isClosing?.() || params.pluginRuntimeClaim?.isCurrent() === false) {
+      // Shutdown only owns attached bindings; retire unadopted results here.
+      loaded.retireGatewayRuntimeBindings?.();
+      pluginRegistry = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
+      return;
     }
-    startupPluginsLoadPromise ??= (async () => {
-      params.onStartupPluginsLoading?.();
-      const loaded = await measureStartup(params.startupTrace, "plugins.runtime-post-bind", () =>
-        params.loadStartupPlugins!(),
-      );
-      await params.pluginRuntimeClaim?.waitForUnblocked();
-      if (params.isClosing?.() || params.pluginRuntimeClaim?.isCurrent() === false) {
-        // Shutdown only owns attached bindings; retire unadopted results here.
-        loaded.retireGatewayRuntimeBindings?.();
-        pluginRegistry = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
-        startupPluginsLoaded = true;
-        return { pluginRegistry, gatewayMethods: [] };
-      }
-      pluginRegistry = loaded.pluginRegistry;
-      startupPluginsLoaded = true;
-      params.startupTrace?.detail("plugins.runtime-post-bind", [
-        [
-          "loadedPluginCount",
-          pluginRegistry.plugins.filter((plugin) => plugin.status === "loaded").length,
-        ],
-        ["gatewayMethodCount", loaded.gatewayMethods.length],
-      ]);
-      await params.onStartupPluginsLoaded?.(loaded);
-      return loaded;
-    })();
-    return await startupPluginsLoadPromise;
+    pluginRegistry = loaded.pluginRegistry;
+    params.startupTrace?.detail("plugins.runtime-post-bind", [
+      [
+        "loadedPluginCount",
+        pluginRegistry.plugins.filter((plugin) => plugin.status === "loaded").length,
+      ],
+      ["gatewayMethodCount", loaded.gatewayMethods.length],
+    ]);
+    await params.onStartupPluginsLoaded?.(loaded);
   };
   let startupLogPromise: Promise<void> | undefined;
   const startupLogSettled = createDeferredCore();
@@ -1352,46 +1344,57 @@ export async function startGatewayPostAttachRuntime(
       return startupLogPromise;
     }
     // Sidecar failure can settle public readiness before this producer finishes.
-    startupLogPromise = params.trackStartupWork(() =>
-      measureStartup(params.startupTrace, "post-attach.log", () =>
+    startupLogPromise = params.trackStartupWork(() => {
+      // A replacement can win while plugins load or startup logging is queued.
+      // Keep model, trust warnings, and loaded ids on that same runtime generation.
+      const startupRuntimeCurrent = params.pluginRuntimeClaim?.isCurrent() !== false;
+      const startupPluginRegistry = startupRuntimeCurrent
+        ? pluginRegistry
+        : (params.getCurrentPluginRegistry?.() ?? pluginRegistry);
+      return measureStartup(params.startupTrace, "post-attach.log", () =>
         runtimeDeps.logGatewayStartup({
-          cfg: params.cfgAtStart,
-          activationSourceConfig: params.activationSourceConfig,
+          cfg: startupRuntimeCurrent ? params.cfgAtStart : params.getConfig(),
+          activationSourceConfig: startupRuntimeCurrent
+            ? params.activationSourceConfig
+            : (params.getCurrentActivationSourceConfig?.() ?? undefined),
           env: process.env,
-          manifestRecords: params.pluginManifestRecords,
+          manifestRecords: startupRuntimeCurrent
+            ? params.pluginManifestRecords
+            : (params.getCurrentPluginMetadataSnapshot?.()?.plugins ?? []),
           ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
           bindHost: params.bindHost,
           bindHosts: params.bindHosts,
           port: params.port,
           tlsEnabled: params.tlsEnabled,
-          loadedPluginIds: pluginRegistry.plugins
+          loadedPluginIds: startupPluginRegistry.plugins
             .filter((plugin) => plugin.status === "loaded")
             .map((plugin) => plugin.id),
           log: params.log,
           isNixMode: params.isNixMode,
           startupStartedAt: params.startupStartedAt,
         }),
-      ),
-    );
+      );
+    });
     void startupLogPromise.catch(() => {});
     assignStartupLogOwner(startupLogPromise);
     return startupLogPromise;
   };
   const skipStartupLog = () => assignStartupLogOwner(Promise.resolve());
 
-  const updateCheck = params.minimalTestGateway
-    ? { start: () => {}, stop: async () => {} }
-    : createDeferredGatewayUpdateCheck({
-        startupTrace: params.startupTrace,
-        runtimeDeps,
-        getConfig: params.getConfig,
-        log: params.log,
-        isNixMode: params.isNixMode,
-        broadcastToConnIds: params.broadcastToConnIds,
-        getClientConnIds: params.getClientConnIds,
-        waitForPostReadyWork: params.waitForPostReadyWork,
-        activeWorkInspectors: params.activeWorkInspectors,
-      });
+  const updateCheck =
+    params.minimalTestGateway || candidateCanary
+      ? { start: () => {}, stop: async () => {} }
+      : createDeferredGatewayUpdateCheck({
+          startupTrace: params.startupTrace,
+          runtimeDeps,
+          getConfig: params.getConfig,
+          log: params.log,
+          isNixMode: params.isNixMode,
+          broadcastToConnIds: params.broadcastToConnIds,
+          getClientConnIds: params.getClientConnIds,
+          waitForPostReadyWork: params.waitForPostReadyWork,
+          activeWorkInspectors: params.activeWorkInspectors,
+        });
   if (!params.minimalTestGateway) {
     // Startup failure can precede publication of the post-attach return handle.
     params.onGatewayLifetimeSidecars?.([updateCheck]);
@@ -1444,6 +1447,19 @@ export async function startGatewayPostAttachRuntime(
             return emptySidecarResult();
           }
           const startupLog = startStartupLog();
+          if (candidateCanary) {
+            await startupLog;
+            const failures = pluginRegistry.plugins.filter((plugin) => plugin.status === "error");
+            if (failures.length) {
+              throw new Error(
+                `Candidate plugin activation failed: ${failures.map((plugin) => plugin.id).join(", ")}`,
+              );
+            }
+            params.unlockStartupMethods();
+            params.onSidecarsReady?.();
+            params.log.info("candidate gateway ready; autonomous sidecars suppressed");
+            return emptySidecarResult();
+          }
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
             gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
@@ -1590,6 +1606,7 @@ export async function startGatewayPostAttachRuntime(
             newGatewayLifetimeSidecars.push(
               scheduleTranscriptsAutoStartSidecar({
                 cfg: params.gatewayPluginConfigAtStart,
+                getConfig: params.getConfig,
                 startupTrace: params.startupTrace,
                 log: params.log,
                 waitForPostReadyWork: params.waitForPostReadyWork,
@@ -1632,7 +1649,7 @@ export async function startGatewayPostAttachRuntime(
   void params
     .trackStartupWork(async (signal) => {
       const sidecarsResult = await sidecarsPromise;
-      if (params.minimalTestGateway) {
+      if (params.minimalTestGateway || candidateCanary) {
         return;
       }
       await params.waitForPostReadyWork?.();

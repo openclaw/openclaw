@@ -82,14 +82,18 @@ const enSkillLibrary = {
     pending:
       "Proposal {id} saved for workspace {agent}. It is pending review and is not active yet.",
     workspaceSaved: "Workspace {agent}: {state}. Start a new session to use the skill.",
-    importHelp:
-      "Import SKILL.md with supporting files, a local folder, or a ZIP into your private library. Text bundles open for review before saving; ZIP imports publish when you choose Import skill.",
-    importWorkspace:
-      "Choose SKILL.md and supporting text files or a folder. Review the content, then save and apply a Workshop proposal to the selected agent workspace. Use ClawHub below for workspace installs.",
-    importClawHub:
-      "Import {source} into your private library. This does not publish your files or install host dependencies.",
-    chooseFiles: "SKILL.md, supporting files, or ZIP",
-    chooseFolder: "Skill folder",
+    importHelp: "Import a skill into your private library.",
+    importWorkspace: "Prepare a skill for review in the selected workspace.",
+    importClawHub: "Import {source} into your private library.",
+    files: "Files",
+    filesHelp: "SKILL.md with supporting files, a folder, or a ZIP (saved on import).",
+    workspaceFilesHelp: "SKILL.md with supporting text files, or a folder.",
+    chooseFilesButton: "Choose files",
+    chooseFolderButton: "Choose folder",
+    noFilesSelected: "No files selected.",
+    selectedFile: "{count} file · {names}",
+    selectedFiles: "{count} files · {names}",
+    clearSelection: "Clear",
     confirm: {
       remove: "Remove {slug} from the library?",
       transfer: "Transfer {slug} to team ownership? Team administrators will manage it.",

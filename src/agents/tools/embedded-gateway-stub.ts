@@ -210,7 +210,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
-  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
+  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const page = await rt.readChatHistoryPage({
     entry: historyEntry,
     provider: resolvedSessionModel.provider,

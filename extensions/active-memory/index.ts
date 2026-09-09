@@ -17,7 +17,7 @@ import {
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
 import { resolveRecallEscalationDecision } from "./escalation.js";
-import { buildMetadata, buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
+import { buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
 import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
 import {
   buildCacheKey,
@@ -28,7 +28,6 @@ import {
   isCircuitBreakerOpen,
   resetActiveRecallStateForTests,
   setCachedResult,
-  shouldCacheResult,
   toSingleLineErrorMessage,
 } from "./recall-state.js";
 import { maybeResolveActiveRecall } from "./recall.js";
@@ -51,7 +50,6 @@ import {
   updateActiveMemoryGlobalEnabledInConfig,
 } from "./session-policy.js";
 import {
-  buildPluginStatusLine,
   persistPluginStatusLines,
   resolveCanonicalSessionKeyFromSessionId,
   resolveStatusUpdateAgentId,
@@ -75,6 +73,7 @@ import {
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
   MAX_SETUP_GRACE_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
+  TRIGGER_LOOKUP_SETTLE_RESERVE_MS,
   type ConversationRecallContext,
 } from "./types.js";
 
@@ -203,11 +202,22 @@ export default definePluginEntry({
     // both maxima so preflight latency cannot consume recall settlement time.
     const beforePromptBuildTimeoutMs =
       MAX_TIMEOUT_MS + MAX_SETUP_GRACE_TIMEOUT_MS + HOOK_TIMEOUT_RECOVERY_GRACE_MS * 2;
+    // Names the exit taken when recall is configured off for this session, so
+    // "no relevant memory found" and "recall never ran" stop being
+    // indistinguishable at info level. Reserved for states an operator can act
+    // on; the routine escalation decision stays at debug. Deliberately not
+    // gated on config.logging, which defaults to false and would reproduce the
+    // invisibility this reports.
+    const logRecallSkipped = (reason: string) => {
+      api.logger.info?.(`active-memory: recall skipped reason=${reason}`);
+    };
     api.on(
       "before_prompt_build",
       async (event, ctx) => {
         const toolAuthority = ctx.toolAuthority;
         if (!toolAuthority) {
+          // Defensive only: the host filters authority-required registrations
+          // out of the unauthorized pass, so this never runs in production.
           api.logger.debug?.(
             "active-memory: recall skipped because this prompt has no turn tool authority",
           );
@@ -288,6 +298,7 @@ export default definePluginEntry({
                 sessionKey: resolvedSessionKey,
                 statusLine: `${ACTIVE_MEMORY_STATUS_PREFIX} status=policy-disabled`,
               });
+              logRecallSkipped("policy-disabled");
               toolAuthority.assertActive();
               return undefined;
             }
@@ -298,6 +309,7 @@ export default definePluginEntry({
                 sessionKey: resolvedSessionKey,
               })
             ) {
+              logRecallSkipped("harness-session");
               return undefined;
             }
             const sessionDisabled = await isSessionActiveMemoryDisabled({
@@ -307,6 +319,7 @@ export default definePluginEntry({
             deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             if (sessionDisabled) {
+              logRecallSkipped("session-disabled");
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -319,6 +332,7 @@ export default definePluginEntry({
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
+              logRecallSkipped("session-ineligible");
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -362,25 +376,38 @@ export default definePluginEntry({
               chatIdAllowed
             ) {
               toolAuthority.assertActive();
-              laneOne = await resolveTriggerRecall({
-                cfg: liveConfig,
-                agentId: effectiveAgentId,
-                query: searchQuery,
-                message: event.prompt,
-                activeProjectKeys: ctx.activeProjectKeys,
-                signal: AbortSignal.timeout(HOOK_TIMEOUT_RECOVERY_GRACE_MS),
-                runId: ctx.runId,
-                authorityFingerprint: toolAuthority.fingerprint,
-              }).catch((error: unknown) => {
+              // Lane one is optional and runs inside the preflight deadline.
+              // Its own timeout is what is left of that budget, less enough
+              // to fall through to model recall before the watchdog fires.
+              // Without that headroom it is skipped outright: even a zero
+              // delay timer is asynchronous and can lose to the watchdog.
+              const triggerLookupTimeoutMs =
+                hookDeadline.remainingMs() - TRIGGER_LOOKUP_SETTLE_RESERVE_MS;
+              if (triggerLookupTimeoutMs > 0) {
+                laneOne = await resolveTriggerRecall({
+                  cfg: liveConfig,
+                  agentId: effectiveAgentId,
+                  query: searchQuery,
+                  message: event.prompt,
+                  activeProjectKeys: ctx.activeProjectKeys,
+                  signal: AbortSignal.timeout(triggerLookupTimeoutMs),
+                  runId: ctx.runId,
+                  authorityFingerprint: toolAuthority.fingerprint,
+                }).catch((error: unknown) => {
+                  api.logger.debug?.(
+                    `active-memory: lane-1 trigger recall failed: ${toSingleLineErrorMessage(error)}`,
+                  );
+                  return { hasStrongHit: false, injectedCount: 0 };
+                });
+                toolAuthority.assertActive();
+                if (laneOne.context && laneOne.injectedCount > 0 && invocationConfig.logging) {
+                  api.logger.info?.(
+                    `active-memory: lane-1 injected ${laneOne.injectedCount} trigger-matched entries`,
+                  );
+                }
+              } else {
                 api.logger.debug?.(
-                  `active-memory: lane-1 trigger recall failed: ${toSingleLineErrorMessage(error)}`,
-                );
-                return { hasStrongHit: false, injectedCount: 0 };
-              });
-              toolAuthority.assertActive();
-              if (laneOne.context && laneOne.injectedCount > 0 && invocationConfig.logging) {
-                api.logger.info?.(
-                  `active-memory: lane-1 injected ${laneOne.injectedCount} trigger-matched entries`,
+                  "active-memory: lane-1 trigger recall skipped: preflight budget exhausted",
                 );
               }
             }
@@ -416,6 +443,7 @@ export default definePluginEntry({
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
+              logRecallSkipped("destination-not-allowed");
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -429,6 +457,9 @@ export default definePluginEntry({
               hasStrongLaneOneHit: laneOne.hasStrongHit,
             });
             if (escalationDecision !== "recall") {
+              // Stays at debug: escalate is the default mode and ordinary
+              // prompts resolve to no-recall-intent, so this is the healthy
+              // path rather than an actionable skip.
               api.logger.debug?.(`active-memory: recall skipped reason=${escalationDecision}`);
               const outcomeContext =
                 escalationDecision === "no-recall-intent"
@@ -516,19 +547,14 @@ export default definePluginEntry({
 });
 
 const testing = {
-  buildSearchQuery,
   buildCacheKey,
   buildCircuitBreakerKey,
-  buildMetadata,
-  buildPluginStatusLine,
-  buildPromptPrefix,
   getCachedResult,
   hasUsableMemoryResultInSessionRecord,
   isCircuitBreakerOpen,
   isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
   readPartialAssistantText,
-  shouldCacheResult,
   resetActiveRecallCacheForTests() {
     resetActiveRecallStateForTests();
     resetActiveMemoryConfigForTests();

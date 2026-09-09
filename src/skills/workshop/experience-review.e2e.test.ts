@@ -33,11 +33,8 @@ import {
   createExperienceReviewCandidate,
   createExperienceReviewMessages,
 } from "./experience-review.test-support.js";
-import {
-  getSkillProposalRunProgress,
-  inspectSkillProposal,
-  listSkillProposals,
-} from "./service.js";
+import { getSkillProposalRunProgress } from "./proposal-run-progress.test-support.js";
+import { inspectSkillProposal, listSkillProposals } from "./service.js";
 
 const modelId = "gpt-5.6-luna";
 const { positiveMessages, interruptedMessages } = createExperienceReviewMessages(modelId);
@@ -111,7 +108,7 @@ function writeToolCall(response: ServerResponse, args: Record<string, unknown>):
   ]);
 }
 
-describe("Workshop experience review through the real provider and tool owners", () => {
+describe("Workshop draft-only review through the real provider and tool owners", () => {
   it("reviews the completed deep turn when shallow work finishes before the idle window", async () => {
     const requests: Request[] = [];
     const handlerErrors: unknown[] = [];
@@ -165,9 +162,7 @@ describe("Workshop experience review through the real provider and tool owners",
           },
           runReview: async (pending) => {
             try {
-              await runSkillExperienceReview(pending, {
-                getCurrentConfig: () => candidate.config,
-              });
+              await runSkillExperienceReview(pending);
               reviewFinished.resolve();
             } catch (error) {
               reviewFinished.reject(error);
@@ -336,11 +331,7 @@ describe("Workshop experience review through the real provider and tool owners",
           let observation: Awaited<ReturnType<typeof observeExperienceReview>> | undefined;
           const failedReview = scenario === "failed" || scenario === "rejected";
           try {
-            const run = observeExperienceReview(() =>
-              runSkillExperienceReview(candidate, {
-                getCurrentConfig: () => candidate.config,
-              }),
-            );
+            const run = observeExperienceReview(() => runSkillExperienceReview(candidate));
             if (failedReview) {
               await expect(run).rejects.toThrow(
                 scenario === "failed"

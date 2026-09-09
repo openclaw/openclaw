@@ -13,18 +13,30 @@ const MINTLIFY_REPAIRED_COMPONENTS = new Set([
   "Step",
 ]);
 
-function visitMintlifyComponentIndentation(raw, onMisindentedClose, onMisindentedOpen) {
+function processMintlifyComponentIndentation(raw, repair) {
   const lines = raw.split(/\r?\n/u);
   const componentStack = [];
-  let inCodeFence = false;
+  const errors = [];
+  let changed = false;
+  let fenceMarker = null;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (/^\s*(```|~~~)/u.test(line)) {
-      inCodeFence = !inCodeFence;
+    const trimmed = line.trimStart();
+    const marker = trimmed.match(/^(`{3,}|~{3,})/u)?.[1];
+    if (marker) {
+      if (!fenceMarker) {
+        fenceMarker = marker;
+      } else if (
+        marker[0] === fenceMarker[0] &&
+        marker.length >= fenceMarker.length &&
+        /^[ \t]*$/u.test(trimmed.slice(marker.length))
+      ) {
+        fenceMarker = null;
+      }
       continue;
     }
-    if (inCodeFence) {
+    if (fenceMarker) {
       continue;
     }
 
@@ -32,7 +44,10 @@ function visitMintlifyComponentIndentation(raw, onMisindentedClose, onMisindente
     if (openComponent && MINTLIFY_REPAIRED_COMPONENTS.has(openComponent[2])) {
       let indent = openComponent[1].length;
       if (componentStack.length === 0 && openComponent[2] === "ParamField" && indent > 0) {
-        onMisindentedOpen?.({ openComponent, index, line, lines });
+        if (repair) {
+          lines[index] = line.slice(indent);
+          changed = true;
+        }
         indent = 0;
       }
       componentStack.push({
@@ -43,55 +58,40 @@ function visitMintlifyComponentIndentation(raw, onMisindentedClose, onMisindente
     }
 
     const closeComponent = line.match(/^(\s*)<\/([A-Z][A-Za-z0-9]*)>/u);
-    if (!closeComponent || !MINTLIFY_REPAIRED_COMPONENTS.has(closeComponent[2])) {
+    if (!closeComponent) {
       continue;
     }
 
-    const opening = componentStack.pop();
+    const opening = MINTLIFY_REPAIRED_COMPONENTS.has(closeComponent[2])
+      ? componentStack.pop()
+      : undefined;
     if (opening?.name === closeComponent[2] && closeComponent[1].length > opening.indent) {
-      onMisindentedClose({ closeComponent, index, line, lines, opening });
+      errors.push({
+        line: index + 1,
+        column: closeComponent[1].length + 1,
+        message: MINTLIFY_ACCORDION_INDENT_MESSAGE,
+      });
+      if (repair) {
+        lines[index] = `${" ".repeat(opening.indent)}${line.slice(closeComponent[1].length)}`;
+        changed = true;
+      }
+    }
+    // Keep spacing repairs inside the same fence boundary as indentation repairs.
+    if (repair && /^\s*[-*+]\s+/u.test(lines[index - 1] ?? "")) {
+      lines[index] = `\n${lines[index]}`;
+      changed = true;
     }
   }
 
-  return lines;
+  return { errors, text: changed ? lines.join("\n") : raw };
 }
 
 /** Return indentation errors for Mintlify accordion-like components. */
 export function checkMintlifyAccordionIndentation(raw) {
-  const errors = [];
-  visitMintlifyComponentIndentation(raw, ({ closeComponent, index }) => {
-    errors.push({
-      line: index + 1,
-      column: closeComponent[1].length + 1,
-      message: MINTLIFY_ACCORDION_INDENT_MESSAGE,
-    });
-  });
-  return errors;
+  return processMintlifyComponentIndentation(raw, false).errors;
 }
 
 /** Repair Mintlify component indentation and list-adjacent closing tags when needed. */
 export function repairMintlifyAccordionIndentation(raw) {
-  let changed = false;
-  const lines = visitMintlifyComponentIndentation(
-    raw,
-    ({ closeComponent, index, line, lines: linesValue, opening }) => {
-      linesValue[index] = `${" ".repeat(opening.indent)}${line.slice(closeComponent[1].length)}`;
-      changed = true;
-    },
-    ({ openComponent, index, line, lines: linesLocal }) => {
-      linesLocal[index] = line.slice(openComponent[1].length);
-      changed = true;
-    },
-  );
-  for (let index = lines.length - 1; index > 0; index--) {
-    if (!/^\s*<\/[A-Z][A-Za-z0-9]*>/u.test(lines[index])) {
-      continue;
-    }
-    if (!/^\s*[-*+]\s+/u.test(lines[index - 1])) {
-      continue;
-    }
-    lines.splice(index, 0, "");
-    changed = true;
-  }
-  return changed ? lines.join("\n") : raw;
+  return processMintlifyComponentIndentation(raw, true).text;
 }

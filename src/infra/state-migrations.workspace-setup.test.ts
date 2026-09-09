@@ -76,70 +76,6 @@ describe("legacy workspace Doctor migration", () => {
     });
   });
 
-  it("imports setup and attestation state, records receipts, and removes files", async () => {
-    const context = setup();
-    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
-    const seededAt = "2026-07-15T10:00:00.000Z";
-    const completedAt = "2026-07-15T10:01:00.000Z";
-    const setupPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
-    await fsp.writeFile(
-      setupPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: seededAt, setupCompletedAt: completedAt }),
-      "utf8",
-    );
-    const attestationPath = path.join(
-      context.stateDir,
-      "workspace-attestations",
-      `${identity.workspaceKey}.attested`,
-    );
-    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
-    await fsp.writeFile(
-      attestationPath,
-      `openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\ngenerated:AGENTS.md:${HASH}\n`,
-      "utf8",
-    );
-    const mtime = new Date("2026-07-15T11:02:03.456Z");
-    await fsp.utimes(attestationPath, mtime, mtime);
-
-    const result = await migrate(context);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toHaveLength(2);
-    expect(fs.existsSync(setupPath)).toBe(false);
-    expect(fs.existsSync(attestationPath)).toBe(false);
-    const db = openOpenClawStateDatabase({ env: context.env }).db;
-    expect(
-      db
-        .prepare(
-          "SELECT workspace_path, bootstrap_seeded_at, setup_completed_at FROM workspace_setup_state WHERE workspace_key = ?",
-        )
-        .get(identity.workspaceKey),
-    ).toEqual({
-      workspace_path: identity.workspacePath,
-      bootstrap_seeded_at: seededAt,
-      setup_completed_at: completedAt,
-    });
-    expect(
-      db
-        .prepare("SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?")
-        .get(identity.workspaceKey),
-    ).toEqual({ attested_at_ms: mtime.getTime() });
-    expect(
-      db
-        .prepare(
-          "SELECT filename, sha256 FROM workspace_generated_bootstrap_hashes WHERE workspace_key = ?",
-        )
-        .get(identity.workspaceKey),
-    ).toEqual({ filename: "AGENTS.md", sha256: HASH });
-    expect(
-      db
-        .prepare(
-          "SELECT COUNT(*) AS count, SUM(removed_source) AS removed FROM migration_sources WHERE migration_kind = ?",
-        )
-        .get("legacy-workspace-setup-files"),
-    ).toEqual({ count: 2, removed: 2 });
-  });
-
   it("imports the legacy onboarding completion alias", async () => {
     const context = setup();
     const completedAt = "2026-07-15T10:01:00.000Z";
@@ -572,6 +508,7 @@ describe("legacy workspace Doctor migration", () => {
     "symlink",
     "hardlink",
     "invalid-json",
+    "invalid-bootstrap-timestamp",
     "invalid-attestation",
     "oversized-attestation",
   ] as const)("rejects %s without changing canonical state", async (kind) => {
@@ -601,6 +538,12 @@ describe("legacy workspace Doctor migration", () => {
         await fsp.symlink(targetPath, setupPath);
       } else if (kind === "hardlink") {
         await fsp.link(targetPath, setupPath);
+      } else if (kind === "invalid-bootstrap-timestamp") {
+        await fsp.writeFile(
+          setupPath,
+          JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-15T10:00:00Z" }),
+          "utf8",
+        );
       } else {
         await fsp.writeFile(setupPath, "{invalid", "utf8");
       }
@@ -610,6 +553,9 @@ describe("legacy workspace Doctor migration", () => {
 
     expect(result.warnings[0]).toMatch(/legacy workspace/i);
     expect(result.warnings[0]).toContain(sourcePath);
+    expect(result.warnings[0]).toContain("Stop the Gateway");
+    expect(result.warnings[0]).toContain(".rejected-<timestamp>");
+    expect(result.warnings[0]).toContain("openclaw doctor --fix");
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
     const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
@@ -618,6 +564,20 @@ describe("legacy workspace Doctor migration", () => {
         .db.prepare("SELECT workspace_key FROM workspace_setup_state WHERE workspace_key = ?")
         .get(identity.workspaceKey),
     ).toBeUndefined();
+    if (kind === "invalid-bootstrap-timestamp") {
+      const original = await fsp.readFile(sourcePath);
+      const retainedPath = `${sourcePath}.rejected-2026-07-15T11-00-00`;
+      expect(() =>
+        assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+      ).toThrow(/requires migration/);
+      await fsp.rename(sourcePath, retainedPath);
+      expect(await fsp.readFile(retainedPath)).toEqual(original);
+      expect(detect(context).hasLegacy).toBe(false);
+      expect(await migrate(context)).toEqual({ changes: [], warnings: [] });
+      expect(() =>
+        assertNoUnmigratedWorkspaceState({ workspaceDir: context.workspaceDir }),
+      ).not.toThrow();
+    }
   });
 
   it("discards an empty reserved hashed attestation and unblocks the workspace", async () => {

@@ -213,8 +213,8 @@ afterAll(async () => {
 
 describe("sessions.patch sticky model persistence", () => {
   it.each([
-    { scope: undefined, agentId: "main", target: "defaults" },
-    { scope: undefined, agentId: "work", target: "agent" },
+    { scope: undefined, agentId: "main", target: undefined },
+    { scope: undefined, agentId: "work", target: undefined },
     { scope: "session", agentId: "main", target: undefined },
     { scope: "session", agentId: "work", target: undefined },
     { scope: "agent", agentId: "main", target: "agent" },
@@ -271,7 +271,12 @@ describe("sessions.patch sticky model persistence", () => {
       );
 
       expect((await patchSession({ key: sessionKey, model }))[0]).toBe(true);
-      expect(loadSessionEntry({ agentId, sessionKey })?.modelOverride).toBeUndefined();
+      expect(loadSessionEntry({ agentId, sessionKey })).toMatchObject({
+        providerOverride: "anthropic",
+        modelOverride: model.slice("anthropic/".length),
+        modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
+      });
       await vi.waitFor(() => expect(persistedConfig).toBeDefined());
       expect(persistedConfig?.agents?.defaults?.model).toBe(
         scope === "global" ? model : defaultConfig.agents.defaults.model,
@@ -351,6 +356,7 @@ describe("sessions.patch sticky model persistence", () => {
   );
 
   it("returns session success and warns when the sticky config write fails", async () => {
+    cfg.agents!.defaults!.modelSelectionScope = "global";
     const sessionKey = "agent:main:dm:write-failure";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },

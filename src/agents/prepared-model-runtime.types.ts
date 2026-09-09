@@ -1,9 +1,11 @@
 import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import type { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
@@ -11,17 +13,31 @@ import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
-import type { AuthStorage } from "./sessions/auth-storage.js";
+import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export type PreparedModelRuntimeCatalogMode = "live" | "static";
+
+export type PreparedModelRuntimeResourceClaim = { release: () => void };
+
+export type PreparedMediaCapabilityProviderSource = Readonly<{
+  registry: PluginRegistry;
+  resources: Pick<PluginRegistryInspectionResources, "retain">;
+}>;
+
+export type PreparedMediaCapabilityProviderAcquisition = Readonly<{
+  providers: ReturnType<typeof prepareMediaCapabilityProviders>;
+  assertOpen: () => void;
+  release: () => Promise<void>;
+}>;
 
 export type PreparedModelRuntimePluginGeneration = Readonly<{
   pluginMetadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
+  mediaCapabilityProviderSource?: PreparedMediaCapabilityProviderSource;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
-  /** Present for live generations, including when the resolved model set is empty. */
+  /** Captured static rows; cleared when catalog discovery expands the provider registry. */
   providerStaticModels?: readonly ProviderRuntimeModel[];
   inlineProviderModels: readonly InlineModelEntry[];
   configuredCatalogEntries: readonly ModelCatalogEntry[];
@@ -52,6 +68,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
+  /** Borrows an inspected source; raw prepared hosts retain their existing external ownership. */
+  acquireMediaCapabilityProviders?: () => PreparedMediaCapabilityProviderAcquisition;
   /** Registry value owned by this generation; omitted from read-only builds. */
   pluginRegistry?: PluginRegistry;
   allowGatewaySubagentBinding: boolean;
@@ -69,6 +87,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
   inlineProviderModels: readonly InlineModelEntry[];
   createStores: () => PreparedModelRuntimeStores;
+  /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
+  routeModelResolutionMemo?: Map<string, Promise<Model>>;
 }>;
 
 /** Closed Gateway turn facts published atomically for one configured agent. */
@@ -78,6 +98,7 @@ export type PreparedReplyDispatchRuntime = Readonly<{
   workspaceDir: string;
   config: OpenClawConfig;
   modelCatalog: ModelCatalogSnapshot;
+  readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   inboundPluginRegistry: PluginRegistry;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
@@ -108,6 +129,19 @@ export type PreparedModelRuntimeLease = Readonly<{
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   release: () => void;
 }>;
+
+export type PreparedModelRuntimeLeaseOptions = {
+  retainIdleRunOwner?: boolean;
+  catalogMode?: PreparedModelRuntimeCatalogMode;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  abortSignal?: AbortSignal;
+  /** Pure planning against admitted facts; requested selections remain explicit and additive. */
+  deriveRuntimePluginSelections?: (context: {
+    config: OpenClawConfig;
+    metadataSnapshot: PluginMetadataSnapshot;
+  }) => readonly AgentHarnessPluginSelection[];
+};
 
 export type PreparedModelRuntimePublicationOptions = {
   force?: boolean;
@@ -151,6 +185,22 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   fullCatalogConcurrencyLimit: number;
 }>;
 
+export type PreparedModelCatalogInventory = {
+  catalog: ModelCatalogSnapshot;
+  key: string;
+  pluginFingerprint: string;
+  discoveryOrigins: readonly { provider: string; profileId?: string }[];
+};
+
+export type PreparedModelCatalogAttempt = {
+  source: {
+    key: string;
+    pluginFingerprint: string;
+    credentials: Readonly<AuthStorageData>;
+  };
+  error?: Error;
+};
+
 export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;
   catalogOwner: PublishedModelCatalogOwnerCandidate["catalogOwner"];
@@ -161,10 +211,13 @@ export type PreparedModelRuntimeOwner = {
   needsRefresh: boolean;
   catalogStale: boolean;
   /** Completed discovery facts; runtime capability projection belongs to each generation. */
-  catalogInventory?: { catalog: ModelCatalogSnapshot; key: string };
+  catalogInventory?: PreparedModelCatalogInventory;
+  /** Source-bound attempt status, including failure before any inventory was published. */
+  catalogAttempt?: PreparedModelCatalogAttempt;
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  resourceClaim?: PreparedModelRuntimeResourceClaim;
   /** Explicit generation admitted for the current publication, when known. */
   pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;
