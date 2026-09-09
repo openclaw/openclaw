@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,7 +19,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   processMocks.execFile.mockImplementation(actual.execFile);
   Object.defineProperties(processMocks.execFile, Object.getOwnPropertyDescriptors(actual.execFile));
-  return { ...actual, execFile: processMocks.execFile };
+  return { ...actual, execFile: processMocks.execFile, spawnSync: vi.fn(actual.spawnSync) };
 });
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -31,6 +32,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 let cacheRoot: string;
 beforeEach(() => {
   processMocks.execFile.mockClear();
+  vi.mocked(spawnSync).mockClear();
   cacheRoot = tempDirs.make("openclaw-readonly-cancellation-cache-");
   vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
 });
@@ -139,28 +141,69 @@ describe("read-only snapshot deadline", () => {
       const root = tempDirs.make("openclaw-snapshot-timeout-");
       vi.stubEnv("XDG_CACHE_HOME", root);
       const worker = path.join(root, "blocked.mjs");
+      const ready = path.join(root, "ready");
       fs.writeFileSync(
         worker,
         `import fs from 'node:fs'; import path from 'node:path';
-      if (process.argv[5]) fs.writeFileSync(path.join(process.argv[5], 'partial.sqlite'), 'partial');
       process.on('SIGTERM', () => {});
+      fs.writeFileSync(path.join(process.argv[5], 'partial.sqlite'), 'partial');
+      fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
       setTimeout(() => process.exit(0), 35000);`,
       );
       vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
       const source = path.join(root, "source.sqlite");
       fs.writeFileSync(source, "source must stay unchanged");
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      let childClosed: Promise<void> | undefined;
+      let closeSignal: NodeJS.Signals | null | undefined;
+      // Exercise native termination and cleanup without waiting out the production budget.
+      if (mode === "sync") {
+        vi.mocked(spawnSync).mockImplementationOnce((command, args, options) => {
+          expect(options).toMatchObject({ timeout: 31_000, killSignal: "SIGKILL" });
+          const result = actual.spawnSync(command, args, { ...options, timeout: 2_000 });
+          expect(result.error).toMatchObject({ code: "ETIMEDOUT" });
+          closeSignal = result.signal;
+          return result;
+        });
+      } else {
+        processMocks.execFile.mockImplementationOnce((file, args, options, callback) => {
+          expect(options).toMatchObject({ timeout: 31_000, killSignal: "SIGKILL" });
+          const child = actual.execFile(file, args, { ...options, timeout: 2_000 }, callback);
+          childClosed = new Promise<void>((resolve) => {
+            child.once("close", (_code, signal) => {
+              closeSignal = signal;
+              resolve();
+            });
+          });
+          return child;
+        });
+      }
       const started = performance.now();
       const run = async () =>
         mode === "sync"
           ? prepareSqliteReadOnlyLocationSync(source)
           : prepareSqliteReadOnlyLocation(source);
-      await expect(run()).rejects.toThrow(
-        /timed out after 31 seconds \(budget for 26 B\).*Stop the Gateway service/,
-      );
-      expect(performance.now() - started).toBeLessThan(33_000);
-      expect(fs.readFileSync(source, "utf8")).toBe("source must stay unchanged");
-      expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+      try {
+        await expect(
+          run().finally(() => {
+            // Check at settlement, before the finally block joins for failed-test cleanup.
+            expect(closeSignal).toBe("SIGKILL");
+          }),
+        ).rejects.toThrow(
+          /timed out after 31 seconds \(budget for 26 B\).*Stop the Gateway service/,
+        );
+        expect(performance.now() - started).toBeLessThan(8_000);
+        expect(fs.readFileSync(ready, "utf8")).toBe("ready");
+        expect(fs.readFileSync(source, "utf8")).toBe("source must stay unchanged");
+        expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+      } finally {
+        await childClosed;
+        // execFile's copied prototype must not become its own parent during reset.
+        processMocks.execFile.mockReset().mockImplementation(actual.execFile.bind(undefined));
+        vi.mocked(spawnSync).mockReset().mockImplementation(actual.spawnSync);
+      }
     },
-    40_000,
+    10_000,
   );
 });
