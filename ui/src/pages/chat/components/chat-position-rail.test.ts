@@ -259,6 +259,7 @@ describe("conversation position rail", () => {
       expect(preview.querySelector("script")).toBeNull();
       expect(preview.closest("[inert]")).not.toBeNull();
     } finally {
+      render(nothing, container);
       transcript.hostDisconnected();
     }
   });
