@@ -364,9 +364,12 @@ candidate's bridges. Existing older compatibility aliases remain separately
 owned by their original upgrade contracts.
 
 The default `update-first-hop-compat` lane runs each recorded release against the
-candidate, with separate artifacts per version. It requires the installed build
-identity and a restarted service, including for same-version or lower-version
-explicit candidate tarballs. The 2026.9.1 negative control demonstrates the
+candidate, with separate artifacts per version. Published updaters may correctly
+skip a same-version tarball, so the lane stamps only test-artifact version metadata:
+first hop `2026.9.99-first-hop.0` retains compatibility bridges; second hop
+`2026.9.99-first-hop.1` removes them. The original candidate stays unchanged, and
+transformation receipts bind package digests and every changed or removed member.
+Both hops still require the exact installed build identity and a restarted service. The 2026.9.1 negative control demonstrates the
 missing restart import; releases that already preload that helper record the
 negative control as not applicable while retaining the positive first-hop and
 bridge-free future-hop checks. An explicit source tarball still selects one
