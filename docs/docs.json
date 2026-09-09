@@ -3169,6 +3169,13 @@
                 "pages": [
                   "help/faq",
                   "help/faq-first-run",
+                  {
+                    "group": "First-run FAQ",
+                    "pages": [
+                      "help/faq-first-run/quick-start",
+                      "help/faq-first-run/providers-and-hosting"
+                    ]
+                  },
                   "help/faq-models"
                 ]
               },

@@ -556,6 +556,18 @@
     "target": "VPS 托管"
   },
   {
+    "source": "Fly.io",
+    "target": "Fly.io"
+  },
+  {
+    "source": "Hetzner",
+    "target": "Hetzner"
+  },
+  {
+    "source": "exe.dev",
+    "target": "exe.dev"
+  },
+  {
     "source": "Linux server",
     "target": "Linux 服务器"
   },
@@ -1002,6 +1014,14 @@
   {
     "source": "FAQ",
     "target": "常见问题"
+  },
+  {
+    "source": "FAQ: quick start and first-run setup",
+    "target": "常见问题：快速开始与首次运行设置"
+  },
+  {
+    "source": "FAQ: providers, hardware, and hosting",
+    "target": "常见问题：服务商、硬件与托管"
   },
   {
     "source": "Ollama Web Search",
