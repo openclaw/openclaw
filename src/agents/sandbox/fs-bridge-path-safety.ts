@@ -256,6 +256,21 @@ export class SandboxFsPathGuard {
     });
   }
 
+  /**
+   * Resolves the canonical full destination path (canonicalized parent plus
+   * basename) so callers can authorize the real mutation target before pinning.
+   */
+  async resolveCanonicalMutationTarget(
+    target: SandboxResolvedFsPath,
+    action: string,
+  ): Promise<string> {
+    const anchoredTarget = await this.resolveAnchoredSandboxEntry(target, action);
+    this.resolveRequiredMount(anchoredTarget.canonicalParentPath, action);
+    return anchoredTarget.canonicalParentPath === "/"
+      ? `/${anchoredTarget.basename}`
+      : `${anchoredTarget.canonicalParentPath}/${anchoredTarget.basename}`;
+  }
+
   async resolveAnchoredPinnedDirectoryEntry(
     target: SandboxResolvedFsPath,
     action: string,

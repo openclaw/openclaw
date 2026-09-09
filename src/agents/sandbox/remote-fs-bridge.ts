@@ -173,6 +173,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       mountRootPath: destination.mountRootPath,
       action: "copy files",
       requireWritable: true,
+      pinnedCanonicalPath: this.authorizedPinnedPath(
+        params.pinnedPath,
+        destination.containerPath,
+        "copy files",
+      ),
       signal: params.signal,
     });
     await this.runMutation({
@@ -194,6 +199,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       mountRootPath: target.mountRootPath,
       action: "write files",
       requireWritable: true,
+      pinnedCanonicalPath: this.authorizedPinnedPath(
+        params.pinnedPath,
+        target.containerPath,
+        "write files",
+      ),
       signal: params.signal,
     });
     await this.assertNoHardlinkedFile({
@@ -225,6 +235,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       mountRootPath: target.mountRootPath,
       action: "create files",
       requireWritable: true,
+      pinnedCanonicalPath: this.authorizedPinnedPath(
+        params.pinnedPath,
+        target.containerPath,
+        "create files",
+      ),
       signal: params.signal,
     });
     const buffer = Buffer.isBuffer(params.data)
@@ -251,7 +266,12 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return "created";
   }
 
-  async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
+  async mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    pinnedPath?: string;
+    signal?: AbortSignal;
+  }): Promise<void> {
     const target = this.resolveTarget(params);
     await this.ensureRemoteWritable(target, "create directories", params.signal);
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
@@ -269,6 +289,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       action: "create directories",
       requireWritable: true,
       directory: true,
+      pinnedCanonicalPath: this.authorizedPinnedPath(
+        params.pinnedPath,
+        target.containerPath,
+        "create directories",
+      ),
       signal: params.signal,
     });
     await this.runMutation({
@@ -297,6 +322,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       requireWritable: true,
       includeDescendants: params.recursive,
       allowFinalSymlinkForUnlink: true,
+      pinnedCanonicalPath: this.authorizedPinnedPath(
+        params.pinnedPath,
+        target.containerPath,
+        "remove files",
+      ),
       signal: params.signal,
     });
     await this.runMutation({
@@ -602,6 +632,101 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     }
   }
 
+  async resolvePinnedMutationTarget(
+    params: Parameters<NonNullable<SandboxFsBridge["resolvePinnedMutationTarget"]>>[0],
+  ): Promise<{ canonicalPath: string }> {
+    const target = this.resolveTarget(params);
+    const action =
+      params.action === "write"
+        ? "write files"
+        : params.action === "create"
+          ? "create files"
+          : params.action === "mkdir"
+            ? "create directories"
+            : params.action === "remove"
+              ? "remove files"
+              : "copy files";
+    const { canonicalPath, logicalPath } = await this.resolveCanonicalPath({
+      // mkdirp pins the directory itself; file operations pin their parent.
+      containerPath: normalizeContainerPath(
+        params.action === "mkdir" ? target.containerPath : path.posix.dirname(target.containerPath),
+      ),
+      mountRootPath: target.mountRootPath,
+      action,
+      signal: params.signal,
+    });
+    if (!resolveRemoteMountByContainerPath(this.getMounts(), logicalPath)) {
+      throw new Error(
+        `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
+      );
+    }
+    const basename = path.posix.basename(target.containerPath);
+    return {
+      canonicalPath:
+        params.action === "mkdir"
+          ? canonicalPath
+          : normalizeContainerPath(path.posix.join(canonicalPath, basename)),
+    };
+  }
+
+  /**
+   * Canonical frame for an already-authorized pinned destination. Only the
+   * infrastructure-owned mount root alias is re-read; sandbox-writable path
+   * components are never followed again, so a post-authorization swap fails
+   * the containment check instead of redirecting the mutation.
+   */
+  private async resolvePinnedCanonicalFrame(params: {
+    pinnedPath: string;
+    directory: boolean;
+    mountRootPath: string;
+    action: string;
+    signal?: AbortSignal;
+  }): Promise<RemoteCanonicalPath> {
+    const pinnedPath = normalizeContainerPath(params.pinnedPath);
+    const result = await this.runtime.runRemoteShellScript({
+      script: 'canonical_root=$(readlink -f -- "$1")\nprintf "%s\\n" "$canonical_root"',
+      args: [params.mountRootPath],
+      signal: params.signal,
+    });
+    const canonicalMountRoot = normalizeContainerPath(result.stdout.toString("utf8").trim());
+    if (!canonicalMountRoot.startsWith("/")) {
+      throw new Error(
+        `Sandbox path canonicalization failed; cannot ${params.action}: ${pinnedPath}`,
+      );
+    }
+    const relative = path.posix.relative(canonicalMountRoot, pinnedPath);
+    if (relativePathEscapesContainerRoot(relative)) {
+      throw new Error(
+        `Sandbox path escapes allowed mounts; cannot ${params.action}: ${pinnedPath}`,
+      );
+    }
+    return {
+      canonicalPath: pinnedPath,
+      canonicalMountRoot,
+      logicalPath:
+        relative === "."
+          ? params.mountRootPath
+          : normalizeContainerPath(path.posix.join(params.mountRootPath, relative)),
+    };
+  }
+
+  private authorizedPinnedPath(
+    pinnedPath: string | undefined,
+    containerPath: string,
+    action: string,
+  ): string | undefined {
+    if (pinnedPath === undefined) {
+      return undefined;
+    }
+    const canonical = normalizeContainerPath(pinnedPath);
+    if (path.posix.basename(canonical) !== path.posix.basename(containerPath)) {
+      throw new Error(
+        `Pinned sandbox destination does not match the requested path; cannot ${action}: ${containerPath}`,
+      );
+    }
+    return canonical;
+  }
+
   private async resolvePinnedTarget(params: {
     containerPath: string;
     mountRootPath: string;
@@ -610,23 +735,35 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     directory?: boolean;
     includeDescendants?: boolean;
     allowFinalSymlinkForUnlink?: boolean;
+    /** Pre-authorized canonical pin path; skips destination re-canonicalization. */
+    pinnedCanonicalPath?: string;
     signal?: AbortSignal;
   }): Promise<{ mountRootPath: string; relativeParentPath: string; basename: string }> {
     const basename = params.directory ? "" : path.posix.basename(params.containerPath);
     if (!params.directory && (!basename || basename === "." || basename === "/")) {
       throw new Error(`Invalid sandbox entry target: ${params.containerPath}`);
     }
-    const { canonicalPath, canonicalMountRoot, logicalPath } = await this.resolveCanonicalPath({
-      // mkdirp pins the directory itself; file operations pin its parent and
-      // retain no-follow handling for the final filename.
-      containerPath: normalizeContainerPath(
-        params.directory ? params.containerPath : path.posix.dirname(params.containerPath),
-      ),
-      mountRootPath: params.mountRootPath,
-      action: params.action,
-      allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
-      signal: params.signal,
-    });
+    const { canonicalPath, canonicalMountRoot, logicalPath } =
+      params.pinnedCanonicalPath !== undefined
+        ? await this.resolvePinnedCanonicalFrame({
+            // mkdirp pins the directory itself; file operations pin their parent.
+            pinnedPath: params.pinnedCanonicalPath,
+            directory: params.directory === true,
+            mountRootPath: params.mountRootPath,
+            action: params.action,
+            signal: params.signal,
+          })
+        : await this.resolveCanonicalPath({
+            // mkdirp pins the directory itself; file operations pin its parent and
+            // retain no-follow handling for the final filename.
+            containerPath: normalizeContainerPath(
+              params.directory ? params.containerPath : path.posix.dirname(params.containerPath),
+            ),
+            mountRootPath: params.mountRootPath,
+            action: params.action,
+            allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
+            signal: params.signal,
+          });
     const mount = resolveRemoteMountByContainerPath(this.getMounts(), logicalPath);
     if (!mount) {
       throw new Error(

@@ -23,6 +23,21 @@ export type SandboxFsStat = {
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
+  /**
+   * Resolves the canonical sandbox destination for a mutation before caller
+   * authorization. canonicalPath canonicalizes mutable parents (symlinks) so
+   * callers can authorize the real destination; pass it back as pinnedPath on
+   * the mutation so the pinned operation lands on the same authorized
+   * location. Pinned mutations walk their path without following symlinks, so
+   * any component swapped after resolution fails the mutation instead of
+   * redirecting it.
+   */
+  resolvePinnedMutationTarget?(params: {
+    filePath: string;
+    cwd?: string;
+    action: "write" | "create" | "mkdir" | "remove" | "copy-destination";
+    signal?: AbortSignal;
+  }): Promise<{ canonicalPath: string }>;
   /** Directory metadata only; callers paginate it without activating file contents. */
   readDirectory?(params: {
     filePath: string;
@@ -42,6 +57,8 @@ export type SandboxFsBridge = {
     destinationPath: string;
     cwd?: string;
     mkdir?: boolean;
+    /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
+    pinnedPath?: string;
     signal?: AbortSignal;
   }): Promise<void>;
   writeFile(params: {
@@ -50,6 +67,8 @@ export type SandboxFsBridge = {
     data: Buffer | string;
     encoding?: BufferEncoding;
     mkdir?: boolean;
+    /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
+    pinnedPath?: string;
     signal?: AbortSignal;
   }): Promise<void>;
   /**
@@ -63,14 +82,24 @@ export type SandboxFsBridge = {
     data: Buffer | string;
     encoding?: BufferEncoding;
     mkdir?: boolean;
+    /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
+    pinnedPath?: string;
     signal?: AbortSignal;
   }): Promise<"created" | "exists">;
-  mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
+  mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
+    pinnedPath?: string;
+    signal?: AbortSignal;
+  }): Promise<void>;
   remove(params: {
     filePath: string;
     cwd?: string;
     recursive?: boolean;
     force?: boolean;
+    /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
+    pinnedPath?: string;
     signal?: AbortSignal;
   }): Promise<void>;
   rename(params: { from: string; to: string; cwd?: string; signal?: AbortSignal }): Promise<void>;

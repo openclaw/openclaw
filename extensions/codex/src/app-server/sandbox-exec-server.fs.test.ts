@@ -144,6 +144,144 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.close();
   });
 
+  it("denies writes whose canonical destination is policy-protected", async () => {
+    const writeFile = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      writeFile,
+      // Simulates a workspace symlink alias that canonicalizes into .git.
+      resolvePinnedMutationTarget: async ({ filePath }) =>
+        filePath === "/workspace/alias/config"
+          ? { canonicalPath: "/workspace/.git/config" }
+          : { canonicalPath: filePath },
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "fs/writeFile", {
+        path: "file:///workspace/alias/config",
+        dataBase64: Buffer.from("blocked").toString("base64"),
+        sandbox: codexFsSandboxContext({
+          entries: [
+            { path: specialPath("root"), access: "read" },
+            { path: specialPath("project_roots"), access: "write" },
+            { path: specialPath("project_roots", ".git"), access: "read" },
+          ],
+        }),
+      }),
+    ).rejects.toThrow("Codex fs sandbox denied write access");
+
+    expect(writeFile).not.toHaveBeenCalled();
+    socket.close();
+  });
+
+  it("pins authorized writes to the canonical destination", async () => {
+    const writeFile = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      writeFile,
+      resolvePinnedMutationTarget: async ({ filePath }) =>
+        filePath === "/workspace/alias/config"
+          ? { canonicalPath: "/workspace/real/config" }
+          : { canonicalPath: filePath },
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await rpc(socket, "fs/writeFile", {
+      path: "file:///workspace/alias/config",
+      dataBase64: Buffer.from("pinned").toString("base64"),
+      sandbox: codexFsSandboxContext({
+        entries: [
+          { path: specialPath("root"), access: "read" },
+          { path: specialPath("project_roots"), access: "write" },
+        ],
+      }),
+    });
+
+    expect(writeFile).toHaveBeenCalledWith({
+      filePath: "/workspace/alias/config",
+      data: Buffer.from("pinned"),
+      mkdir: false,
+      pinnedPath: "/workspace/real/config",
+    });
+    socket.close();
+  });
+
+  it("denies copies whose canonical destination is policy-protected", async () => {
+    const copyFile = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      copyFile,
+      resolvePinnedMutationTarget: async ({ filePath }) =>
+        filePath === "/workspace/alias/config"
+          ? { canonicalPath: "/workspace/.git/config" }
+          : { canonicalPath: filePath },
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "fs/copy", {
+        sourcePath: "file:///workspace/source.txt",
+        destinationPath: "file:///workspace/alias/config",
+        sandbox: codexFsSandboxContext({
+          entries: [
+            { path: specialPath("root"), access: "read" },
+            { path: specialPath("project_roots"), access: "write" },
+            { path: specialPath("project_roots", ".git"), access: "read" },
+          ],
+        }),
+      }),
+    ).rejects.toThrow("Codex fs sandbox denied write access");
+
+    expect(copyFile).not.toHaveBeenCalled();
+    socket.close();
+  });
+
+  it("pins authorized copies to the canonical destination", async () => {
+    const copyFile = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      copyFile,
+      stat: async () => ({ type: "file", size: 4, mtimeMs: 1 }),
+      resolvePinnedMutationTarget: async ({ filePath }) =>
+        filePath === "/workspace/alias/config"
+          ? { canonicalPath: "/workspace/real/config" }
+          : { canonicalPath: filePath },
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await rpc(socket, "fs/copy", {
+      sourcePath: "file:///workspace/source.txt",
+      destinationPath: "file:///workspace/alias/config",
+      sandbox: codexFsSandboxContext({
+        entries: [
+          { path: specialPath("root"), access: "read" },
+          { path: specialPath("project_roots"), access: "write" },
+        ],
+      }),
+    });
+
+    expect(copyFile).toHaveBeenCalledWith({
+      sourcePath: "/workspace/source.txt",
+      destinationPath: "/workspace/alias/config",
+      mkdir: true,
+      pinnedPath: "/workspace/real/config",
+    });
+    socket.close();
+  });
+
   it("honors Codex fs sandbox protected metadata carveouts", async () => {
     const remove = vi.fn(async () => undefined);
     const writeFile = vi.fn(async () => undefined);

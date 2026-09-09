@@ -247,8 +247,20 @@ export async function writeFile(
 ): Promise<void> {
   const record = requireObject(params, "fs/writeFile params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "write path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "write" }]);
   const fsBridge = execServer.fsBridge;
+  // Authorize the canonical destination before pinning the mutation so a
+  // symlinked parent cannot redirect an approved write into a protected path
+  // after authorization.
+  const canonicalDestination = await fsBridge.resolvePinnedMutationTarget?.({
+    filePath,
+    action: "write",
+  });
+  assertFsSandboxAccess(execServer, record, [
+    { path: filePath, access: "write" },
+    ...(canonicalDestination
+      ? [{ path: canonicalDestination.canonicalPath, access: "write" as const }]
+      : []),
+  ]);
   const parent = await fsBridge.stat({ filePath: pathPosix.dirname(filePath) });
   if (parent?.type !== "directory") {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "parent directory not found");
@@ -257,6 +269,7 @@ export async function writeFile(
     filePath,
     data: Buffer.from(requireBase64String(record.dataBase64, "dataBase64"), "base64"),
     mkdir: false,
+    pinnedPath: canonicalDestination?.canonicalPath,
   });
 }
 
@@ -270,8 +283,17 @@ export async function createDirectory(
     requireString(record.path, "path"),
     "create-directory path",
   );
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "write" }]);
   const fsBridge = execServer.fsBridge;
+  const canonicalDestination = await fsBridge.resolvePinnedMutationTarget?.({
+    filePath,
+    action: "mkdir",
+  });
+  assertFsSandboxAccess(execServer, record, [
+    { path: filePath, access: "write" },
+    ...(canonicalDestination
+      ? [{ path: canonicalDestination.canonicalPath, access: "write" as const }]
+      : []),
+  ]);
   if (record.recursive === false) {
     const parentPath = pathPosix.dirname(filePath);
     const parent = await fsBridge.stat({ filePath: parentPath });
@@ -281,6 +303,7 @@ export async function createDirectory(
   }
   await fsBridge.mkdirp({
     filePath,
+    pinnedPath: canonicalDestination?.canonicalPath,
   });
 }
 
@@ -355,14 +378,27 @@ export async function removePath(
   const record = requireObject(params, "fs/remove params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "remove path");
   const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
-  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "write" }]);
+  const canonicalDestination = await execServer.fsBridge.resolvePinnedMutationTarget?.({
+    filePath,
+    action: "remove",
+  });
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [
+    { path: filePath, access: "write" },
+    ...(canonicalDestination
+      ? [{ path: canonicalDestination.canonicalPath, access: "write" as const }]
+      : []),
+  ]);
   if (record.recursive !== false) {
     assertNoReadOnlyDescendant(fsSandboxPolicy, filePath, "remove");
+    if (canonicalDestination) {
+      assertNoReadOnlyDescendant(fsSandboxPolicy, canonicalDestination.canonicalPath, "remove");
+    }
   }
   await execServer.fsBridge.remove({
     filePath,
     recursive: record.recursive !== false,
     force: record.force !== false,
+    pinnedPath: canonicalDestination?.canonicalPath,
   });
 }
 
@@ -403,9 +439,18 @@ async function copySandboxPath(
   },
 ): Promise<void> {
   const fsBridge = execServer.fsBridge;
+  // Authorize the canonical copy destination before pinning the mutation so a
+  // symlinked parent cannot redirect an approved copy into a protected path.
+  const canonicalDestination = await fsBridge.resolvePinnedMutationTarget?.({
+    filePath: params.destinationPath,
+    action: "copy-destination",
+  });
   assertResolvedFsSandboxAccess(params.fsSandboxPolicy, [
     { path: params.sourcePath, access: "read" },
     { path: params.destinationPath, access: "write" },
+    ...(canonicalDestination
+      ? [{ path: canonicalDestination.canonicalPath, access: "write" as const }]
+      : []),
   ]);
   const sourceStat = await fsBridge.stat({ filePath: params.sourcePath });
   if (!sourceStat) {
@@ -423,7 +468,10 @@ async function copySandboxPath(
     ) {
       throw new Error("Cannot recursively copy a directory into itself.");
     }
-    await fsBridge.mkdirp({ filePath: params.destinationPath });
+    await fsBridge.mkdirp({
+      filePath: params.destinationPath,
+      pinnedPath: canonicalDestination?.canonicalPath,
+    });
     for (const entry of await listDirectoryEntries(
       execServer,
       params.sourcePath,
@@ -447,6 +495,7 @@ async function copySandboxPath(
       sourcePath: params.sourcePath,
       destinationPath: params.destinationPath,
       mkdir: true,
+      pinnedPath: canonicalDestination?.canonicalPath,
     });
     return;
   }
@@ -462,6 +511,7 @@ async function copySandboxPath(
     filePath: params.destinationPath,
     data,
     mkdir: true,
+    pinnedPath: canonicalDestination?.canonicalPath,
   });
 }
 
