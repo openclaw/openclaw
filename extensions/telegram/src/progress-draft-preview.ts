@@ -18,6 +18,14 @@ import {
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 import { buildTelegramRichBlocksPlan } from "./rich-message.js";
 
+function isTelegramProgressPriorityLine(line: ChannelProgressDraftCompositorLine): boolean {
+  if (!isChannelProgressAttentionLine(line) || typeof line === "string") {
+    return false;
+  }
+  const status = line.status?.toLowerCase();
+  return status?.startsWith("exit ") !== true || status === "exit 0";
+}
+
 // Each row has one content decision; both Telegram transports use that row.
 type ProgressText = { html: string; rich: RichText };
 
@@ -83,13 +91,13 @@ export function renderTelegramProgressDraftPreview(
             !line.id?.startsWith("commentary:"),
         )
       : snapshot.lines;
-  const attention = activity.filter(isChannelProgressAttentionLine);
+  const attention = activity.filter(isTelegramProgressPriorityLine);
   const checklist = selectPlanChecklistSteps(snapshot.plan ?? [], {
     maxLines: maxLines - attention.length,
   });
   const checklistLines = checklist.steps.length + (checklist.summary ? 1 : 0);
   const lineBudget = Math.max(0, maxLines - checklistLines);
-  const lines = [...activity.filter((line) => !isChannelProgressAttentionLine(line)), ...attention];
+  const lines = [...activity.filter((line) => !isTelegramProgressPriorityLine(line)), ...attention];
   const visibleLines = lineBudget ? lines.slice(-lineBudget) : [];
   const diffStat =
     visibleLines.length + checklistLines < maxLines

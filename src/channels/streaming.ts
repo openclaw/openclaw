@@ -317,6 +317,17 @@ export function isChannelProgressAttentionLine(line: string | ChannelProgressDra
   );
 }
 
+/** Lines that reserve bounded progress capacity. */
+export function isChannelProgressPriorityLine(line: string | ChannelProgressDraftLine): boolean {
+  if (typeof line === "string") {
+    return false;
+  }
+  const status = line.status?.toLowerCase();
+  return (
+    line.kind === "approval" || status === "failed" || status === "error" || status === "blocked"
+  );
+}
+
 const progressDraftLineCorrelationKeys = new WeakMap<ChannelProgressDraftLine, string>();
 
 function compactStrings(values: readonly (string | undefined | null)[]): string[] {
@@ -1253,12 +1264,12 @@ function limitProgressDraftLines<TLine extends string | ChannelProgressDraftLine
   maxLines: number,
 ): TLine[] {
   let attentionSlots = maxLines;
-  let ordinarySlots = Math.max(0, maxLines - lines.filter(isChannelProgressAttentionLine).length);
+  let ordinarySlots = Math.max(0, maxLines - lines.filter(isChannelProgressPriorityLine).length);
   // Keep attention through tool/commentary bursts without changing arrival order.
   return lines
     .toReversed()
     .filter((line) =>
-      isChannelProgressAttentionLine(line) ? attentionSlots-- > 0 : ordinarySlots-- > 0,
+      isChannelProgressPriorityLine(line) ? attentionSlots-- > 0 : ordinarySlots-- > 0,
     )
     .toReversed();
 }
@@ -1335,7 +1346,7 @@ export function formatChannelProgressDraftText(params: {
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
-  const attention = params.lines.filter(isChannelProgressAttentionLine);
+  const attention = params.lines.filter(isChannelProgressPriorityLine);
   const planLines = formatPlanChecklistLines(params.plan ?? [], {
     maxLines: maxLines - attention.length,
     maxLineChars,
@@ -1354,7 +1365,7 @@ export function formatChannelProgressDraftText(params: {
   const toolLineBudget = planLines.length > 0 ? Math.max(0, maxLines - planLines.length) : maxLines;
   // Attention owns capacity before plans and routine progress consume the window.
   const visibleLines = [
-    ...params.lines.filter((line) => !isChannelProgressAttentionLine(line)),
+    ...params.lines.filter((line) => !isChannelProgressPriorityLine(line)),
     ...attention,
   ];
   const renderedToolLines = visibleLines

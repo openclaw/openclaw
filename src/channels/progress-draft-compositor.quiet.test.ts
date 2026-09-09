@@ -177,8 +177,16 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
           toolCallId: "failed-command",
           exitCode: 1,
         });
-        expect(update.mock.lastCall?.[0]).toContain("exit 1");
-        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        // Non-zero exits stay eligible for quiet-mode display but do not take
+        // capacity from a full plan or receive attention-only immediate flushes.
+        expect(
+          progress
+            .getSnapshot()
+            .lines.some(
+              (line) => typeof line === "object" && "text" in line && line.text.includes("exit 1"),
+            ),
+        ).toBe(true);
+        expect(update.mock.lastCall?.[1]).not.toMatchObject({ flush: true });
         await progress.pushCommandOutputEvent({
           phase: "end",
           toolCallId: "failed-command",
@@ -190,4 +198,69 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
       }
     },
   );
+
+  it("keeps a non-zero exit visible when the quiet draft has room", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: false, maxLines: 3, label: false },
+        },
+      },
+      update,
+    });
+    try {
+      await progress.start();
+      await progress.pushCommandOutputEvent({
+        phase: "end",
+        toolCallId: "failed-command",
+        exitCode: 1,
+      });
+      expect(update.mock.lastCall?.[0]).toContain("exit 1");
+      expect(update.mock.lastCall?.[1]).not.toMatchObject({ flush: true });
+    } finally {
+      progress.cancel();
+    }
+  });
+
+  it("lets new activity replace old non-zero exits without collapsing the plan", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, maxLines: 8, commentary: true, label: false },
+        },
+      },
+      update,
+    });
+    try {
+      await progress.pushPlanProgress([
+        { step: "Inspect", status: "completed" },
+        { step: "Repair", status: "in_progress" },
+        { step: "Verify", status: "pending" },
+        { step: "Audit", status: "pending" },
+        { step: "Ship", status: "pending" },
+      ]);
+      for (let index = 1; index <= 8; index++) {
+        await progress.pushCommandOutputEvent({
+          phase: "end",
+          toolCallId: `failed-${index}`,
+          exitCode: index,
+        });
+      }
+      await progress.pushToolEvent({ name: "read", toolCallId: "new-work", phase: "start" });
+
+      const rendered = update.mock.lastCall?.[0] ?? "";
+      for (const step of ["Inspect", "Repair", "Verify", "Audit", "Ship"]) {
+        expect(rendered).toContain(step);
+      }
+      expect(rendered).toContain("Read");
+      expect(rendered).not.toContain("exit 1");
+      expect(progress.getSnapshot().lines).toHaveLength(8);
+    } finally {
+      progress.cancel();
+    }
+  });
 });

@@ -22,6 +22,7 @@ import {
   type ChannelProgressDraftLine,
   formatChannelProgressDraftText,
   isChannelProgressAttentionLine,
+  isChannelProgressPriorityLine,
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
@@ -404,8 +405,9 @@ export function createChannelProgressDraftCompositor(params: {
     }
     const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
     // Approvals and failures stay visible even when the rolling tool log is off.
-    const needsAttention = isChannelProgressAttentionLine(progressLine);
-    const shouldStoreLine = !quietProgress || needsAttention;
+    const needsAttention = isChannelProgressPriorityLine(progressLine);
+    const shouldStartImmediately = isChannelProgressAttentionLine(progressLine);
+    const shouldStoreLine = !quietProgress || isChannelProgressAttentionLine(progressLine);
     const nextLines = shouldStoreLine
       ? mergeChannelProgressDraftLine(lines, progressLine, {
           maxLines: resolveChannelProgressDraftMaxLines(params.entry),
@@ -442,7 +444,7 @@ export function createChannelProgressDraftCompositor(params: {
       return shouldStoreLine ? await publish() : false;
     }
     // Attention bypasses startup delay and adapter batching even with the tool log enabled.
-    if (options?.startImmediately || params.shouldStartNow?.(line) || needsAttention) {
+    if (options?.startImmediately || params.shouldStartNow?.(line) || shouldStartImmediately) {
       const flush = options?.flush === true || needsAttention;
       return await startAndRender(flush ? { flush: true } : undefined);
     }

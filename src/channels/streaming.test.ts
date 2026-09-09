@@ -6,6 +6,8 @@ import {
   buildChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   formatPlanChecklistLines,
+  isChannelProgressAttentionLine,
+  isChannelProgressPriorityLine,
   normalizeAgentPlanSteps,
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
@@ -20,6 +22,42 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
+  it("does not reserve attention capacity for non-zero command exits", () => {
+    const exitLine = {
+      kind: "command-output" as const,
+      label: "Exec",
+      text: "🛠️ exit 1",
+      status: "exit 1",
+    };
+    expect(isChannelProgressAttentionLine(exitLine)).toBe(true);
+    expect(isChannelProgressPriorityLine(exitLine)).toBe(false);
+    expect(
+      isChannelProgressAttentionLine({
+        kind: "tool",
+        label: "Deploy",
+        text: "Deploy failed",
+        status: "failed",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps non-zero exits in the legacy quiet summary", () => {
+    expect(
+      formatChannelProgressDraftText({
+        presentation: "summary",
+        entry: { streaming: { mode: "progress", progress: { label: false } } },
+        lines: [
+          {
+            kind: "command-output",
+            label: "Exec",
+            text: "🛠️ exit 1",
+            status: "exit 1",
+          },
+        ],
+      }),
+    ).toBe("Exec — exit 1");
+  });
+
   it("suppresses status tools from generic work-tool progress", () => {
     expect(isChannelProgressDraftWorkToolName("progress_card")).toBe(false);
     expect(isChannelProgressDraftWorkToolName("update_plan")).toBe(false);

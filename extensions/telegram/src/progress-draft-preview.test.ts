@@ -90,6 +90,34 @@ describe("renderTelegramProgressDraftPreview", () => {
     expect(preview.text).toContain("1/4 done");
     expect(preview.text).not.toContain("Read files");
   });
+
+  it("keeps the full plan when non-zero exits fill the activity window", () => {
+    const preview = renderTelegramProgressDraftPreview(
+      {
+        lines: Array.from({ length: 8 }, (_, index) => ({
+          id: `command:${index}`,
+          kind: "command-output" as const,
+          label: "Exec",
+          text: `🛠️ exit ${index + 1}`,
+          status: `exit ${index + 1}`,
+        })),
+        plan: [
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+          { step: "Audit", status: "pending" },
+          { step: "Ship", status: "pending" },
+        ],
+      },
+      { ...options, maxLines: 8 },
+    );
+    const text = telegramHtmlToPlainTextFallback(preview.text);
+    for (const step of ["Inspect", "Repair", "Verify", "Audit", "Ship"]) {
+      expect(text).toContain(step);
+    }
+    expect(text).toContain("exit 8");
+    expect(text).not.toContain("exit 1");
+  });
   it.each([true, false])(
     "renders retained edit totals without a plan (rich=%s)",
     (richMessages) => {
