@@ -48,7 +48,15 @@ export function createStatusModelAuthResolver(params: {
     acceptedProviderIds: readonly string[];
   }): Promise<string | undefined> => {
     const { provider, model, runtimeId } = selection;
-    if (!runtimeId || runtimeId === "openclaw" || runtimeId === "auto") {
+    // SDK renderers without a prepared owner retain host-profile diagnostics.
+    // A native observation, when present, never falls back to a different account.
+    if (
+      !owner ||
+      !runtimeId ||
+      runtimeId === "openclaw" ||
+      runtimeId === "auto" ||
+      provider === runtimeId
+    ) {
       return resolveModelAuthLabel({
         provider,
         acceptedProviderIds: selection.acceptedProviderIds,
