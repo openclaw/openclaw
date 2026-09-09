@@ -71,7 +71,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           ...result,
           plugins: result.plugins.map((plugin) =>
             plugin.clawhubPackage
-              ? { ...plugin, catalogId: encodePluginDiscoveryId(plugin.clawhubPackage) }
+              ? Object.assign({}, plugin, {
+                  catalogId: encodePluginDiscoveryId(plugin.clawhubPackage),
+                })
               : plugin,
           ),
         },

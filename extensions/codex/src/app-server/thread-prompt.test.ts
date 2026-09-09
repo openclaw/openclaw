@@ -234,7 +234,7 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       expect(instructions).toContain("result.presentation");
       expect(instructions).toContain("inline support varies by surface");
       expect(instructions).toContain(
-        `\`${prefix}message(action=\"send\", clawhub={query:\"capability\"})\``,
+        `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
       );
       expect(instructions).toContain("including when it is already installed");
       expect(instructions).toContain("desktop app does not establish");

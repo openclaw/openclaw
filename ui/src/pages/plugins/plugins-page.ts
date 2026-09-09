@@ -19,10 +19,8 @@ import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
-  type PluginDiscoveryDetailResult,
   type PluginListResult,
   type PluginMutationResult,
-  type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
   GatewayPageController,
@@ -41,7 +39,12 @@ import type { PluginRowMessage } from "./plugin-row-message.ts";
 import { PluginsConsentController } from "./plugins-consent-controller.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
 import { PluginsPageIcons } from "./plugins-page-icons.ts";
-import { mergePluginCatalogItem, pluginMutationBlockedReason } from "./plugins-page-model.ts";
+import {
+  mergePluginCatalogItem,
+  pluginMutationBlockedReason,
+  type PluginsPageCatalogDetail,
+  type PluginsPageDetail,
+} from "./plugins-page-model.ts";
 import { renderPluginsPage } from "./plugins-page-view.ts";
 import type { PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsTab } from "./settings-view.ts";
@@ -61,19 +64,11 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private settingsTab: PluginSettingsTab = "installed";
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, PluginRowMessage> = {};
-  @state() private detail: {
-    pluginId: string;
-    inspection: PluginsInspectResult | null;
-    error: string | null;
-  } | null = null;
+  @state() private detail: PluginsPageDetail | null = null;
   @state() private iconUrls: Record<string, string> = {};
   @state() private catalogIconUrls: Record<string, string> = {};
   @state() private pageNotice: PluginRowMessage | null = null;
-  @state() private catalogDetail: {
-    id: string;
-    result: PluginDiscoveryDetailResult | null;
-    error: string | null;
-  } | null = null;
+  @state() private catalogDetail: PluginsPageCatalogDetail | null = null;
   @state() private catalogDetailTab: PluginCatalogDetailTab = "readme";
   @state() private installedDetailTab: InstalledPluginDetailTab = "readme";
   @state() private installWizard: PluginInstallWizardState | null = null;

@@ -1,5 +1,22 @@
 import { t } from "../../i18n/index.ts";
-import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginCatalogItem,
+  PluginDiscoveryDetailResult,
+  PluginListResult,
+  PluginsInspectResult,
+} from "../../lib/plugins/index.ts";
+
+export type PluginsPageDetail = {
+  pluginId: string;
+  inspection: PluginsInspectResult | null;
+  error: string | null;
+};
+
+export type PluginsPageCatalogDetail = {
+  id: string;
+  result: PluginDiscoveryDetailResult | null;
+  error: string | null;
+};
 
 export function mergePluginCatalogItem(
   current: PluginListResult | null,
