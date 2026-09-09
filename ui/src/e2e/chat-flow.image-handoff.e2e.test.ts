@@ -198,7 +198,8 @@ suite.define(() => {
             session: sessionInfo,
           });
           await gateway.waitForRequest("chat.history", { after: histories });
-          await expect.poll(() => page.locator(".chat-send-status").count()).toBe(0);
+          // Custody starts the canonical media read while the send acknowledgment is held.
+          await expect.poll(() => metadataRequested).toBe(true);
           await expectImageStillVisible("02-custody");
           await gateway.resolveDeferred("chat.send", { runId, status: "started" });
 
