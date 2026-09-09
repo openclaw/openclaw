@@ -81,7 +81,7 @@ Standard files OpenClaw expects inside the workspace:
     The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual. Template: [IDENTITY.md](/reference/templates/IDENTITY).
   </Accordion>
   <Accordion title="AGENTS.md Tools section - local tool conventions">
-    The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance. Template: [TOOLS.md](/reference/templates/TOOLS).
+    The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance. Template: [AGENTS.md Tools section](/reference/templates/AGENTS#tools).
   </Accordion>
   <Accordion title="BOOT.md - startup checklist">
     Optional startup checklist run on Gateway startup when the [boot-md hook](/automation/hooks#boot-md) is enabled. Enabling a different internal hook does not enable `boot-md`. Keep it short; use the message tool for outbound sends. Template: [BOOT.md](/reference/templates/BOOT).
