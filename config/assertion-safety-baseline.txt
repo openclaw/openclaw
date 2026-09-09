@@ -2063,7 +2063,7 @@ src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
-src/auto-reply/reply/agent-runner-memory.ts	6
+src/auto-reply/reply/agent-runner-memory.ts	5
 src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-session-reset.ts	1
 src/auto-reply/reply/agent-runner-trace.ts	1
