@@ -9,6 +9,7 @@ import {
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveDailyRangeProvenance, type DailyProvenanceRecord } from "./daily-provenance.js";
 import {
   appendConsolidationSkippedSummary,
   appendConsolidationSummary,
@@ -185,25 +186,50 @@ function withAuthoritativeProvenance(
   return next;
 }
 
-function withDailyFileQuarantine(
+function withDailyRangeQuarantine(
   candidate: PromotionCandidate,
-  provenanceByPath: ReadonlyMap<
-    string,
-    { fileHash: string; originClass: "agent" | "untrusted"; observedAt: number }
-  >,
+  record: DailyProvenanceRecord | undefined,
+  content: string | undefined,
 ): PromotionCandidate {
-  const record = provenanceByPath.get(candidate.path.replaceAll("\\", "/"));
   if (record?.originClass !== "untrusted") {
+    return candidate;
+  }
+  const provenance = content
+    ? resolveDailyRangeProvenance({
+        content,
+        record,
+        startLine: candidate.startLine,
+        endLine: candidate.endLine,
+        defaultObservedAt: record.observedAt,
+      })
+    : {
+        originClass: "untrusted" as const,
+        sessionKind: "unknown" as const,
+        observedAt: record.observedAt,
+      };
+  if (provenance.originClass !== "untrusted") {
     return candidate;
   }
   return {
     ...candidate,
-    provenance: {
-      originClass: "untrusted",
-      sessionKind: candidate.provenance?.sessionKind ?? "unknown",
-      observedAt: record.observedAt,
-    },
+    provenance,
   };
+}
+
+async function readPromotionSourceText(
+  workspaceDir: string,
+  candidatePath: string,
+): Promise<string | undefined> {
+  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, candidatePath)) {
+    try {
+      return await fs.readFile(sourcePath, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  return undefined;
 }
 
 function recallStoreEntryFingerprint(entry: ShortTermRecallEntry | undefined): string {
@@ -258,33 +284,48 @@ export async function applyShortTermPromotions(
   const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
 
-  const dailyProvenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir });
+  const dailyProvenanceEntries = await readMemoryCoreWorkspaceEntries<DailyProvenanceRecord>({
+    namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+    workspaceDir,
+  });
   const dailyProvenanceByPath = new Map(
     dailyProvenanceEntries.map((entry) => [entry.key.replaceAll("\\", "/"), entry.value]),
   );
   const store = await withShortTermLock(workspaceDir, async () => readStore(workspaceDir, nowIso));
-  const currentCandidates = options.candidates.map((candidate) => {
-    const entry = store.entries[candidate.key];
-    const authoritative = entry
-      ? withAuthoritativeProvenance(
-          {
-            ...candidate,
-            path: entry.path,
-            startLine: entry.startLine,
-            endLine: entry.endLine,
-            snippet: entry.snippet,
-          },
-          entry.provenance,
-        )
-      : candidate;
-    // Flush quarantine is sticky at the daily-file boundary. This deliberately
-    // sacrifices trusted lines in a mixed file so untrusted text cannot promote.
-    return withDailyFileQuarantine(authoritative, dailyProvenanceByPath);
-  });
+  const dailySourceTextByPath = new Map<string, string | undefined>();
+  const currentCandidates = await Promise.all(
+    options.candidates.map(async (candidate) => {
+      const entry = store.entries[candidate.key];
+      const authoritative = entry
+        ? withAuthoritativeProvenance(
+            {
+              ...candidate,
+              path: entry.path,
+              startLine: entry.startLine,
+              endLine: entry.endLine,
+              snippet: entry.snippet,
+            },
+            entry.provenance,
+          )
+        : candidate;
+      const normalizedPath = authoritative.path.replaceAll("\\", "/");
+      const record = dailyProvenanceByPath.get(normalizedPath);
+      if (record?.originClass !== "untrusted") {
+        return authoritative;
+      }
+      if (!dailySourceTextByPath.has(normalizedPath)) {
+        dailySourceTextByPath.set(
+          normalizedPath,
+          await readPromotionSourceText(workspaceDir, normalizedPath),
+        );
+      }
+      return withDailyRangeQuarantine(
+        authoritative,
+        record,
+        dailySourceTextByPath.get(normalizedPath),
+      );
+    }),
+  );
   const selected = currentCandidates
     .filter((candidate) => {
       const latest = store.entries[candidate.key];

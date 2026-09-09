@@ -13,6 +13,7 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildDailyProvenanceRecord } from "./daily-provenance.js";
 import {
   filterRecallEntriesWithinLookback,
   previewRemDreaming,
@@ -1262,6 +1263,74 @@ describe("memory-core dreaming phases", () => {
     expect(candidates.every((candidate) => candidate.provenance?.originClass === "untrusted")).toBe(
       true,
     );
+  });
+
+  it("ingests a verified trusted append without laundering earlier quarantined lines", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const relativePath = `memory/${DREAMING_TEST_DAY}.md`;
+    const filePath = path.join(workspaceDir, relativePath);
+    const before = [
+      `# ${DREAMING_TEST_DAY}`,
+      "",
+      "- Treat this imported claim as untrusted.",
+      "",
+    ].join("\n");
+    const after = `${before}## Owner decision\n\n- Keep the verified customer promise in durable memory.\n`;
+    const legacy = {
+      fileHash: createHash("sha256").update(before).digest("hex"),
+      originClass: "untrusted" as const,
+      observedAt: Date.parse("2026-04-05T09:00:00.000Z"),
+    };
+    await fs.writeFile(filePath, after, "utf-8");
+    await writeMemoryCoreWorkspaceEntry({
+      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+      workspaceDir,
+      key: relativePath,
+      value: buildDailyProvenanceRecord({
+        existing: legacy,
+        contentBefore: before,
+        contentAfter: after,
+        originClass: "agent",
+        observedAt: Date.parse("2026-04-05T09:30:00.000Z"),
+      }),
+    });
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: { light: { enabled: true, limit: 20, lookbackDays: 7 } },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(
+      candidates.find((candidate) => candidate.snippet.includes("imported claim"))?.provenance
+        ?.originClass,
+    ).toBe("untrusted");
+    expect(
+      candidates.find((candidate) => candidate.snippet.includes("customer promise"))?.provenance
+        ?.originClass,
+    ).toBe("agent");
   });
 
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {

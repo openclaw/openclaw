@@ -1096,12 +1096,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         triggers: null,
         projectKey: null,
       };
-      chunk.provenance = this.resolveChunkProvenance(
-        entry,
-        options.source,
-        chunk,
-        pathClassification.originClass,
-      );
+      chunk.provenance = this.resolveChunkProvenance(entry, chunk, pathClassification.originClass);
       return {
         entry,
         source: options.source,
@@ -1138,12 +1133,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         : chunkMarkdown(indexingContent, chunkOptions),
     );
     for (const chunk of baseChunks) {
-      chunk.provenance = this.resolveChunkProvenance(
-        entry,
-        options.source,
-        chunk,
-        pathClassification.originClass,
-      );
+      chunk.provenance = this.resolveChunkProvenance(entry, chunk, pathClassification.originClass);
     }
     const chunks = (
       generation?.kind === "semantic"
@@ -1174,12 +1164,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private resolveChunkProvenance(
     entry: MemoryIndexEntry,
-    source: MemorySource,
     chunk: MemoryChunk,
     pathOriginClass: MemoryEntryProvenance["originClass"],
   ): MemoryEntryProvenance {
     const lineProvenance = entry.lineProvenance?.slice(chunk.startLine - 1, chunk.endLine) ?? [];
-    if (source === "sessions" && lineProvenance.length > 0) {
+    if (lineProvenance.length > 0) {
       const originPriority = ["owner", "agent", "system", "untrusted"] as const;
       const originClass = originPriority.findLast((origin) =>
         lineProvenance.some((item) => item.originClass === origin),
@@ -1198,8 +1187,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     // Workspace memory files are inside the operator trust boundary: any
-    // filesystem writer already owns the host. Defaulting them untrusted would
-    // silently make handwritten persona memory ineligible for dreaming.
+    // filesystem writer already owns the host. Daily files with recorded mixed
+    // provenance take the line-aware branch above; other workspace notes keep
+    // the trusted default so handwritten persona memory remains dream-eligible.
     return {
       originClass: pathOriginClass,
       sessionKind: "unknown",

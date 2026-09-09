@@ -1,4 +1,5 @@
 // Memory Core plugin module owns memory and session source indexing.
+import fs from "node:fs/promises";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -11,6 +12,15 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   runWithConcurrency,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  hashDailyMemoryContent,
+  resolveDailyLineProvenance,
+  type DailyProvenanceRecord,
+} from "../daily-provenance.js";
+import {
+  DREAMING_DAILY_PROVENANCE_NAMESPACE,
+  readMemoryCoreWorkspaceEntries,
+} from "../dreaming-state.js";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
 import {
@@ -63,12 +73,38 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       this.settings.extraPaths,
       this.settings.multimodal,
     );
+    const dailyProvenanceEntries = await readMemoryCoreWorkspaceEntries<DailyProvenanceRecord>({
+      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+      workspaceDir: this.workspaceDir,
+    });
+    const dailyProvenanceByPath = new Map(
+      dailyProvenanceEntries.map((entry) => [entry.key.replaceAll("\\", "/"), entry.value]),
+    );
     const fileEntries = (
       await runWithConcurrency(
-        files.map(
-          (file) => async () =>
-            await buildFileEntry(file, this.workspaceDir, this.settings.multimodal),
-        ),
+        files.map((file) => async () => {
+          const entry = await buildFileEntry(file, this.workspaceDir, this.settings.multimodal);
+          if (!entry || entry.kind !== "markdown") {
+            return entry;
+          }
+          const record = dailyProvenanceByPath.get(entry.path);
+          if (!record) {
+            return entry;
+          }
+          const content = await fs.readFile(entry.absPath, "utf-8").catch(() => undefined);
+          if (content === undefined || hashDailyMemoryContent(content) !== entry.hash) {
+            return entry;
+          }
+          return {
+            ...entry,
+            content,
+            lineProvenance: resolveDailyLineProvenance({
+              content,
+              record,
+              defaultObservedAt: entry.mtimeMs,
+            }),
+          };
+        }),
         this.getIndexConcurrency(),
       )
     ).filter((entry): entry is MemoryIndexEntry => entry !== null);

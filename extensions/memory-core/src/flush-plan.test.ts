@@ -24,7 +24,7 @@ describe("buildMemoryFlushPlan", () => {
     expect(plan?.relativePath).toBe("memory/2026-05-30.md");
   });
 
-  it("records mixed trusted and untrusted writes as untrusted for the whole file", async () => {
+  it("records mixed writes with a conservative file summary and exact segments", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-flush-provenance-");
     const plan = buildMemoryFlushPlan({ nowMs: Date.UTC(2026, 6, 28, 12, 0, 0) });
     if (!plan?.recordWriteProvenance) {
@@ -46,16 +46,33 @@ describe("buildMemoryFlushPlan", () => {
       originClass: "untrusted",
       observedAt: 2,
     });
+    await plan.recordWriteProvenance({
+      workspaceDir,
+      relativePath: plan.relativePath,
+      contentBefore: "trusted line\nuntrusted line\n",
+      contentAfter: "trusted line\nuntrusted line\nlater trusted line\n",
+      originClass: "agent",
+      observedAt: 3,
+    });
 
     const records = await readMemoryCoreWorkspaceEntries<{
       fileHash: string;
       originClass: "agent" | "untrusted";
       observedAt: number;
+      segments?: Array<{ originClass: "agent" | "untrusted" }>;
     }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir });
     expect(records).toEqual([
       expect.objectContaining({
         key: plan.relativePath,
-        value: expect.objectContaining({ originClass: "untrusted", observedAt: 2 }),
+        value: expect.objectContaining({
+          originClass: "untrusted",
+          observedAt: 3,
+          segments: [
+            expect.objectContaining({ originClass: "agent" }),
+            expect.objectContaining({ originClass: "untrusted" }),
+            expect.objectContaining({ originClass: "agent" }),
+          ],
+        }),
       }),
     ]);
   });

@@ -1,5 +1,4 @@
 // Memory Core plugin module implements flush plan behavior.
-import { createHash } from "node:crypto";
 import {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
@@ -8,6 +7,7 @@ import {
   type MemoryFlushPlan,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { buildDailyProvenanceRecord, type DailyProvenanceRecord } from "./daily-provenance.js";
 import {
   DREAMING_DAILY_PROVENANCE_NAMESPACE,
   deleteMemoryCoreWorkspaceEntry,
@@ -160,30 +160,26 @@ export function buildMemoryFlushPlan(
       if (!writtenPath) {
         return undefined;
       }
-      const hash = (value: string) => createHash("sha256").update(value).digest("hex");
-      const existing = await readMemoryCoreWorkspaceEntry<{
-        fileHash: string;
-        originClass: "agent" | "untrusted";
-        observedAt: number;
-      }>({
+      const existing = await readMemoryCoreWorkspaceEntry<DailyProvenanceRecord>({
         namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
         workspaceDir: write.workspaceDir,
         key: writtenPath,
       });
-      const originClass =
-        write.originClass === "agent" &&
-        (!existing ||
-          (existing?.originClass === "agent" && existing.fileHash === hash(write.contentBefore)))
-          ? "agent"
-          : "untrusted";
-      // Provenance is file-level and therefore collapses to the least-trusted
-      // content in the file. Trusted lines in a downgraded file lose promotion
-      // eligibility; untrusted content must never ride an agent-trusted hash.
+      const record = buildDailyProvenanceRecord({
+        ...(existing ? { existing } : {}),
+        contentBefore: write.contentBefore,
+        contentAfter: write.contentAfter,
+        originClass: write.originClass,
+        observedAt: write.observedAt,
+      });
+      // Keep the least-trusted file summary for legacy readers, while verified
+      // append segments let ingestion preserve trusted material on either side
+      // of quarantined text. Non-append writes and hash mismatches still fail closed.
       await writeMemoryCoreWorkspaceEntry({
         namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
         workspaceDir: write.workspaceDir,
         key: writtenPath,
-        value: { fileHash: hash(write.contentAfter), originClass, observedAt: write.observedAt },
+        value: record,
       });
       return async () => {
         if (existing) {

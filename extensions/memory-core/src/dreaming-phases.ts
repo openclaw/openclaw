@@ -1,5 +1,4 @@
 // Memory Core plugin module implements dreaming phases behavior.
-import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDailyRangeProvenance, type DailyProvenanceRecord } from "./daily-provenance.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
   normalizeDailyIngestionState,
@@ -170,6 +170,7 @@ function normalizeDailySnippet(line: string): string | null {
 type DailySnippetChunk = {
   startLine: number;
   endLine: number;
+  provenanceStartLine: number;
   snippet: string;
   identitySnippet?: string;
 };
@@ -194,10 +195,11 @@ function buildDailyListSnippet(
 function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetChunk[] {
   const chunks: DailySnippetChunk[] = [];
   let activeHeading: string | null = null;
+  let activeHeadingLine = 0;
   let chunkLines: string[] = [];
   let chunkStartLine = 0;
   let chunkEndLine = 0;
-  let listAncestors: Array<{ indent: number; text: string }> = [];
+  let listAncestors: Array<{ indent: number; text: string; startLine: number }> = [];
 
   const flushChunk = () => {
     if (chunkLines.length === 0) {
@@ -211,6 +213,7 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
       chunks.push({
         startLine: chunkStartLine,
         endLine: chunkEndLine,
+        provenanceStartLine: activeHeadingLine || chunkStartLine,
         snippet,
       });
     }
@@ -230,6 +233,7 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
     if (heading) {
       flushChunk();
       activeHeading = heading;
+      activeHeadingLine = index + 1;
       listAncestors = [];
       continue;
     }
@@ -302,13 +306,17 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
         chunks.push({
           startLine: index + 1,
           endLine: endIndex + 1,
+          provenanceStartLine: Math.min(
+            activeHeadingLine || index + 1,
+            listAncestors.at(0)?.startLine ?? index + 1,
+          ),
           snippet: contextualSnippet,
           // The rendered semantic context is part of claim identity, keeping
           // identical bullet text for different subjects or events separate.
           identitySnippet: contextualSnippet,
         });
       }
-      listAncestors.push({ indent, text: claimBody });
+      listAncestors.push({ indent, text: claimBody, startLine: index + 1 });
       index = nestedChildIndex === undefined ? endIndex : nestedChildIndex - 1;
       if (chunks.length >= limit) {
         break;
@@ -346,22 +354,6 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
 
   flushChunk();
   return chunks.slice(0, limit);
-}
-
-function resolveDailyFileProvenance(params: {
-  currentHash: string;
-  defaultObservedAt: number;
-  recorded?: { fileHash: string; originClass: "agent" | "untrusted"; observedAt: number };
-}): { originClass: "agent" | "untrusted"; observedAt: number } {
-  // Untracked workspace notes are operator-trusted; filesystem writers already
-  // own the host, while explicit flush quarantine stays sticky across edits.
-  if (params.recorded?.originClass === "untrusted") {
-    return { originClass: "untrusted", observedAt: params.recorded.observedAt };
-  }
-  if (params.recorded?.fileHash === params.currentHash) {
-    return { originClass: params.recorded.originClass, observedAt: params.recorded.observedAt };
-  }
-  return { originClass: "agent", observedAt: params.defaultObservedAt };
 }
 
 function findManagedDailyDreamingHeadingIndex(
@@ -430,18 +422,20 @@ function buildDailyIngestionResults(params: {
   path: string;
   limit: number;
   defaultObservedAt: number;
-  recorded?: { fileHash: string; originClass: "agent" | "untrusted"; observedAt: number };
+  recorded?: DailyProvenanceRecord;
 }): Array<MemorySearchResult & { identitySnippet?: string }> {
-  const provenance = resolveDailyFileProvenance({
-    currentHash: createHash("sha256").update(params.raw).digest("hex"),
-    defaultObservedAt: params.defaultObservedAt,
-    ...(params.recorded ? { recorded: params.recorded } : {}),
-  });
   return buildDailySnippetChunks(
     stripManagedDailyDreamingLines(params.raw.split(/\r?\n/)),
     params.limit,
-  ).map((chunk) =>
-    Object.assign(
+  ).map((chunk) => {
+    const provenance = resolveDailyRangeProvenance({
+      content: params.raw,
+      ...(params.recorded ? { record: params.recorded } : {}),
+      startLine: chunk.provenanceStartLine,
+      endLine: chunk.endLine,
+      defaultObservedAt: params.defaultObservedAt,
+    });
+    return Object.assign(
       {
         path: params.path,
         startLine: chunk.startLine,
@@ -452,8 +446,8 @@ function buildDailyIngestionResults(params: {
         provenance: { ...provenance, sessionKind: "unknown" as const },
       },
       chunk.identitySnippet ? { identitySnippet: chunk.identitySnippet } : {},
-    ),
-  );
+    );
+  });
 }
 
 function entryWithinLookback(entry: ShortTermRecallEntry, cutoffMs: number): boolean {
@@ -775,11 +769,10 @@ async function collectDailyIngestionBatches(params: {
   ingestionDreamingDay: string;
   state: DailyIngestionState;
 }): Promise<DailyIngestionCollectionResult> {
-  const provenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir: params.workspaceDir });
+  const provenanceEntries = await readMemoryCoreWorkspaceEntries<DailyProvenanceRecord>({
+    namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+    workspaceDir: params.workspaceDir,
+  });
   const provenanceByPath = new Map(provenanceEntries.map((entry) => [entry.key, entry.value]));
   const memoryDir = path.join(params.workspaceDir, "memory");
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
@@ -953,11 +946,10 @@ export async function seedHistoricalDailyMemorySignals(params: {
       skippedPaths: [],
     };
   }
-  const provenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir: params.workspaceDir });
+  const provenanceEntries = await readMemoryCoreWorkspaceEntries<DailyProvenanceRecord>({
+    namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+    workspaceDir: params.workspaceDir,
+  });
   const provenanceByPath = new Map(provenanceEntries.map((entry) => [entry.key, entry.value]));
 
   const resolved = normalizedPaths

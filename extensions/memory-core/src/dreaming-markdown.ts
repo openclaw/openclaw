@@ -12,7 +12,13 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { rebaseDailyProvenanceRecord, type DailyProvenanceRecord } from "./daily-provenance.js";
 import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
+import {
+  DREAMING_DAILY_PROVENANCE_NAMESPACE,
+  readMemoryCoreWorkspaceEntry,
+  writeMemoryCoreWorkspaceEntry,
+} from "./dreaming-state.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -106,7 +112,25 @@ export async function writeDailyDreamingPhaseBlock(params: {
       endMarker: markers.end,
       body,
     });
-    await replaceDreamingMarkdownFile(inlinePath, withTrailingNewline(updated));
+    const finalContent = withTrailingNewline(updated);
+    const relativePath = path.relative(params.workspaceDir, inlinePath).replaceAll(path.sep, "/");
+    const existing = await readMemoryCoreWorkspaceEntry<DailyProvenanceRecord>({
+      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+      workspaceDir: params.workspaceDir,
+      key: relativePath,
+    });
+    await replaceDreamingMarkdownFile(inlinePath, finalContent);
+    await writeMemoryCoreWorkspaceEntry({
+      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+      workspaceDir: params.workspaceDir,
+      key: relativePath,
+      value: rebaseDailyProvenanceRecord({
+        ...(existing ? { existing } : {}),
+        contentBefore: original,
+        contentAfter: finalContent,
+        observedAt: nowMs,
+      }),
+    });
   }
 
   if (shouldWriteSeparate(params.storage)) {
