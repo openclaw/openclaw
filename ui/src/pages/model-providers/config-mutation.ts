@@ -1,7 +1,12 @@
 import { t } from "../../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { ModelProviderRowMessage } from "./view.ts";
+
+export type ModelProviderRowMessage = {
+  kind: "success" | "error";
+  text: string;
+  warning?: string;
+};
 
 export type ModelProviderConfigMutation = {
   key: string;

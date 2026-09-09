@@ -105,6 +105,11 @@ type AgentCatalogFixtureEntry = {
   contextWindow?: number;
 };
 
+const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacement"]> = {
+  requiredNodeCommands: [],
+  consumesWorkerSlot: true,
+};
+
 const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
   { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
   {
@@ -150,6 +155,7 @@ const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] 
       id: "openclaw",
       cloudPlacementSupported: true,
       cloudPlacementExecutionMode: "worker-turn",
+      devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
       devicePlacementSupported: true,
       source: "implicit",
     },
@@ -164,6 +170,7 @@ const expectedSortedCatalog = (gptTestZTags?: string[]): ModelCatalogRpcEntry[] 
       id: "openclaw",
       cloudPlacementSupported: true,
       cloudPlacementExecutionMode: "worker-turn",
+      devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
       devicePlacementSupported: true,
       source: "implicit",
     },
@@ -706,6 +713,26 @@ describe("gateway server models + voicewake", () => {
           agentId: "ops",
           workspaceDir: path.join(workspaceRoot, "ops-workspace"),
         });
+        const hotSkillDir = path.join(workspaceRoot, "ops-workspace", "skills", "hot-status");
+        await fs.mkdir(hotSkillDir, { recursive: true });
+        await fs.writeFile(
+          path.join(hotSkillDir, "SKILL.md"),
+          "---\nname: hot-status\ndescription: Hot status fixture\n---\n",
+          "utf8",
+        );
+        await expect
+          .poll(
+            async () => {
+              const refreshed = await rpcReq<{
+                skills?: Array<{ name?: string; eligible?: boolean }>;
+              }>(ws, "skills.status", {});
+              return refreshed.payload?.skills?.some(
+                (skill) => skill.name === "hot-status" && skill.eligible === true,
+              );
+            },
+            { interval: 20, timeout: 5_000 },
+          )
+          .toBe(true);
         expect(memory.payload).toMatchObject({ agentId: "ops" });
         expect(health.ok, JSON.stringify(health)).toBe(true);
       } finally {
@@ -797,6 +824,7 @@ describe("gateway server models + voicewake", () => {
               id: "openclaw",
               cloudPlacementSupported: true,
               cloudPlacementExecutionMode: "worker-turn",
+              devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
               devicePlacementSupported: true,
               source: "implicit",
             },
@@ -855,6 +883,7 @@ describe("gateway server models + voicewake", () => {
             id: "openclaw",
             cloudPlacementSupported: true,
             cloudPlacementExecutionMode: "worker-turn",
+            devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
             devicePlacementSupported: true,
             source: "implicit",
           },
@@ -880,6 +909,7 @@ describe("gateway server models + voicewake", () => {
             id: "openclaw",
             cloudPlacementSupported: true,
             cloudPlacementExecutionMode: "worker-turn",
+            devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
             devicePlacementSupported: true,
             source: "implicit",
           },

@@ -1,11 +1,11 @@
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   ProviderCatalogContext,
+  ProviderCatalogResult,
   ProviderPrepareDynamicModelContext,
-  ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import * as liveCatalogRuntime from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
 import {
   hasLlamaServerAuthorizationHeader,
@@ -14,52 +14,44 @@ import {
 } from "./auth.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
-import { buildLlamaServerProviderConfig, type LlamaServerDiscoveredModel } from "./models.js";
+import { buildLlamaServerProviderConfig } from "./models.js";
 
-const dynamicModels = new Map<string, ProviderRuntimeModel[]>();
-const LLAMA_SERVER_DYNAMIC_MODEL_MAX_SCOPES = 100;
+// Published 2026.9.2 understands catalog outcomes but does not export this runner.
+// Remove this fallback when the declared plugin API floor excludes that host.
+const liveCatalogSdk: Partial<Pick<typeof liveCatalogRuntime, "runLiveProviderCatalog">> =
+  liveCatalogRuntime;
+type CatalogOutcome = NonNullable<NonNullable<ProviderCatalogResult>["outcomes"]>[number];
 
-function cacheDynamicModels(key: string, models: ProviderRuntimeModel[]): void {
-  dynamicModels.delete(key);
-  dynamicModels.set(key, models);
-  pruneMapToMaxSize(dynamicModels, LLAMA_SERVER_DYNAMIC_MODEL_MAX_SCOPES);
-}
-
-function dynamicModelScopeKey(
-  ctx: Pick<
-    ProviderResolveDynamicModelContext,
-    "agentRuntimeId" | "agentDir" | "authProfileId" | "providerConfig"
-  >,
-): string {
-  return [
-    ctx.agentRuntimeId ?? ctx.agentDir ?? "",
-    ctx.authProfileId ?? "",
-    ctx.providerConfig?.baseUrl ?? "",
-  ].join("\u0000");
-}
-
-function toRuntimeModel(
-  model: LlamaServerDiscoveredModel,
-  providerConfig: {
-    baseUrl?: string;
-    api?: ProviderRuntimeModel["api"];
-  },
-): ProviderRuntimeModel {
-  return {
-    ...model.config,
-    provider: LLAMA_CPP_PROVIDER_ID,
-    api: providerConfig.api ?? "openai-completions",
-    baseUrl: resolveLlamaServerEndpoint(providerConfig.baseUrl).inferenceBaseUrl,
-    input: model.config.input.filter(
-      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-    ),
+async function runLlamaServerCatalog(
+  params: Parameters<typeof liveCatalogRuntime.runLiveProviderCatalog>[0],
+): Promise<ProviderCatalogResult> {
+  if (liveCatalogSdk.runLiveProviderCatalog) {
+    return await liveCatalogSdk.runLiveProviderCatalog(params);
+  }
+  const identity = {
+    provider: params.providerId,
+    ...(params.profileId ? { profileId: params.profileId } : {}),
   };
+  try {
+    const result = await params.run();
+    return result
+      ? { ...result, outcomes: [...(result.outcomes ?? []), { ...identity, status: "ready" }] }
+      : result;
+  } catch (error) {
+    const rejected =
+      error instanceof liveCatalogRuntime.LiveModelCatalogHttpError &&
+      (error.status === 401 || error.status === 403);
+    const outcome: CatalogOutcome = rejected
+      ? { ...identity, status: "auth-rejected", rejectionScope: "catalog" }
+      : { ...identity, status: "unavailable" };
+    return { providers: {}, outcomes: [outcome] };
+  }
 }
 
 /** Discovers external llama-server models for provider runtime resolution. */
 export async function discoverLlamaServerProvider(
   ctx: ProviderCatalogContext,
-): Promise<{ provider: ModelProviderConfig } | null> {
+): Promise<ProviderCatalogResult> {
   const configured = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const auth = ctx.resolveProviderApiKey(LLAMA_CPP_PROVIDER_ID);
   const headers = await resolveLlamaServerProviderHeaders({
@@ -67,38 +59,46 @@ export async function discoverLlamaServerProvider(
     env: ctx.env,
     headers: configured?.headers,
   });
-  const discovery = await discoverLlamaServer({
-    baseUrl: configured?.baseUrl,
-    apiKey: hasLlamaServerAuthorizationHeader(headers)
+  const authApiKey = auth.discoveryApiKey ?? auth.apiKey;
+  const apiKey =
+    hasLlamaServerAuthorizationHeader(headers) ||
+    (authApiKey && isNonSecretApiKeyMarker(authApiKey))
       ? undefined
-      : (auth.discoveryApiKey ?? auth.apiKey),
-    headers,
-  });
-  if (discovery.kind !== "success") {
-    return configured
-      ? {
-          provider: buildLlamaServerProviderConfig({
-            configured,
-            discoveredModels: [],
-          }),
+      : authApiKey;
+  return await runLlamaServerCatalog({
+    providerId: LLAMA_CPP_PROVIDER_ID,
+    profileId: apiKey ? auth.profileId : undefined,
+    run: async () => {
+      const discovery = await discoverLlamaServer({
+        baseUrl: configured?.baseUrl,
+        apiKey,
+        headers,
+        cacheTtlMs: 0,
+      });
+      if (discovery.kind !== "success") {
+        if (!configured && !apiKey && !headers) {
+          return null;
         }
-      : null;
-  }
-  return {
-    provider: buildLlamaServerProviderConfig({
-      configured: {
-        ...configured,
-        baseUrl: discovery.endpoint.inferenceBaseUrl,
-        models: configured?.models ?? [],
-      },
-      discoveredModels: discovery.models,
-    }),
-  };
+        throw discovery.kind === "http-error"
+          ? new liveCatalogRuntime.LiveModelCatalogHttpError(
+              LLAMA_CPP_PROVIDER_ID,
+              discovery.status,
+            )
+          : discovery.error;
+      }
+      return {
+        provider: buildLlamaServerProviderConfig({
+          configured,
+          discoveredModels: discovery.models,
+        }),
+      };
+    },
+  });
 }
 
-export async function prepareLlamaServerDynamicModels(
+export async function prepareLlamaServerDynamicModel(
   ctx: ProviderPrepareDynamicModelContext,
-): Promise<void> {
+): Promise<ProviderRuntimeModel | undefined> {
   const apiKey = await resolveLlamaServerRuntimeApiKey({
     config: ctx.config,
     agentDir: ctx.agentDir,
@@ -115,19 +115,20 @@ export async function prepareLlamaServerDynamicModels(
     headers,
     cacheTtlMs: 0,
   });
-  const key = dynamicModelScopeKey(ctx);
-  cacheDynamicModels(
-    key,
+  const model =
     discovery.kind === "success"
-      ? discovery.models.map((model) => toRuntimeModel(model, ctx.providerConfig ?? {}))
-      : [],
-  );
-}
-
-export function resolveLlamaServerDynamicModel(
-  params: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  return dynamicModels
-    .get(dynamicModelScopeKey(params))
-    ?.find((model) => model.id === params.modelId);
+      ? discovery.models.find((entry) => entry.config.id === ctx.modelId)
+      : undefined;
+  if (!model) {
+    return undefined;
+  }
+  return {
+    ...model.config,
+    provider: LLAMA_CPP_PROVIDER_ID,
+    api: ctx.providerConfig?.api ?? "openai-completions",
+    baseUrl: resolveLlamaServerEndpoint(ctx.providerConfig?.baseUrl).inferenceBaseUrl,
+    input: model.config.input.filter(
+      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+    ),
+  };
 }

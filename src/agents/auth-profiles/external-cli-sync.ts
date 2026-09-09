@@ -5,12 +5,10 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
-  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
-  CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_SYNC_TTL_MS,
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
@@ -18,6 +16,7 @@ import {
 } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
+import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
   areOAuthCredentialsEquivalent,
   isSafeToAdoptBootstrapOAuthIdentity,
@@ -51,13 +50,14 @@ type ExternalCliSyncProvider = {
   // CLI state must not replace or shadow it. Codex requires this to
   // avoid clobbering a locally refreshed token with stale CLI state.
   bootstrapOnly?: boolean;
+  persistence?: ExternalCliResolvedProfile["persistence"];
 };
 
-// Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
-// Also the passthrough gate in cli-runner/prepare.ts: a live CLI login that
-// this sync would refuse to import must not authenticate a run either.
+const PERSISTED_EXTERNAL_CLI_AUTH_FLOW = "external-cli";
+
+// External CLI bootstrap must never replace a local profile with another identity.
 /** Return true when imported CLI credentials match an existing profile identity. */
-export function isSafeToUseExternalCliCredential(
+function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
   imported: OAuthCredential,
 ): boolean {
@@ -84,21 +84,6 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
     bootstrapOnly: true,
   },
   {
-    profileId: CLAUDE_CLI_PROFILE_ID,
-    provider: "claude-cli",
-    aliases: ["anthropic"],
-    readCredentials: (options) => {
-      const credential = readClaudeCliCredentialsCached({
-        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
-        allowKeychainPrompt: options?.allowKeychainPrompt,
-      });
-      if (credential?.type !== "oauth") {
-        return null;
-      }
-      return { ...credential, provider: "claude-cli" };
-    },
-  },
-  {
     profileId: MINIMAX_CLI_PROFILE_ID,
     provider: "minimax-portal",
     aliases: ["minimax", "minimax-cli"],
@@ -123,6 +108,35 @@ function resolveExternalCliSyncProvider(params: {
     return null;
   }
   return provider;
+}
+
+function resolveExternalCliPersistence(
+  provider: ExternalCliSyncProvider,
+): ExternalCliResolvedProfile["persistence"] {
+  return provider.persistence ?? (provider.bootstrapOnly ? "runtime-only" : "persisted");
+}
+
+/** True when durable metadata assigns this stored profile to an external CLI owner. */
+export function isPersistedExternalCliAuthProfile(params: {
+  profileId: string;
+  credential: OAuthCredential;
+}): boolean {
+  const provider = resolveExternalCliSyncProvider(params);
+  if (!provider || resolveExternalCliPersistence(provider) !== "persisted") {
+    return false;
+  }
+  // Historical native MiniMax logins and CLI imports share an unmarked shape.
+  // Only exact CLI token backfill may assign durable external ownership.
+  return params.credential.authFlow === PERSISTED_EXTERNAL_CLI_AUTH_FLOW;
+}
+
+function markPersistedExternalCliCredential(
+  provider: ExternalCliSyncProvider,
+  credential: OAuthCredential,
+): OAuthCredential {
+  return resolveExternalCliPersistence(provider) === "persisted"
+    ? { ...credential, authFlow: PERSISTED_EXTERNAL_CLI_AUTH_FLOW }
+    : credential;
 }
 
 function listExternalCliProfileIds(providerConfig: ExternalCliSyncProvider): string[] {
@@ -181,6 +195,7 @@ function hasManagedProviderOAuth(
     (credential) =>
       credential?.type === "oauth" &&
       listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
+      !isOAuthRefreshFence(credential) &&
       hasInlineOAuthTokenMaterial(credential),
   );
 }
@@ -203,14 +218,21 @@ export function readExternalCliBootstrapCredential(params: {
   if (
     provider.bootstrapOnly &&
     !params.allowInlineOAuthTokenMaterial &&
+    !isOAuthRefreshFence(params.credential) &&
     hasInlineOAuthTokenMaterial(params.credential)
   ) {
     return null;
   }
-  return normalizeExternalCliCredentialProvider(
+  const imported = normalizeExternalCliCredentialProvider(
     provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt }),
     params.credential.provider,
   );
+  if (imported && isOAuthRefreshFence(params.credential)) {
+    // An external snapshot has no generation ordering proof. It must not clear
+    // a fence and make an older single-use refresh token replayable.
+    return null;
+  }
+  return imported;
 }
 
 function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {
@@ -328,19 +350,23 @@ function backfillExternalCliIdentity(params: {
   existingOAuth: OAuthCredential;
   allowKeychainPrompt?: boolean;
 }): OAuthCredential | null {
-  if (params.existingOAuth.email) {
-    return null;
-  }
   const creds = params.providerConfig.readCredentials({
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
-  // Matching token material is the only proof the stored profile IS the CLI
-  // login; identity fields are absent on the stored side by definition here.
-  const sameLogin =
-    creds?.email &&
-    (creds.refresh === params.existingOAuth.refresh ||
-      creds.access === params.existingOAuth.access);
-  return sameLogin ? { ...params.existingOAuth, email: creds.email } : null;
+  // Matching token material proves the stored profile came from this CLI owner.
+  // Persist that fact so refresh ownership does not depend on a later file read.
+  const sameLogin = creds?.refresh === params.existingOAuth.refresh;
+  if (!sameLogin) {
+    return null;
+  }
+  const credential = markPersistedExternalCliCredential(params.providerConfig, {
+    ...params.existingOAuth,
+    ...(params.existingOAuth.email || !creds.email ? {} : { email: creds.email }),
+  });
+  return credential.authFlow === params.existingOAuth.authFlow &&
+    credential.email === params.existingOAuth.email
+    ? null
+    : credential;
 }
 
 /** Resolve scoped external CLI auth profiles available to overlay or persist. */
@@ -378,6 +404,7 @@ export function resolveExternalCliAuthProfiles(
       if (
         providerConfig.bootstrapOnly &&
         existingOAuth &&
+        !isOAuthRefreshFence(existingOAuth) &&
         hasInlineOAuthTokenMaterial(existingOAuth)
       ) {
         authProfilesLog.debug("kept local oauth over external cli bootstrap-only provider", {
@@ -399,7 +426,11 @@ export function resolveExternalCliAuthProfiles(
           allowKeychainPrompt: options?.allowKeychainPrompt,
         });
         if (backfilled) {
-          profiles.push({ profileId, credential: backfilled, persistence: "persisted" });
+          profiles.push({
+            profileId,
+            credential: backfilled,
+            persistence: resolveExternalCliPersistence(providerConfig),
+          });
         }
         continue;
       }
@@ -410,6 +441,13 @@ export function resolveExternalCliAuthProfiles(
         existingOAuth?.provider ?? providerConfig.provider,
       );
       if (!creds) {
+        continue;
+      }
+      if (existingOAuth && isOAuthRefreshFence(existingOAuth)) {
+        authProfilesLog.warn("refused unordered external cli oauth recovery for a fenced profile", {
+          profileId,
+          provider: providerConfig.provider,
+        });
         continue;
       }
       if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
@@ -461,8 +499,8 @@ export function resolveExternalCliAuthProfiles(
       );
       profiles.push({
         profileId,
-        credential: creds,
-        persistence: providerConfig.bootstrapOnly ? "runtime-only" : "persisted",
+        credential: markPersistedExternalCliCredential(providerConfig, creds),
+        persistence: resolveExternalCliPersistence(providerConfig),
       });
     }
   }

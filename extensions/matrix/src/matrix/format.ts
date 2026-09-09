@@ -10,7 +10,6 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import {
   createMatrixPrivateMarkers,
-  isMarkdownEscaped,
   MATRIX_FORMAT_PROFILE,
   projectMatrixMarkdown,
 } from "./format-profile.js";
@@ -34,6 +33,7 @@ const md = new MarkdownIt({
   typographer: false,
 });
 
+md.linkify.set({ fuzzyLink: true });
 md.enable("strikethrough");
 
 const { escapeHtml } = md.utils;
@@ -54,7 +54,6 @@ type MatrixMentionCandidate = {
   userId?: string;
 };
 
-const ESCAPED_MENTION_SENTINEL = "\uE000";
 const MENTION_PATTERN = /@[A-Za-z0-9._=+\-/:[\]]+/g;
 const MATRIX_MENTION_SERVER_NAME_PATTERN =
   /(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?))*(?::\d+)?/;
@@ -113,7 +112,7 @@ function shouldSuppressAutoLink(
   if (token?.type !== "link_open" || token.info !== "auto") {
     return false;
   }
-  const href = token.attrGet("href") ?? "";
+  const href = String(token.attrGet("href") ?? "");
   const label = tokens[idx + 1]?.type === "text" ? (tokens[idx + 1]?.content ?? "") : "";
   return Boolean(href && label && isAutoLinkedFileRef(href, label));
 }
@@ -127,6 +126,13 @@ md.renderer.rules.image = (tokens, idx, options, env, self) => {
 
 md.renderer.rules.html_block = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
 md.renderer.rules.html_inline = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.text_special = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.matrix_escaped_mention = () => "@";
+md.core.ruler.before("text_join", "matrix_escaped_mentions", (state) => {
+  // Preserve the parser's escape decision before text_join erases it; otherwise
+  // literal IDs become mentions when their surrounding Markdown is incomplete.
+  preserveEscapedMentionTokens(state.tokens);
+});
 md.renderer.rules.link_open = (tokens, idx, _options, _env, self) =>
   shouldSuppressAutoLink(tokens, idx) ? "" : self.renderToken(tokens, idx, _options);
 md.renderer.rules.link_close = (tokens, idx, _options, _env, self) => {
@@ -137,50 +143,13 @@ md.renderer.rules.link_close = (tokens, idx, _options, _env, self) => {
   return self.renderToken(tokens, idx, _options);
 };
 
-function maskEscapedMentions(markdown: string): string {
-  let masked = "";
-  let idx = 0;
-  let codeFenceLength = 0;
-
-  while (idx < markdown.length) {
-    if (markdown[idx] === "`" && !isMarkdownEscaped(markdown, idx)) {
-      let runLength = 1;
-      while (markdown[idx + runLength] === "`") {
-        runLength += 1;
-      }
-      if (codeFenceLength === 0) {
-        codeFenceLength = runLength;
-      } else if (runLength === codeFenceLength) {
-        codeFenceLength = 0;
-      }
-      masked += markdown.slice(idx, idx + runLength);
-      idx += runLength;
-      continue;
-    }
-    if (codeFenceLength === 0 && markdown[idx] === "\\" && markdown[idx + 1] === "@") {
-      masked += ESCAPED_MENTION_SENTINEL;
-      idx += 2;
-      continue;
-    }
-    masked += markdown[idx] ?? "";
-    idx += 1;
-  }
-
-  return masked;
-}
-
-function restoreEscapedMentions(text: string): string {
-  return text.replaceAll(ESCAPED_MENTION_SENTINEL, "@");
-}
-
-function restoreEscapedMentionsInCode(text: string): string {
-  return text.replaceAll(ESCAPED_MENTION_SENTINEL, "\\@");
-}
-
-function restoreEscapedMentionsInBlockTokens(tokens: MarkdownToken[]): void {
+function preserveEscapedMentionTokens(tokens: MarkdownToken[]): void {
   for (const token of tokens) {
-    if ((token.type === "fence" || token.type === "code_block") && token.content) {
-      token.content = restoreEscapedMentionsInCode(token.content);
+    if (token.type === "text_special" && token.info === "escape" && token.content === "@") {
+      token.type = "matrix_escaped_mention";
+    }
+    if (token.children) {
+      preserveEscapedMentionTokens(token.children);
     }
   }
 }
@@ -422,23 +391,20 @@ function mutateInlineTokensWithMentions(params: {
       continue;
     }
 
-    const visibleContent = restoreEscapedMentions(child.content);
     if (insideLinkDepth > 0) {
-      nextChildren.push(createTextToken(child, visibleContent));
+      nextChildren.push(child);
       continue;
     }
     const matches = collectMentionCandidates(child.content);
     if (matches.length === 0) {
-      nextChildren.push(createTextToken(child, visibleContent));
+      nextChildren.push(child);
       continue;
     }
 
     let cursor = 0;
     for (const match of matches) {
       if (match.start > cursor) {
-        nextChildren.push(
-          createTextToken(child, restoreEscapedMentions(child.content.slice(cursor, match.start))),
-        );
+        nextChildren.push(createTextToken(child, child.content.slice(cursor, match.start)));
       }
       cursor = match.end;
       if (match.kind === "room") {
@@ -465,9 +431,7 @@ function mutateInlineTokensWithMentions(params: {
       );
     }
     if (cursor < child.content.length) {
-      nextChildren.push(
-        createTextToken(child, restoreEscapedMentions(child.content.slice(cursor))),
-      );
+      nextChildren.push(createTextToken(child, child.content.slice(cursor)));
     }
   }
   return { children: nextChildren, roomMentioned };
@@ -482,31 +446,25 @@ function mutateInlineTokensWithMentions(params: {
 function compactLooseListTokens(tokens: MarkdownToken[]): void {
   const listItemStack: Array<{
     level: number;
-    immediateParagraphOpenIndexes: number[];
-    immediateParagraphCloseIndexes: number[];
+    // null keeps multi-paragraph items visible, including after later paragraphs.
+    paragraphIndex: number | null | undefined;
   }> = [];
 
   for (const [index, token] of tokens.entries()) {
     if (token.type === "list_item_open") {
       listItemStack.push({
         level: token.level,
-        immediateParagraphOpenIndexes: [],
-        immediateParagraphCloseIndexes: [],
+        paragraphIndex: undefined,
       });
       continue;
     }
 
     if (token.type === "list_item_close") {
       const item = listItemStack.pop();
-      if (
-        item &&
-        item.immediateParagraphOpenIndexes.length === 1 &&
-        item.immediateParagraphCloseIndexes.length === 1
-      ) {
-        const openIndex = item.immediateParagraphOpenIndexes[0];
-        const closeIndex = item.immediateParagraphCloseIndexes[0];
-        const openToken = openIndex === undefined ? undefined : tokens[openIndex];
-        const closeToken = closeIndex === undefined ? undefined : tokens[closeIndex];
+      if (typeof item?.paragraphIndex === "number") {
+        // markdown-it emits each paragraph as open, inline, close tokens.
+        const openToken = tokens[item.paragraphIndex];
+        const closeToken = tokens[item.paragraphIndex + 2];
         if (openToken && closeToken) {
           openToken.hidden = true;
           closeToken.hidden = true;
@@ -521,9 +479,7 @@ function compactLooseListTokens(tokens: MarkdownToken[]): void {
     }
 
     if (token.type === "paragraph_open") {
-      currentItem.immediateParagraphOpenIndexes.push(index);
-    } else if (token.type === "paragraph_close") {
-      currentItem.immediateParagraphCloseIndexes.push(index);
+      currentItem.paragraphIndex = currentItem.paragraphIndex === undefined ? index : null;
     }
   }
 }
@@ -616,9 +572,7 @@ async function resolveMarkdownMentionState(params: {
   client: MatrixClient;
   tableMode?: MarkdownTableMode;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
-  const markdown = maskEscapedMentions(projectMatrixMarkdown(params.markdown));
-  const tokens = parseMatrixMarkdown(markdown, params.tableMode);
-  restoreEscapedMentionsInBlockTokens(tokens);
+  const tokens = parseMatrixMarkdown(projectMatrixMarkdown(params.markdown), params.tableMode);
   const selfUserId = await resolveMatrixSelfUserId(params.client);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();

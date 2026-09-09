@@ -17,6 +17,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
 
 type ExecutionDecisionDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -26,9 +27,15 @@ type ExecutionDecisionRow = Selectable<OpenClawStateKyselyDatabase["execution_de
 type ExecutionDecisionMetadataRow = Omit<ExecutionDecisionRow, "receipt_json"> & {
   receipt_rowid: number;
   payload_bytes: number;
+  bounded_receipt_json: string | null;
 };
 type ExecutionDecisionFactCursor = { occurredAt: number; rowId: number };
+type ExecutionDecisionFactPageEntry = {
+  receipt: DecisionReceiptV1;
+  selectorId: string;
+};
 type ExecutionDecisionFactPage = {
+  entries: ExecutionDecisionFactPageEntry[];
   receipts: DecisionReceiptV1[];
   nextCursor?: ExecutionDecisionFactCursor;
 };
@@ -38,37 +45,13 @@ const EXECUTION_DECISION_FACT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const EXECUTION_DECISION_FACT_MAX_ROWS = 250_000;
 const EXECUTION_DECISION_FACT_PRUNE_BATCH_ROWS = 1_024;
 const EXECUTION_DECISION_FACT_SUMMARY_MAX_ROWS = 128;
+const EXECUTION_DECISION_SELECTOR_PREFIX = "decision-fact:";
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
-
-// Keep this feature-local DDL byte-for-byte aligned with the canonical schema.
-const EXECUTION_DECISION_FACT_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS execution_decision_facts (
-  receipt_id TEXT NOT NULL PRIMARY KEY CHECK (length(receipt_id) BETWEEN 1 AND 256),
-  context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),
-  execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
-  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 256),
-  action_id TEXT CHECK (action_id IS NULL OR length(action_id) BETWEEN 1 AND 256),
-  action_family TEXT NOT NULL CHECK (length(action_family) BETWEEN 1 AND 256),
-  decision_outcome TEXT NOT NULL CHECK (
-    decision_outcome IN ('allowed', 'denied', 'not-applicable', 'unknown')
-  ),
-  coverage_state TEXT NOT NULL CHECK (
-    coverage_state IN ('enforced', 'attribution-only', 'unattributed', 'unknown', 'unsupported')
-  ),
-  reason_code TEXT NOT NULL CHECK (length(reason_code) BETWEEN 1 AND 256),
-  owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 256),
-  source_ref TEXT NOT NULL CHECK (length(source_ref) BETWEEN 1 AND 256),
-  occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
-  receipt_bytes INTEGER NOT NULL CHECK (receipt_bytes BETWEEN 1 AND 16384),
-  receipt_json TEXT NOT NULL CHECK (length(receipt_json) > 0),
-  UNIQUE (occurred_at, receipt_id)
-) STRICT;
-CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
-  ON execution_decision_facts (context_id, occurred_at, receipt_id);
-CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
-  ON execution_decision_facts (run_id, occurred_at, receipt_id);
-`;
+const ensureExecutionDecisionFactSchema = createOpenClawStateSchemaEnsurer({
+  table: "execution_decision_facts",
+  endMarker: "  ON execution_decision_facts (run_id, occurred_at, receipt_id);\n",
+  operationLabel: "audit.execution-decision.schema.ensure",
+});
 
 type ExecutionDecisionFactOptions = OpenClawStateDatabaseOptions & {
   now?: number;
@@ -77,22 +60,6 @@ type ExecutionDecisionFactOptions = OpenClawStateDatabaseOptions & {
 
 function decisionDb(db: DatabaseSync) {
   return getNodeSqliteKysely<ExecutionDecisionDatabase>(db);
-}
-
-function ensureExecutionDecisionFactSchema(options: OpenClawStateDatabaseOptions = {}): void {
-  const database = openOpenClawStateDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; fact rows use Kysely.
-      db.exec(EXECUTION_DECISION_FACT_SCHEMA_SQL);
-    },
-    options,
-    { operationLabel: "audit.execution-decision.schema.ensure" },
-  );
-  ensuredDatabases.add(database.db);
 }
 
 function parseDecisionRow(row: ExecutionDecisionRow): DecisionReceiptV1 {
@@ -321,6 +288,20 @@ function executionDecisionPayloadBytes() {
   return /* kysely-allow-raw: SQLite byte length excludes oversized retained receipt JSON before materialization. */ sql<number>`length(CAST(execution_decision_facts.receipt_json AS BLOB))`;
 }
 
+function executionDecisionBoundedPayload() {
+  return /* kysely-allow-raw: one page snapshot returns bounded payload bytes beside the owning rowid. */ sql<
+    string | null
+  >`CASE WHEN length(CAST(execution_decision_facts.receipt_json AS BLOB)) <= ${EXECUTION_DECISION_FACT_MAX_BYTES} THEN execution_decision_facts.receipt_json ELSE NULL END`;
+}
+
+function executionDecisionSelectorId(row: ExecutionDecisionMetadataRow): string {
+  const rowId = normalizeSqliteNumber(row.receipt_rowid);
+  if (rowId === undefined || rowId < 1) {
+    throw new Error("invalid execution decision fact rowid");
+  }
+  return `${EXECUTION_DECISION_SELECTOR_PREFIX}${rowId}`;
+}
+
 function retainedDecisionFactMetadata(params: {
   db: DatabaseSync;
   contextId: string;
@@ -375,30 +356,13 @@ function retainedDecisionFactMetadata(params: {
       .select([
         executionDecisionRowId().as("receipt_rowid"),
         executionDecisionPayloadBytes().as("payload_bytes"),
+        executionDecisionBoundedPayload().as("bounded_receipt_json"),
       ])
       .orderBy("occurred_at", "asc")
       .orderBy("receipt_id", "asc")
       .$if(params.offset !== undefined, (query) => query.offset(params.offset!))
       .limit(params.limit),
   ).rows;
-}
-
-function retainedDecisionFactRowsById(
-  db: DatabaseSync,
-  ids: readonly string[],
-): Map<string, ExecutionDecisionRow> {
-  if (ids.length === 0) {
-    return new Map();
-  }
-  const rows = executeSqliteQuerySync(
-    db,
-    decisionDb(db)
-      .selectFrom("execution_decision_facts")
-      .selectAll()
-      .where("receipt_id", "in", [...ids])
-      .where(executionDecisionPayloadBytes(), "<=", EXECUTION_DECISION_FACT_MAX_BYTES),
-  ).rows;
-  return new Map(rows.map((row) => [row.receipt_id, row]));
 }
 
 function projectDecisionRow(
@@ -419,6 +383,22 @@ function projectDecisionRow(
   } catch {
     return unknownDecisionReceipt(row, "decision_fact_record_corrupt", "decision.fact.valid");
   }
+}
+
+function projectDecisionMetadata(
+  metadata: ExecutionDecisionMetadataRow,
+  context: ExecutionDecisionContext,
+): DecisionReceiptV1 {
+  if (metadata.payload_bytes > EXECUTION_DECISION_FACT_MAX_BYTES) {
+    return unknownDecisionReceipt(
+      metadata,
+      "decision_fact_payload_bounded",
+      "decision.fact.payload_bounded",
+    );
+  }
+  return typeof metadata.bounded_receipt_json === "string"
+    ? projectDecisionRow({ ...metadata, receipt_json: metadata.bounded_receipt_json }, context)
+    : unknownDecisionReceipt(metadata, "decision_fact_record_corrupt", "decision.fact.valid");
 }
 
 /** Summarize at most 128 owner rows; the 129th makes coverage explicitly unknown. */
@@ -455,25 +435,9 @@ export function summarizeExecutionDecisionFactsForContext(params: {
           missingEvidence: ["decision.fact.summary_bounded"],
         };
       }
-      const rowsById = retainedDecisionFactRowsById(
-        db,
-        metadataRows
-          .filter((row) => row.payload_bytes <= EXECUTION_DECISION_FACT_MAX_BYTES)
-          .map((row) => row.receipt_id),
+      const receipts = metadataRows.map((metadata) =>
+        projectDecisionMetadata(metadata, params.context),
       );
-      const receipts = metadataRows.map((metadata) => {
-        if (metadata.payload_bytes > EXECUTION_DECISION_FACT_MAX_BYTES) {
-          return unknownDecisionReceipt(
-            metadata,
-            "decision_fact_payload_bounded",
-            "decision.fact.payload_bounded",
-          );
-        }
-        const row = rowsById.get(metadata.receipt_id);
-        return row
-          ? projectDecisionRow(row, params.context)
-          : unknownDecisionReceipt(metadata, "decision_fact_record_corrupt", "decision.fact.valid");
-      });
       const coverage = new Set(receipts.map((receipt) => receipt.enforcement.coverageState));
       return {
         count,
@@ -532,7 +496,7 @@ export function pageExecutionDecisionFactsForContext(params: {
   return (
     withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
       if (!tableExists(db, "execution_decision_facts")) {
-        return { receipts: [] };
+        return { entries: [], receipts: [] };
       }
       const metadataRows = retainedDecisionFactMetadata({
         db,
@@ -543,28 +507,14 @@ export function pageExecutionDecisionFactsForContext(params: {
         limit: params.limit + 1,
       });
       const pageMetadata = metadataRows.slice(0, params.limit);
-      const rowsById = retainedDecisionFactRowsById(
-        db,
-        pageMetadata
-          .filter((row) => row.payload_bytes <= EXECUTION_DECISION_FACT_MAX_BYTES)
-          .map((row) => row.receipt_id),
-      );
-      const receipts = pageMetadata.map((metadata) => {
-        if (metadata.payload_bytes > EXECUTION_DECISION_FACT_MAX_BYTES) {
-          return unknownDecisionReceipt(
-            metadata,
-            "decision_fact_payload_bounded",
-            "decision.fact.payload_bounded",
-          );
-        }
-        const row = rowsById.get(metadata.receipt_id);
-        return row
-          ? projectDecisionRow(row, params.context)
-          : unknownDecisionReceipt(metadata, "decision_fact_record_corrupt", "decision.fact.valid");
-      });
+      const entries = pageMetadata.map((metadata) => ({
+        receipt: projectDecisionMetadata(metadata, params.context),
+        selectorId: executionDecisionSelectorId(metadata),
+      }));
       const last = pageMetadata.at(-1);
       return {
-        receipts,
+        entries,
+        receipts: entries.map((entry) => entry.receipt),
         ...(metadataRows.length > params.limit && last
           ? {
               nextCursor: {
@@ -574,7 +524,7 @@ export function pageExecutionDecisionFactsForContext(params: {
             }
           : {}),
       };
-    }, params.database) ?? { receipts: [] }
+    }, params.database) ?? { entries: [], receipts: [] }
   );
 }
 

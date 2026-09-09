@@ -11,6 +11,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveConfiguredTalkRealtimeProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
@@ -19,23 +20,9 @@ import type {
   ConfiguredGenerationProviderIds,
   ConfiguredVoiceProviderIds,
 } from "./gateway-startup-plugin-contracts.js";
-import { normalizeConfiguredSpeechProviderIdForStartup } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { CORE_BUILT_IN_MODEL_APIS } from "./provider-config-owner.js";
 import type { PluginRegistry } from "./registry-types.js";
-
-export function manifestOwnsConfiguredSpeechProvider(params: {
-  manifest: PluginManifestRecord | undefined;
-  configuredSpeechProviderIds: ReadonlySet<string>;
-}): boolean {
-  if (params.configuredSpeechProviderIds.size === 0) {
-    return false;
-  }
-  return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
-    const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
-    return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
-  });
-}
 
 export function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): ReadonlySet<string> {
   const search = config.tools?.web?.search;
@@ -44,19 +31,6 @@ export function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): R
   }
   const providerId = normalizeOptionalLowercaseString(search.provider);
   return providerId ? new Set([providerId]) : new Set();
-}
-
-export function manifestOwnsConfiguredWebSearchProvider(params: {
-  manifest: PluginManifestRecord | undefined;
-  configuredWebSearchProviderIds: ReadonlySet<string>;
-}): boolean {
-  if (params.configuredWebSearchProviderIds.size === 0) {
-    return false;
-  }
-  return (params.manifest?.contracts?.webSearchProviders ?? []).some((providerId) => {
-    const normalized = normalizeOptionalLowercaseString(providerId);
-    return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
-  });
 }
 
 function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
@@ -216,10 +190,15 @@ export function collectConfiguredVoiceProviderIds(
   config: OpenClawConfig,
 ): ConfiguredVoiceProviderIds {
   const providerIds = collectModelProviderIds(config.agents?.defaults?.voiceModel);
+  const realtimeProviderIds = new Set(providerIds);
+  const talkRealtimeProviderId = resolveConfiguredTalkRealtimeProviderId(config);
+  if (talkRealtimeProviderId) {
+    realtimeProviderIds.add(talkRealtimeProviderId.toLowerCase());
+  }
   return {
     speechProviders: providerIds,
     realtimeTranscriptionProviders: providerIds,
-    realtimeVoiceProviders: providerIds,
+    realtimeVoiceProviders: realtimeProviderIds,
   };
 }
 

@@ -21,11 +21,6 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import {
-  type ChatModelOverride,
-  createChatModelOverride,
-  resolvePreferredServerChatModelValue,
-} from "../../lib/chat/model-ref.ts";
-import {
   normalizeChatFastModeInput,
   resolveChatFastModeStatus,
 } from "../../lib/chat/model-select-state.ts";
@@ -37,7 +32,9 @@ import {
 } from "../../lib/chat/thinking.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -49,13 +46,11 @@ import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-set
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
-  content: string;
+  content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
-  /** Optional session-level directive changes that the caller should mirror locally. */
-  sessionPatch?: {
-    modelOverride?: ChatModelOverride | null;
-  };
+  /** Model-dependent tools need refreshing after a confirmed selection. */
+  modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
   /** When set, the caller should surface a visible pending item tied to the current run. */
@@ -228,17 +223,7 @@ async function executeCompact(
       };
     }
     if (result?.compacted) {
-      const before = result.result?.tokensBefore;
-      const after = result.result?.tokensAfter;
-      const tokenSummary =
-        typeof before === "number" && typeof after === "number"
-          ? t("chat.commandResults.compaction.tokenSummary", {
-              before: before.toLocaleString(),
-              after: after.toLocaleString(),
-            })
-          : "";
       return {
-        content: `${t("chat.commandResults.compaction.succeeded")}${tokenSummary}.`,
         action: "refresh",
       };
     }
@@ -271,7 +256,9 @@ async function executeModel(
     try {
       const [sessions, models] = await Promise.all([
         listSessions(context, selectedAgentListScope(sessionKey, context)),
-        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
+        modelCatalog
+          ? Promise.resolve(modelCatalog)
+          : loadModelCatalog(client, { agentId, sessionKey }).then((result) => result.models),
       ]);
       const { session, defaults } = resolveCommandSessionState(context, sessionKey, sessions);
       const model = session?.model || defaults?.model || "default";
@@ -304,10 +291,6 @@ async function executeModel(
 
   try {
     const requestedModel = args.trim();
-    const resolvedModelCatalog = modelCatalog
-      ? Promise.resolve(modelCatalog)
-      : loadModelCatalog(client, agentId, { allowFailure: true });
-    let resolvedOverride: ChatModelOverride | null = null;
     await patchSession(
       context,
       sessionKey,
@@ -315,37 +298,13 @@ async function executeModel(
         model: requestedModel,
       },
       {
-        deferModelOverride: true,
         ownsModelOverride: context.ownsModelOverride,
-        reconcile: async (result) => {
-          const resolvedModel = result.resolved?.model ?? requestedModel;
-          let resolvedValue = resolvePreferredServerChatModelValue(
-            resolvedModel,
-            result.resolved?.modelProvider,
-            await resolvedModelCatalog,
-          );
-          const requestedOverride = createChatModelOverride(requestedModel);
-          const resolvedProvider = result.resolved?.modelProvider?.trim();
-          if (
-            requestedOverride?.kind === "qualified" &&
-            resolvedProvider &&
-            resolvedValue &&
-            !resolvedValue.toLowerCase().startsWith(`${resolvedProvider.toLowerCase()}/`) &&
-            requestedOverride.value.toLowerCase().endsWith(`/${resolvedModel.trim().toLowerCase()}`)
-          ) {
-            resolvedValue = requestedOverride.value;
-          }
-          resolvedOverride = createChatModelOverride(resolvedValue);
-          if (context.ownsModelOverride?.() !== false) {
-            context.sessions.setModelOverride(sessionKey, resolvedOverride?.value ?? null);
-          }
-        },
       },
     );
     return {
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
       action: "refresh",
-      sessionPatch: { modelOverride: resolvedOverride },
+      modelChanged: true,
     };
   } catch (err) {
     return {
@@ -415,7 +374,7 @@ async function executeThink(
         }),
       };
     }
-    if (!isThinkingLevelOptionForSession(session, defaults, level, modelCatalog)) {
+    if (isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false) {
       return {
         content: t("chat.commandResults.thinking.unsupported", {
           level: rawLevel,
@@ -581,7 +540,8 @@ async function executeUsage(
       ? (session.totalTokens ?? null)
       : cumulativeTotal;
     const totalTokensFresh = session.totalTokensFresh !== false;
-    const ctx = session.contextTokens ?? 0;
+    const limit = resolveSessionContextLimit(session);
+    const ctx = limit.tokens;
     const pct =
       contextSnapshotTotal !== null && totalTokensFresh && ctx > 0
         ? Math.round((contextSnapshotTotal / ctx) * 100)
@@ -603,10 +563,15 @@ async function executeUsage(
     ];
     if (pct !== null) {
       lines.push(
-        t("chat.commandResults.usage.context", {
-          percent: `**${pct}%**`,
-          total: formatCompactTokenCount(ctx),
-        }),
+        t(
+          limit.fromLastPrompt
+            ? "chat.commandResults.usage.promptBudget"
+            : "chat.commandResults.usage.context",
+          {
+            percent: `**${pct}%**`,
+            total: formatCompactTokenCount(ctx),
+          },
+        ),
       );
     }
     if (session.model) {
@@ -780,35 +745,15 @@ async function loadThinkingCommandState(
   const agentId = resolveSelectedAgentId(sessionKey, context);
   const [sessions, models] = await Promise.all([
     listSessions(context, selectedAgentListScope(sessionKey, context)),
-    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
+    modelCatalog
+      ? Promise.resolve(modelCatalog)
+      : loadModelCatalog(client, { agentId, sessionKey }).then((result) => result.models),
   ]);
   const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {
     ...state,
     models,
   };
-}
-
-async function loadModelCatalog(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-  opts?: { allowFailure?: boolean },
-): Promise<ModelCatalogEntry[]> {
-  if (!agentId) {
-    return [];
-  }
-  try {
-    const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
-      agentId,
-      view: "configured",
-    });
-    return result?.models ?? [];
-  } catch (err) {
-    if (opts?.allowFailure) {
-      return [];
-    }
-    throw err;
-  }
 }
 
 function resolveCommandMessage(
@@ -885,7 +830,7 @@ async function executeSteer(
     );
     const terminalAckContent = formatTerminalSteerAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const result: SlashCommandResult = { content: t("chat.commandResults.steer.succeeded") };
     if (ackStatus === "started" || ackStatus === "in_flight") {
@@ -926,7 +871,7 @@ async function executeRedirect(
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
     return {

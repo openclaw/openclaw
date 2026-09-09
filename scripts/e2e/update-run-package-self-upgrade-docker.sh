@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Proves a published package can update itself through Gateway update.run and restart healthy.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$ROOT_DIR/scripts/lib/upgrade-survivor-diagnostics.sh"
+HARNESS_ROOT_DIR="$ROOT_DIR"
+LANE_ARTIFACT_SUFFIX=update-run-package-self-upgrade
 
 ALLOW_ENV="OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF"
 SOURCE_VERSION="2026.4.26"
@@ -27,8 +34,21 @@ ARTIFACT_DIR="${OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR:-$ROOT_DIR/.artifa
 QA_CHANNEL_FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-update-run-qa-channel.XXXXXX")"
 HISTORICAL_DIST_ARCHIVE="$QA_CHANNEL_FIXTURE_ROOT/historical-dist.tar"
 
+run_completed=0
+diagnostics_ready=0
 cleanup() {
+  local exit_status="$?"
+  trap - EXIT
+  set +e
+  # A joined successful scenario, not teardown, owns the success result.
+  if [ "$exit_status" -eq 0 ] && [ "$run_completed" != 1 ]; then
+    exit_status=1
+  fi
+  if [ "$exit_status" -ne 0 ] && [ "$diagnostics_ready" = 1 ]; then
+    publish_diagnostics || echo "Self-upgrade diagnostics missing; preserving original failure." >&2
+  fi
   rm -rf "$QA_CHANNEL_FIXTURE_ROOT"
+  exit "$exit_status"
 }
 trap cleanup EXIT
 
@@ -110,6 +130,7 @@ prepare_qa_channel_fixture() {
 
 mkdir -p "$ARTIFACT_DIR"
 chmod -R a+rwX "$ARTIFACT_DIR" || true
+prepare_diagnostics_capture
 prepare_qa_channel_fixture
 
 docker_e2e_build_or_reuse \
@@ -171,3 +192,4 @@ fs.writeFileSync(
 );
 NODE
 exec bash scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh'
+run_completed=1

@@ -198,19 +198,16 @@ async function prepareTelegramSticker(params: {
   const formattedDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
   sticker.cachedDescription = description;
   if (!stickerSupportsVision) {
-    const isCaptionlessSticker =
-      !context.ctxPayload.RawBody?.trim() && context.ctxPayload.StickerMediaIncluded === true;
     context.ctxPayload.Body = includeStickerDescription({
       body: context.ctxPayload.Body,
       formattedDescription,
     });
-    context.ctxPayload.BodyForAgent =
-      isCaptionlessSticker && !context.ctxPayload.BodyForAgent?.trim()
-        ? formattedDescription
-        : includeStickerDescription({
-            body: context.ctxPayload.BodyForAgent,
-            formattedDescription,
-          });
+    // Reply finalization projects BodyForAgent from the canonical agent text.
+    context.ctxPayload.agentText = includeStickerDescription({
+      body: context.ctxPayload.agentText ?? context.ctxPayload.BodyForAgent,
+      formattedDescription,
+    });
+    context.ctxPayload.BodyForAgent = context.ctxPayload.agentText;
     context.ctxPayload.SkipStickerMediaUnderstanding = true;
   }
   cacheSticker({
@@ -384,6 +381,12 @@ export const dispatchTelegramMessage = async (
       }
     }
     loadFreshSessionEntry.clear();
+    // Media hydration and other pre-dispatch work can outlive the durable
+    // ingress watchdog. Never enter the reply pipeline after that owner has
+    // already fenced this attempt; the canonical spool row will retry it.
+    if (isDispatchSuperseded()) {
+      return { kind: "completed" };
+    }
     if (status.controller && !isRoomEvent) {
       void status.controller.setThinking();
     }
@@ -420,28 +423,31 @@ export const dispatchTelegramMessage = async (
 
   const deliverySummary = turn.deliveryState.snapshot();
   let sentFallback = false;
+  const terminalFailure = turn.dispatchError || turn.agentRunFailed;
   const shouldSendFailureFallback =
     !isRoomEvent &&
-    !suppressFailureFallback &&
+    !turn.sendPolicyDenied &&
+    (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.finalAnswerDelivered &&
-    (turn.dispatchError ||
+    (terminalFailure ||
       deliverySummary.failedNonSilent > 0 ||
       (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
-    const fallbackText = turn.dispatchError
+    const fallbackText = terminalFailure
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
     const result = await deliverFallback(
       turn,
       [{ text: fallbackText }],
       telegramCfg.silentErrorReplies === true &&
-        (turn.dispatchError != null || turn.hadErrorReplyFailureOrSkip),
+        Boolean(terminalFailure || turn.hadErrorReplyFailureOrSkip),
     );
     sentFallback = result.delivered;
   }
 
   if (
     !sentFallback &&
+    !turn.sendPolicyDenied &&
     !turn.dispatchError &&
     !deliverySummary.delivered &&
     !turn.suppressSilentReplyFallback &&

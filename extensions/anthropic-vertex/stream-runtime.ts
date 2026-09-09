@@ -23,12 +23,10 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { copyProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
-import {
-  resolveAnthropicVertexAdcCredentials,
-  resolveAnthropicVertexClientRegion,
-  resolveAnthropicVertexProjectId,
-} from "./region.js";
+import { resolveAnthropicVertexClientRegion } from "./region-endpoint.js";
+import { resolveAnthropicVertexAdcCredentials, resolveAnthropicVertexProjectId } from "./region.js";
 
 const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 
@@ -219,7 +217,7 @@ export function createAnthropicVertexStreamFn(
       isClaudeMythos5Model(contractModelId)
         ? undefined
         : options?.temperature;
-    const opts: AnthropicVertexTransportOptions = {
+    const opts: AnthropicVertexTransportOptions = copyProviderAcceptanceObserver(options, {
       client,
       ...(temperature !== undefined ? { temperature } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
@@ -231,9 +229,10 @@ export function createAnthropicVertexStreamFn(
       // cache boundary and budgets all cache_control markers; re-applying the
       // payload policy here marked the uncached suffix and breached the 4-marker cap.
       onPayload: options?.onPayload,
+      onResponse: options?.onResponse,
       maxRetryDelayMs: options?.maxRetryDelayMs,
       metadata: options?.metadata,
-    };
+    });
 
     if (reasoning === "off") {
       opts.thinkingEnabled = false;

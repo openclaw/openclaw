@@ -58,7 +58,7 @@ describe("renderSkills ClawHub", () => {
     expect(dialog.open).toBe(true);
 
     const closeButton = container.querySelector<HTMLButtonElement>(
-      ".md-preview-dialog__header .btn",
+      ".skill-reader-dialog .exec-approval-header .btn",
     );
     expect(closeButton).toBeInstanceOf(HTMLButtonElement);
     closeButton!.click();
@@ -154,8 +154,8 @@ describe("renderSkills ClawHub", () => {
     expect(
       Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
     ).toEqual(["rate limited", "Installed github"]);
-    expect(normalizeText(container.querySelector(".md-preview-dialog__body")!)).toBe(
-      "GitHub integration for OpenClaw By OpenClaw (@openclaw) Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
+    expect(normalizeText(container.querySelector(".skill-reader-dialog__body")!)).toBe(
+      "GitHub integration for OpenClaw By OpenClaw (@openclaw) · Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
     );
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
       `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`,
@@ -163,7 +163,7 @@ describe("renderSkills ClawHub", () => {
     expect(container.querySelector(".clawhub-skill-icon--profile")).toBeNull();
 
     const detailInstallButton = container.querySelector<HTMLButtonElement>(
-      ".md-preview-dialog__body .btn.primary",
+      ".skill-reader-dialog__body .btn.primary",
     );
     expect(detailInstallButton).toBeInstanceOf(HTMLButtonElement);
     detailInstallButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -286,55 +286,65 @@ describe("renderSkills ClawHub", () => {
     expect(onClawHubDetailOpen).not.toHaveBeenCalled();
   });
 
-  it("renders an installed external result from its exact recorded reference", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onClawHubInstall = vi.fn();
+  it.each([false, true])(
+    "scopes an installed external result to its destination (personal=%s)",
+    async (personalImport) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      dialogRestores.push(() => container.remove());
+      const onClawHubInstall = vi.fn();
 
-    render(
-      renderSkills(
-        createProps({
-          clawhubQuery: "pdf",
-          clawhubResults: [
-            {
-              score: 1,
-              slug: "pdf",
-              installRef: "skills-sh:openai/skills/pdf",
-              installOnly: true,
-              displayName: "Pdf",
-            },
-          ],
-          report: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [
-              createSkill({
-                clawhub: {
-                  status: "linked",
-                  valid: true,
-                  registry: "https://clawhub.ai",
-                  slug: "pdf",
-                  requestedReference: "skills-sh:openai/skills/pdf",
-                  installedVersion: "0.0.0",
-                  installedAt: 1,
-                },
-              }),
+      render(
+        renderSkills(
+          createProps({
+            personalImport,
+            clawhubQuery: "pdf",
+            clawhubResults: [
+              {
+                score: 1,
+                slug: "pdf",
+                installRef: "skills-sh:openai/skills/pdf",
+                installOnly: true,
+                displayName: "Pdf",
+              },
             ],
-          },
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
+            report: {
+              workspaceDir: "/tmp/workspace",
+              managedSkillsDir: "/tmp/skills",
+              skills: [
+                createSkill({
+                  clawhub: {
+                    status: "linked",
+                    valid: true,
+                    registry: "https://clawhub.ai",
+                    slug: "pdf",
+                    requestedReference: "skills-sh:openai/skills/pdf",
+                    installedVersion: "0.0.0",
+                    installedAt: 1,
+                    originPath: "/tmp/.clawhub/origin.json",
+                    lockPath: "/tmp/workspace/.clawhub/lock.json",
+                  },
+                }),
+              ],
+            },
+            onClawHubInstall,
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
 
-    const button = container.querySelector<HTMLButtonElement>(".btn.btn--sm")!;
-    expect(button.textContent?.trim()).toBe("Installed");
-    expect(button.disabled).toBe(true);
-    button.click();
-    expect(onClawHubInstall).not.toHaveBeenCalled();
-  });
+      const button = container.querySelector<HTMLButtonElement>(".btn.btn--sm")!;
+      expect(button.textContent?.trim()).toBe(personalImport ? "Import skill" : "Installed");
+      expect(button.disabled).toBe(!personalImport);
+      button.click();
+      if (personalImport) {
+        expect(onClawHubInstall).toHaveBeenCalledWith("skills-sh:openai/skills/pdf");
+      } else {
+        expect(onClawHubInstall).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps the review flow for results from a gateway that predates the install-only flag", async () => {
     const container = document.createElement("div");
@@ -368,60 +378,6 @@ describe("renderSkills ClawHub", () => {
     expect(onClawHubDetailOpen).toHaveBeenCalledWith("@alice/email");
   });
 
-  it("sizes the ClawHub detail dialog to a refusal message instead of a reader", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    render(
-      renderSkills(
-        createProps({
-          clawhubDetailRef: "skills-sh:acme/tools/imap-smtp-email",
-          clawhubDetailError:
-            "ClawHub cannot return details for skills-sh:acme/tools/imap-smtp-email; external skill sources are install-only.",
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    // Without this the panel keeps the tall reader height meant for skill documents, so a
-    // two-line refusal renders in a mostly empty dialog and reads as broken.
-    expect(container.querySelectorAll(".md-preview-dialog__panel--message-only")).toHaveLength(1);
-  });
-
-  it("renders ClawHub acknowledgement retry actions", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onClawHubInstall = vi.fn();
-
-    render(
-      renderSkills(
-        createProps({
-          clawhubInstallMessage: {
-            kind: "error",
-            text: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-            acknowledgeRef: "github",
-            acknowledgeVersion: "1.2.3",
-          },
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
-
-    const retryButton = container.querySelector<HTMLButtonElement>(".callout button");
-    expect(normalizeText(container.querySelector(".callout")!)).toBe(
-      "REVIEW REQUIRED - ClawHub found suspicious behavior. Acknowledge risk and install",
-    );
-    expect(retryButton).toBeInstanceOf(HTMLButtonElement);
-    retryButton!.click();
-
-    expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github", true, "1.2.3");
-  });
-
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -441,6 +397,8 @@ describe("renderSkills ClawHub", () => {
         ownerHandle: "openclaw",
         installedVersion: "1.2.3",
         installedAt: 123,
+        originPath: "/tmp/.clawhub/origin.json",
+        lockPath: "/tmp/workspace/.clawhub/lock.json",
       },
       skillCard: {
         present: true,
@@ -562,6 +520,8 @@ describe("renderSkills ClawHub", () => {
           slug: "agentreceipt",
           installedVersion: "1.2.3",
           installedAt: 123,
+          originPath: "/tmp/.clawhub/origin.json",
+          lockPath: "/tmp/workspace/.clawhub/lock.json",
         },
       });
       render(
@@ -612,6 +572,8 @@ describe("renderSkills ClawHub", () => {
         slug: "agentreceipt",
         installedVersion: "1.2.3",
         installedAt: 123,
+        originPath: "/tmp/.clawhub/origin.json",
+        lockPath: "/tmp/workspace/.clawhub/lock.json",
       },
     });
     const report: SkillStatusReport = {

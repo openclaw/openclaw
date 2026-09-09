@@ -152,14 +152,6 @@ export function buildMatrixReplyArtifact(
   };
 }
 
-export function buildMatrixNoticeArtifact(event: MatrixQaObservedEvent) {
-  return {
-    bodyPreview: truncateMatrixQaPreview(event.body?.trim()),
-    eventId: event.eventId,
-    sender: event.sender,
-  };
-}
-
 export function buildMatrixReplyDetails(label: string, artifact: MatrixQaReplyArtifact) {
   return [
     `${label} event: ${artifact.eventId}`,
@@ -435,22 +427,6 @@ export async function runConfigurableTopLevelScenario(params: {
   };
 }
 
-async function runTopLevelMentionScenario(params: {
-  accessToken: string;
-  actorId: MatrixQaActorId;
-  baseUrl: string;
-  observedEvents: MatrixQaObservedEvent[];
-  roomId: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
-  sutUserId: string;
-  timeoutMs: number;
-  tokenPrefix: string;
-  withMention?: boolean;
-}) {
-  return await runConfigurableTopLevelScenario(params);
-}
-
 export async function runDriverTopLevelMentionScenario(params: {
   baseUrl: string;
   driverAccessToken: string;
@@ -462,7 +438,7 @@ export async function runDriverTopLevelMentionScenario(params: {
   timeoutMs: number;
   tokenPrefix: string;
 }) {
-  return await runTopLevelMentionScenario({
+  return await runConfigurableTopLevelScenario({
     accessToken: params.driverAccessToken,
     actorId: "driver",
     baseUrl: params.baseUrl,
@@ -547,7 +523,7 @@ export async function runTopologyScopedTopLevelScenario(params: {
   withMention?: boolean;
 }) {
   const roomId = resolveMatrixQaScenarioRoomId(params.context, params.roomKey);
-  const result = await runTopLevelMentionScenario({
+  const result = await runConfigurableTopLevelScenario({
     accessToken: params.accessToken,
     actorId: params.actorId,
     baseUrl: params.context.baseUrl,
@@ -646,6 +622,9 @@ export async function runNoReplyExpectedScenario(params: {
         ...buildMatrixReplyDetails("unexpected reply", unexpectedReply),
       ].join("\n"),
     );
+  }
+  if (!observedTriggerEvent) {
+    throw new Error("Matrix no-reply observation did not observe the trigger event");
   }
   advanceMatrixQaActorCursor({
     actorId: params.actorId,

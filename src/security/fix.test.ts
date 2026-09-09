@@ -84,7 +84,7 @@ describe("security fix", () => {
         const changes: string[] = [];
         let changed = false;
         const maybeApply = (prefix: string, holder: Record<string, unknown>) => {
-          if (holder.groupPolicy !== "allowlist") {
+          if (holder.groupPolicy !== "open") {
             return;
           }
           const allowFrom = Array.isArray(holder.allowFrom) ? holder.allowFrom : [];
@@ -237,6 +237,31 @@ describe("security fix", () => {
     expect(expectDefined(accounts.a1, "accounts.a1 test invariant").groupAllowFrom).toEqual([
       "+15550001111",
     ]);
+  });
+
+  it("does not seed WhatsApp accounts that were already allowlisted", async () => {
+    const { res, channels } = await fixWhatsAppConfigScenario({
+      whatsapp: {
+        groupPolicy: "allowlist",
+        accounts: {
+          default: { groupPolicy: "allowlist" },
+          work: { groupPolicy: "allowlist" },
+        },
+      },
+      allowFromStore: ["+15550001111"],
+    });
+
+    expect(res.configWritten).toBe(false);
+    expect(res.changes).toEqual([]);
+    const whatsapp = expectDefined(channels.whatsapp, "channels.whatsapp test invariant");
+    expect(whatsapp.groupAllowFrom).toBeUndefined();
+    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
+    expect(
+      expectDefined(accounts.default, "accounts.default test invariant").groupAllowFrom,
+    ).toBeUndefined();
+    expect(
+      expectDefined(accounts.work, "accounts.work test invariant").groupAllowFrom,
+    ).toBeUndefined();
   });
 
   it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {

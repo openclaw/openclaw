@@ -292,9 +292,17 @@ export function buildSlackQaConfig(
                 ? {
                     streaming: {
                       mode: "progress" as const,
+                      // These scenarios assert the portable draft compositor and
+                      // chat.update identity. Native task streams have their own
+                      // transport proof and do not expose that draft contract.
+                      nativeTransport: false,
                       progress: {
+                        // The per-run command marker is the tool-line correlation
+                        // key; the product default intentionally hides raw commands.
+                        commandText: "raw" as const,
                         label: false,
                         maxLines: 4,
+                        ...(progressOverrides.style ? { style: progressOverrides.style } : {}),
                         toolProgress: progressOverrides.toolProgress,
                         ...(progressOverrides.commentary === undefined
                           ? {}

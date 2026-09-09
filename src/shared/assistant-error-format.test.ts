@@ -3,9 +3,22 @@ import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
+  formatProviderRefusalText,
   formatRawAssistantErrorForUi,
   parseApiErrorInfo,
 } from "./assistant-error-format.js";
+
+describe("formatProviderRefusalText", () => {
+  it.each(["bio", "cyber"])("formats a sanitized %s refusal", (category) => {
+    expect(
+      formatProviderRefusalText({
+        diagnostics: [{ type: "provider_refusal", details: { category } }],
+      }),
+    ).toBe(
+      `The provider refused this request (category: ${category}). Revise the request and try again.`,
+    );
+  });
+});
 
 describe("extractLeadingHttpStatus", () => {
   it("accepts status codes in the valid HTTP range 100-599", () => {
@@ -81,6 +94,18 @@ describe("extractErrorHttpStatus", () => {
 });
 
 describe("HTTP status consumers", () => {
+  it.each(["500 ", "500: ", "HTTP 502: "])(
+    "preserves distinct validation type and code after %s",
+    (prefix) => {
+      const error = {
+        type: "invalid_request_error",
+        code: "unknown_parameter",
+        message: "Unsupported parameter: timeout",
+      };
+      expect(parseApiErrorInfo(`${prefix}${JSON.stringify({ error })}`)).toMatchObject(error);
+    },
+  );
+
   it("does not return raw HTML after an HTTP reason phrase", () => {
     const raw = [
       "HTTP 502 Bad Gateway",

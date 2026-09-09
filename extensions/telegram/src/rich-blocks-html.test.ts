@@ -1,5 +1,6 @@
 // HTML-island → typed block mapping tests: this is the agent authoring contract
 // the core system prompt advertises for rich-enabled Telegram accounts.
+import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import { countInputRichBlockChars, type InputRichBlock } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
@@ -30,6 +31,339 @@ describe("block HTML islands", () => {
     }
     expect(JSON.stringify(block.summary)).toContain("output");
     expect(block.blocks).toEqual([{ type: "paragraph", text: "hidden body" }]);
+  });
+
+  it("keeps Markdown lists inside <details> islands", () => {
+    const block = single("<details><summary>List</summary>\n\n- item A\n- item B\n\n</details>");
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.summary).toBe("List");
+    expect(block.blocks).toHaveLength(1);
+    expect(block.blocks[0]?.type).toBe("paragraph");
+    const serialized = JSON.stringify(block);
+    expect(serialized).toContain("• item A");
+    expect(serialized).toContain("• item B");
+    expect(serialized).not.toContain("<details>");
+  });
+
+  it.each(
+    [
+      ["details", "<details><summary>More</summary><p>", "</p></details>", "More\n"],
+      ["list items", "<ul><li>", "</li></ul>", "• "],
+      ["blockquotes", "<blockquote>", "</blockquote>", ""],
+    ].flatMap(([container, open, close, prefix]) =>
+      [
+        ["styled text", "Download", "Download"],
+        ["entities decoded once", "A &amp; &#38; &amp;amp;", "A & & &amp;"],
+        ["escaped entity", String.raw`\&amp;`, "&amp;"],
+        ["parsed whitespace", "A   B\nC&nbsp;D", "A   B\nC\u00a0D"],
+      ].map(([label, source, expected]) => ({
+        container,
+        open,
+        close,
+        prefix,
+        label,
+        source,
+        expected,
+      })),
+    ),
+  )(
+    "keeps inline HTML links across Markdown styles inside $container ($label)",
+    ({ open, close, prefix, source, expected }) => {
+      const { blocks, plainText } = markdownToTelegramRichBlocks(
+        `${open}<a href="https://example.com">**${source}**</a>${close}`,
+      );
+
+      expect(JSON.stringify(blocks)).toContain('"type":"url"');
+      expect(JSON.stringify(blocks)).toContain('"url":"https://example.com"');
+      expect(JSON.stringify(blocks)).toContain('"type":"bold"');
+      expect(plainText).toBe(`${prefix}${expected}`);
+      expect(plainText).not.toContain("<a ");
+      expect(plainText).not.toContain("</a>");
+    },
+  );
+
+  it.each([
+    ["headings", "# Steps", "heading"],
+    ["fenced code", "```bash\nopenclaw doctor\n```", "pre"],
+    ["blockquotes", "> quoted output", "blockquote"],
+    ["tables", "| item | done |\n| --- | --- |\n| lint | yes |", "table"],
+  ])("keeps Markdown %s inside <details> islands", (_label, body, type) => {
+    const block = single(`<details><summary>Content</summary>\n\n${body}\n\n</details>`);
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toContain(type);
+    expect(JSON.stringify(block)).not.toContain("<details>");
+  });
+
+  it("preserves nested <details> containers around Markdown blocks", () => {
+    const block = single(
+      [
+        "<details><summary>Outer</summary>",
+        "",
+        "# Outer heading",
+        "",
+        "<details><summary>Inner</summary>",
+        "",
+        "# Inner heading",
+        "",
+        "```bash",
+        "openclaw doctor",
+        "```",
+        "",
+        "> inner quote",
+        "",
+        "| item | done |",
+        "| --- | --- |",
+        "| lint | yes |",
+        "",
+        "</details>",
+        "",
+        "> outer quote",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["heading", "details", "blockquote"]);
+    const inner = block.blocks[1];
+    expect(inner?.type).toBe("details");
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.summary).toBe("Inner");
+    expect(inner.blocks.map((child) => child.type)).toEqual([
+      "heading",
+      "pre",
+      "blockquote",
+      "table",
+    ]);
+    expect(JSON.stringify(block)).not.toContain("<details>");
+  });
+
+  it("ignores tag-shaped code while finding the details summary", () => {
+    const block = single("<details><summary><code><summary></code>Title</summary>Body</details>");
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.summary).toEqual([{ type: "code", text: "<summary>" }, "Title"]);
+    expect(block.blocks).toEqual([{ type: "paragraph", text: "Body" }]);
+  });
+
+  it("binds summary ranges to their direct details container", () => {
+    const block = single(
+      "<details><details><summary>Inner</summary>\n\n# Inner heading\n\n</details></details>",
+    );
+    expect(block).toMatchObject({ type: "details", summary: "Details" });
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["details"]);
+    const inner = block.blocks[0];
+    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.blocks.map((child) => child.type)).toEqual(["heading"]);
+  });
+
+  it("keeps a summary nested inside a wrapper in the details body", () => {
+    const block = single("<details><div><summary>Wrapped</summary><p>Body</p></div></details>");
+    expect(block).toMatchObject({ type: "details", summary: "Details" });
+    if (block.type !== "details") {
+      return;
+    }
+    const body = JSON.stringify(block.blocks);
+    expect(body).toContain("Wrapped");
+    expect(body).toContain("Body");
+  });
+
+  it("discovers details inside a top-level raw blockquote", () => {
+    const block = single(
+      "<blockquote><details><summary>Inner</summary>\n\n# Inner heading\n\n</details></blockquote>",
+    );
+    expect(block.type).toBe("blockquote");
+    if (block.type !== "blockquote") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["details"]);
+    const inner = block.blocks[0];
+    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.blocks.map((child) => child.type)).toEqual(["heading"]);
+  });
+
+  it("discovers details inside a top-level raw list", () => {
+    const block = single(
+      "<ul><li><details><summary>Inner</summary>\n\n# Inner heading\n\n</details></li></ul>",
+    );
+    expect(block.type).toBe("list");
+    if (block.type !== "list") {
+      return;
+    }
+    expect(block.items).toHaveLength(1);
+    const inner = block.items[0]?.blocks[0];
+    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.blocks.map((child) => child.type)).toEqual(["heading"]);
+  });
+
+  it("keeps same-offset tables before nested <details>", () => {
+    const block = single(
+      [
+        "<details><summary>Outer</summary>",
+        "",
+        "| item | done |",
+        "| --- | --- |",
+        "| table | before |",
+        "",
+        "<details><summary>Inner</summary>",
+        "",
+        "# Inner heading",
+        "",
+        "</details>",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["table", "details"]);
+    const inner = block.blocks[1];
+    expect(inner?.type).toBe("details");
+  });
+
+  it.each([
+    [
+      "before",
+      "| a |\n| --- |\n| before |\n\n<details><summary>S</summary>\n\n# In\n\n</details>",
+      ["table", "details"],
+    ],
+    [
+      "after",
+      "<details><summary>S</summary>\n\n# In\n\n</details>\n\n| a |\n| --- |\n| after |",
+      ["details", "table"],
+    ],
+    [
+      "between",
+      "<details><summary>A</summary>\n\n# In\n\n</details>\n\n| a |\n| --- |\n| between |\n\n<details><summary>B</summary>Body</details>",
+      ["details", "table", "details"],
+    ],
+  ])("keeps a Markdown table %s disclosures outside their bodies", (_label, markdown, types) => {
+    expect(blocksFor(markdown).map((block) => block.type)).toEqual(types);
+  });
+
+  it("preserves rich Markdown table cells inside a disclosure", () => {
+    const block = single(
+      "<details><summary>Rich</summary>\n\n| item | note |\n| --- | --- |\n| **bold** | [link](https://openclaw.ai) |\n| `code` | *italic* |\n\n</details>",
+    );
+    expect(block).toMatchObject({
+      type: "details",
+      blocks: [
+        {
+          type: "table",
+          cells: [
+            [
+              { text: "item", is_header: true },
+              { text: "note", is_header: true },
+            ],
+            [
+              { text: { type: "bold", text: "bold" } },
+              { text: { type: "url", text: "link", url: "https://openclaw.ai" } },
+            ],
+            [
+              { text: { type: "code", text: "code" } },
+              { text: { type: "italic", text: "italic" } },
+            ],
+          ],
+        },
+      ],
+    });
+  });
+
+  it("reports wide-table degradation inside a disclosure", () => {
+    const header = `| ${Array.from({ length: 21 }, (_, index) => `H${index + 1}`).join(" | ")} |`;
+    const separator = `| ${Array.from({ length: 21 }, () => "---").join(" | ")} |`;
+    const row = `| ${Array.from({ length: 21 }, (_, index) => String(index + 1)).join(" | ")} |`;
+    const { blocks, degradationReasons } = markdownToTelegramRichBlocks(
+      `<details><summary>Wide</summary>\n\n${header}\n${separator}\n${row}\n\n</details>`,
+    );
+    expect(degradationReasons).toEqual(["table-ascii"]);
+    expect(blocks).toMatchObject([{ type: "details", blocks: [{ type: "pre" }] }]);
+    expect(JSON.stringify(blocks)).toContain("H21");
+  });
+
+  it.each([
+    ["inline", "Keep `</details>` literal.", "paragraph"],
+    ["fenced", "```html\n</details>\n<details>\n```", "pre"],
+  ])("keeps %s code tags inside their authored disclosure", (_label, body, type) => {
+    const block = single(`<details><summary>Code</summary>\n\n${body}\n\n</details>`);
+    expect(block).toMatchObject({ type: "details", blocks: [{ type }] });
+    expect(JSON.stringify(block)).toContain("</details>");
+  });
+
+  it("keeps blockquote wrappers around nested <details>", () => {
+    const block = single(
+      [
+        "<details><summary>Outer</summary>",
+        "",
+        "> <details><summary>Inner</summary>",
+        ">",
+        "> # Inner heading",
+        ">",
+        "> </details>",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["blockquote"]);
+    const quote = block.blocks[0];
+    expect(quote?.type).toBe("blockquote");
+    if (quote?.type !== "blockquote") {
+      return;
+    }
+    expect(quote.blocks.map((child) => child.type)).toEqual(["details"]);
+  });
+
+  it("preserves raw blockquote wrappers around nested <details>", () => {
+    const block = single(
+      "<details><summary>Outer</summary><blockquote><details><summary>Inner</summary>\n\n# Inner heading\n\n</details><cite>Author</cite></blockquote></details>",
+    );
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.blocks.map((child) => child.type)).toEqual(["blockquote"]);
+    const quote = block.blocks[0];
+    expect(quote).toMatchObject({ type: "blockquote", credit: "Author" });
+    if (quote?.type !== "blockquote") {
+      return;
+    }
+    expect(quote.blocks.map((child) => child.type)).toEqual(["details"]);
+    const inner = quote.blocks[0];
+    expect(inner).toMatchObject({ type: "details", summary: "Inner" });
+    if (inner?.type !== "details") {
+      return;
+    }
+    expect(inner.blocks.map((child) => child.type)).toEqual(["heading"]);
   });
 
   it("maps <ul> with checkbox tasks", () => {
@@ -152,8 +486,8 @@ describe("block HTML islands", () => {
     if (block.type !== "table") {
       return;
     }
-    expect(block.cells[0]?.[0]).toEqual({ text: "bad span" });
-    expect(block.cells[0]?.[1]).toEqual({ text: "next" });
+    expect(block.cells[0]?.[0]).toEqual({ text: "bad span", align: "left", valign: "middle" });
+    expect(block.cells[0]?.[1]).toEqual({ text: "next", align: "left", valign: "middle" });
   });
 
   it.each([
@@ -175,11 +509,54 @@ describe("block HTML islands", () => {
     expect(blocks.map((block) => block.type)).toEqual(["paragraph", "divider", "paragraph"]);
   });
 
+  it.each([
+    { attributes: "href=https://example.com/?x&#61;1", url: "https://example.com/?x=1" },
+    {
+      attributes: 'href="https://example.com/?q=&quot;hi&quot;"',
+      url: 'https://example.com/?q="hi"',
+    },
+    {
+      attributes: "href='https://example.com/?q=&#39;hi&#39;'",
+      url: "https://example.com/?q='hi'",
+    },
+    { attributes: 'href="https://example.com/**path**"', url: "https://example.com/**path**" },
+  ])("preserves authored attribute data: $attributes", ({ attributes, url }) => {
+    for (const skipEntityDetection of [true, false]) {
+      expect(
+        markdownToTelegramRichBlocks(`<a ${attributes}>**label**</a>`, { skipEntityDetection })
+          .blocks,
+      ).toEqual([
+        { type: "paragraph", text: { type: "url", url, text: { type: "bold", text: "label" } } },
+      ]);
+    }
+  });
+
   it("leaves unsupported or unclosed HTML as literal text", () => {
     const blocks = blocksFor("<details><summary>oops</summary> and <custom>tag</custom>");
     expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
     const plain = JSON.stringify(blocks);
     expect(plain).toContain("oops");
+  });
+
+  it("does not use an unclosed summary as a disclosure title", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      "<details><summary>Unclosed</details>",
+    );
+    expect(blocks).toMatchObject([
+      {
+        type: "details",
+        summary: "Details",
+        blocks: [{ type: "paragraph" }],
+      },
+    ]);
+    expect(plainText).toContain("<summary>Unclosed");
+  });
+
+  it.each(["ul", "table"])("keeps an unclosed child of <%s> literal", (tag) => {
+    const child = tag === "ul" ? "<li>Unclosed" : "<tr><td>Unclosed";
+    const { blocks, plainText } = markdownToTelegramRichBlocks(`<${tag}>${child}</${tag}>`);
+    expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
+    expect(plainText).toContain(child);
   });
 
   it("keeps unclosed inline tags literal instead of restyling trailing text", () => {
@@ -189,18 +566,62 @@ describe("block HTML islands", () => {
     expect(serialized).not.toContain('"superscript"');
   });
 
-  it("keeps unsupported matched tags literal", () => {
-    const blocks = blocksFor("a <custom>tag</custom> here");
+  it.each(["custom", "constructor"])("keeps unsupported matched <%s> tags literal", (tag) => {
+    const markdown = `a <${tag}>tag</${tag}> here`;
+    const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+    expect(plainText).toBe(markdown);
     const serialized = JSON.stringify(blocks);
-    expect(serialized).toContain("<custom>");
-    expect(serialized).toContain("</custom>");
+    expect(serialized).toContain(`<${tag}>`);
+    expect(serialized).toContain(`</${tag}>`);
   });
 
-  it("keeps the entire subtree of unsupported wrappers literal", () => {
-    const blocks = blocksFor("a <custom><sup>x</sup></custom> here");
-    const serialized = JSON.stringify(blocks);
-    expect(serialized).toContain("<sup>x</sup>");
-    expect(serialized).not.toContain('"superscript"');
+  it("still maps own inline style tags", () => {
+    expect(single("<b>secret</b>")).toEqual({
+      type: "paragraph",
+      text: { type: "bold", text: "secret" },
+    });
+  });
+
+  it.each(["custom", "constructor"])(
+    "keeps unsupported <%s> HTML literal without discarding Markdown spans",
+    (tag) => {
+      for (const close of [`</${tag}>`, ""]) {
+        const markdown = `a <${tag}><sup>**x**</sup>${close} here`;
+        const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+        expect(plainText).toBe(`a <${tag}><sup>x</sup>${close} here`);
+        expect(blocks).toMatchObject([
+          { type: "paragraph", text: expect.arrayContaining([{ type: "bold", text: "x" }]) },
+        ]);
+      }
+    },
+  );
+
+  it.each([
+    { body: "> <sup>**x**</sup>", kind: "blockquote" },
+    { body: "| Header |\n| --- |\n| <sup>**x**</sup> |", kind: "table" },
+  ])("keeps unsupported HTML ownership across a Markdown $kind", ({ body, kind }) => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(`<custom>\n\n${body}\n\n</custom>`);
+    expect(plainText).toContain("<sup>x</sup>");
+    const block = blocks.find((value) => value.type === kind);
+    expect(block).toBeDefined();
+    const text =
+      block?.type === "blockquote" && block.blocks[0]?.type === "paragraph"
+        ? block.blocks[0].text
+        : block?.type === "table"
+          ? block.cells[1]?.[0]?.text
+          : undefined;
+    expect(text).toEqual(expect.arrayContaining([{ type: "bold", text: "x" }]));
+  });
+
+  it("keeps HTML active in a table before an unsupported wrapper", () => {
+    const blocks = blocksFor("| Header |\n| --- |\n| <sup>**x**</sup> |\n\n<custom>after</custom>");
+    expect(blocks[0]).toMatchObject({
+      type: "table",
+      cells: [
+        [{ text: "Header" }],
+        [{ text: { type: "superscript", text: { type: "bold", text: "x" } } }],
+      ],
+    });
   });
 
   it("counts rowspan carryover toward the table column limit", () => {
@@ -272,6 +693,38 @@ describe("block HTML islands", () => {
     const wideRow = Array.from({ length: 21 }, (_, i) => `<td>c${i}</td>`).join("");
     const block = single(`<table><tr>${wideRow}</tr></table>`);
     expect(block.type).toBe("pre");
+  });
+
+  it("aligns Unicode and expands colspan in over-wide HTML tables", () => {
+    const header = [
+      '<th colspan="2">Name</th>',
+      ...Array.from({ length: 19 }, (_value, index) => `<th>H${index + 3}</th>`),
+    ].join("");
+    const values = [
+      "小明",
+      "✅",
+      "⌚",
+      "⚽",
+      "👨‍👩‍👧",
+      "🇨🇳",
+      "1⃣",
+      "1️⃣",
+      "❤",
+      "❤️",
+      "©",
+      "©️",
+      "cafe\u0301",
+      ...Array.from({ length: 8 }, (_value, index) => String(index + 14)),
+    ];
+    const row = values.map((value) => `<td>${value}</td>`).join("");
+    const block = single(`<table><tr>${header}</tr><tr>${row}</tr></table>`);
+    expect(block.type).toBe("pre");
+    if (block.type !== "pre") {
+      return;
+    }
+    const lines = block.text.split("\n");
+    expect(lines.every((line) => line.split("|").length === 23)).toBe(true);
+    expect(new Set(lines.map((line) => stringWidth(line))).size).toBe(1);
   });
 
   it("emits anchor_link nodes for fragment hrefs", () => {

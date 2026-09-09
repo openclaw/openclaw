@@ -3,21 +3,16 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBrowserActExecutionBudgetMs } from "../../browser/act-policy.js";
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
+  runBrowserCliCommand,
   parseBrowserNonNegativeIntegerOption,
   parseBrowserPositiveIntegerOption,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
-import {
-  callBrowserAct,
-  logBrowserActionResult,
-  readFields,
-  resolveBrowserActionContext,
-} from "./shared.js";
+import { runBrowserAction, readFields, resolveBrowserActionContext } from "./shared.js";
 
 type BrowserWaitLoadState = "load" | "domcontentloaded" | "networkidle";
 
@@ -48,12 +43,12 @@ export function registerBrowserFormWaitEvalCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
+      await runBrowserCliCommand(async () => {
         const fields = await readFields({
           fields: opts.fields,
           fieldsFile: opts.fieldsFile,
         });
-        const result = await callBrowserAct<{ result?: unknown }>({
+        await runBrowserAction({
           parent,
           profile,
           body: {
@@ -61,12 +56,9 @@ export function registerBrowserFormWaitEvalCommands(
             fields,
             targetId: normalizeOptionalString(opts.targetId),
           },
+          successMessage: `filled ${fields.length} field(s)`,
         });
-        logBrowserActionResult(parent, result, `filled ${fields.length} field(s)`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   browser
@@ -89,7 +81,7 @@ export function registerBrowserFormWaitEvalCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (selector: string | undefined, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
+      await runBrowserCliCommand(async () => {
         const sel = normalizeOptionalString(selector);
         const load = parseBrowserWaitLoadState(opts.load);
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
@@ -110,17 +102,13 @@ export function registerBrowserFormWaitEvalCommands(
           targetId: normalizeOptionalString(opts.targetId),
           timeoutMs,
         };
-        const result = await callBrowserAct<{ result?: unknown }>({
+        await runBrowserAction({
           parent,
           profile,
           body: request,
-          timeoutMs: resolveBrowserActExecutionBudgetMs(request),
+          successMessage: "wait complete",
         });
-        logBrowserActionResult(parent, result, "wait complete");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   browser
@@ -144,9 +132,9 @@ export function registerBrowserFormWaitEvalCommands(
         defaultRuntime.exit(1);
         return;
       }
-      try {
+      await runBrowserCliCommand(async () => {
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const result = await callBrowserAct<{ result?: unknown }>({
+        await runBrowserAction({
           parent,
           profile,
           body: {
@@ -156,16 +144,7 @@ export function registerBrowserFormWaitEvalCommands(
             targetId: normalizeOptionalString(opts.targetId),
             timeoutMs,
           },
-          timeoutMs,
         });
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
-          return;
-        }
-        defaultRuntime.writeJson(result.result ?? null);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

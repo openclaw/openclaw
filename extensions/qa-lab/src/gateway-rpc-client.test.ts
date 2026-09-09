@@ -97,6 +97,7 @@ describe("startQaGatewayRpcClient", () => {
       mode: "backend",
       scopes: ["operator.admin"],
     });
+    expect(gatewayRpcMock.clients[0]?.options).not.toHaveProperty("sharedStateMode");
     expect(gatewayRpcMock.startGatewayClientWhenEventLoopReady).toHaveBeenCalledWith(
       gatewayRpcMock.clients[0],
       { timeoutMs: 20_000 },
@@ -111,15 +112,45 @@ describe("startQaGatewayRpcClient", () => {
     expect(requestOptions.timeoutMs).toBeLessThanOrEqual(45_000);
   });
 
-  it("can request a narrower operator scope for authorization-sensitive probes", async () => {
+  it.each([{ scopes: ["operator.read", "operator.write"] }, { scopes: [] }])(
+    "forwards ephemeral device identity and explicit scopes $scopes without shared-state writes",
+    async ({ scopes }) => {
+      const deviceIdentity = {
+        deviceId: "qa-observer-device",
+        publicKeyPem: "fixture-public-key",
+        privateKeyPem: "fixture-private-key",
+      };
+      const client = await startQaGatewayRpcClient({
+        wsUrl: "ws://proof-candidate:19879",
+        token: "qa-token",
+        logs: () => "",
+        deviceIdentity,
+        scopes,
+      });
+
+      expect(gatewayRpcMock.clients[0]?.options).toMatchObject({
+        deviceIdentity,
+        scopes,
+        sharedStateMode: "read-only",
+      });
+      await client.stop();
+    },
+  );
+
+  it("preserves explicit null identity without enabling read-only state", async () => {
     const client = await startQaGatewayRpcClient({
       wsUrl: "ws://127.0.0.1:18789",
       token: "qa-token",
-      logs: () => "qa logs",
-      scopes: ["operator.write"],
+      logs: () => "",
+      deviceIdentity: null,
+      scopes: ["operator.read"],
     });
 
-    expect(gatewayRpcMock.clients[0]?.options.scopes).toEqual(["operator.write"]);
+    expect(gatewayRpcMock.clients[0]?.options).toMatchObject({
+      deviceIdentity: null,
+      scopes: ["operator.read"],
+    });
+    expect(gatewayRpcMock.clients[0]?.options).not.toHaveProperty("sharedStateMode");
     await client.stop();
   });
 
