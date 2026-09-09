@@ -30,6 +30,8 @@ export type NodeWorkerWorkspaceExecInput = {
   gatewayNamespace: string;
   environmentId: string;
   sessionId: string;
+  sessionKey?: string;
+  preparationKey?: string;
   generation: number;
   argv: string[];
   input?: string;
@@ -74,12 +76,28 @@ export function parseNodeWorkerWorkspaceExecInput(
     !hasExactOwnKeys(
       value,
       ["gatewayNamespace", "environmentId", "sessionId", "generation", "argv"],
-      ["input", "timeoutMs", "resetWorkspace", "transfer", "seed"],
+      ["input", "timeoutMs", "resetWorkspace", "transfer", "seed", "sessionKey", "preparationKey"],
     )
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker workspace request");
   }
   const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
+  if (
+    value.preparationKey !== undefined &&
+    (typeof value.preparationKey !== "string" || !/^[a-f0-9]{64}$/u.test(value.preparationKey))
+  ) {
+    throw new Error("INVALID_REQUEST: preparationKey must be a SHA-256 hex digest");
+  }
+  if (
+    value.sessionKey !== undefined &&
+    (typeof value.sessionKey !== "string" ||
+      value.sessionKey.length === 0 ||
+      value.sessionKey.length > 1_024 ||
+      value.sessionKey.trim() !== value.sessionKey ||
+      value.sessionKey.includes("\0"))
+  ) {
+    throw new Error("INVALID_REQUEST: sessionKey must be a bounded non-empty identifier");
+  }
   if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
     throw new Error("INVALID_REQUEST: gatewayNamespace must be a safe bounded path component");
   }
@@ -254,6 +272,8 @@ export function parseNodeWorkerWorkspaceExecInput(
     gatewayNamespace,
     environmentId: requireIdentifier(value.environmentId, "environmentId"),
     sessionId: requireIdentifier(value.sessionId, "sessionId"),
+    ...(value.sessionKey === undefined ? {} : { sessionKey: value.sessionKey }),
+    ...(value.preparationKey === undefined ? {} : { preparationKey: value.preparationKey }),
     generation: value.generation,
     argv: [...value.argv],
     ...(value.input === undefined ? {} : { input: value.input }),

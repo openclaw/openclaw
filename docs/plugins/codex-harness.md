@@ -53,7 +53,7 @@ dynamic tools routed through the app-server `item/tool/call` bridge. An
 ordinary OpenClaw sandbox or restricted tool policy disables native code mode
 unless you opt into the experimental sandbox exec-server path. Node-backed
 `remote-exec` on a paired device or cloud worker instead uses its
-placement-owned environment without that experimental flag.
+placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection; ending the connection removes that Codex state and preserves the prepared project home.
 
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command

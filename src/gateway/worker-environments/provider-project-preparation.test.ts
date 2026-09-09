@@ -10,6 +10,7 @@ import type {
   WorkerNodeEnrollment,
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
@@ -50,6 +51,63 @@ function createService(
 
 describe("worker provider project preparation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("replays an inherited prepared intent with its exact admitted target and artifacts", async () => {
+    const git = await repository("prepared-inherited-replay");
+    const provision = vi.fn(async () => {
+      throw new Error("fixture allocation unavailable");
+    });
+    const provider = support.createProvider({
+      requiresNodeEnrollment: true,
+      provisionBeforeInstallation: true,
+      supportsProjectPreparation: () => true,
+      resolvePreparationTarget: (_profile, machineClass, os) => ({
+        machineClass: machineClass ?? "small",
+        platform: os ?? "linux",
+      }),
+      provision,
+    });
+    const service = support.createService(provider, {
+      projectNamespace: "gateway",
+      prepareNodeEnrollment: async () => {
+        throw new Error("fixture must not enroll");
+      },
+      prepareNodeArtifacts: async () => ({
+        artifacts: {
+          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
+          enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
+          workerBundleHash: support.BUNDLE_HASH,
+          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
+          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
+          protocolFeatures: [...support.BUNDLE_ARTIFACT.protocolFeatures],
+        },
+        assertCurrent: () => {},
+      }),
+    });
+    const profile = {
+      profileId: "development",
+      providerId: provider.id,
+      profileSnapshot: { install: "bundle", settings: {}, machineClass: "large" },
+    };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(
+        service.createFromProfileSnapshot(
+          profile,
+          "prepared-replay",
+          undefined,
+          undefined,
+          git.root,
+        ),
+      ).rejects.toThrow("fixture allocation unavailable");
+    }
+    expect(provision).toHaveBeenCalledTimes(2);
+    const rows = support.testState.store.list();
+    expect(rows).toHaveLength(1);
+    expect(readWorkerProjectPreparation(rows[0]?.profileSnapshot.project)?.target).toEqual({
+      machineClass: "large",
+      platform: "linux",
+    });
+  });
 
   it.each(["runtime-bootstrap", "runtime-worker", "enrollment-bootstrap"] as const)(
     "closes changed %s grants without publishing a different prepared runtime identity",

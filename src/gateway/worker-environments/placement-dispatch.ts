@@ -197,6 +197,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             projectPath,
             signal,
             request.os,
+            request.runSetupScript,
           )
         : await environments.create(
             request.profileId,
@@ -206,6 +207,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             projectPath,
             signal,
             request.os,
+            request.runSetupScript,
           );
       return await startup.continueProvisionedDispatch({
         request,

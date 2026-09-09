@@ -194,6 +194,7 @@ export function createService(
       | "resolveSshIdentity"
       | "ensureNodeWorkerBundle"
       | "prepareNodeBootstrap"
+      | "prepareNodeArtifacts"
       | "prepareNodeRuntime"
       | "closeNodeRuntime"
       | "prepareNodeEnrollment"

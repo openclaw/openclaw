@@ -84,31 +84,36 @@ describe("worker placement dispatch", () => {
     expect(states).toEqual(["requested", "provisioning", "syncing", "starting", "active"]);
   });
 
-  it("provisions an inherited dispatch from the exact durable profile snapshot", async () => {
-    const harness = createTestHarness();
-    const inheritedProfile = {
-      providerId: "fake",
-      profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
-    };
+  it.each([false, true])(
+    "provisions an inherited dispatch with its exact profile and setup authority (%s)",
+    async (runSetupScript) => {
+      const harness = createTestHarness();
+      const inheritedProfile = {
+        providerId: "fake",
+        profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
+      };
 
-    await harness.service.dispatch({
-      ...REQUEST,
-      inheritedProfile,
-      machineClass: "beast",
-      os: "os-a",
-    });
+      await harness.service.dispatch({
+        ...REQUEST,
+        inheritedProfile,
+        runSetupScript,
+        machineClass: "beast",
+        os: "os-a",
+      });
 
-    expect(harness.environments.create).not.toHaveBeenCalled();
-    expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
-      { profileId: REQUEST.profileId, ...inheritedProfile },
-      expect.stringMatching(/^session-dispatch:/u),
-      "beast",
-      REQUEST.executionMode,
-      path.join(root, "workspace"),
-      undefined,
-      "os-a",
-    );
-  });
+      expect(harness.environments.create).not.toHaveBeenCalled();
+      expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
+        { profileId: REQUEST.profileId, ...inheritedProfile },
+        expect.stringMatching(/^session-dispatch:/u),
+        "beast",
+        REQUEST.executionMode,
+        path.join(root, "workspace"),
+        undefined,
+        "os-a",
+        runSetupScript,
+      );
+    },
+  );
 
   it("normalizes profile OS overrides and rejects choices without a profile", () => {
     const cfg = { cloudWorkers: { profiles: { cloud: { provider: "fake" } } } };

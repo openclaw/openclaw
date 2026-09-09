@@ -81,6 +81,7 @@ export type WorkerEnvironmentServiceContract = {
     projectPath?: string,
     signal?: AbortSignal,
     os?: string,
+    runSetupScript?: boolean,
   ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   destroyUnattached(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;

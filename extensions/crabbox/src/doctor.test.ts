@@ -225,7 +225,8 @@ describe("Crabbox warm-image doctor", () => {
   it.each([
     { name: "healthy checkpoint", operation: undefined, severity: undefined },
     { name: "fresh capture", operation: "capture", severity: "info" },
-    { name: "paused capture", operation: "stale", severity: "warning" },
+    { name: "long-running capture", operation: "stale", severity: "warning" },
+    { name: "long-running scrub", operation: "stale-scrub", severity: "warning" },
     { name: "failed capture", operation: "uncertain", severity: "warning" },
     { name: "pending retirement", operation: "retire", severity: "warning" },
   ] as const)(
@@ -252,11 +253,17 @@ describe("Crabbox warm-image doctor", () => {
                   : {
                       type: "capture" as const,
                       id: "capture-selector",
-                      startedAtMs: now - (operation === "stale" ? 1_200_000 : 0),
+                      startedAtMs:
+                        now -
+                        (operation === "stale" || operation === "stale-scrub" ? 1_200_000 : 0),
                       leaseId: "cbx_capture",
                       provider: "aws",
                       phase:
-                        operation === "uncertain" ? ("uncertain" as const) : ("creating" as const),
+                        operation === "uncertain"
+                          ? ("uncertain" as const)
+                          : operation === "stale-scrub"
+                            ? ("scrubbing" as const)
+                            : ("creating" as const),
                     },
             }
           : {}),
@@ -288,10 +295,15 @@ describe("Crabbox warm-image doctor", () => {
             ]
           : [],
       );
-      if (operation === "stale") {
+      if (operation === "uncertain") {
         expect(findings[0]?.fixHint).toContain(
           "--recover capture-selector --acknowledge-provider-cleanup",
         );
+      } else if (operation === "stale" || operation === "stale-scrub") {
+        expect(findings[0]?.fixHint).toContain("may still be");
+        expect(findings[0]?.message).not.toContain("paused");
+        expect(findings[0]?.fixHint).not.toContain("--recover");
+        expect(findings[0]?.fixHint).not.toContain("Stop the owning Gateway");
       }
       await check.repair?.(context, findings);
       expect(store.lookup("profile")).toEqual(record);
