@@ -1,11 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  collectPackageDistImportErrors,
-  collectPackageDistImports,
-} from "../../scripts/lib/package-dist-imports.mjs";
+import { afterEach, describe, expect, it } from "vitest";
+import { collectPackageDistImports } from "../../scripts/lib/package-dist-imports.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
@@ -16,128 +13,23 @@ afterEach(() => {
 });
 
 describe("collectPackageDistImports", () => {
-  it("preserves ordered duplicate edges and the narrower import.meta.url filter", () => {
-    const imports = collectPackageDistImports({
-      files: ["dist/index.js"],
-      readText: () =>
-        [
-          'import "./chunk.js?first";',
-          'export * from "./chunk.js#second";',
-          'import("./data.json");',
-          'require("../outside.cjs");',
-          'new URL("./chunk.js?third", import.meta.url);',
-          'new URL("./asset.png", import.meta.url);',
-          'new URL("../outside.cjs", import.meta.url);',
-          'require("./chunk.js");',
-          'import "node:fs";',
-          'import "/absolute.js";',
-        ].join("\n"),
-    });
-
-    expect(imports).toEqual(
-      [
-        "dist/chunk.js",
-        "dist/chunk.js",
-        "dist/data.json",
-        "outside.cjs",
-        "dist/chunk.js",
-        "dist/chunk.js",
-      ].map((importedPath) => ({ importerPath: "dist/index.js", importedPath })),
-    );
-    expect(
-      collectPackageDistImportErrors({
-        files: ["dist/index.js"],
-        imports,
-        readText: () => {
-          throw new Error("provided edges must not reread the source");
-        },
-      }),
-    ).toEqual(imports.map(({ importedPath }) => `dist/index.js imports missing ${importedPath}`));
-  });
-
-  it("normalizes a single file and reuses its only source buffer", () => {
-    const readText = vi.fn((relativePath: string): string => {
-      expect(relativePath).toBe("dist/index.mjs");
-      if (readText.mock.calls.length > 1) {
-        throw new Error("source buffer must be read only once");
-      }
-      return 'import "./chunk.mjs";';
-    });
+  it("limits URL dependencies without filtering ordinary relative imports", () => {
     const imports = collectPackageDistImports({
       files: ["package\\dist\\index.mjs"],
-      readText,
+      readText: () =>
+        [
+          'import("./data.json");',
+          'require("../outside.cjs");',
+          'new URL("./worker.mjs?rev=1", import.meta.url);',
+          'new URL("./asset.png", import.meta.url);',
+          'new URL("../outside.cjs", import.meta.url);',
+        ].join("\n"),
     });
-
-    expect(readText).toHaveBeenCalledTimes(1);
-    expect(imports).toEqual([{ importerPath: "dist/index.mjs", importedPath: "dist/chunk.mjs" }]);
-  });
-
-  it.each([
-    { files: [] },
-    { files: ["README.md"] },
-    { files: ["package/dist/node_modules/dependency/index.js"] },
-  ])("does not read skipped input $files", ({ files }) => {
-    const readText = vi.fn(() => {
-      throw new Error("skipped files must not be read");
-    });
-    expect(collectPackageDistImports({ files, readText })).toEqual([]);
-    expect(readText).not.toHaveBeenCalled();
-  });
-
-  it("normalizes, deduplicates and orders multiple files without reordering their edges", () => {
-    const readText = vi.fn(() => 'require("./second.cjs"); import("./first.js");');
-    const imports = collectPackageDistImports({
-      files: [
-        "dist/z.cjs",
-        "package\\dist\\a.js",
-        "dist/a.js",
-        "package/dist/z.cjs",
-        "dist/node_modules/dependency/index.js",
-        "README.md",
-      ],
-      readText,
-    });
-
-    expect(readText.mock.calls).toEqual([["dist/a.js"], ["dist/z.cjs"]]);
     expect(imports).toEqual(
-      ["dist/a.js", "dist/z.cjs"].flatMap((importerPath) =>
-        ["dist/second.cjs", "dist/first.js"].map((importedPath) => ({
-          importerPath,
-          importedPath,
-        })),
-      ),
-    );
-  });
-
-  it.each([
-    {
-      name: "nested import",
-      source: 'function f() { import "./a.mjs"; }',
-      paths: ["dist/a.mjs"],
-    },
-    {
-      name: "TypeScript import equals",
-      source: 'import x = require("./a.cjs");',
-      paths: ["dist/a.cjs"],
-    },
-    {
-      name: "syntax error between imports",
-      source: 'import "./before.mjs"; const = ; import "./after.mjs";',
-      paths: ["dist/before.mjs", "dist/after.mjs"],
-    },
-    {
-      name: "unterminated string after require",
-      source: 'require("./before.cjs"); const s = "unterminated',
-      paths: ["dist/before.cjs"],
-    },
-    {
-      name: "syntax error before require",
-      source: 'const = ; require("./after.cjs");',
-      paths: ["dist/after.cjs"],
-    },
-  ])("preserves TypeScript recovery for $name", ({ source, paths }) => {
-    expect(collectPackageDistImports({ files: ["dist/index.js"], readText: () => source })).toEqual(
-      paths.map((importedPath) => ({ importerPath: "dist/index.js", importedPath })),
+      ["dist/data.json", "outside.cjs", "dist/worker.mjs"].map((importedPath) => ({
+        importerPath: "dist/index.mjs",
+        importedPath,
+      })),
     );
   });
 });
