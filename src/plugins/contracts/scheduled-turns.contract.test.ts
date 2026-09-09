@@ -258,6 +258,85 @@ describe("plugin scheduled turns", () => {
     expect(getCronAddBody().name).toBe("plugin:workflow-plugin:agent:main:main:daily-nudge");
   });
 
+  it("pins an explicit delivery target instead of using mutable session routing", async () => {
+    mockCronAdd(makeCronJob({ id: "job-route-bound" }));
+
+    await scheduleWorkflowTurn({
+      schedule: {
+        deliveryMode: "announce",
+        deliveryTarget: {
+          channel: "telegram",
+          accountId: "alerts",
+          to: "42",
+          threadId: "topic-7",
+        },
+      },
+    });
+
+    expect(getCronAddBody().delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      accountId: "alerts",
+      to: "42",
+      threadId: "topic-7",
+    });
+  });
+
+  it("maps a retained one-shot idempotency key to a stable Cron declaration", async () => {
+    mockCronAdd(makeCronJob({ id: "job-idempotent" }));
+
+    await scheduleWorkflowTurn({
+      schedule: {
+        idempotencyKey: "handoff-1",
+        name: "resume-handoff-1",
+        deleteAfterRun: false,
+      },
+    });
+    const first = getCronAddBody();
+    workflowMocks.cronAdd.mockClear();
+    await scheduleWorkflowTurn({
+      schedule: {
+        idempotencyKey: "handoff-1",
+        name: "resume-handoff-1",
+        deleteAfterRun: false,
+      },
+    });
+    const second = getCronAddBody();
+
+    expect(first.declarationKey).toMatch(/^plugin-session-turn:[a-f0-9]{64}$/u);
+    expect(second.declarationKey).toBe(first.declarationKey);
+    expect(first.deleteAfterRun).toBe(false);
+  });
+
+  it("preserves a retained idempotent one-shot through plugin restart cleanup", async () => {
+    mockCronAdd(makeCronJob({ id: "job-idempotent-restart" }));
+    await scheduleWorkflowTurn({
+      schedule: {
+        idempotencyKey: "handoff-restart",
+        deleteAfterRun: false,
+      },
+    });
+
+    await expect(
+      cleanupPluginSessionSchedulerJobs({
+        pluginId: WORKFLOW_PLUGIN_ID,
+        reason: "restart",
+      }),
+    ).resolves.toEqual([]);
+
+    expect(workflowMocks.cronRemove).not.toHaveBeenCalled();
+    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([]);
+  });
+
+  it("rejects an idempotent one-shot that would delete its durable claim", async () => {
+    await expect(
+      scheduleWorkflowTurn({
+        schedule: { idempotencyKey: "handoff-1", deleteAfterRun: true },
+      }),
+    ).resolves.toBeUndefined();
+    expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
+  });
+
   it("builds payloads accepted by the real cron.add protocol validator", async () => {
     const { validateCronAddParams } =
       await import("../../../packages/gateway-protocol/src/index.js");

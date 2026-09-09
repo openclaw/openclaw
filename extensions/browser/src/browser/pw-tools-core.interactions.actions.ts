@@ -98,6 +98,26 @@ export async function clickCoordsViaPlaywright(
   });
 }
 
+export async function dragCoordsViaPlaywright(
+  opts: GuardedInteractionOptions & {
+    x: number;
+    y: number;
+    endX: number;
+    endY: number;
+  },
+): Promise<void> {
+  const page = await getRestoredPageForTarget(opts);
+  await runGuardedPageInteraction(page, opts, async () => {
+    await page.mouse.move(opts.x, opts.y);
+    await page.mouse.down();
+    try {
+      await page.mouse.move(opts.endX, opts.endY, { steps: 8 });
+    } finally {
+      await page.mouse.up();
+    }
+  });
+}
+
 async function runGuardedPageInteraction<T>(
   page: Page,
   opts: GuardedInteractionOptions,

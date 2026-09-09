@@ -103,6 +103,10 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 
 ## Deployment patterns
 
+### Human browser handoff
+
+An owner-authorized WhatsApp DM can receive a readable HTTPS **Open browser** link when an agent pauses a managed browser tab for live human verification. The shared mobile viewer requires normal Gateway authentication and returns the continuation to the same WhatsApp route. See [Human browser intervention](/tools/browser-human-intervention).
+
 <AccordionGroup>
   <Accordion title="Dedicated number (recommended)">
     - separate WhatsApp identity for OpenClaw

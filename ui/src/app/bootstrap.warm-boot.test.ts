@@ -38,7 +38,7 @@ describe("warm boot profile validation", () => {
       { cachedProfileId: null, profileId: null, clears: 0 },
       { cachedProfileId: "profile-a", profileId: "profile-b", clears: 0, credentialsChanged: true },
     ].map((entry) => Object.assign(entry, { pathname: "/chat", warmBoot: true })),
-    ...["/focus/terminal", "/approve/exec%3A1"].map((pathname) => ({
+    ...["/focus/terminal", "/focus/browser/handoff-1", "/approve/exec%3A1"].map((pathname) => ({
       cachedProfileId: "profile-a",
       profileId: "profile-b",
       clears: 0,

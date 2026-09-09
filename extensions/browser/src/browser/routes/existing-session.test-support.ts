@@ -73,11 +73,13 @@ export function createExistingSessionAgentSharedModule() {
         ctx,
         enforceCurrentUrlAllowed,
         req,
+        signal,
         run,
       }: {
         ctx: BrowserRouteContext;
         enforceCurrentUrlAllowed?: boolean;
         req: BrowserRequest;
+        signal?: AbortSignal;
         run: (args: unknown) => Promise<void>;
       }) => {
         if (enforceCurrentUrlAllowed) {
@@ -93,7 +95,7 @@ export function createExistingSessionAgentSharedModule() {
           profileCtx: existingSessionRouteState.profileCtx,
           cdpUrl: "http://127.0.0.1:18800",
           tab: existingSessionRouteState.tab,
-          signal: req.signal ?? new AbortController().signal,
+          signal: signal ?? req.signal ?? new AbortController().signal,
           resolveTabUrl: vi.fn(async (fallbackUrl?: string) => fallbackUrl ?? routeStateUrl()),
         });
       },

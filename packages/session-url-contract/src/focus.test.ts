@@ -39,6 +39,11 @@ describe("Control UI focus locations", () => {
 
   it.each([
     ["terminal", "/focus/terminal", { kind: "terminal" }],
+    [
+      "browser handoff",
+      "/focus/browser/handoff%3Aone",
+      { kind: "browser", handoffId: "handoff:one" },
+    ],
     ["desktop", "/focus/desktop/", { kind: "desktop", control: false, selector: null }],
     [
       "desktop source",
@@ -93,6 +98,8 @@ describe("Control UI focus locations", () => {
     "/focus",
     "/focus/unknown",
     "/focus/terminal/extra",
+    "/focus/browser",
+    "/focus/browser/%",
     "/focus/desktop/source",
     "/focus/desktop/session/%",
     "/focus/desktop/control/unknown/value",
@@ -160,6 +167,12 @@ describe("buildControlUiFocusPath", () => {
       "/openclaw/focus/dashboard/roboclaw/main?catalog=beam#pane",
     ],
     ["terminal", { kind: "terminal" }, "/openclaw", "/openclaw/focus/terminal"],
+    [
+      "browser handoff",
+      { kind: "browser", handoffId: "handoff:one" },
+      "/openclaw",
+      "/openclaw/focus/browser/handoff%3Aone",
+    ],
     ["desktop", { kind: "desktop" }, "", "/focus/desktop"],
     [
       "desktop source",

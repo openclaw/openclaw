@@ -18,6 +18,7 @@ type ControlUiFocusDesktopBuildTarget = {
 export type ControlUiFocusBuildTarget =
   | ControlUiFocusDashboardTarget
   | { kind: "terminal" }
+  | { kind: "browser"; handoffId: string }
   | ControlUiFocusDesktopBuildTarget;
 
 export type ControlUiFocusTarget =
@@ -26,6 +27,7 @@ export type ControlUiFocusTarget =
       route: { pathname: string; search: string; hash: string };
     }
   | { kind: "terminal" }
+  | { kind: "browser"; handoffId: string }
   | {
       kind: "desktop";
       control: boolean;
@@ -79,6 +81,9 @@ export function inferControlUiFocusBasePath(pathname: string): string | null {
     if (rest[0] === "terminal") {
       return rest.length === 1;
     }
+    if (rest[0] === "browser") {
+      return rest.length === 2 && decodeFocusValue(rest[1] ?? "").ok;
+    }
     if (rest[0] === "dashboard") {
       return rest.length >= 2;
     }
@@ -130,6 +135,10 @@ export function buildControlUiFocusPath(
   if (target.kind === "terminal") {
     return `${root}/terminal`;
   }
+  if (target.kind === "browser") {
+    const handoffId = nonEmptyValue(target.handoffId);
+    return handoffId ? `${root}/browser/${encodeURIComponent(handoffId)}` : null;
+  }
   if (target.kind === "desktop") {
     const control = target.control === true ? "/control" : "";
     const source = nonEmptyValue(target.source);
@@ -169,6 +178,21 @@ export function parseControlUiFocusLocation(
   const rest = normalizedPath.slice(root.length + 1);
   if (rest === "terminal") {
     return { status: "valid", basePath: resolvedBasePath, target: { kind: "terminal" } };
+  }
+  if (rest.startsWith("browser/")) {
+    const segments = rest.split("/");
+    if (segments.length !== 2) {
+      return { status: "unsupported", basePath: resolvedBasePath };
+    }
+    const decoded = decodeFocusValue(segments[1] ?? "");
+    if (decoded.ok && decoded.value) {
+      return {
+        status: "valid",
+        basePath: resolvedBasePath,
+        target: { kind: "browser", handoffId: decoded.value },
+      };
+    }
+    return { status: "unsupported", basePath: resolvedBasePath };
   }
   if (rest.startsWith("dashboard/") && rest.length > "dashboard/".length) {
     return {

@@ -26,11 +26,13 @@ import {
   type AnyAgentTool,
   type browserAct,
   BrowserToolOutputSchema,
+  browserTabs,
   createBrowserToolSchema,
   resolveBrowserToolCapabilities,
   type BrowserToolCapabilities,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
+  jsonResult,
   readPositiveIntegerParam,
   readStringParam,
   readStringValue,
@@ -41,11 +43,24 @@ import {
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
+import { humanInterventionHandoffOwner } from "./human-intervention/constants.js";
 
 type BrowserTabIdentity = { targetId: string; profile: string } & (
   | { target: "host" }
   | { target: "node"; node: string }
 );
+
+class BrowserAutomationLease implements AsyncDisposable {
+  private release?: () => Promise<void>;
+
+  setRelease(release: () => Promise<void>): void {
+    this.release = release;
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.release?.();
+  }
+}
 
 function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
@@ -202,6 +217,28 @@ export function createBrowserTool(
     agentSessionKey?: string;
     runToolBinding?: unknown;
     toolCapabilities?: BrowserToolCapabilities;
+    automationGate?: {
+      beginAutomation: (browser: {
+        target: "host";
+        profile: string;
+        targetId: string;
+      }) => Promise<() => Promise<void>>;
+    };
+    humanIntervention?: {
+      request: (input: {
+        profile: string;
+        targetId: string;
+        reason: string;
+        resolveHostname: () => Promise<string>;
+      }) => Promise<{ record: { id: string; state: string; hostname: string }; launchUrl: string }>;
+      waitForHuman: (input: {
+        id: string;
+        launchUrl: string;
+        hostname: string;
+        reason: string;
+        handoffOwner: string;
+      }) => Promise<void>;
+    };
   },
 ): AnyAgentTool {
   const bindingResult =
@@ -236,11 +273,13 @@ export function createBrowserTool(
   return {
     label: "Browser",
     name: "browser",
+    ...(opts?.humanIntervention ? { turnHandoffOwner: humanInterventionHandoffOwner } : {}),
     resultContentSource: "network",
     description: describeBrowserTool({ targetDefault, hostHint, capabilities }),
     parameters: createBrowserToolSchema(capabilities),
     outputSchema: BrowserToolOutputSchema,
-    execute: async (_toolCallId, args, signal) => {
+    execute: async (toolCallId, args, signal) => {
+      await using automationLease = new BrowserAutomationLease();
       const params = bindingResult?.ok
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, bindingResult.binding)
         : (args as Record<string, unknown>);
@@ -276,6 +315,12 @@ export function createBrowserTool(
           throw new Error(
             'system profile import must run on the host; omit target or use target="host".',
           );
+        }
+        target = "host";
+      }
+      if (action === "handoff") {
+        if (target === "sandbox" || target === "node" || requestedNode) {
+          throw new Error('human browser handoff must use target="host".');
         }
         target = "host";
       }
@@ -344,7 +389,6 @@ export function createBrowserTool(
           `action=${action} is not supported for existing-session profiles; use action=snapshot to inspect this page, or select a managed browser profile for ${action}.`,
         );
       }
-      const nodeRoute = nodeTarget ? createBrowserNodeSessionTabRoute(nodeTarget) : undefined;
       const toolTimeoutMs = resolveBrowserToolTimeoutMs({
         requestedTimeoutMs,
         action,
@@ -353,6 +397,69 @@ export function createBrowserTool(
         isNodeProxy: proxyRequest !== null,
         resolvedBrowser,
       });
+      const managedHost = !proxyRequest && baseUrl === undefined && target !== "sandbox";
+      if (
+        managedHost &&
+        opts?.automationGate &&
+        action !== "handoff" &&
+        !["doctor", "status", "profiles"].includes(action)
+      ) {
+        automationLease.setRelease(
+          await opts.automationGate.beginAutomation({
+            target: "host",
+            profile: effectiveProfile,
+            targetId: readStringParam(params, "targetId") ?? "*",
+          }),
+        );
+      }
+      if (action === "handoff") {
+        if (!managedHost || !opts?.humanIntervention) {
+          throw new Error("Human browser handoff is unavailable for this browser target");
+        }
+        if (isUserBrowserProfile) {
+          throw new Error("Human browser handoff is unavailable for existing-session profiles");
+        }
+        const targetId = readStringParam(params, "targetId", { required: true });
+        const reason = readStringParam(params, "reason") ?? "Human verification required";
+        const handoff = await opts.humanIntervention.request({
+          profile: effectiveProfile,
+          targetId,
+          reason,
+          resolveHostname: async () => {
+            const tabs = await browserTabs(baseUrl, {
+              profile: effectiveProfile,
+              timeoutMs: toolTimeoutMs,
+              signal,
+            });
+            const tab = tabs.tabs.find(
+              (candidate) => readStringValue(candidate.targetId) === targetId,
+            );
+            if (!tab) {
+              throw new Error(`Browser tab not found for human handoff: ${targetId}`);
+            }
+            const url = readStringValue(tab.url);
+            return url ? URL.parse(url)?.hostname || "this site" : "this site";
+          },
+        });
+        const hostname = handoff.record.hostname;
+        await opts.humanIntervention.waitForHuman({
+          id: handoff.record.id,
+          launchUrl: handoff.launchUrl,
+          hostname,
+          reason,
+          handoffOwner: humanInterventionHandoffOwner(toolCallId),
+        });
+        return jsonResult({
+          ok: true,
+          waitingForHuman: true,
+          handoffId: handoff.record.id,
+          state: handoff.record.state,
+          launchUrl: handoff.launchUrl,
+          profile: effectiveProfile,
+          targetId,
+        });
+      }
+      const nodeRoute = nodeTarget ? createBrowserNodeSessionTabRoute(nodeTarget) : undefined;
       const sessionTabs = createBrowserToolSessionTabs({
         sessionKey: opts?.agentSessionKey,
         requestedProfile: profile,

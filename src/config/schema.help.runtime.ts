@@ -55,6 +55,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Chrome extension relay authentication compatibility settings. Keep the legacy window only while older paired extensions or external CDP clients still need it.",
   "browser.extensionRelay.allowLegacyAuth":
     "Temporarily accepts legacy Bearer, Basic, and token-subprotocol relay authentication. Default: true for one migration window. Set false after every extension and external CDP client uses Browser Relay Authentication v2.",
+  "browser.humanIntervention":
+    "Owner-operated browser handoff settings for completing a blocked step from another device while OpenClaw keeps the managed browser tab alive.",
+  "browser.humanIntervention.enabled":
+    "Enables the browser handoff action and its restricted Control UI viewer. Requires gateway.publicOrigin to be an HTTPS origin that the phone can reach.",
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":

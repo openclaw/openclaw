@@ -22,6 +22,7 @@ import {
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
+import { readBrowserControlAuthoritySignal } from "../control-authority.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import {
   assertBrowserNavigationResultAllowed,
@@ -341,6 +342,8 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
       return null;
     case "clickCoords":
       return null;
+    case "dragCoords":
+      return "dragCoords is not supported for existing-session browser profiles";
     case "type":
       if (action.selector) {
         return EXISTING_SESSION_LIMITS.act.typeSelector;
@@ -398,6 +401,11 @@ export function registerBrowserAgentActRoutes(
 ) {
   app.post("/act", async (req, res) => {
     const body = readBody(req);
+    const controlAuthoritySignal = readBrowserControlAuthoritySignal(body);
+    const authorityBoundSignal =
+      req.signal && controlAuthoritySignal
+        ? AbortSignal.any([req.signal, controlAuthoritySignal])
+        : (req.signal ?? controlAuthoritySignal);
     const kindRaw = toStringOrEmpty(body.kind);
     if (!isActKind(kindRaw)) {
       return jsonActError(res, 400, ACT_ERROR_CODES.kindRequired, "kind is required");
@@ -433,6 +441,7 @@ export function registerBrowserAgentActRoutes(
 
     await withRouteTabContext({
       req,
+      ...(authorityBoundSignal ? { signal: authorityBoundSignal } : {}),
       res,
       ctx,
       targetId,
@@ -567,6 +576,10 @@ export function registerBrowserAgentActRoutes(
                   }),
                 );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
+              case "dragCoords":
+                throw new Error(
+                  "dragCoords is not supported for existing-session browser profiles",
+                );
               case "type":
                 await runGuardedAction(async () => {
                   await fillChromeMcpElement({
@@ -734,6 +747,7 @@ export function registerBrowserAgentActRoutes(
               );
             case "click":
             case "clickCoords":
+            case "dragCoords":
               return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
             case "resize":
             case "close":

@@ -464,6 +464,10 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
 
 ## Deployment patterns
 
+### Human browser handoff
+
+An owner-authorized iMessage DM can receive an HTTPS **Open browser** link when an agent pauses a managed browser tab for live human verification. The link opens the shared mobile viewer; normal Gateway sign-in is still required, and completion returns to the originating iMessage route. See [Human browser intervention](/tools/browser-human-intervention).
+
 <AccordionGroup>
   <Accordion title="Dedicated bot macOS user (separate iMessage identity)">
     Use a dedicated Apple ID and macOS user so bot traffic is isolated from your personal Messages profile.

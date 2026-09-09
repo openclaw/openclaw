@@ -1,18 +1,23 @@
 // Schedules host hook turns requested by plugin hook contracts.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import {
   readCanonicalCronListPage,
   resolveCronListPageNextOffset,
 } from "../cron/service/list-page-validation.js";
-import type { CronJob, CronJobCreate } from "../cron/types.js";
+import type { CronJob, CronJobCreate, CronMessageChannel } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   deletePluginSessionSchedulerJob,
   registerPluginSessionSchedulerJob,
@@ -32,6 +37,7 @@ const PLUGIN_CRON_TAG_MARKER = ":tag:";
 const PLUGIN_CRON_CLEANUP_PAGE_SIZE = 200;
 const PLUGIN_CRON_CLEANUP_MAX_PAGES = 50;
 const PLUGIN_CRON_CLEANUP_MAX_SNAPSHOT_RESTARTS = 3;
+const PLUGIN_CRON_IDEMPOTENCY_PREFIX = "plugin-session-turn:";
 
 type ResolvedSessionTurnSchedule =
   | {
@@ -83,6 +89,51 @@ function resolveSessionEventDeliveryMode(deliveryMode: unknown): "none" | "annou
     return deliveryMode;
   }
   return undefined;
+}
+
+type ResolvedPluginSessionTurnDeliveryTarget = {
+  channel: CronMessageChannel;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
+function resolvePluginSessionTurnDeliveryTarget(value: unknown): {
+  target?: ResolvedPluginSessionTurnDeliveryTarget;
+  invalid: boolean;
+} {
+  if (value === undefined) {
+    return { invalid: false };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { invalid: true };
+  }
+  const candidate = asNullableRecord(value);
+  if (!candidate) {
+    return { invalid: true };
+  }
+  const channel = normalizeMessageChannel(normalizeOptionalString(candidate.channel));
+  const to = normalizeOptionalString(candidate.to);
+  const accountId = normalizeOptionalString(candidate.accountId);
+  const threadId = normalizeOptionalThreadValue(candidate.threadId);
+  if (
+    !channel ||
+    channel === "last" ||
+    !to ||
+    (candidate.accountId !== undefined && !accountId) ||
+    (candidate.threadId !== undefined && threadId === undefined)
+  ) {
+    return { invalid: true };
+  }
+  return {
+    invalid: false,
+    target: {
+      channel,
+      to,
+      ...(accountId ? { accountId } : {}),
+      ...(threadId !== undefined ? { threadId } : {}),
+    },
+  };
 }
 
 function formatScheduleLogContext(params: {
@@ -165,6 +216,21 @@ function buildPluginSchedulerTagPrefix(params: {
   sessionKey: string;
 }): string {
   return `${PLUGIN_CRON_NAME_PREFIX}${params.pluginId}${PLUGIN_CRON_TAG_MARKER}${params.tag}:${params.sessionKey}:`;
+}
+
+function buildPluginSessionTurnDeclarationKey(params: {
+  pluginId: string;
+  sessionKey: string;
+  idempotencyKey: string;
+}): string {
+  const digest = createHash("sha256")
+    .update(params.pluginId)
+    .update("\0")
+    .update(params.sessionKey)
+    .update("\0")
+    .update(params.idempotencyKey)
+    .digest("hex");
+  return `${PLUGIN_CRON_IDEMPOTENCY_PREFIX}${digest}`;
 }
 
 function isCronRemoveResult(
@@ -255,7 +321,24 @@ export async function schedulePluginSessionTurn(params: {
   }
   const rawDeliveryMode = (params.schedule as { deliveryMode?: unknown }).deliveryMode;
   const deliveryMode = resolveSessionEventDeliveryMode(rawDeliveryMode);
+  const deliveryTargetResult = resolvePluginSessionTurnDeliveryTarget(
+    params.schedule.deliveryTarget,
+  );
   const scheduleName = normalizeOptionalString(params.schedule.name);
+  const idempotencyKey = normalizeOptionalString(params.schedule.idempotencyKey);
+  if (
+    params.schedule.idempotencyKey !== undefined &&
+    (!idempotencyKey || idempotencyKey.length > 256)
+  ) {
+    log.warn(
+      `plugin session turn scheduling failed (${formatScheduleLogContext({
+        pluginId: params.pluginId,
+        sessionKey,
+        ...(scheduleName ? { name: scheduleName } : {}),
+      })}): invalid idempotencyKey`,
+    );
+    return undefined;
+  }
   if (rawDeliveryMode !== undefined && !deliveryMode) {
     log.warn(
       `plugin session turn scheduling failed (${formatScheduleLogContext({
@@ -266,6 +349,19 @@ export async function schedulePluginSessionTurn(params: {
     );
     return undefined;
   }
+  if (
+    deliveryTargetResult.invalid ||
+    (deliveryTargetResult.target !== undefined && deliveryMode === "none")
+  ) {
+    log.warn(
+      `plugin session turn scheduling failed (${formatScheduleLogContext({
+        pluginId: params.pluginId,
+        sessionKey,
+        ...(scheduleName ? { name: scheduleName } : {}),
+      })}): invalid deliveryTarget`,
+    );
+    return undefined;
+  }
   if (cronSchedule.kind === "cron" && params.schedule.deleteAfterRun === true) {
     log.warn(
       `plugin session turn scheduling failed (${formatScheduleLogContext({
@@ -273,6 +369,16 @@ export async function schedulePluginSessionTurn(params: {
         sessionKey,
         ...(scheduleName ? { name: scheduleName } : {}),
       })}): deleteAfterRun requires a one-shot schedule`,
+    );
+    return undefined;
+  }
+  if (idempotencyKey && (cronSchedule.kind !== "at" || params.schedule.deleteAfterRun !== false)) {
+    log.warn(
+      `plugin session turn scheduling failed (${formatScheduleLogContext({
+        pluginId: params.pluginId,
+        sessionKey,
+        ...(scheduleName ? { name: scheduleName } : {}),
+      })}): idempotent one-shot schedules require deleteAfterRun=false`,
     );
     return undefined;
   }
@@ -308,6 +414,13 @@ export async function schedulePluginSessionTurn(params: {
     ...(tag !== undefined ? { tag } : {}),
     ...(scheduleName ? { uniqueId: scheduleName } : {}),
   });
+  const declarationKey = idempotencyKey
+    ? buildPluginSessionTurnDeclarationKey({
+        pluginId: params.pluginId,
+        sessionKey,
+        idempotencyKey,
+      })
+    : undefined;
   const cronPayload: CronJobCreate["payload"] = {
     kind: "agentTurn",
     message,
@@ -316,6 +429,7 @@ export async function schedulePluginSessionTurn(params: {
   try {
     result = await cron.add({
       name: cronJobName,
+      ...(declarationKey ? { declarationKey } : {}),
       enabled: true,
       schedule: cronSchedule,
       sessionTarget: `session:${sessionKey}`,
@@ -325,7 +439,8 @@ export async function schedulePluginSessionTurn(params: {
       wakeMode: "now",
       delivery: {
         mode: cronDeliveryMode,
-        ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
+        ...(deliveryTargetResult.target ??
+          (cronDeliveryMode === "announce" ? { channel: "last" as const } : {})),
       },
     });
   } catch (error) {
@@ -343,22 +458,25 @@ export async function schedulePluginSessionTurn(params: {
     return undefined;
   }
   if (params.shouldCommit && !params.shouldCommit()) {
-    const removed = await removeScheduledSessionTurn({
-      cron,
-      jobId,
-      pluginId: params.pluginId,
-      sessionKey,
-      name: cronJobName,
-    });
-    if (!removed) {
-      log.warn(
-        `plugin session turn scheduling rollback failed (${formatScheduleLogContext({
-          pluginId: params.pluginId,
-          sessionKey,
-          name: cronJobName,
-          jobId,
-        })}): failed to remove stale scheduled session turn`,
-      );
+    const created = "created" in result ? result.created : true;
+    if (created) {
+      const removed = await removeScheduledSessionTurn({
+        cron,
+        jobId,
+        pluginId: params.pluginId,
+        sessionKey,
+        name: cronJobName,
+      });
+      if (!removed) {
+        log.warn(
+          `plugin session turn scheduling rollback failed (${formatScheduleLogContext({
+            pluginId: params.pluginId,
+            sessionKey,
+            name: cronJobName,
+            jobId,
+          })}): failed to remove stale scheduled session turn`,
+        );
+      }
     }
     return undefined;
   }
@@ -370,7 +488,14 @@ export async function schedulePluginSessionTurn(params: {
       id: jobId,
       sessionKey,
       kind: "session-turn",
-      cleanup: async () => {
+      cleanup: async ({ reason }) => {
+        // A retained declaration-keyed one-shot is the durable admission claim.
+        // Removing it during registry replacement creates a crash window after
+        // the owning plugin has committed its resumed state. Other cleanup
+        // reasons intentionally retire the claim with the plugin/session.
+        if (idempotencyKey && reason === "restart") {
+          return;
+        }
         const removed = await removeScheduledSessionTurn({
           cron,
           jobId,

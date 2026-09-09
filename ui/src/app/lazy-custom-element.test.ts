@@ -49,9 +49,12 @@ describe("ensureCustomElementDefined", () => {
   it("rejects modules that do not register their declared element", async () => {
     const tagName = uniqueTag();
 
-    await expect(ensureCustomElementDefined(tagName, async () => undefined)).rejects.toThrow(
-      `Custom element module did not define ${tagName}`,
+    const error = await ensureCustomElementDefined(tagName, async () => undefined).then(
+      () => undefined,
+      (caught: unknown) => caught,
     );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(`Custom element module did not define ${tagName}`);
   });
 });
 

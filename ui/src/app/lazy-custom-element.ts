@@ -273,6 +273,14 @@ export const BROWSER_PANEL_ELEMENT = {
   loadModule: () => import("../components/browser/browser-panel.ts"),
 } satisfies OptionalCustomElement;
 
+export const HUMAN_INTERVENTION_PANEL_ELEMENT = {
+  tagName: "openclaw-human-intervention-panel",
+  get label() {
+    return t("browser.title");
+  },
+  loadModule: () => import("../components/browser/human-intervention-panel.ts"),
+} satisfies OptionalCustomElement;
+
 export const DESKTOP_PANEL_ELEMENT = {
   tagName: "openclaw-desktop-panel",
   label: "desktop panel",

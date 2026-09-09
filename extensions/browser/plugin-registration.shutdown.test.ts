@@ -37,7 +37,7 @@ function registerLifecycleCallbacks(path: string) {
   registerBrowserPlugin(
     createTestPluginApi({
       runtime: {
-        state: { openKeyedStore: vi.fn() },
+        state: { openKeyedStore: vi.fn(() => ({ update: vi.fn() })) },
       } as never,
       registerHttpRoute(value) {
         if (value.path === path) {
@@ -45,7 +45,9 @@ function registerLifecycleCallbacks(path: string) {
         }
       },
       registerService(value) {
-        service = value;
+        if (value.id === "browser-control" && value.stop) {
+          service = value;
+        }
       },
     }),
   );

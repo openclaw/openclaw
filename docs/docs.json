@@ -1942,6 +1942,7 @@
                     "pages": [
                       "tools/browser",
                       "tools/browser-control",
+                      "tools/browser-human-intervention",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-login",
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting",

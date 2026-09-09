@@ -115,6 +115,56 @@ describe("wrapToolWithAbortSignal", () => {
     expect(runAbort.signal.reason).toBe(handoffReason);
   });
 
+  it("preserves a plugin tool result when it originates its declared turn handoff", async () => {
+    const runAbort = new AbortController();
+    const tool = asAgentTool({
+      name: "browser",
+      execute: vi.fn(async (toolCallId) => {
+        runAbort.abort({
+          code: "sessions_yield",
+          owner: `browser_human_intervention:${toolCallId}`,
+          turnHandoff: true,
+        });
+        return textResult("waiting");
+      }),
+    });
+    tool.turnHandoffOwner = (toolCallId) => `browser_human_intervention:${toolCallId}`;
+    const wrapped = wrapToolWithAbortSignal(tool, runAbort.signal);
+
+    await expect(wrapped.execute("call-handoff", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "waiting" }],
+    });
+  });
+
+  it("aborts a concurrent call of the same handoff-capable tool", async () => {
+    const runAbort = new AbortController();
+    const tool = asAgentTool({
+      name: "browser",
+      execute: vi.fn(async (toolCallId) => {
+        if (toolCallId === "call-owner") {
+          runAbort.abort({
+            code: "sessions_yield",
+            owner: `browser_human_intervention:${toolCallId}`,
+            turnHandoff: true,
+          });
+          return textResult("waiting");
+        }
+        return await new Promise<never>(() => {});
+      }),
+    });
+    tool.turnHandoffOwner = (toolCallId) => `browser_human_intervention:${toolCallId}`;
+    const wrapped = wrapToolWithAbortSignal(tool, runAbort.signal);
+    const sibling = expect(wrapped.execute("call-sibling", {})).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Aborted",
+    });
+
+    await expect(wrapped.execute("call-owner", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "waiting" }],
+    });
+    await sibling;
+  });
+
   it("still aborts a concurrent sibling when sessions_yield hands off the run", async () => {
     const runAbort = new AbortController();
     const handoffReason = { code: "sessions_yield", turnHandoff: true } as const;

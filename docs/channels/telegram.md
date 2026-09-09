@@ -34,6 +34,10 @@ Telegram is production-ready for bot DMs and groups via grammY. Long polling is 
 - [Telegram Dashboard Mini App](/channels/telegram/mini-app) — open the Control UI inside Telegram with `/dashboard`.
 - [Telegram troubleshooting](/channels/telegram/troubleshooting) — silent groups, missing commands, rejected tokens, and unstable polling.
 
+## Human browser handoff
+
+An owner-authorized Telegram DM can receive a portable **Open browser** link when an agent pauses on a live verification step in a managed browser tab. Open the link on the phone, authenticate to the Gateway if needed, take control of the remote tab, and select **Done — continue agent**. The task resumes in the same Telegram conversation. Group chats do not receive handoff links. See [Human browser intervention](/tools/browser-human-intervention) for setup and security details.
+
 ## Where each section moved
 
 Every section heading from the previous single-page version keeps its anchor here, so an existing link such as `/channels/telegram#troubleshooting` still resolves. Each entry points at the page that now holds the content.

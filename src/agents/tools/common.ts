@@ -60,6 +60,8 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
     catalogMode?: "direct-only";
     /** Gateway client capabilities required before this tool can be assembled. */
     requiredClientCaps?: string[];
+    /** Host abort owner this tool call may originate to hand the current turn back to the runtime. */
+    turnHandoffOwner?: string | ((toolCallId: string) => string);
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
       unknown

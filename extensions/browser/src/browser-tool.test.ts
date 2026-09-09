@@ -5375,3 +5375,82 @@ describe("resolveBrowserToolTimeoutMs", () => {
     },
   );
 });
+
+describe("human browser intervention", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("binds the handoff to the exact managed host tab and derives the hostname", async () => {
+    setResolvedBrowserProfiles({
+      openclaw: { driver: "openclaw", cdpPort: 18792 },
+    });
+    browserClientMocks.browserTabs.mockResolvedValueOnce({
+      running: true,
+      tabs: [{ targetId: "tab-1", url: "https://accounts.example.com/challenge" }],
+    });
+    const request = vi.fn(async (input: { resolveHostname: () => Promise<string> }) => ({
+      record: {
+        id: "handoff-1",
+        state: "waiting",
+        hostname: await input.resolveHostname(),
+      },
+      launchUrl: "https://claw.example/focus/browser/handoff-1",
+    }));
+    const beginAutomation = vi.fn(async () => vi.fn(async () => undefined));
+    const waitForHuman = vi.fn(async () => undefined);
+    const tool = createBrowserTool({
+      toolCapabilities: resolveBrowserToolCapabilities({ humanInterventionEnabled: true }),
+      automationGate: { beginAutomation },
+      humanIntervention: { request, waitForHuman },
+    });
+
+    const result = await tool.execute("handoff", {
+      action: "handoff",
+      target: "host",
+      profile: "openclaw",
+      targetId: "tab-1",
+      reason: "Human verification required",
+    });
+
+    expect(request).toHaveBeenCalledWith({
+      profile: "openclaw",
+      targetId: "tab-1",
+      reason: "Human verification required",
+      resolveHostname: expect.any(Function),
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      waitingForHuman: true,
+      handoffId: "handoff-1",
+    });
+    expect(beginAutomation).not.toHaveBeenCalled();
+    expect(waitForHuman).toHaveBeenCalledWith({
+      id: "handoff-1",
+      launchUrl: "https://claw.example/focus/browser/handoff-1",
+      hostname: "accounts.example.com",
+      reason: "Human verification required",
+      handoffOwner: "browser_human_intervention:handoff",
+    });
+  });
+
+  it("blocks managed automation from a context that cannot create handoffs", async () => {
+    setResolvedBrowserProfiles({
+      openclaw: { driver: "openclaw", cdpPort: 18792 },
+    });
+    const beginAutomation = vi.fn(async () => {
+      throw new Error("paused for human control");
+    });
+    const tool = createBrowserTool({
+      automationGate: { beginAutomation },
+    });
+
+    await expect(
+      tool.execute("snapshot", {
+        action: "snapshot",
+        target: "host",
+        profile: "openclaw",
+        targetId: "tab-1",
+      }),
+    ).rejects.toThrow("paused for human control");
+    expect(browserClientMocks.browserSnapshot).not.toHaveBeenCalled();
+  });
+});

@@ -200,6 +200,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.profiles.*.attachOnly": "Browser Profile Attach-only Mode",
   "browser.extensionRelay": "Browser Extension Relay",
   "browser.extensionRelay.allowLegacyAuth": "Allow Legacy Browser Relay Auth",
+  "browser.humanIntervention": "Human Browser Intervention",
+  "browser.humanIntervention.enabled": "Enable Human Browser Intervention",
   tools: "Tools",
   "tools.allow": "Tool Allowlist",
   "tools.deny": "Tool Denylist",

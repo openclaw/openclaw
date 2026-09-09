@@ -10,6 +10,7 @@ const ACT_KINDS = [
   "clickCoords",
   "close",
   "drag",
+  "dragCoords",
   "evaluate",
   "fill",
   "hover",

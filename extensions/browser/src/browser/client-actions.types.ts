@@ -35,6 +35,14 @@ export type BrowserActRequest =
       timeoutMs?: number;
     }
   | {
+      kind: "dragCoords";
+      x: number;
+      y: number;
+      endX: number;
+      endY: number;
+      targetId?: string;
+    }
+  | {
       kind: "type";
       ref?: string;
       selector?: string;

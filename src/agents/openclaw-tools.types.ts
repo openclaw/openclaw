@@ -163,7 +163,11 @@ export type OpenClawToolsOptions = {
    * reaches the person being asked.
    */
   questionPrompt?: QuestionPromptDelivery;
-  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  onYield?: (
+    message: string,
+    acknowledgment?: string,
+    handoffOwner?: string,
+  ) => Promise<void> | void;
   claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;

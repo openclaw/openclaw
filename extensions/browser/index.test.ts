@@ -76,6 +76,7 @@ function createApi() {
     delete: vi.fn(async () => false),
     entries: vi.fn(async () => []),
     clear: vi.fn(async () => undefined),
+    update: vi.fn(async () => true),
   }));
   const openSyncKeyedStore = vi.fn(() => ({
     register: vi.fn(),
@@ -146,6 +147,92 @@ describe("browser plugin", () => {
     });
   });
 
+  it("opens durable human-intervention state and advertises handoff only to an owner route", () => {
+    const { api, openKeyedStore, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "browser.human-intervention",
+      maxEntries: 1_000,
+      overflowPolicy: "reject-new",
+    });
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+    const common = {
+      runtimeConfig: {
+        browser: {
+          humanIntervention: { enabled: true },
+        },
+        gateway: { publicOrigin: "https://claw.example" },
+      },
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:42",
+      messageChannel: "telegram",
+      chatType: "direct" as const,
+      requesterSenderId: "42",
+      deliveryContext: { channel: "telegram", to: "42" },
+      yieldTurn: vi.fn(async () => undefined),
+    };
+    const directTools = ["telegram", "imessage", "whatsapp"].map((channel) =>
+      factory({
+        ...common,
+        senderIsOwner: true,
+        messageChannel: channel,
+        sessionKey:
+          channel === "whatsapp" ? "agent:main:whatsapp:42" : `agent:main:${channel}:direct:42`,
+        deliveryContext: { channel, to: "42" },
+      }),
+    );
+    const ownerTool = directTools[0];
+    const guestTool = factory({ ...common, senderIsOwner: false });
+    const groupTool = factory({
+      ...common,
+      senderIsOwner: true,
+      chatType: "group",
+      sessionKey: "agent:main:telegram:group:42",
+    });
+    if (
+      !ownerTool ||
+      Array.isArray(ownerTool) ||
+      !guestTool ||
+      Array.isArray(guestTool) ||
+      !groupTool ||
+      Array.isArray(groupTool)
+    ) {
+      throw new Error("expected browser plugin to return browser tools");
+    }
+    const actions = (tool: typeof ownerTool) =>
+      (tool.parameters as { properties: { action: { enum?: string[] } } }).properties.action.enum ??
+      [];
+
+    expect(actions(ownerTool)).toContain("handoff");
+    for (const directTool of directTools) {
+      if (!directTool || Array.isArray(directTool)) {
+        throw new Error("expected a direct-channel browser tool");
+      }
+      expect(actions(directTool)).toContain("handoff");
+    }
+    expect(actions(guestTool)).not.toContain("handoff");
+    expect(actions(groupTool)).not.toContain("handoff");
+    const disabledUiTool = factory({
+      ...common,
+      senderIsOwner: true,
+      runtimeConfig: {
+        ...common.runtimeConfig,
+        gateway: {
+          ...common.runtimeConfig.gateway,
+          controlUi: { enabled: false },
+        },
+      },
+    });
+    if (!disabledUiTool || Array.isArray(disabledUiTool)) {
+      throw new Error("expected a browser tool with Control UI disabled");
+    }
+    expect(actions(disabledUiTool)).not.toContain("handoff");
+  });
+
   it("initializes the shared durable session-tab registry without loading browser control", () => {
     const { api, openSyncKeyedStore } = createApi();
     registerBrowserPlugin(api);
@@ -173,6 +260,7 @@ describe("browser plugin", () => {
         "browser.snapshotDefaults",
         "browser.tabCleanup",
         "browser.allowSystemProfileImport",
+        "browser.humanIntervention",
       ],
     });
     expect(browserPluginNodeHostCommands.map((entry) => entry.command)).toEqual([
@@ -249,6 +337,7 @@ describe("browser plugin", () => {
       sandboxBridgeUrl: "http://127.0.0.1:9999",
       allowHostControl: true,
       agentSessionKey: "agent:main:webchat:direct:123",
+      automationGate: { beginAutomation: expect.any(Function) },
       mediaScope: {
         sessionKey: "agent:main:webchat:direct:123",
         chatType: "direct",
@@ -285,6 +374,7 @@ describe("browser plugin", () => {
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", model: "gpt-5.5" },
+      automationGate: { beginAutomation: expect.any(Function) },
       mediaScope: {
         sessionKey: "agent:main:webchat:direct:123",
         channel: "telegram",
@@ -316,6 +406,7 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "snapshot" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       runToolBinding: binding,
+      automationGate: { beginAutomation: expect.any(Function) },
       toolCapabilities: expect.any(Object),
     });
   });
@@ -379,6 +470,7 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "snapshot" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       runToolBinding: expect.objectContaining({ profile: "chrome", targetId: "target-7" }),
+      automationGate: { beginAutomation: expect.any(Function) },
       toolCapabilities: expect.objectContaining({
         tabBound: true,
       }),
@@ -465,6 +557,7 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:telegram:group:chat-123",
+      automationGate: { beginAutomation: expect.any(Function) },
       mediaScope: {
         sessionKey: "agent:main:telegram:group:chat-123",
         channel: "telegram",
@@ -504,7 +597,7 @@ describe("browser plugin", () => {
     const { api, registerGatewayMethod } = createApi();
     registerBrowserPlugin(api);
 
-    expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
+    expect(registerGatewayMethod).toHaveBeenCalledTimes(8);
     expect(mockCallArg(registerGatewayMethod)).toBe("browser.request");
     const handler = mockCallArg(registerGatewayMethod, 0, 1) as (request: {
       method: string;

@@ -1,5 +1,6 @@
 // Browser tests cover agent.act.existing session navigation guard plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { browserControlAuthoritySignal } from "../control-authority.js";
 import {
   createExistingSessionAgentSharedModule,
   existingSessionRouteState,
@@ -8,7 +9,7 @@ import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helper
 
 const chromeMcpMocks = vi.hoisted(() => ({
   ChromeMcpDocumentUnavailableError: class ChromeMcpDocumentUnavailableError extends Error {},
-  clickChromeMcpCoords: vi.fn(async () => {}),
+  clickChromeMcpCoords: vi.fn(async (_params: unknown) => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
   evaluateChromeMcpScript: vi.fn(async (_params: unknown) => "https://example.com"),
@@ -156,6 +157,21 @@ describe("existing-session interaction navigation guard", () => {
 
     await expect(completion).rejects.toThrow(message);
   }
+
+  it("binds action execution to the supplied human-control authority", async () => {
+    const authority = new AbortController();
+    const body = { kind: "clickCoords", x: 10, y: 20 } as Record<PropertyKey, unknown>;
+    body[browserControlAuthoritySignal] = authority.signal;
+
+    await runAction(body as Record<string, unknown>, null);
+
+    const call = chromeMcpMocks.clickChromeMcpCoords.mock.calls[0]?.[0] as
+      | { signal?: AbortSignal }
+      | undefined;
+    expect(call?.signal?.aborted).toBe(false);
+    authority.abort();
+    expect(call?.signal?.aborted).toBe(true);
+  });
 
   function expectNavigationProbeUrls(urls: string[]) {
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledTimes(

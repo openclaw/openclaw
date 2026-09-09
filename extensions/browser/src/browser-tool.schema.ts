@@ -58,6 +58,7 @@ const BROWSER_TOOL_ACTIONS = [
   "upload",
   "dialog",
   "act",
+  "handoff",
 ] as const;
 
 const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
@@ -83,6 +84,7 @@ export type BrowserToolCapabilities = {
 export function resolveBrowserToolCapabilities(params?: {
   tabBound?: boolean;
   evaluateEnabled?: boolean;
+  humanInterventionEnabled?: boolean;
   profileCapabilities?: Pick<
     BrowserProfileCapabilities,
     "supportsBatchActions" | "supportsDownloads" | "supportsPdf"
@@ -96,10 +98,16 @@ export function resolveBrowserToolCapabilities(params?: {
 }): BrowserToolCapabilities {
   const evaluateEnabled = params?.evaluateEnabled !== false;
   const profileCapabilities = params?.profileCapabilities;
-  const actions = params?.tabBound ? BROWSER_TAB_BOUND_ACTIONS : BROWSER_TOOL_ACTIONS;
+  const actions = params?.tabBound
+    ? [
+        ...BROWSER_TAB_BOUND_ACTIONS,
+        ...(params.humanInterventionEnabled === true ? (["handoff"] as const) : []),
+      ]
+    : BROWSER_TOOL_ACTIONS;
   return {
     actions: actions.filter(
       (action) =>
+        (params?.humanInterventionEnabled === true || action !== "handoff") &&
         (profileCapabilities?.supportsPdf !== false || action !== "pdf") &&
         (profileCapabilities?.supportsRequests !== false || action !== "requests") &&
         (profileCapabilities?.supportsErrors !== false || action !== "errors") &&
@@ -237,6 +245,16 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
     dialogId: Type.Optional(Type.String()),
     accept: Type.Optional(Type.Boolean()),
     promptText: Type.Optional(Type.String()),
+    ...(capabilities.actions.includes("handoff")
+      ? {
+          reason: Type.Optional(
+            Type.String({
+              maxLength: 240,
+              description: "Short owner-facing reason for action=handoff.",
+            }),
+          ),
+        }
+      : {}),
     // Legacy flattened act params (preferred: request={...})
     kind: Type.Optional(stringEnum(capabilities.actKinds, { description: actKindDescription })),
     ...actProperties,

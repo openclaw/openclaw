@@ -25,6 +25,7 @@ import {
 import {
   clickCoordsViaPlaywright,
   clickViaPlaywright,
+  dragCoordsViaPlaywright,
   dragViaPlaywright,
   evaluateViaPlaywright,
   fillFormViaPlaywright,
@@ -84,6 +85,18 @@ async function executeSingleAction(
         doubleClick: action.doubleClick,
         button: action.button as "left" | "right" | "middle" | undefined,
         delayMs: action.delayMs,
+        ...navigationPolicy,
+        signal,
+      });
+      break;
+    case "dragCoords":
+      await dragCoordsViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        x: action.x,
+        y: action.y,
+        endX: action.endX,
+        endY: action.endY,
         ...navigationPolicy,
         signal,
       });

@@ -387,8 +387,12 @@ type OpenClawCodingToolsOptions = {
   senderIsOwner?: boolean;
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
-  /** Callback invoked when sessions_yield tool is called. */
-  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  /** Callback invoked when a tool hands the current turn back to the runtime. */
+  onYield?: (
+    message: string,
+    acknowledgment?: string,
+    handoffOwner?: string,
+  ) => Promise<void> | void;
   /** Side-effect-free runtime completion claimant composed with the durable subagent claim. */
   claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Optional instrumentation callback for tool preparation stage timing. */
@@ -787,6 +791,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
             ),
+            currentChatType: options?.chatType,
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
@@ -802,6 +807,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sessionId: options?.sessionId,
             conversationRecall: options?.conversationRecall,
             oneShotCliRun: options?.oneShotCliRun,
+            onYield: options?.onYield,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             sandboxed: Boolean(sandbox),

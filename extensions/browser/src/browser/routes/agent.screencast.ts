@@ -1,3 +1,4 @@
+import { readBrowserControlAuthoritySignal } from "../control-authority.js";
 import { BrowserProfileUnavailableError } from "../errors.js";
 import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -24,8 +25,12 @@ export function registerBrowserAgentScreencastRoutes(
   ctx: BrowserRouteContext,
 ) {
   app.post("/screencast", async (req, res) => {
+    const body = readBody(req);
+    const handoffAuthoritySignal = readBrowserControlAuthoritySignal(body);
+    const requesterIsCurrent = () =>
+      req.requester?.isCurrent() !== false && handoffAuthoritySignal?.aborted !== true;
     const requesterGone = () => {
-      if (!req.requester || req.requester.isCurrent()) {
+      if (requesterIsCurrent()) {
         return false;
       }
       res.status(401).json({
@@ -37,7 +42,6 @@ export function registerBrowserAgentScreencastRoutes(
     if (requesterGone()) {
       return;
     }
-    const body = readBody(req);
     await withRouteTabContext({
       req,
       res,
@@ -84,6 +88,10 @@ export function registerBrowserAgentScreencastRoutes(
         if (requesterGone()) {
           return;
         }
+        const requesterSignal =
+          req.requester?.signal && handoffAuthoritySignal
+            ? AbortSignal.any([req.requester.signal, handoffAuthoritySignal])
+            : (req.requester?.signal ?? handoffAuthoritySignal);
         const { token, expiresAtMs } = mintBrowserScreencastToken({
           profileName,
           targetId: tab.targetId,
@@ -94,8 +102,8 @@ export function registerBrowserAgentScreencastRoutes(
           quality: clampScreencastOption(body.quality, 30, 90, 70),
           lifecycleGeneration: generation,
           lifecycleSignal: lifecycle.controller.signal,
-          requesterSignal: req.requester?.signal,
-          isRequesterCurrent: req.requester?.isCurrent,
+          requesterSignal,
+          isRequesterCurrent: requesterIsCurrent,
           assertCurrent,
           checkNavigationAllowed: async (nextUrl) => {
             await assertBrowserNavigationResultAllowed({

@@ -114,6 +114,24 @@ describe("browser tool schema", () => {
     expect(properties.path).toBeDefined();
   });
 
+  it("advertises human intervention only when the current tool context enables it", () => {
+    const disabled = resolveBrowserToolCapabilities();
+    const enabled = resolveBrowserToolCapabilities({ humanInterventionEnabled: true });
+    const schema = createBrowserToolSchema(enabled);
+
+    expect(disabled.actions).not.toContain("handoff");
+    expect(enabled.actions).toContain("handoff");
+    expect(
+      Value.Check(schema, {
+        action: "handoff",
+        target: "host",
+        profile: "openclaw",
+        targetId: "tab-1",
+        reason: "Human verification required",
+      }),
+    ).toBe(true);
+  });
+
   it.each([false, true])("accepts the new action parameters (bound=%s)", (tabBound) => {
     const schema = createBrowserToolSchema(resolveBrowserToolCapabilities({ tabBound }));
     for (const args of [

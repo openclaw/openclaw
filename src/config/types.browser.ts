@@ -37,6 +37,10 @@ export type BrowserExtensionRelayConfig = {
   /** Temporarily accept legacy relay bearer/basic/subprotocol auth. Default: true. */
   allowLegacyAuth?: boolean;
 };
+export type BrowserHumanInterventionConfig = {
+  /** Enable owner-operated mobile handoff for a managed browser tab. Default: false. */
+  enabled?: boolean;
+};
 export type BrowserSsrFPolicyConfig = SsrFPolicyConfig;
 export type BrowserConfig = {
   /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
@@ -66,6 +70,8 @@ export type BrowserConfig = {
   tabCleanup?: BrowserTabCleanupConfig;
   /** Chrome extension relay authentication compatibility settings. */
   extensionRelay?: BrowserExtensionRelayConfig;
+  /** Owner-operated browser handoff settings. */
+  humanIntervention?: BrowserHumanInterventionConfig;
   /** SSRF policy for browser navigation/open-tab operations. */
   ssrfPolicy?: BrowserSsrFPolicyConfig;
   /**

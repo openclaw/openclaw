@@ -3,7 +3,7 @@
  * Verifies requester metadata, workspace selection, and delivery routing.
  */
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
 
 describe("openclaw plugin tool context", () => {
@@ -27,6 +27,17 @@ describe("openclaw plugin tool context", () => {
     });
 
     expect(result.context.senderIsOwner).toBe(true);
+  });
+
+  it("forwards the trusted conversation kind", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        currentChatType: "direct",
+      },
+    });
+
+    expect(result.context.chatType).toBe("direct");
   });
 
   it("forwards the trusted native conversation id", () => {
@@ -231,6 +242,24 @@ describe("openclaw plugin tool context", () => {
       sandboxBridgeUrl: "http://127.0.0.1:9999",
       allowHostControl: true,
     });
+  });
+
+  it("binds plugin turn handoff to the current runtime yield callback", async () => {
+    const onYield = vi.fn(async () => undefined);
+    const result = resolveOpenClawPluginToolInputs({
+      options: { config: {} as never, onYield },
+    });
+
+    await result.context.yieldTurn?.({
+      handoffOwner: "browser_human_intervention",
+      message: "Waiting for human browser intervention handoff-1.",
+    });
+
+    expect(onYield).toHaveBeenCalledWith(
+      "Waiting for human browser intervention handoff-1.",
+      undefined,
+      "browser_human_intervention",
+    );
   });
 
   it("forwards gateway subagent binding", () => {

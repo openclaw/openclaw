@@ -208,6 +208,7 @@ const pwMocks = vi.hoisted(() => {
       path: "/tmp/report.pdf",
     })),
     dragViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    dragCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     evaluateViaPlaywright: vi.fn(async (_opts?: unknown) => "ok"),
     fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     getConsoleMessagesViaPlaywright: vi.fn(async () => []),
@@ -269,6 +270,11 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   clickCoords: {
     mock: pwMocks.clickCoordsViaPlaywright,
     fields: ["x", "y", "doubleClick", "button", "delayMs", "timeoutMs"],
+    includeSsrf: true,
+  },
+  dragCoords: {
+    mock: pwMocks.dragCoordsViaPlaywright,
+    fields: ["x", "y", "endX", "endY"],
     includeSsrf: true,
   },
   type: {

@@ -55,6 +55,11 @@ export function describeBrowserTool(opts: {
           "For file chooser uploads, pass the trigger ref with paths in the same upload call when available; use paths-only arming only when a later trigger is intentional. Use inputRef or element to set a file input directly.",
         ]
       : []),
+    ...(actions.has("handoff")
+      ? [
+          "When a site requires live human verification, use action=handoff with the exact targetId and a short reason. This pauses managed automation, sends the owner a mobile link, and ends the current turn; never solve the challenge yourself.",
+        ]
+      : []),
     ...(!opts.capabilities.tabBound
       ? [
           `target selects browser location (sandbox|host|node). Default: ${opts.targetDefault}.`,

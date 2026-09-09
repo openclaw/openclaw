@@ -1,3 +1,4 @@
+import type { ChatType } from "../channels/chat-type.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -8,6 +9,7 @@ import {
  * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawPluginTurnYield } from "../plugins/tool-types.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
@@ -21,6 +23,7 @@ export type OpenClawPluginToolOptions = {
   runSessionKey?: string;
   runId?: string;
   agentChannel?: string;
+  currentChatType?: ChatType;
   agentAccountId?: string;
   agentTo?: string;
   /** Routable target for the current conversation when it differs from the native channel ID. */
@@ -54,6 +57,11 @@ export type OpenClawPluginToolOptions = {
   allowGatewaySubagentBinding?: boolean;
   toolBindings?: Readonly<Record<string, unknown>>;
   activeProjectKeys?: readonly string[];
+  onYield?: (
+    message: string,
+    acknowledgment?: string,
+    handoffOwner?: string,
+  ) => Promise<void> | void;
 };
 
 /** Resolves plugin-tool context inputs from runtime options and config state. */
@@ -93,6 +101,10 @@ export function resolveOpenClawPluginToolInputs(params: {
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
+  const yieldTurn: OpenClawPluginTurnYield | undefined = options?.onYield
+    ? ({ handoffOwner, message, acknowledgment }) =>
+        options.onYield?.(message, acknowledgment, handoffOwner)
+    : undefined;
 
   return {
     context: {
@@ -114,8 +126,10 @@ export function resolveOpenClawPluginToolInputs(params: {
         allowHostControl: options?.allowHostBrowserControl,
       },
       messageChannel: options?.agentChannel,
+      chatType: options?.currentChatType,
       agentAccountId: options?.agentAccountId,
       deliveryContext,
+      ...(yieldTurn ? { yieldTurn } : {}),
       nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner,

@@ -198,6 +198,33 @@ export function normalizeActRequest(
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
     }
+    case "dragCoords": {
+      const x = readRouteFiniteNumber(body.x, "x");
+      const y = readRouteFiniteNumber(body.y, "y");
+      const endX = readRouteFiniteNumber(body.endX, "endX");
+      const endY = readRouteFiniteNumber(body.endY, "endY");
+      if (
+        x === undefined ||
+        y === undefined ||
+        endX === undefined ||
+        endY === undefined ||
+        x < 0 ||
+        y < 0 ||
+        endX < 0 ||
+        endY < 0
+      ) {
+        throw new Error("dragCoords requires non-negative x, y, endX, and endY");
+      }
+      const targetId = toStringOrEmpty(body.targetId) || undefined;
+      return {
+        kind,
+        x,
+        y,
+        endX,
+        endY,
+        ...(targetId ? { targetId } : {}),
+      };
+    }
     case "type": {
       const ref = toStringOrEmpty(body.ref) || undefined;
       const selector = toStringOrEmpty(body.selector) || undefined;

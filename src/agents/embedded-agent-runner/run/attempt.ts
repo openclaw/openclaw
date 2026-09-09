@@ -183,12 +183,16 @@ export async function runEmbeddedAttempt(
         attempt: params,
         setup,
         markCoreToolStage: (name) => corePluginToolStages.mark(name),
-        onYield: (message, acknowledgment) => {
+        onYield: (message, acknowledgment, handoffOwner) => {
           yieldDetected = true;
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           queueYieldInterruptForSession?.();
-          runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
+          runAbortController.abort(
+            handoffOwner
+              ? { ...SESSIONS_YIELD_ABORT_REASON, owner: handoffOwner }
+              : SESSIONS_YIELD_ABORT_REASON,
+          );
           abortSessionForYield?.();
         },
         runAbortController,

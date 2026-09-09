@@ -2,6 +2,7 @@
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -17,6 +18,12 @@ export type OpenClawPluginActiveModelContext = {
 export type OpenClawPluginToolDelivery = {
   send: (params: { text?: string; mediaUrl?: string }) => Promise<void>;
 };
+
+export type OpenClawPluginTurnYield = (params: {
+  handoffOwner: string;
+  message: string;
+  acknowledgment?: string;
+}) => Promise<void> | void;
 
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
@@ -50,6 +57,8 @@ export type OpenClawPluginToolContext = {
     allowHostControl?: boolean;
   };
   messageChannel?: string;
+  /** Trusted conversation kind for direct/group/channel authorization. */
+  chatType?: ChatType;
   agentAccountId?: string;
   /** Trusted provider auth availability from the active auth profile store. */
   hasAuthForProvider?: (providerId: string) => boolean;
@@ -59,6 +68,8 @@ export type OpenClawPluginToolContext = {
   deliveryContext?: DeliveryContext;
   /** Host-bound current-route delivery. Retained copies fail after the owning turn closes. */
   delivery?: OpenClawPluginToolDelivery;
+  /** Host-bound turn handoff available only in runtimes that can end the current model call. */
+  yieldTurn?: OpenClawPluginTurnYield;
   /** Trusted platform-native conversation id for the active inbound turn. */
   nativeChannelId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */

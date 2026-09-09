@@ -30,12 +30,13 @@ export function raceWithAbortSignal<T>(
   promise: Promise<T>,
   signal: AbortSignal,
   yieldRunSignal?: AbortSignal,
+  turnHandoffOwner?: string,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
       const reason = yieldRunSignal?.reason as
-        | { code?: unknown; turnHandoff?: unknown }
+        | { code?: unknown; owner?: unknown; turnHandoff?: unknown }
         | undefined;
       // Only the initiating tool may finish its run owner's deliberate handoff;
       // caller-authored aborts and concurrent sibling tools must still cancel.
@@ -43,6 +44,7 @@ export function raceWithAbortSignal<T>(
         yieldRunSignal?.aborted &&
         signal.reason === reason &&
         reason?.code === "sessions_yield" &&
+        (reason.owner ?? "sessions_yield") === turnHandoffOwner &&
         reason.turnHandoff === true
       ) {
         return;
@@ -81,9 +83,17 @@ export function wrapToolWithAbortSignal(
     return tool;
   }
   const ownsCancellationOutcome = isCodeModeControlTool(tool);
+  const resolveTurnHandoffOwner = (toolCallId: string): string | undefined => {
+    const owner =
+      typeof tool.turnHandoffOwner === "function"
+        ? tool.turnHandoffOwner(toolCallId)
+        : tool.turnHandoffOwner;
+    return owner?.trim() || undefined;
+  };
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      const turnHandoffOwner = resolveTurnHandoffOwner(toolCallId);
       const combinedSignal = signal ? AbortSignal.any([signal, abortSignal]) : abortSignal;
       if (combinedSignal.aborted) {
         throwAbortError();
@@ -96,7 +106,8 @@ export function wrapToolWithAbortSignal(
         : await raceWithAbortSignal(
             execution,
             combinedSignal,
-            tool.name === "sessions_yield" ? abortSignal : undefined,
+            turnHandoffOwner ? abortSignal : undefined,
+            turnHandoffOwner,
           );
     },
   };
@@ -104,17 +115,23 @@ export function wrapToolWithAbortSignal(
   const sourcePreparer = getInternalToolExecutionPreparer(tool);
   if (sourcePreparer) {
     attachInternalToolExecutionPreparer(wrappedTool, async (params) => {
+      const turnHandoffOwner = resolveTurnHandoffOwner(params.toolCallId);
       const combinedSignal = params.signal
         ? AbortSignal.any([params.signal, abortSignal])
         : abortSignal;
       if (combinedSignal.aborted) {
         throwAbortError();
       }
-      const yieldRunSignal = tool.name === "sessions_yield" ? abortSignal : undefined;
+      const yieldRunSignal = turnHandoffOwner ? abortSignal : undefined;
       const sourcePreparation = sourcePreparer({ ...params, signal: combinedSignal });
       let prepared;
       try {
-        prepared = await raceWithAbortSignal(sourcePreparation, combinedSignal, yieldRunSignal);
+        prepared = await raceWithAbortSignal(
+          sourcePreparation,
+          combinedSignal,
+          yieldRunSignal,
+          turnHandoffOwner,
+        );
       } catch (error) {
         void sourcePreparation.then(
           (latePreparation) => latePreparation.dispose(),
@@ -135,7 +152,7 @@ export function wrapToolWithAbortSignal(
           const execution = prepared.execute(onImplementationStart);
           return ownsCancellationOutcome
             ? execution
-            : raceWithAbortSignal(execution, combinedSignal, yieldRunSignal);
+            : raceWithAbortSignal(execution, combinedSignal, yieldRunSignal, turnHandoffOwner);
         },
         dispose: prepared.dispose,
       };

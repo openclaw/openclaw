@@ -1,4 +1,5 @@
 export * from "./error-details.js";
+export type * from "./browser-handoff.js";
 export * from "./github-publication-api.js";
 export * from "./session-agent-status.js";
 export * from "./terminal-validators.js";

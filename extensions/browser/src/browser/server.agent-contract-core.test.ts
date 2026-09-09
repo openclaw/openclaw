@@ -706,6 +706,25 @@ describe("browser control server", () => {
       },
     });
 
+    const dragCoords = await postJson<{ ok: boolean; url?: string }>(`${base}/act`, {
+      kind: "dragCoords",
+      x: 10,
+      y: 20,
+      endX: 110,
+      endY: 220,
+    });
+    expect(dragCoords.ok).toBe(true);
+    expect(dragCoords.url).toBe("https://example.com");
+    expectRecordFields(mockFirstArg(requirePwMock("dragCoordsViaPlaywright"), 0, "drag coords"), {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      x: 10,
+      y: 20,
+      endX: 110,
+      endY: 220,
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+
     const type = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "type",
       ref: "1",

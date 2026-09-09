@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-support/browser-security.mock.js";
+import { browserControlAuthoritySignal } from "../control-authority.js";
 import {
   clearBrowserScreencastTokens,
   consumeBrowserScreencastToken,
@@ -127,6 +128,37 @@ describe("browser screencast mint route", () => {
     }
     expect(connection.signal.aborted).toBe(end === "socket close");
     expect(consumeBrowserScreencastToken(token)).toBeUndefined();
+  });
+
+  it("binds a minted token to handoff control authority", async () => {
+    const authority = new AbortController();
+    const body = {} as Record<string, unknown>;
+    (body as Record<PropertyKey, unknown>)[browserControlAuthoritySignal] = authority.signal;
+    const { request } = setup();
+    const response = await request(body);
+    const token = (response.body as { token: string }).token;
+
+    authority.abort();
+
+    expect(consumeBrowserScreencastToken(token)).toBeUndefined();
+  });
+
+  it("rejects handoff authority revoked during tab resolution", async () => {
+    const authority = new AbortController();
+    const body = {} as Record<string, unknown>;
+    (body as Record<PropertyKey, unknown>)[browserControlAuthoritySignal] = authority.signal;
+    const { request, ensureTabAvailable } = setup();
+    const resolveTab = ensureTabAvailable.getMockImplementation()!;
+    ensureTabAvailable.mockImplementationOnce(async () => {
+      authority.abort();
+      return await resolveTab();
+    });
+
+    const response = await request(body);
+
+    expect(response.statusCode).toBe(401);
+    expect(response.body).toMatchObject({ code: "SCREENCAST_REQUESTER_GONE" });
+    expect(response.body).not.toHaveProperty("token");
   });
 
   it.each([

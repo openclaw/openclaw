@@ -12,6 +12,7 @@ import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { installTitleTooltips } from "../components/tooltip-title.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -23,6 +24,7 @@ import {
   APPROVAL_PAGE_ELEMENT,
   DASHBOARD_DOCUMENT_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
+  HUMAN_INTERVENTION_PANEL_ELEMENT,
   isOptionalElementDefined,
   LazyCustomElementRequestController,
   LOGIN_GATE_ELEMENT,
@@ -130,6 +132,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     if (focusTarget?.kind === "desktop") {
       this.requestLazyDocument(DESKTOP_PANEL_ELEMENT);
+    }
+    if (focusTarget?.kind === "browser") {
+      this.requestLazyDocument(HUMAN_INTERVENTION_PANEL_ELEMENT);
     }
     if (focusTarget?.kind === "dashboard") {
       this.requestLazyDocument(DASHBOARD_DOCUMENT_ELEMENT);
@@ -632,6 +637,28 @@ export class OpenClawApp extends OpenClawLightDomElement {
             },
           }}
         ></openclaw-login-gate>
+      `;
+    }
+    if (focusTarget?.kind === "browser") {
+      if (!gatewayConnected) {
+        return renderConnectingSplash(gatewayStartupStatus);
+      }
+      const browserHandoffAvailable =
+        canCallGatewayMethod(gatewaySnapshot, "browser.handoff.get", "operator.read") &&
+        canCallGatewayMethod(gatewaySnapshot, "browser.handoff.browser", "operator.write") &&
+        canCallGatewayMethod(gatewaySnapshot, "browser.handoff.complete", "operator.write");
+      return html`
+        <openclaw-human-intervention-panel
+          .client=${gatewaySnapshot.client}
+          .available=${browserHandoffAvailable}
+          .handoffId=${focusTarget.handoffId}
+          .onDocumentClose=${() => this.closeDocument(context.basePath)}
+        ></openclaw-human-intervention-panel>
+        ${
+          browserHandoffAvailable
+            ? this.renderLazyDocumentState(HUMAN_INTERVENTION_PANEL_ELEMENT)
+            : nothing
+        }
       `;
     }
     if (runtime.documentMode?.kind === "approval") {

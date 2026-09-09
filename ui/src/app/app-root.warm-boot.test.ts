@@ -32,7 +32,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function createWarmSurface(warm = true) {
+function createWarmSurface(warm = true, pathname = "/chat/main") {
+  window.history.replaceState({}, "", pathname);
   if (warm) {
     const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
     const record: BootRecord = {
@@ -88,6 +89,34 @@ describe("warm boot app root", () => {
     draw();
 
     expect(container.querySelector(".connect-splash")).not.toBeNull();
+    expect(container.querySelector("openclaw-app-shell")).toBeNull();
+  });
+
+  it("keeps a browser handoff behind gateway authentication and replaces the shell after connect", () => {
+    const { snapshot, container, draw } = createWarmSurface(true, "/focus/browser/handoff-1");
+    draw();
+    expect(container.querySelector("openclaw-human-intervention-panel")).toBeNull();
+
+    Object.assign(snapshot, {
+      phase: "connected",
+      client: { request: vi.fn(), gatewayUrl: "ws://gateway.test" },
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+        features: {
+          methods: [
+            "browser.handoff.get",
+            "browser.handoff.claim",
+            "browser.handoff.browser",
+            "browser.handoff.complete",
+          ],
+        },
+      },
+    });
+    draw();
+
+    const panel = container.querySelector("openclaw-human-intervention-panel");
+    expect(panel).not.toBeNull();
+    expect((panel as unknown as { handoffId: string }).handoffId).toBe("handoff-1");
     expect(container.querySelector("openclaw-app-shell")).toBeNull();
   });
 

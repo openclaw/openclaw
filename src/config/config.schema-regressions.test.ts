@@ -413,6 +413,32 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts human browser intervention with the shared Gateway public origin", () => {
+    const res = validateConfigObject({
+      gateway: { publicOrigin: "https://claw.example" },
+      browser: {
+        humanIntervention: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects a feature-specific public URL instead of duplicating gateway.publicOrigin", () => {
+    const res = validateConfigObject({
+      browser: {
+        humanIntervention: {
+          enabled: true,
+          publicUrl: "https://claw.example",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
     const res = validateConfigObject({
       discovery: {

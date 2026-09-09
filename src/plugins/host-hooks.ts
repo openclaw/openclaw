@@ -279,7 +279,15 @@ type PluginSessionTurnScheduleCommonParams = {
   message: string;
   agentId?: string;
   deliveryMode?: "none" | "announce";
+  deliveryTarget?: {
+    channel: string;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   name?: string;
+  /** Stable scheduler claim. Idempotent one-shots must be retained after they run. */
+  idempotencyKey?: string;
   /** Optional cleanup tag. Reserved cron-name delimiters like `:` are rejected. */
   tag?: string;
 };

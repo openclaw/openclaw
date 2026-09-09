@@ -100,6 +100,21 @@ describe("normalizeActRequest keyboard keys", () => {
 });
 
 describe("normalizeActRequest numeric fields", () => {
+  it("normalizes coordinate drags and rejects negative endpoints", () => {
+    expect(
+      normalizeActRequest({
+        kind: "dragCoords",
+        x: "10.5",
+        y: 20,
+        endX: 30,
+        endY: "40.5",
+      }),
+    ).toEqual({ kind: "dragCoords", x: 10.5, y: 20, endX: 30, endY: 40.5 });
+    expect(() =>
+      normalizeActRequest({ kind: "dragCoords", x: 10, y: 20, endX: -1, endY: 40 }),
+    ).toThrow("dragCoords requires non-negative x, y, endX, and endY");
+  });
+
   it("keeps structured numeric action options", () => {
     expect(
       normalizeActRequest({

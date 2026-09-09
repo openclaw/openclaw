@@ -138,6 +138,7 @@ type RouteTabPwContext = RouteTabContext & {
 
 type RouteWithTabParams<T> = {
   req: BrowserRequest;
+  signal?: AbortSignal;
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   profileCtx?: ProfileContext;
@@ -161,7 +162,7 @@ export async function withRouteTabContext<T>(
   try {
     return await runProfileRouteOperation({
       profileCtx,
-      signal: params.req.signal,
+      signal: params.signal ?? params.req.signal,
       run: async (signal) => {
         // Agent routes can address local-managed tabs through Playwright when per-tab WS discovery lags.
         const tab = await profileCtx.ensureTabAvailable(params.targetId, {

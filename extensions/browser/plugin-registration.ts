@@ -4,6 +4,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { resolveGatewayPublicOrigin } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,
@@ -38,9 +39,40 @@ import {
   configureSystemProfileImportStateStore,
   type SystemProfileImportState,
 } from "./src/browser/system-profile-import-state.js";
+import { humanInterventionHandoffOwner } from "./src/human-intervention/constants.js";
+import { HumanInterventionCoordinator } from "./src/human-intervention/coordinator.js";
+import { registerHumanInterventionGatewayMethods } from "./src/human-intervention/gateway.js";
+import {
+  HumanInterventionService,
+  type HumanInterventionRecord,
+} from "./src/human-intervention/service.js";
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 const logger = createSubsystemLogger("browser");
+
+type HumanInterventionToolCallbacks = {
+  request: (input: {
+    profile: string;
+    targetId: string;
+    reason: string;
+    resolveHostname: () => Promise<string>;
+  }) => Promise<{ record: { id: string; state: string; hostname: string }; launchUrl: string }>;
+  waitForHuman: (input: {
+    id: string;
+    launchUrl: string;
+    hostname: string;
+    reason: string;
+    handoffOwner: string;
+  }) => Promise<void>;
+};
+
+type BrowserAutomationGateCallbacks = {
+  beginAutomation: (browser: {
+    target: "host";
+    profile: string;
+    targetId: string;
+  }) => Promise<() => Promise<void>>;
+};
 
 const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
   () => import("./register.runtime.js"),
@@ -72,6 +104,35 @@ const BROWSER_CLI_DESCRIPTOR = {
   machineOutput: isBrowserMachineOutput,
 };
 
+function resolveHumanInterventionPublicOrigin(config: {
+  readonly gateway?: { readonly publicOrigin?: string };
+}): string | undefined {
+  return resolveGatewayPublicOrigin(
+    config.gateway ? { gateway: { publicOrigin: config.gateway.publicOrigin } } : undefined,
+  );
+}
+
+function isHumanInterventionEnabled(
+  config:
+    | {
+        readonly browser?: {
+          readonly humanIntervention?: { readonly enabled?: boolean };
+        };
+        readonly gateway?: {
+          readonly publicOrigin?: string;
+          readonly controlUi?: { readonly enabled?: boolean };
+        };
+      }
+    | undefined,
+): boolean {
+  const publicOrigin = config ? resolveHumanInterventionPublicOrigin(config) : undefined;
+  return (
+    config?.browser?.humanIntervention?.enabled === true &&
+    publicOrigin?.startsWith("https://") === true &&
+    config?.gateway?.controlUi?.enabled !== false
+  );
+}
+
 function createLazyBrowserTool(
   opts?: {
     sandboxBridgeUrl?: string;
@@ -90,6 +151,8 @@ function createLazyBrowserTool(
       chatType?: string;
     };
     runToolBinding?: unknown;
+    automationGate?: BrowserAutomationGateCallbacks;
+    humanIntervention?: HumanInterventionToolCallbacks;
   },
   config?: OpenClawPluginToolContext["runtimeConfig"],
 ): AnyAgentTool {
@@ -110,11 +173,13 @@ function createLazyBrowserTool(
   const capabilities = resolveBrowserToolCapabilities({
     tabBound: bindingResult?.ok,
     evaluateEnabled: config?.browser?.evaluateEnabled !== false,
+    humanInterventionEnabled: opts?.humanIntervention !== undefined,
     ...(boundProfile ? { profileCapabilities: getBrowserProfileCapabilities(boundProfile) } : {}),
   });
   return {
     label: "Browser",
     name: "browser",
+    ...(opts?.humanIntervention ? { turnHandoffOwner: humanInterventionHandoffOwner } : {}),
     resultContentSource: "network",
     description: describeBrowserTool({ targetDefault, hostHint, capabilities }),
     parameters: createBrowserToolSchema(capabilities),
@@ -154,7 +219,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   runToolBinding?: unknown;
 } {
   const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
-  const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
+  const mediaChatType = ctx.chatType ?? deriveChatTypeFromSessionKey(ctx.sessionKey);
   return {
     ...(ctx.browser?.sandboxBridgeUrl ? { sandboxBridgeUrl: ctx.browser.sandboxBridgeUrl } : {}),
     ...(ctx.browser?.allowHostControl !== undefined
@@ -202,6 +267,7 @@ export const browserPluginReload = {
     "browser.snapshotDefaults",
     "browser.tabCleanup",
     "browser.allowSystemProfileImport",
+    "browser.humanIntervention",
   ],
 };
 
@@ -286,9 +352,57 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       maxEntries: 1,
     }),
   );
+  const humanInterventionService = new HumanInterventionService(
+    api.runtime.state.openKeyedStore<HumanInterventionRecord>({
+      namespace: "browser.human-intervention",
+      maxEntries: 1_000,
+      overflowPolicy: "reject-new",
+    }),
+  );
+  const currentConfig = () => api.runtime.config.current?.() ?? api.config;
+  const humanInterventionCoordinator = new HumanInterventionCoordinator(humanInterventionService, {
+    publicUrl: () => resolveHumanInterventionPublicOrigin(currentConfig()) ?? "",
+    basePath: () => currentConfig().gateway?.controlUi?.basePath,
+    scheduleContinuation: api.session.workflow.scheduleSessionTurn,
+    onRetryError: (error) =>
+      api.logger.warn(`browser handoff continuation retry failed: ${String(error)}`),
+  });
   api.registerTool(((ctx: OpenClawPluginToolContext) => {
     const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
-    return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
+    const humanInterventionEnabled = isHumanInterventionEnabled(config);
+    return createLazyBrowserTool(
+      {
+        ...createBrowserToolOptions(ctx),
+        automationGate: {
+          beginAutomation: (browser) => humanInterventionCoordinator.beginAutomation(browser),
+        },
+        ...(humanInterventionEnabled &&
+        ctx.senderIsOwner === true &&
+        ctx.yieldTurn &&
+        ctx.requesterSenderId &&
+        ctx.sessionKey &&
+        ctx.agentId &&
+        (ctx.chatType ?? deriveChatTypeFromSessionKey(ctx.sessionKey)) === "direct"
+          ? {
+              humanIntervention: {
+                request: (input) => humanInterventionCoordinator.request(ctx, input),
+                waitForHuman: async ({ id, launchUrl, hostname, reason, handoffOwner }) => {
+                  await ctx.yieldTurn?.({
+                    handoffOwner,
+                    message: `Waiting for human browser intervention ${id}.`,
+                    acknowledgment: [
+                      `OpenClaw needs your help on ${hostname}: ${reason}`,
+                      `Open browser: ${launchUrl}`,
+                      "The task is paused until you select Done — continue task.",
+                    ].join("\n"),
+                  });
+                },
+              },
+            }
+          : {}),
+      },
+      config,
+    );
   }) as OpenClawPluginToolFactory);
   api.registerCli(
     async ({ program }) => {
@@ -307,6 +421,15 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       scope: BROWSER_REQUEST_GATEWAY_SCOPE,
     },
   );
+  registerHumanInterventionGatewayMethods({
+    api,
+    coordinator: humanInterventionCoordinator,
+    forwardBrowserRequest: async (opts) => {
+      const { handleBrowserGatewayRequest } = await loadBrowserRegistrationRuntimeModule();
+      return await handleBrowserGatewayRequest(opts);
+    },
+    isEnabled: () => isHumanInterventionEnabled(currentConfig()),
+  });
   // Remote extension relay: lets the Chrome extension connect directly to this
   // gateway over wss:// (no node host on the browser machine). auth:"plugin"
   // with no nodeCapability means the gateway does not pre-enforce token auth;
@@ -344,4 +467,13 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     },
   });
   api.registerService(createLazyBrowserPluginService());
+  api.registerService({
+    id: "browser-human-intervention",
+    start: async () => {
+      await humanInterventionCoordinator.start();
+    },
+    stop: async () => {
+      humanInterventionCoordinator.stop();
+    },
+  });
 }
