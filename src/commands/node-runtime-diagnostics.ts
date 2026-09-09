@@ -1,5 +1,5 @@
 /** Read-only Node findings shared by Doctor and status commands. */
-import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../node-sqlite.mjs";
+import { nodeRuntimeFailure, nodeRuntimeNote } from "../../node-sqlite.mjs";
 import {
   formatUnsupportedNodeVersionMessage,
   SUPPORTED_NODE_VERSIONS,
@@ -9,6 +9,7 @@ import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { detectRuntime } from "../infra/runtime-guard.js";
 
 const CHECK_ID = "core/doctor/node-runtime";
 
@@ -36,23 +37,40 @@ function unsupportedNodeFinding(
   };
 }
 
-/** Inspect the active CLI and recorded service executable without starting or repairing the service. */
+function collectCurrentNodeRuntimeFindings(): readonly HealthFinding[] {
+  const runtime = detectRuntime();
+  if (runtime.kind !== "node" || !runtime.sqliteProbe) {
+    return [];
+  }
+  const failure = nodeRuntimeFailure(runtime.version, runtime.sqliteProbe);
+  const message = failure ?? nodeRuntimeNote(runtime.version, runtime.sqliteProbe);
+  return message
+    ? [
+        {
+          checkId: CHECK_ID,
+          severity: failure ? "error" : "info",
+          source: "cli",
+          message,
+          requirement: SUPPORTED_NODE_VERSIONS,
+          target: runtime.execPath ?? undefined,
+          ...(failure ? { fixHint: formatUnsupportedNodeVersionMessage(runtime.version) } : {}),
+        },
+      ]
+    : [];
+}
+
+/** Inspect the CLI and recorded service without starting or repairing the service. */
 export async function collectNodeRuntimeFindings(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<HealthFinding[]> {
-  const findings: HealthFinding[] = [];
-  if (!process.versions.bun) {
-    const probe = detectCurrentSqliteCapabilities();
-    const failure = nodeRuntimeFailure(process.versions.node, probe);
-    if (failure) {
-      findings.push(unsupportedNodeFinding(process.versions.node, "cli", failure));
-    }
-  }
-  return [...findings, ...(await collectServiceNodeRuntimeFindings(env))];
+  return [
+    ...collectCurrentNodeRuntimeFindings(),
+    ...(await collectServiceNodeRuntimeFindings(env)),
+  ];
 }
 
 /** Inspect the recorded service executable without starting or repairing the service. */
-export async function collectServiceNodeRuntimeFindings(
+async function collectServiceNodeRuntimeFindings(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<HealthFinding[]> {
   const findings: HealthFinding[] = [];
@@ -71,6 +89,14 @@ export async function collectServiceNodeRuntimeFindings(
         findings.push(
           unsupportedNodeFinding(runtime.version, "gateway-service", runtime.capabilityError),
         );
+      } else if (runtime.note) {
+        findings.push({
+          checkId: CHECK_ID,
+          severity: "info",
+          source: "gateway-service",
+          message: runtime.note,
+          target: executable,
+        });
       }
     }
   } catch {

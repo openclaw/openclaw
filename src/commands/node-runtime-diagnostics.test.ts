@@ -34,6 +34,18 @@ vi.mock("./status-json-command.ts", () => ({
   runStatusJsonCommand: async () => {},
 }));
 
+function mockCliRuntime(version: string, text = true) {
+  vi.spyOn(runtimeGuard, "detectRuntime").mockReturnValue({
+    kind: "node",
+    version,
+    execPath: "/fixture/node",
+    pathEnv: "/fixture",
+    hasNodeSqlite: true,
+    sqliteVersion: "3.53.4",
+    sqliteProbe: { available: true, version: "3.53.4", text, blob: true, json: true },
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.readCommand.mockResolvedValue({
@@ -45,7 +57,7 @@ beforeEach(() => {
     sqliteVersion: "3.50.2",
     nodeSharedSqlite: false,
   });
-  vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "26.8.1" } });
+  mockCliRuntime("26.8.1");
 });
 
 afterEach(() => {
@@ -62,7 +74,7 @@ describe("Node runtime diagnostics command surfaces", () => {
       path: "/tmp/openclaw.json",
       issues: [{ path: "gateway.mode", message: "Required" }],
     });
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "22.23.2" } });
+    mockCliRuntime("22.23.2", false);
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
       expect(await runDoctorLintCli(runtime, { json: true })).toBe(1);
@@ -83,16 +95,7 @@ describe("Node runtime diagnostics command surfaces", () => {
   });
 
   it("registers canonical Doctor findings for CLI and recorded service runtimes", async () => {
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "26.0.0" } });
-    vi.spyOn(runtimeGuard, "detectRuntime").mockReturnValue({
-      kind: "node",
-      version: "26.0.0",
-      execPath: "/fixture/node",
-      pathEnv: "/fixture",
-      hasNodeSqlite: true,
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: false, blob: true, json: true },
-    });
+    mockCliRuntime("26.0.0", false);
     const checks = await resolveDoctorContributionHealthChecks();
     const check = checks.find((entry) => entry.id === "core/doctor/node-runtime");
     expect(check).toBeDefined();
@@ -122,14 +125,11 @@ describe("Node runtime diagnostics command surfaces", () => {
   });
 
   it.each(["cli", "service"])(
-    "does not warn for an admitted out-of-table %s runtime",
+    "renders an admitted out-of-table %s runtime as information",
     async (source) => {
       mocks.readCommand.mockResolvedValue(null);
       if (source === "cli") {
-        vi.stubGlobal("process", {
-          ...process,
-          versions: { ...process.versions, node: "24.15.0" },
-        });
+        mockCliRuntime("24.15.0");
       } else {
         mocks.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
         mocks.resolveNodeRuntimeInfo.mockResolvedValue({
@@ -139,7 +139,9 @@ describe("Node runtime diagnostics command surfaces", () => {
         });
       }
       await statusCommand({ json: true }, runtime);
-      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("[info] Node 24.15.0:"));
+      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("[warning]"));
+      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("undefined"));
     },
   );
 

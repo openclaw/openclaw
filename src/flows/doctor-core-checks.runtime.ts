@@ -1,6 +1,5 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { nodeRuntimeFailure, nodeRuntimeNote } from "../../node-sqlite.mjs";
 import { formatUnsupportedNodeVersionMessage } from "../../node-version.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
@@ -56,7 +55,6 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { detectRuntime } from "../infra/runtime-guard.js";
 import {
   formatLocalAudioSelection,
   inspectLocalAudioSelection,
@@ -206,26 +204,6 @@ export async function collectGatewayHealthFindings(
 
 function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | undefined {
   return runtime?.status ?? runtime?.state ?? runtime?.subState;
-}
-
-export function collectNodeRuntimeFindings(): readonly HealthFinding[] {
-  const runtime = detectRuntime();
-  if (runtime.kind !== "node" || !runtime.sqliteProbe) {
-    return [];
-  }
-  const failure = nodeRuntimeFailure(runtime.version, runtime.sqliteProbe);
-  const message = failure ?? nodeRuntimeNote(runtime.version, runtime.sqliteProbe);
-  return message
-    ? [
-        {
-          checkId: "core/doctor/node-runtime",
-          severity: failure ? "error" : "info",
-          message,
-          target: runtime.execPath ?? undefined,
-          ...(failure ? { fixHint: formatUnsupportedNodeVersionMessage(runtime.version) } : {}),
-        },
-      ]
-    : [];
 }
 
 export async function collectGatewayDaemonFindings(

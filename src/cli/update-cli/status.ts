@@ -114,8 +114,16 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   defaultRuntime.log(theme.heading("OpenClaw update status"));
   defaultRuntime.log("");
   for (const finding of runtimeFindings) {
-    defaultRuntime.log(theme.warn(finding.message));
-    defaultRuntime.log(finding.fixHint);
+    const color =
+      finding.severity === "error"
+        ? theme.error
+        : finding.severity === "warning"
+          ? theme.warn
+          : theme.muted;
+    defaultRuntime.log(color(finding.message));
+    if (finding.fixHint) {
+      defaultRuntime.log(finding.fixHint);
+    }
     defaultRuntime.log("");
   }
   defaultRuntime.log(

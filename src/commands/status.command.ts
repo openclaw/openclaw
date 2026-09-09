@@ -111,7 +111,9 @@ export async function statusCommand(
   assertStatusUsageAgentScope(opts);
   for (const finding of await collectNodeRuntimeFindings()) {
     const write = opts.json ? runtime.error : runtime.log;
-    write(`[warning] ${finding.message}\n${finding.fixHint}`);
+    write(
+      `[${finding.severity}] ${finding.message}${finding.fixHint ? `\n${finding.fixHint}` : ""}`,
+    );
   }
   if (opts.all && !opts.json) {
     // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.

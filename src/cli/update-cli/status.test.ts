@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as nodeSqlite from "../../../node-sqlite.mjs";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as runtimeGuard from "../../infra/runtime-guard.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   createUpdateRun,
@@ -64,6 +64,33 @@ beforeEach(() => {
 });
 
 describe("update status Node runtime findings", () => {
+  it.each(["cli", "service"])(
+    "renders admitted %s runtime information without a missing hint",
+    async (source) => {
+      if (source === "cli") {
+        vi.spyOn(runtimeGuard, "detectRuntime").mockReturnValue({
+          kind: "node",
+          version: "24.15.0",
+          execPath: "/fixture/node",
+          pathEnv: "/fixture",
+          hasNodeSqlite: true,
+          sqliteVersion: "3.53.4",
+          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+        });
+      } else {
+        service.readCommand.mockResolvedValue({ programArguments: ["/fixture/node", "gateway"] });
+        service.resolveNodeRuntimeInfo.mockResolvedValue({
+          status: "supported",
+          version: "24.15.0",
+          note: "Node 24.15.0: unsupported version, capability probe passed.",
+        });
+      }
+      await updateStatusCommand({});
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("capability probe passed"));
+      expect(runtime.log).not.toHaveBeenCalledWith(undefined);
+    },
+  );
+
   it.each([
     { version: "22.23.2", source: "cli" },
     { version: "26.0.0", source: "cli" },
@@ -77,9 +104,14 @@ describe("update status Node runtime findings", () => {
         versions: { ...process.versions, node: source === "cli" ? version : "26.8.1" },
       });
       if (source === "cli") {
-        vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockReturnValue({
-          ...nodeSqlite.detectCurrentSqliteCapabilities(),
-          text: false,
+        vi.spyOn(runtimeGuard, "detectRuntime").mockReturnValue({
+          kind: "node",
+          version,
+          execPath: "/fixture/node",
+          pathEnv: "/fixture",
+          hasNodeSqlite: true,
+          sqliteVersion: "3.53.4",
+          sqliteProbe: { available: true, version: "3.53.4", text: false, blob: true, json: true },
         });
       }
       if (source === "gateway-service") {
