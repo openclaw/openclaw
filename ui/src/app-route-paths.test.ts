@@ -460,7 +460,7 @@ describe("Agent panel route paths", () => {
     expect(pathname).toBe("/ui/settings/agents/research");
     expect(agentRouteFromPath(pathname, "/ui")).toEqual({
       agentId: "research",
-      panel: "files",
+      panel: "overview",
       panelSegment: null,
       invalidPanel: false,
     });
@@ -470,7 +470,7 @@ describe("Agent panel route paths", () => {
   it("falls back unknown panel segments to the default panel", () => {
     expect(agentRouteFromPath("/settings/agents/research/unknown")).toEqual({
       agentId: "research",
-      panel: "files",
+      panel: "overview",
       panelSegment: null,
       invalidPanel: true,
     });
