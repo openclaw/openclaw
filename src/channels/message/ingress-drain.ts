@@ -10,6 +10,7 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   runOutsideGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   createIngressDrainOwnerId,
   deregisterLiveIngressDrainInstance,
@@ -47,6 +48,9 @@ export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
 
 /** Default claim→adoption stall before applying the shared retry disposition. */
 export const DEFAULT_INGRESS_ADOPTION_STALL_MS = 5 * 60 * 1000;
+
+/** Hold a draining claim before release so the pump cannot re-claim it immediately. */
+export const INGRESS_DRAINING_RELEASE_HOLD_MS = 5_000;
 
 type DeferredLaneOccupancy = "hold" | "release";
 
@@ -235,8 +239,12 @@ export function createChannelIngressDrain<
   ) => {
     if (err instanceof GatewayDrainingError) {
       // Root dispatch closes before durable transport admission during restart.
-      // Preserve the row for the successor without spending its failure budget.
-      await releaseClaim(claim, { recordAttempt: false });
+      // Hold the claim so the pump cannot re-dispatch the same row every ~40ms,
+      // then release without spending the failure budget.
+      await sleep(INGRESS_DRAINING_RELEASE_HOLD_MS, options.abortSignal);
+      if (!isStopped()) {
+        await releaseClaim(claim, { recordAttempt: false });
+      }
       return;
     }
     const disposition = resolveIngressFailureDisposition({
