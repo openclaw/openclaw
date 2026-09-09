@@ -2940,6 +2940,54 @@
     "target": "插件 SDK 事件与钩子语义"
   },
   {
+    "source": "Load pipeline and registry",
+    "target": "加载流水线与注册表"
+  },
+  {
+    "source": "Plugin load pipeline and registry",
+    "target": "插件加载流水线与注册表"
+  },
+  {
+    "source": "Provider hooks and catalogs",
+    "target": "提供商 Hook 与目录"
+  },
+  {
+    "source": "Provider runtime hooks and catalogs",
+    "target": "提供商运行时 Hook 与目录"
+  },
+  {
+    "source": "Core runtime helpers",
+    "target": "核心运行时辅助方法"
+  },
+  {
+    "source": "Gateway routes",
+    "target": "Gateway 路由"
+  },
+  {
+    "source": "Channel surfaces",
+    "target": "频道接口"
+  },
+  {
+    "source": "Packs and import paths",
+    "target": "扩展包与导入路径"
+  },
+  {
+    "source": "Package packs and import paths",
+    "target": "软件包扩展包与导入路径"
+  },
+  {
+    "source": "Context engines",
+    "target": "上下文引擎"
+  },
+  {
+    "source": "New capability",
+    "target": "新能力"
+  },
+  {
+    "source": "Adding a new capability",
+    "target": "添加新能力"
+  },
+  {
     "source": "Channel message adapter",
     "target": "频道消息适配器"
   },
