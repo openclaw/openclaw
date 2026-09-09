@@ -180,6 +180,32 @@ function createMemoryManager(overrides?: {
   };
 }
 
+function createSessionSearchInput(
+  sessionPath: string,
+  sessionSnippet: string,
+): NonNullable<Parameters<typeof createMemoryManager>[0]> {
+  return {
+    searchResults: [
+      {
+        path: sessionPath,
+        startLine: 1,
+        endLine: 2,
+        score: 30,
+        snippet: sessionSnippet,
+        source: "sessions",
+      },
+      {
+        path: "MEMORY.md",
+        startLine: 5,
+        endLine: 6,
+        score: 10,
+        snippet: "durable memory",
+        source: "memory",
+      },
+    ],
+  };
+}
+
 describe("getMemoryWikiPage", () => {
   it("enforces visibility for all current session storage layouts", async () => {
     const { config } = await createQueryVault({
@@ -1376,26 +1402,9 @@ describe("searchMemoryWiki", () => {
         },
       },
     });
-    const manager = createMemoryManager({
-      searchResults: [
-        {
-          path: "sessions/visible-session.jsonl",
-          startLine: 1,
-          endLine: 2,
-          score: 30,
-          snippet: "global transcript",
-          source: "sessions",
-        },
-        {
-          path: "MEMORY.md",
-          startLine: 5,
-          endLine: 6,
-          score: 10,
-          snippet: "durable memory",
-          source: "memory",
-        },
-      ],
-    });
+    const manager = createMemoryManager(
+      createSessionSearchInput("sessions/visible-session.jsonl", "global transcript"),
+    );
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
     const results = await searchMemoryWiki({
@@ -1423,26 +1432,12 @@ describe("searchMemoryWiki", () => {
       storePath: "(test)",
       store: {},
     });
-    const manager = createMemoryManager({
-      searchResults: [
-        {
-          path: "sessions/secondary/deleted-stem.jsonl.deleted.2026-02-16T22-27-33.000Z",
-          startLine: 1,
-          endLine: 2,
-          score: 30,
-          snippet: "archived transcript",
-          source: "sessions",
-        },
-        {
-          path: "MEMORY.md",
-          startLine: 5,
-          endLine: 6,
-          score: 10,
-          snippet: "durable memory",
-          source: "memory",
-        },
-      ],
-    });
+    const manager = createMemoryManager(
+      createSessionSearchInput(
+        "sessions/secondary/deleted-stem.jsonl.deleted.2026-02-16T22-27-33.000Z",
+        "archived transcript",
+      ),
+    );
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
     const results = await searchMemoryWiki({
@@ -1563,26 +1558,9 @@ describe("searchMemoryWiki", () => {
         },
       },
     });
-    const manager = createMemoryManager({
-      searchResults: [
-        {
-          path: "sessions/other/main.jsonl",
-          startLine: 1,
-          endLine: 2,
-          score: 30,
-          snippet: "other transcript",
-          source: "sessions",
-        },
-        {
-          path: "MEMORY.md",
-          startLine: 5,
-          endLine: 6,
-          score: 10,
-          snippet: "durable memory",
-          source: "memory",
-        },
-      ],
-    });
+    const manager = createMemoryManager(
+      createSessionSearchInput("sessions/other/main.jsonl", "other transcript"),
+    );
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
     const results = await searchMemoryWiki({
@@ -1613,26 +1591,9 @@ describe("searchMemoryWiki", () => {
         },
       },
     });
-    const manager = createMemoryManager({
-      searchResults: [
-        {
-          path: "sessions/visible-session.jsonl",
-          startLine: 1,
-          endLine: 2,
-          score: 30,
-          snippet: "other transcript",
-          source: "sessions",
-        },
-        {
-          path: "MEMORY.md",
-          startLine: 5,
-          endLine: 6,
-          score: 10,
-          snippet: "durable memory",
-          source: "memory",
-        },
-      ],
-    });
+    const manager = createMemoryManager(
+      createSessionSearchInput("sessions/visible-session.jsonl", "other transcript"),
+    );
     getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
 
     const results = await searchMemoryWiki({
