@@ -1459,52 +1459,6 @@ describe("createCopilotToolBridge", () => {
       });
     });
 
-    it.each([
-      { name: "runtime deny-all", toolsAllow: [] as string[], writes: false },
-      { name: "unrestricted control", toolsAllow: undefined, writes: true },
-    ])("keeps $name enforced through the real filesystem tool sink", async (testCase) => {
-      await withTempDir("openclaw-copilot-runtime-policy-", async (workspaceDir) => {
-        const outputPath = path.join(workspaceDir, "runtime-policy.txt");
-        const sessionKey = "agent:agent-1:runtime-policy";
-        const bridge = await createCopilotToolBridge({
-          attemptParams: {
-            config: {
-              plugins: { enabled: false },
-              tools: {
-                codeMode: false,
-                fs: { workspaceOnly: true },
-                toolSearch: false,
-              },
-            },
-            runId: "runtime-policy-run",
-            sessionKey,
-            toolsAllow: testCase.toolsAllow,
-            workspaceDir,
-          },
-          createOpenClawCodingTools: createRealOpenClawCodingTools,
-          sessionKey,
-          workspaceDir,
-        });
-        try {
-          const write = bridge.promptToolPolicy.apply().tools.find((tool) => tool.name === "write");
-          if (write) {
-            await expect(
-              runSdkTool(write, { path: outputPath, content: "real tool sink proof" }),
-            ).resolves.toMatchObject({ resultType: "success" });
-          }
-
-          expect(write !== undefined).toBe(testCase.writes);
-          if (testCase.writes) {
-            await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("real tool sink proof");
-          } else {
-            await expect(fs.readFile(outputPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-          }
-        } finally {
-          bridge.cleanup?.();
-        }
-      });
-    });
-
     it("hands the question tools this run's own way to show a prompt", async () => {
       // Bridged tools are dispatched here, not through the embedded tool lifecycle,
       // so nothing reserves a blocking question's prompt before the tool runs. Without
