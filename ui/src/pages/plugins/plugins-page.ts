@@ -59,8 +59,6 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private error: string | null = null;
   @state() private query = "";
   @state() private settingsTab: PluginSettingsTab = "installed";
-  @state() private inventoryExpanded = false;
-  @state() private inventorySearchOpen = false;
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, PluginRowMessage> = {};
   @state() private detail: {
@@ -325,6 +323,7 @@ class PluginsPage extends OpenClawLightDomElement {
           void this.discovery.refresh();
           void this.discovery.refreshCategories();
           void this.discovery.refreshFeatured();
+          void this.discovery.refreshTrending();
         }
       }
     } else {
@@ -551,6 +550,34 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
+  private async installCatalogEntry(id: string): Promise<void> {
+    const scope = this.gateway.capture();
+    if (!scope || !this.canMutate()) {
+      return;
+    }
+    try {
+      const result = await loadPluginDiscoveryDetail(scope.client, id);
+      if (!this.gateway.isCurrent(scope)) {
+        return;
+      }
+      this.catalogIcons.sync(
+        [
+          ...(this.discovery.result?.items ?? []),
+          ...this.discovery.featured,
+          ...this.discovery.trending,
+          result.plugin,
+        ],
+        result.detail.author?.imageUrl ? [result.detail.author.imageUrl] : [],
+      );
+      this.installWizardController.open(result);
+    } catch (error) {
+      if (this.gateway.isCurrent(scope)) {
+        this.discovery.error = formatUiError(error);
+        this.requestUpdate();
+      }
+    }
+  }
+
   private closeCatalogDetail() {
     this.catalogDetail = null;
     this.catalogDetailTab = "readme";
@@ -565,6 +592,7 @@ class PluginsPage extends OpenClawLightDomElement {
       [
         ...(this.discovery.result?.items ?? []),
         ...this.discovery.featured,
+        ...this.discovery.trending,
         ...(detail ? [detail.plugin] : []),
       ],
       detail?.detail.author?.imageUrl ? [detail.detail.author.imageUrl] : [],
@@ -622,8 +650,6 @@ class PluginsPage extends OpenClawLightDomElement {
       error: this.error,
       query: this.query,
       settingsTab: this.settingsTab,
-      inventoryExpanded: this.inventoryExpanded,
-      inventorySearchOpen: this.inventorySearchOpen,
       busy: this.busy,
       messages: this.messages,
       detail: this.detail,
@@ -644,17 +670,9 @@ class PluginsPage extends OpenClawLightDomElement {
         selectHubTab: (tab) => this.selectHubTab(tab),
         closeCatalogDetail: () => this.closeCatalogDetail(),
         retryCatalogDetail: () => void this.showCatalogDetail(this.catalogDetail?.id ?? null),
+        installCatalogEntry: (id) => void this.installCatalogEntry(id),
         selectCatalogDetailTab: (tab) => {
           this.catalogDetailTab = tab;
-        },
-        setInventoryExpanded: (expanded) => {
-          this.inventoryExpanded = expanded;
-        },
-        setInventorySearchOpen: (open) => {
-          this.inventorySearchOpen = open;
-          if (!open) {
-            this.query = "";
-          }
         },
         setQuery: (query) => {
           this.query = query;

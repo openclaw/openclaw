@@ -119,12 +119,19 @@ suite.define(() => {
           });
         }
 
+        await workboardRow.click();
+        await waitForControlUiRoute(page, {
+          pathname: "/settings/plugins/workboard",
+          routeId: "plugin-settings",
+        });
+        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
+
         await gateway.deferNext("plugins.setEnabled");
-        const enabledSwitch = workboardRow.getByRole("switch", {
+        const enabledSwitch = page.getByRole("switch", {
           name: "Enable or disable Workboard",
           exact: true,
         });
-        await workboardRow.locator("wa-switch").click();
+        await page.locator("wa-switch").click();
         expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
         const pendingDraft = await gateway.waitForRequest("config.set");
@@ -149,13 +156,13 @@ suite.define(() => {
         });
 
         await expect.poll(() => enabledSwitch.isChecked()).toBe(true);
-        expect(await gateway.getRequests("plugins.inspect")).toHaveLength(0);
+        expect((await gateway.getRequests("plugins.inspect")).length).toBeGreaterThan(0);
         expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBeGreaterThanOrEqual(2);
         if (captureUiProofEnabled) {
-          await workboardRow.screenshot({
+          await page.locator(".content").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-after-enable.png"),
           });

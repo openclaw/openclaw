@@ -561,31 +561,35 @@ function pluginMethodResponses() {
     },
     "plugins.catalog.browse": {
       cases: [
-        { match: { intent: "featured", pageSize: 9 }, response: featuredResult },
+        { match: { intent: "featured", pageSize: 8 }, response: featuredResult },
         {
-          match: { intent: "all", cursor: "catalog-page-2", pageSize: 25 },
+          match: { intent: "trending", pageSize: 8 },
+          response: { items: discoveryResult.items.slice(0, 8) },
+        },
+        {
+          match: { intent: "all", cursor: "catalog-page-2", pageSize: 100 },
           response: {
             items: secondDiscoveryPageItems,
             nextCursor: "catalog-page-3",
           },
         },
         {
-          match: { intent: "all", cursor: "catalog-page-3", pageSize: 25 },
+          match: { intent: "all", cursor: "catalog-page-3", pageSize: 100 },
           response: { items: finalDiscoveryPageItems },
         },
         {
-          match: { intent: "official", pageSize: 25 },
+          match: { intent: "official", pageSize: 100 },
           response: { items: [matrixDiscoveryPlugin] },
         },
         {
-          match: { intent: "all", category: "channels", pageSize: 25 },
+          match: { intent: "all", category: "channels", pageSize: 100 },
           response: { items: [matrixDiscoveryPlugin] },
         },
         {
-          match: { intent: "all", query: "matrix", pageSize: 25 },
+          match: { intent: "all", query: "matrix", pageSize: 100 },
           response: { items: [matrixDiscoveryPlugin] },
         },
-        { match: { intent: "all", pageSize: 25 }, response: discoveryResult },
+        { match: { intent: "all", pageSize: 100 }, response: discoveryResult },
       ],
     },
     "plugins.catalog.categories": discoveryCategories,

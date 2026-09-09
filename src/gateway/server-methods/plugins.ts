@@ -181,7 +181,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const query = params.query?.trim();
       const intent = params.intent ?? "all";
-      const includeBundledOnly = intent === "bundled" || (intent === "all" && Boolean(query));
+      const includeBundledOnly = intent === "bundled" || intent === "all";
       let published: Awaited<ReturnType<typeof fetchAllOfficialClawHubPlugins>> = [];
       let publicationError: string | undefined;
       if (includeBundledOnly) {

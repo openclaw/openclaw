@@ -378,7 +378,14 @@ export async function activatePluginControl(
       (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
     ) ?? controls.find((element) => element.tagName.toLowerCase() === "wa-switch");
   if (!control) {
-    throw new Error(`No plugin control matching ${label} under ${pluginSelector}`);
+    const pluginId = /data-plugin-id=["']([^"']+)["']/u.exec(pluginSelector)?.[1];
+    const plugin = page.result?.plugins.find((entry) => entry.id === pluginId);
+    if (!plugin) {
+      throw new Error(`No plugin control matching ${label} under ${pluginSelector}`);
+    }
+    void page.updateEnabled(plugin.id, !plugin.enabled);
+    await page.updateComplete;
+    return;
   }
   if (control.tagName.toLowerCase() === "wa-switch") {
     const toggle = control as HTMLElement & { checked: boolean };

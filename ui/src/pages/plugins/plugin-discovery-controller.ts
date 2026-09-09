@@ -12,7 +12,8 @@ import type {
 import type { PluginDiscoveryIntent } from "./catalog-results.ts";
 import type { PluginCardAttribution } from "./plugin-card.ts";
 
-const CATALOG_PAGE_SIZE = 25;
+const CATALOG_PAGE_SIZE = 100;
+const CATALOG_SECTION_SIZE = 8;
 
 type CatalogPageLoad = {
   items: PluginDiscoveryEntry[];
@@ -38,6 +39,8 @@ export class PluginDiscoveryController {
   categoriesError: string | null = null;
   featured: PluginDiscoveryEntry[] = [];
   featuredError: string | null = null;
+  trending: PluginDiscoveryEntry[] = [];
+  trendingError: string | null = null;
   intent: PluginDiscoveryIntent = "all";
   category: string | null = null;
   query = "";
@@ -54,6 +57,7 @@ export class PluginDiscoveryController {
   private readonly browseTask: Task;
   private readonly categoriesTask: Task;
   private readonly featuredTask: Task;
+  private readonly trendingTask: Task;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -111,17 +115,37 @@ export class PluginDiscoveryController {
         client
           ? client.request<PluginDiscoveryResult>(
               "plugins.catalog.browse",
-              { intent: "featured", pageSize: 9 },
+              { intent: "featured", pageSize: CATALOG_SECTION_SIZE },
               { signal },
             )
           : initialState,
       onComplete: (result) => {
-        this.featured = result.items.filter((plugin) => !plugin.local.enabled).slice(0, 9);
+        this.featured = result.items.slice(0, CATALOG_SECTION_SIZE);
         this.rememberEntries(result.items);
         this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
         this.featuredError = formatUiError(error);
+      },
+    });
+    this.trendingTask = new Task(host, {
+      autoRun: false,
+      args: () => [this.gateway.isConnected() ? this.gateway.getClient() : null] as const,
+      task: ([client], { signal }) =>
+        client
+          ? client.request<PluginDiscoveryResult>(
+              "plugins.catalog.browse",
+              { intent: "trending", pageSize: CATALOG_SECTION_SIZE },
+              { signal },
+            )
+          : initialState,
+      onComplete: (result) => {
+        this.trending = result.items.slice(0, CATALOG_SECTION_SIZE);
+        this.rememberEntries(result.items);
+        this.gateway.onEntriesChanged?.();
+      },
+      onError: (error) => {
+        this.trendingError = formatUiError(error);
       },
     });
   }
@@ -132,6 +156,10 @@ export class PluginDiscoveryController {
 
   get featuredLoading(): boolean {
     return this.gateway.isConnected() && this.featuredTask.status === TaskStatus.PENDING;
+  }
+
+  get trendingLoading(): boolean {
+    return this.gateway.isConnected() && this.trendingTask.status === TaskStatus.PENDING;
   }
 
   get pageNumber(): number {
@@ -204,9 +232,11 @@ export class PluginDiscoveryController {
       shouldFetch = !params.query && Boolean(cursor);
     }
 
+    const groupedOverview =
+      params.intent === "all" && !params.category && !params.query && !params.cursor;
     return {
-      items: available.slice(0, CATALOG_PAGE_SIZE),
-      overflow: available.slice(CATALOG_PAGE_SIZE),
+      items: groupedOverview ? available : available.slice(0, CATALOG_PAGE_SIZE),
+      overflow: groupedOverview ? [] : available.slice(CATALOG_PAGE_SIZE),
       ...(cursor ? { nextCursor: cursor } : {}),
       observed,
       ...(remoteError ? { remoteError } : {}),
@@ -234,12 +264,20 @@ export class PluginDiscoveryController {
     ) {
       void this.refreshFeatured();
     }
+    if (
+      this.trendingTask.status === TaskStatus.INITIAL &&
+      this.trending.length === 0 &&
+      !this.trendingError
+    ) {
+      void this.refreshTrending();
+    }
   }
 
   invalidate(): void {
     void this.browseTask.run([null, this.intent, this.category, this.committedQuery]);
     void this.categoriesTask.run([null]);
     void this.featuredTask.run([null]);
+    void this.trendingTask.run([null]);
     this.result = null;
     this.error = null;
     this.remoteError = null;
@@ -247,6 +285,8 @@ export class PluginDiscoveryController {
     this.categoriesError = null;
     this.featured = [];
     this.featuredError = null;
+    this.trending = [];
+    this.trendingError = null;
     this.entriesById.clear();
     this.resetPagination();
   }
@@ -287,12 +327,23 @@ export class PluginDiscoveryController {
     await this.featuredTask.run([client]);
   }
 
+  async refreshTrending(): Promise<void> {
+    const client = this.gateway.getClient();
+    if (!client || !this.gateway.isConnected()) {
+      return;
+    }
+    this.trendingError = null;
+    await this.trendingTask.run([client]);
+  }
+
   selectIntent(intent: PluginDiscoveryIntent): void {
     this.intent = intent;
+    this.category = null;
     void this.refresh();
   }
 
   selectCategory(category: string | null): void {
+    this.intent = "all";
     this.category = category;
     void this.refresh();
   }
@@ -301,6 +352,7 @@ export class PluginDiscoveryController {
     this.query = query;
     if (query.trim()) {
       this.intent = "all";
+      this.category = null;
     }
     this.host.requestUpdate();
     if (this.searchTimer) {

@@ -88,6 +88,9 @@ describe("PluginsPage routing", () => {
     expect(page.querySelector(".plugins-settings-tabs")?.classList.contains("oc-segmented")).toBe(
       true,
     );
+    const row = page.querySelector('[data-plugin-id="workboard"]');
+    expect(row?.querySelector("wa-switch")).toBeNull();
+    expect(row?.querySelector('[data-plugin-state="disabled"]')).not.toBeNull();
   });
 
   it.each([

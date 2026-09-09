@@ -7,7 +7,7 @@ export type PluginCardAttribution = {
   official: boolean;
 };
 
-type InstalledPluginState = "enabled" | "disabled" | "needs-setup" | "error";
+export type InstalledPluginState = "enabled" | "disabled" | "needs-setup" | "error";
 
 function installedPluginStatePresentation(state: InstalledPluginState): {
   label: string;
@@ -24,6 +24,22 @@ function installedPluginStatePresentation(state: InstalledPluginState): {
       return { label: t("pluginsPage.needsAttention"), tone: "danger" };
   }
   return state satisfies never;
+}
+
+export function renderPluginStateStatus(
+  state: InstalledPluginState,
+  className = "installed-plugins-card__status-notice",
+): TemplateResult {
+  const presentation = installedPluginStatePresentation(state);
+  return html`<span
+    class="${className} settings-status settings-status--${presentation.tone}"
+    data-plugin-state=${state}
+    role="img"
+    aria-label=${presentation.label}
+    title=${presentation.label}
+  >
+    <span class="settings-status__dot" aria-hidden="true"></span>
+  </span>`;
 }
 
 export function renderPluginOfficialBadge(): TemplateResult {
@@ -63,26 +79,11 @@ export function renderPluginCardIdentity(params: {
   state?: InstalledPluginState;
   subtitle?: string;
 }): TemplateResult {
-  const statePresentation = params.state
-    ? installedPluginStatePresentation(params.state)
-    : undefined;
   return html`<div class="installed-plugins-card__identity">
     <div class="plugin-card-title-row">
       <h3>${params.name}</h3>
       ${params.attribution.official ? renderPluginOfficialBadge() : nothing}
-      ${
-        statePresentation && params.state
-          ? html`<span
-              class="installed-plugins-card__status-notice settings-status settings-status--${statePresentation.tone}"
-              data-plugin-state=${params.state}
-              role="img"
-              aria-label=${statePresentation.label}
-              title=${statePresentation.label}
-            >
-              <span class="settings-status__dot" aria-hidden="true"></span>
-            </span>`
-          : nothing
-      }
+      ${params.state ? renderPluginStateStatus(params.state) : nothing}
     </div>
     ${params.subtitle ? renderPluginCardSummary(params.subtitle) : nothing}
     ${

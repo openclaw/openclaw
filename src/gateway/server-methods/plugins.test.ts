@@ -614,7 +614,8 @@ describe("plugin management Gateway handlers", () => {
       error: undefined,
       response: {
         items: [],
-        remoteError: "ClawHub is unavailable: service unavailable.",
+        remoteError:
+          "ClawHub is unavailable: service unavailable. Bundled plugins remain available.",
       },
     });
   });

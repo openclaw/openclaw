@@ -40,7 +40,7 @@ import {
 } from "./consent-dialog.ts";
 import { renderPluginDetailRows, renderPluginDetailShell } from "./detail-shell.ts";
 import { buildInstalledPluginDetailTabs, type InstalledPluginDetailTab } from "./detail-tabs.ts";
-import { renderPluginOfficialBadge } from "./plugin-card.ts";
+import { renderPluginOfficialBadge, renderPluginStateStatus } from "./plugin-card.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
 import { matchesPluginQuery, pluginStatePresentation } from "./plugin-state-presentation.ts";
 import { renderPluginLifecycle } from "./settings-lifecycle.ts";
@@ -184,31 +184,13 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
     (plugin) => plugin.id,
     (plugin) => {
       const key = pluginRowKey(plugin.id);
-      const busy = Boolean(props.busy[key]);
-      const setupBlockedReason =
-        plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null;
-      const toggle = renderSettingsToggle({
-        checked: plugin.enabled,
-        disabled:
-          Boolean(setupBlockedReason) ||
-          (!props.mutationBlockedReason && (!props.canMutate || busy)),
-        ariaDisabled: Boolean(setupBlockedReason) || !props.canMutate,
-        ariaLabel: t("pluginsPage.toggleNamed", { name: plugin.name }),
-        onChange: (enabled) => {
-          if (setupBlockedReason || !props.canMutate || busy) {
-            return false;
-          }
-          props.onSetEnabled(plugin.id, enabled, key);
-          return true;
-        },
-      });
       return html`
         <article
           class="settings-row settings-row--nav plugins-settings-row oc-settings-row"
           data-plugin-id=${plugin.id}
           @click=${(event: Event) => {
             const target = event.target;
-            if (!(target instanceof Element) || !target.closest("wa-switch, button, a")) {
+            if (!(target instanceof Element) || !target.closest("button, a")) {
               props.onOpenPlugin(plugin.id);
             }
           }}
@@ -233,7 +215,11 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
             >
           </a>
           <div class="settings-row__control oc-settings-row-control">
-            ${renderReasonedDisabledControl(setupBlockedReason ?? props.mutationBlockedReason, toggle)}
+            ${
+              plugin.state === "not-installed"
+                ? nothing
+                : renderPluginStateStatus(plugin.state, "plugins-settings-row__status")
+            }
             <span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </div>
           ${renderMessage(props.messages[key])}

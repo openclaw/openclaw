@@ -19,6 +19,7 @@ type PluginsHubHeaderProps = {
   onSelect: (tab: PluginsHubTab) => void;
   secondaryAction?: {
     label: string;
+    icon?: TemplateResult;
     onClick: () => void;
   };
 };
@@ -43,10 +44,14 @@ export function renderPluginsHubHeader(props: PluginsHubHeaderProps): TemplateRe
           props.secondaryAction
             ? html`<button
                 type="button"
-                class="btn btn--sm plugins-hub-header__secondary oc-action oc-action-secondary"
+                class="btn btn--sm ${
+                  props.secondaryAction.icon ? "btn--icon" : ""
+                } plugins-hub-header__secondary oc-action oc-action-secondary"
+                aria-label=${props.secondaryAction.label}
+                title=${props.secondaryAction.icon ? props.secondaryAction.label : nothing}
                 @click=${props.secondaryAction.onClick}
               >
-                ${props.secondaryAction.label}
+                ${props.secondaryAction.icon ?? props.secondaryAction.label}
               </button>`
             : nothing
         }

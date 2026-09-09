@@ -78,39 +78,39 @@ it("switches filtered tabs to All when starting a unified search", async () => {
 
 it("pages through retained unified-search overflow without another request", async () => {
   vi.useFakeTimers();
-  const matches = Array.from({ length: 26 }, (_, index) => entry(index));
+  const matches = Array.from({ length: 101 }, (_, index) => entry(index));
   const { controller, request } = setup([{ items: matches }]);
 
   controller.updateQuery("plugin");
   await vi.runAllTimersAsync();
-  expect(controller.result?.items).toHaveLength(25);
+  expect(controller.result?.items).toHaveLength(100);
 
   await controller.nextPage();
-  expect(controller.result?.items.map((item) => item.id)).toEqual(["plugin-25"]);
+  expect(controller.result?.items.map((item) => item.id)).toEqual(["plugin-100"]);
 
   await controller.previousPage();
-  expect(controller.result?.items).toHaveLength(25);
+  expect(controller.result?.items).toHaveLength(100);
   expect(request).toHaveBeenCalledTimes(1);
 });
 
 it("consumes cursorless Bundled overflow without requesting the first page again", async () => {
-  const bundled = Array.from({ length: 26 }, (_, index) => entry(index));
+  const bundled = Array.from({ length: 101 }, (_, index) => entry(index));
   const { controller, request } = setup([{ items: bundled }]);
   controller.intent = "bundled";
 
   await controller.refresh();
-  expect(controller.result?.items).toHaveLength(25);
+  expect(controller.result?.items).toHaveLength(100);
 
   await controller.nextPage();
-  expect(controller.result?.items.map((item) => item.id)).toEqual(["plugin-25"]);
+  expect(controller.result?.items.map((item) => item.id)).toEqual(["plugin-100"]);
   expect(request).toHaveBeenCalledTimes(1);
 });
 
 it("publishes visible entry changes on fetched and cached page transitions", async () => {
-  const firstPage = Array.from({ length: 25 }, (_, index) =>
+  const firstPage = Array.from({ length: 100 }, (_, index) =>
     entry(index, `https://cdn.example.test/${index}.png`),
   );
-  const secondPage = [entry(25, "https://cdn.example.test/25.png")];
+  const secondPage = [entry(100, "https://cdn.example.test/100.png")];
   const { controller, onEntriesChanged } = setup([
     { items: firstPage, nextCursor: "page-2" },
     { items: secondPage },
@@ -120,10 +120,10 @@ it("publishes visible entry changes on fetched and cached page transitions", asy
   expect(onEntriesChanged).toHaveBeenCalledTimes(1);
 
   await controller.nextPage();
-  expect(controller.result?.items.map((item) => item.id)).toEqual(["plugin-25"]);
+  expect(controller.result?.items.map((item) => item.id)).toEqual(["plugin-100"]);
   expect(onEntriesChanged).toHaveBeenCalledTimes(2);
 
   await controller.previousPage();
-  expect(controller.result?.items).toHaveLength(25);
+  expect(controller.result?.items).toHaveLength(100);
   expect(onEntriesChanged).toHaveBeenCalledTimes(3);
 });

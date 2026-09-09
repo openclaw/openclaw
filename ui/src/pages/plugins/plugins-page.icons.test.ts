@@ -97,7 +97,7 @@ describe("PluginsPage icon routing", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
   });
 
-  it("prefers installed package icons over legacy bundled art", async () => {
+  it("prefers installed package icons over legacy art in unified catalog cards", async () => {
     const createObjectURL = vi.fn(() => "blob:package-icon");
     vi.stubGlobal(
       "URL",
@@ -203,34 +203,22 @@ describe("PluginsPage icon routing", () => {
       createPluginsRouteData(harness.gateway, result, createPluginsRouteLocation("/plugins")),
     );
 
-    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/__openclaw__/plugin-icon/%40openclaw%2Fbrave-plugin",
-      "/__openclaw__/plugin-icon/%40openclaw%2Fdeepseek-provider",
       "/__openclaw__/plugin-icon/%40openclaw%2Fdiscord",
-      "/__openclaw__/plugin-icon/%40vendor%2Fbrave-plugin",
     ]);
-    await waitForFast(() => {
+    await waitForFast(() =>
       expect(
-        ["@openclaw/brave-plugin", "@openclaw/deepseek-provider"].map((pluginId) =>
-          page
-            .querySelector(`[data-plugin-id="${pluginId}"] img.plugins-icon`)
-            ?.getAttribute("src"),
-        ),
-      ).toEqual(["blob:package-icon", "blob:package-icon"]);
-    });
-    expect(
-      page.querySelector('[data-plugin-id="@openclaw/discord"] img')?.getAttribute("src"),
-    ).toBe("/plugin-art/discord.webp");
-    expect(
-      page.querySelector('[data-plugin-id="ch_brave"] img.plugins-icon')?.getAttribute("src"),
-    ).toBe("blob:package-icon");
+        page.querySelector('[data-plugin-id="ch_brave"] img.plugins-icon')?.getAttribute("src"),
+      ).toBe("blob:package-icon"),
+    );
     expect(page.querySelector('[data-plugin-id="ch_discord"] img')?.getAttribute("src")).toBe(
       "/plugin-art/discord.webp",
     );
   });
 
-  it("fetches package icons only for installed cards rendered by the inventory", async () => {
+  it("fetches package icons for installed settings rows", async () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
@@ -262,19 +250,18 @@ describe("PluginsPage icon routing", () => {
 
     const { page } = await mountPage(
       createContext(harness.gateway),
-      createPluginsRouteData(harness.gateway, result, createPluginsRouteLocation("/plugins")),
+      createPluginsRouteData(
+        harness.gateway,
+        result,
+        createPluginsRouteLocation("/settings/plugins"),
+      ),
     );
-
-    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(4));
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
-      plugins.slice(0, 4).map((plugin) => `/__openclaw__/plugin-icon/${plugin.id}`),
-    );
-    expect(page.querySelectorAll(".installed-plugins-card")).toHaveLength(4);
-
-    page.querySelector<HTMLButtonElement>(".installed-plugins__group-action")?.click();
 
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(12));
-    expect(page.querySelectorAll(".installed-plugins-card")).toHaveLength(12);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(
+      plugins.map((plugin) => `/__openclaw__/plugin-icon/${plugin.id}`),
+    );
+    expect(page.querySelectorAll(".plugins-settings-row")).toHaveLength(12);
   });
 
   it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
