@@ -1,3 +1,4 @@
+import type { messagingApi } from "@line/bot-sdk";
 // Line tests cover quoted reply delivery plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
@@ -11,10 +12,15 @@ import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
 
 const logVerboseMock = vi.hoisted(() => vi.fn());
+const ssrfMocks = vi.hoisted(() => ({ resolvePinnedHostnameWithPolicy: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: logVerboseMock,
   danger: (t: string) => t,
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
 }));
 
 // baseDeliveryParams answers on account "acc" in chat "line:user:1".
@@ -176,9 +182,14 @@ describe("the push delivery path", () => {
       cfg,
     });
 
-    expect(mocks.pushMessageLine.mock.calls.map((args) => [args[1], args[2].quoteToken])).toEqual([
-      ["first", "token-push"],
-      ["second", undefined],
+    expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+    const messages = expectDefined(
+      mocks.pushMessagesLine.mock.calls[0]?.[1],
+      "push messages",
+    ) as messagingApi.Message[];
+    expect(messages).toEqual([
+      { type: "text", text: "first", quoteToken: "token-push" },
+      { type: "text", text: "second" },
     ]);
   });
 
@@ -256,10 +267,22 @@ describe("the push delivery path", () => {
     });
 
     // The caption is the only part LINE lets a quote ride on; the image itself cannot.
-    expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
-      "line:group:Cmedia",
-      "here you go",
-      expect.objectContaining({ quoteToken: "token-media" }),
+    expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+    const messages = expectDefined(
+      mocks.pushMessagesLine.mock.calls[0]?.[1],
+      "push messages",
+    ) as messagingApi.Message[];
+    expect(messages).toEqual([
+      { type: "text", text: "here you go", quoteToken: "token-media" },
+      {
+        type: "image",
+        originalContentUrl: "https://example.com/image.jpg",
+        previewImageUrl: "https://example.com/image.jpg",
+      },
+    ]);
+    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith(
+      "example.com",
+      expect.objectContaining({ policy: { allowPrivateNetwork: false } }),
     );
   });
 
@@ -290,12 +313,18 @@ describe("the push delivery path", () => {
       cfg,
     });
 
-    expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
-    expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
-      "line:group:Cordered",
-      "After the card",
-      expect.objectContaining({ quoteToken: "token-ordered" }),
-    );
+    expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+    const messages = expectDefined(
+      mocks.pushMessagesLine.mock.calls[0]?.[1],
+      "push messages",
+    ) as messagingApi.Message[];
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({ type: "flex", altText: "Code" });
+    expect(messages[1]).toEqual({
+      type: "text",
+      text: "After the card",
+      quoteToken: "token-ordered",
+    });
   });
 
   it("sends unquoted when the push answers nothing", async () => {
