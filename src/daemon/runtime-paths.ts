@@ -6,7 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { isMissingPathError } from "../infra/errno.js";
-import { isSupportedBunVersion, isSupportedNodeVersion } from "../infra/runtime-guard.js";
+import {
+  isSupportedBunVersion,
+  isSupportedNodeVersion,
+  parseSemver,
+} from "../infra/runtime-guard.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
@@ -226,6 +230,7 @@ async function resolveRuntimeInfo(
     const sqliteSelectionError = parsed.sqliteSelectionError;
     if (
       !(typeof version === "string" || (runtime === "bun" && version === null)) ||
+      (runtime === "node" && typeof version === "string" && !parseSemver(version)) ||
       !(typeof sqliteVersion === "string" || sqliteVersion === null) ||
       !(typeof sqliteSelectionError === "string" || sqliteSelectionError == null)
     ) {

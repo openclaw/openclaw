@@ -142,6 +142,16 @@ describe.each(["node", "bun"] as const)("%s probe failures", (runtime) => {
   });
 });
 
+it("treats an unparseable Node version as a probe failure", async () => {
+  mockNodePathPresent("/usr/bin/node");
+  const result = await resolveSystemNodeInfo({
+    env: {},
+    platform: "linux",
+    execFile: async () => nodeRuntime("unparseable"),
+  });
+  expect(result?.status).toBe("probe-failed");
+});
+
 describe("resolvePreferredNodePath", () => {
   const darwinNode = "/opt/homebrew/bin/node";
   const fnmNode = "/Users/test/.fnm/node-versions/v24.16.0/installation/bin/node";

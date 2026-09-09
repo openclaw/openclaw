@@ -679,7 +679,7 @@ describe("install-cli.sh", () => {
     expect(wrapperIndex).toBeGreaterThan(compatibilityIndex);
   });
 
-  it.each([false, true])(
+  it.each(["none", "unsupported", "missing"])(
     "reports a successful runtime replacement (%s) without restarting again",
     (replaced) => {
       const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-gateway-refresh-"));
@@ -695,7 +695,8 @@ describe("install-cli.sh", () => {
           'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
           'if [[ "$*" == "gateway install --force" ]]; then',
           '  printf "%s\\n" "incidental-output-canary"',
-          '  if [[ "$REPLACED" == 1 ]]; then printf "%s\\n" "Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install."; fi',
+          '  if [[ "$REPLACED" == unsupported ]]; then printf "%s\\n" "Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install."; fi',
+          '  if [[ "$REPLACED" == missing ]]; then printf "%s\\n" "Replacing missing Gateway service Node (/old/node) with /new/node; refreshing the install."; fi',
           "fi",
         ].join("\n"),
       );
@@ -711,11 +712,13 @@ describe("install-cli.sh", () => {
             "is_gateway_daemon_loaded() { return 0; }",
             "refresh_gateway_service_if_loaded",
           ].join("\n"),
-          { COMMAND_LOG: commandLog, REPLACED: replaced ? "1" : "0" },
+          { COMMAND_LOG: commandLog, REPLACED: replaced },
         );
 
         expect(result.status).toBe(0);
-        expect(result.stderr.includes("Gateway service Node runtime replaced.")).toBe(replaced);
+        expect(result.stderr.includes("Gateway service Node runtime replaced.")).toBe(
+          replaced !== "none",
+        );
         expect(result.stdout + result.stderr).not.toContain("incidental-output-canary");
         expect(result.stdout + result.stderr).not.toContain("/old/node");
         expect(result.stdout + result.stderr).not.toContain("/new/node");

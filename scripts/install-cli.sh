@@ -1764,7 +1764,7 @@ refresh_gateway_service_if_loaded() {
   emit_json step name gateway-service status start
   log "Refreshing loaded gateway service..."
 
-  if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/^Replacing unsupported Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+  if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/^Replacing unsupported Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/^Replacing missing Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
     refresh_output="$(printf '%s\n' "$refresh_output" | sed '/^node-runtime-replaced$/d')"
     if [[ -n "$refresh_output" ]]; then
       emit_json step name gateway-service status warn reason definition-mutation-denied

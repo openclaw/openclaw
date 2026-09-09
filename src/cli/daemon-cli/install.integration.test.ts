@@ -158,20 +158,40 @@ describe("runDaemonInstall integration", () => {
     clearConfigCache();
   });
 
-  it.each([
-    { platform: "darwin", force: false },
-    { platform: "linux", force: false },
-    { platform: "darwin", force: true },
-    { platform: "linux", force: true },
-  ] as const)(
-    "repairs unsupported Node in the $platform definition (force=$force)",
-    async ({ platform, force }) => {
+  it.each(
+    (
+      [
+        { platform: "darwin", force: false },
+        { platform: "linux", force: false },
+        { platform: "darwin", force: true },
+        { platform: "linux", force: true },
+      ] as const
+    ).flatMap(({ platform, force }) =>
+      ["unsupported", "missing", "non-executable"].map((condition) => ({
+        platform,
+        force,
+        condition,
+      })),
+    ),
+  )(
+    "repairs $condition Node in the $platform definition (force=$force)",
+    async ({ platform, force, condition }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       const entry = path.join(tempHome, "dist", "index.js");
       await fs.mkdir(path.dirname(entry), { recursive: true });
       await fs.writeFile(entry, "");
       const originalArgv = process.argv;
-      const oldNode = path.join(accountHome, ".hermes", "node", "bin", "node");
+      const oldNode = path.join(
+        accountHome,
+        `.hermes-${condition}-${platform}-${force}`,
+        "node",
+        "bin",
+        "node",
+      );
+      if (condition === "non-executable") {
+        await fs.mkdir(path.dirname(oldNode), { recursive: true });
+        await fs.writeFile(oldNode, "not executable\n", { mode: 0o600 });
+      }
       const definitionPath = path.join(
         tempHome,
         platform === "darwin" ? "gateway.plist" : "gateway.service",
@@ -187,7 +207,7 @@ describe("runDaemonInstall integration", () => {
           : buildSystemdUnit({ programArguments });
       const runExec = processExec.runExec;
       vi.spyOn(processExec, "runExec").mockImplementation(async (file, args, options) => {
-        if (file === oldNode) {
+        if (file === oldNode && condition === "unsupported") {
           return {
             stdout: JSON.stringify({ nodeVersion: "22.23.1", sqliteVersion: "3.53.4" }),
             stderr: "",
@@ -239,7 +259,9 @@ describe("runDaemonInstall integration", () => {
         expect(repaired?.programArguments).toContain(entry);
         expect(await fs.readFile(definitionPath, "utf8")).not.toContain(oldNode);
         expect(runtimeLogs.join("\n")).toContain(
-          "Replacing unsupported Gateway service Node 22.23.1",
+          condition === "unsupported"
+            ? "Replacing unsupported Gateway service Node 22.23.1"
+            : `Replacing missing Gateway service Node (${oldNode})`,
         );
       } finally {
         process.argv = originalArgv;

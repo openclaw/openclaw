@@ -1,4 +1,6 @@
 // Gateway service installer: writes config defaults, resolves credentials, and installs service definitions.
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSupportedOpenClawNodeVersion, SUPPORTED_NODE_VERSIONS } from "../../../node-version.mjs";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
@@ -32,6 +34,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
+import { hasErrnoCode, isMissingPathError } from "../../infra/errno.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -276,10 +279,19 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const recordedNode = existingManagedCommand?.programArguments[0];
   if (runtimeRaw === "node" && !wrapperPath && recordedNode && isNodeRuntime(recordedNode)) {
     const recordedRuntime = await resolveNodeRuntimeInfo(recordedNode, installEnv);
-    if (
-      recordedRuntime.status === "unsupported" &&
-      !isSupportedOpenClawNodeVersion(recordedRuntime.version)
-    ) {
+    const missingRuntime =
+      recordedRuntime.status === "probe-failed" &&
+      (await fs.access(recordedNode, fsConstants.X_OK).then(
+        () => false,
+        (error: unknown) => isMissingPathError(error) || hasErrnoCode(error, "EACCES"),
+      ));
+    const replacement = missingRuntime
+      ? `missing Gateway service Node (${recordedNode})`
+      : recordedRuntime.status === "unsupported" &&
+          !isSupportedOpenClawNodeVersion(recordedRuntime.version)
+        ? `unsupported Gateway service Node ${recordedRuntime.version} (${recordedNode})`
+        : undefined;
+    if (replacement) {
       try {
         runtimePath = await resolvePreferredNodePath({
           env: installEnv,
@@ -296,9 +308,11 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         fail(`Gateway runtime selection failed: ${String(error)}`);
         return;
       }
-      autoRefreshMessage = `Replacing unsupported Gateway service Node ${recordedRuntime.version} (${recordedNode}) with ${runtimePath}; refreshing the install.`;
+      autoRefreshMessage = `Replacing ${replacement} with ${runtimePath}; refreshing the install.`;
     } else if (recordedRuntime.status === "probe-failed" && !opts.force) {
-      fail(recordedRuntime.error.message);
+      fail(
+        `${recordedRuntime.error.message} Reinstall with: ${formatCliCommand("openclaw gateway install --force")}.`,
+      );
       return;
     }
   }

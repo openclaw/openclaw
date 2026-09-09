@@ -777,20 +777,20 @@ describe("runDaemonInstall", () => {
   );
 
   it.each([
-    { failure: "probe", message: "Node runtime probe failed" },
+    { failure: "probe", message: "openclaw gateway install --force" },
     { failure: "no-replacement", message: "No supported Node runtime is available" },
     { failure: "sealed-definition", message: "SERVICE_DEFINITION_UNKNOWN" },
   ])(
     "refuses runtime repair on $failure without claiming success",
     async ({ failure, message }) => {
       service.isLoaded.mockResolvedValue(true);
-      const oldNode = "/opt/old/bin/node";
+      const oldNode = failure === "probe" ? process.execPath : "/opt/old/bin/node";
       service.readCommand.mockResolvedValue({
         programArguments: [oldNode, "/opt/openclaw/dist/index.js", "gateway"],
       });
       runExecMock.mockImplementation(async (file: string) => {
         if (failure === "probe") {
-          throw new Error("EACCES");
+          throw new Error("runtime probe timed out");
         }
         return nodeProbeOutput(
           failure === "sealed-definition" && file !== oldNode ? "26.8.1" : "22.23.1",
