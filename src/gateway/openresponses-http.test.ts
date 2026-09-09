@@ -2864,11 +2864,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const text = await res.text();
     const events = parseSseEvents(text);
     expect(
-      events
-        .filter((event) =>
-          ["response.completed", "response.incomplete", "response.failed"].includes(event.event),
-        )
-        .map((event) => event.event),
+      collectSseEventTypes(events).filter((type) =>
+        ["response.completed", "response.incomplete", "response.failed"].includes(type),
+      ),
     ).toEqual(["response.incomplete"]);
     expect(text.split("data: [DONE]")).toHaveLength(2);
     const incomplete = parseSseData(findSseEvent(events, "response.incomplete")) as {
