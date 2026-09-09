@@ -140,12 +140,9 @@ describe("embedded run auth plan provider pin", () => {
     });
   });
 
-  it.each([
-    { pin: true, authMode: "api-key", authRequirement: "api-key", kind: "direct" },
-    { pin: false, authMode: "oauth", authRequirement: "subscription", kind: "profile" },
-  ])(
-    "selects $authMode with ambient Codex OAuth and api-key pin=$pin",
-    async ({ pin, authMode, authRequirement, kind }) => {
+  it.each([true, false])(
+    "uses host API-key auth without importing Codex OAuth (pin=%s)",
+    async (pin) => {
       const config: OpenClawConfig = {
         models: {
           providers: {
@@ -202,13 +199,12 @@ describe("embedded run auth plan provider pin", () => {
       );
 
       expect(prepared.preparedAuthAttempts[0]).toMatchObject({
-        kind,
-        plan: { selectedAuthMode: authMode, modelRoute: { authRequirement } },
+        kind: "direct",
+        plan: { selectedAuthMode: "api-key", modelRoute: { authRequirement: "api-key" } },
       });
-      expect(prepared.attemptAuthProfileStore.profiles["openai:default"]?.type).toBe(
-        pin ? undefined : "oauth",
-      );
-      expect(model).toEqual(pin ? platformModel : subscriptionModel);
+      expect(prepared.attemptAuthProfileStore.profiles["openai:default"]).toBeUndefined();
+      expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
+      expect(model).toEqual(platformModel);
     },
   );
 });

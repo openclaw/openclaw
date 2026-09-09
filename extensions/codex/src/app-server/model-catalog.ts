@@ -95,19 +95,21 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       if (discovery?.enabled === false) {
         return [];
       }
+      const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });
       const usesNativeHome =
-        configured.appServer?.homeScope !== "agent" &&
-        configured.appServer?.transport !== "websocket";
+        configured.appServer?.homeScope !== "agent" && options.start.transport === "stdio";
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
         return [];
       }
-      const { start } = resolveCodexAppServerRuntimeOptions({
-        pluginConfig: {
-          ...configured,
-          appServer: { ...configured.appServer, ...(usesNativeHome ? { homeScope: "user" } : {}) },
-        },
-      });
+      const { start } = usesNativeHome
+        ? resolveCodexAppServerRuntimeOptions({
+            pluginConfig: {
+              ...configured,
+              appServer: { ...configured.appServer, homeScope: "user" },
+            },
+          })
+        : options;
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
       const result = await withCodexAppServerJsonClient(
         { startOptions: start, config: params.config, agentDir: params.agentDir, timeoutMs },

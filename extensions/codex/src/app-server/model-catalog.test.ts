@@ -119,6 +119,34 @@ describe("Codex app-server model catalog", () => {
     expect(listModelsMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { transport: "unix", url: "unix:///tmp/native-catalog.sock" },
+    { transport: "websocket", url: "ws://127.0.0.1:12345" },
+  ])("uses the $transport server account without probing a local login", async (appServer) => {
+    vi.mocked(probeCodexNativeAuth).mockResolvedValue(undefined);
+    listModelsMock.mockResolvedValue({
+      models: [
+        {
+          id: "synthetic-opaque",
+          model: "synthetic-opaque",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+    const pluginConfig = { appServer: { ...appServer, homeScope: "user" } };
+    expect(await owner.load(catalogParams, pluginConfig)).toContainEqual(
+      expect.objectContaining({ id: "synthetic-opaque", nativeRuntime: "codex" }),
+    );
+    expect(
+      owner.read(
+        { ...catalogParams, provider: "openai", modelId: "synthetic-opaque" },
+        pluginConfig,
+      ),
+    ).toEqual({ accountType: "apiKey" });
+    expect(probeCodexNativeAuth).not.toHaveBeenCalled();
+  });
+
   it("discovers configured hidden models without exposing other hidden models or readiness", async () => {
     const models = ["visible", "configured", "other-agent", "unconfigured", "other-provider"].map(
       (name) => ({

@@ -906,7 +906,9 @@ describe("prepared model catalog worker boundary", () => {
       );
       expect(latestModes.codex).toBeUndefined();
       fixture.supersede();
-      await expect(listModels()).rejects.toThrow();
+      await expect(
+        loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: ["openai"] }),
+      ).rejects.toThrow("superseded");
     },
   );
 
