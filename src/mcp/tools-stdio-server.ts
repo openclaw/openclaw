@@ -117,8 +117,7 @@ export async function connectToolsMcpServerToStdio(server: Server): Promise<void
   // MCP stdio requires stdout to stay protocol-only.
   routeLogsToStderr();
 
-  const transport = new StdioServerTransport();
-  const previousOnClose = server.onclose;
+  const closeFailures = new Set<unknown>();
   let shuttingDown = false;
   const shutdownComplete = createDeferredCore<unknown[]>();
   const shutdown = () => {
@@ -130,30 +129,30 @@ export async function connectToolsMcpServerToStdio(server: Server): Promise<void
     process.stdin.off("close", shutdown);
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
-    if (server.onclose === onServerClose) {
-      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes a callback property, not EventTarget.
-      server.onclose = previousOnClose;
-    }
     void (async () => {
       try {
         await server.close();
-        shutdownComplete.resolve([]);
       } catch (error) {
-        shutdownComplete.resolve([error]);
+        closeFailures.add(error);
+      } finally {
+        shutdownComplete.resolve([...closeFailures]);
       }
     })();
   };
-  const onServerClose = () => {
-    try {
-      previousOnClose?.call(server);
-    } finally {
-      shutdown();
+  class OwnedStdioTransport extends StdioServerTransport {
+    override async close(): Promise<void> {
+      try {
+        await super.close();
+      } catch (error) {
+        // SDK self-close can consume this rejection before the serving owner sees it.
+        closeFailures.add(error);
+        throw error;
+      } finally {
+        shutdown();
+      }
     }
-  };
-
-  // Transport closure is terminal for this stdio owner, not for the reusable Server class.
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes a callback property, not EventTarget.
-  server.onclose = onServerClose;
+  }
+  const transport = new OwnedStdioTransport();
   process.stdin.once("end", shutdown);
   process.stdin.once("close", shutdown);
   process.once("SIGINT", shutdown);

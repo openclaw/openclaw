@@ -1,4 +1,3 @@
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
@@ -6,6 +5,9 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 
 const lifetime = createFixtureLifetime();
 const repository = fileURLToPath(new URL("../../", import.meta.url));
+const runner = fileURLToPath(
+  new URL("../../test/fixtures/mcp-registration/runner.mjs", import.meta.url),
+);
 afterAll(() => lifetime.cleanup());
 
 describe("standalone MCP registration lifetime", () => {
@@ -15,12 +17,7 @@ describe("standalone MCP registration lifetime", () => {
       lifetime.run(async () => {
         const root = lifetime.createTempDir("openclaw-mcp-registration-");
         const result = await runNodeScript(
-          [
-            path.join(repository, "test/fixtures/mcp-registration/runner.mjs"),
-            repository,
-            mode,
-            root,
-          ],
+          [runner, repository, mode, root],
           { PATH: process.env.PATH },
           120_000,
           { cwd: repository, requireProcessTreeExit: true, maxBuffer: 1024 * 1024 },

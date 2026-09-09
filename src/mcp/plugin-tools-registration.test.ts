@@ -253,6 +253,58 @@ describe("MCP serving registration ownership", () => {
     }
   });
 
+  it.each([false, true])(
+    "joins owned stdio self-close without replacing the caller callback (throws: %s)",
+    async (throws) => {
+      const fixture = nativePlugin();
+      const closeError = new Error("caller close callback failed");
+      let callbacks = 0;
+      const onclose = () => {
+        callbacks++;
+        if (throws) {
+          throw closeError;
+        }
+      };
+      let server: ReturnType<typeof createToolsMcpServer> | undefined;
+      let selfClose: Promise<unknown> | undefined;
+      try {
+        const servingFailure = await serveRegisteredToolsMcpServer({
+          acquireRegistry: fixture.acquire,
+          createServer(tools, sdkResourceHost) {
+            server = createToolsMcpServer({ name: "native-self-close", tools, sdkResourceHost });
+            // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes callback properties, not EventTarget.
+            server.onclose = onclose;
+            const created = server;
+            queueMicrotask(() => {
+              const transport = created.transport;
+              if (!transport) {
+                throw new Error("Expected the connected owned stdio transport");
+              }
+              selfClose = transport.close().then(
+                () => undefined,
+                (error: unknown) => error,
+              );
+            });
+            return server;
+          },
+        }).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(await selfClose).toBe(throws ? closeError : undefined);
+        expect(servingFailure).toBe(throws ? closeError : undefined);
+        expect(callbacks).toBe(1);
+        expect(server?.onclose).toBe(onclose);
+        expect(fixture.state.database?.isOpen).toBe(false);
+        expect(fixture.state.disposals).toBe(1);
+      } finally {
+        await selfClose;
+        await server?.close();
+        fixture.cleanup();
+      }
+    },
+  );
+
   it("preserves real SDK connect and transport-close errors while joining a failed native disposer once", async () => {
     const fixture = nativePlugin({ failDisposal: true });
     const [outbound, inbound] = InMemoryTransport.createLinkedPair();
