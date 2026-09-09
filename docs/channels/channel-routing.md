@@ -202,3 +202,5 @@ This is consistent across channels.
 - [Groups](/channels/groups)
 - [Broadcast groups](/channels/broadcast-groups)
 - [Pairing](/channels/pairing)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Agent bindings](/concepts/agent-bindings)

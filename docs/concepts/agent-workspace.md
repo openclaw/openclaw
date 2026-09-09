@@ -242,3 +242,4 @@ Suggested `.gitignore` starter:
 - [Sandboxing](/gateway/sandboxing) - workspace access in sandboxed environments
 - [Session](/concepts/session) - session storage paths
 - [Standing orders](/automation/standing-orders) - persistent instructions in workspace files
+- [System prompt](/concepts/system-prompt) - where workspace files are injected into the prompt

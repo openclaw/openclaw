@@ -3694,5 +3694,53 @@
   {
     "source": "Rollback and recovery",
     "target": "回滚与恢复"
+  },
+  {
+    "source": "Standing orders",
+    "target": "常设指令"
+  },
+  {
+    "source": "Standing intents",
+    "target": "常设意图"
+  },
+  {
+    "source": "Multi-agent routing",
+    "target": "多智能体路由"
+  },
+  {
+    "source": "Agent bindings",
+    "target": "智能体绑定"
+  },
+  {
+    "source": "System prompt",
+    "target": "系统提示词"
+  },
+  {
+    "source": "Usage tracking",
+    "target": "用量追踪"
+  },
+  {
+    "source": "Honcho memory",
+    "target": "Honcho 记忆"
+  },
+  {
+    "source": "Managed worktrees",
+    "target": "托管工作树"
+  },
+  {
+    "source": "Typing indicators",
+    "target": "正在输入指示器"
+  },
+  {
+    "source": "Session management deep dive",
+    "target": "会话管理深入解析"
+  },
+  {
+    "source": "Personal agent benchmark pack",
+    "target": "个人智能体基准包"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
   }
 ]

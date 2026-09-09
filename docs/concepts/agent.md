@@ -155,3 +155,4 @@ At minimum, set:
 - [Multi-agent routing](/concepts/multi-agent)
 - [Session management](/concepts/session)
 - [Group chats](/channels/group-messages)
+- [System prompt](/concepts/system-prompt)

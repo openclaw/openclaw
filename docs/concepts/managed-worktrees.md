@@ -186,3 +186,8 @@ The bundled [Workboard plugin](/plugins/workboard) can materialize a card worksp
 `path` identifies the source git checkout. `branch` is optional and becomes the base ref. For a full-host caller, Workboard creates or reuses `wb-<card-id>`, runs the subagent with the managed checkout as its working directory, and writes the resolved path and branch back to the card. Gateway clients need `operator.admin` for full-host materialization. On run end, Workboard removes the checkout only when it is provably lossless; dirty work or unpushed commits remain available.
 
 For a workspace-bound caller, `path` and the repository root must exactly match the target agent workspace. Workboard then runs directly in that directory and records a directory workspace instead of host-materializing a managed worktree. The target must use a writable, non-shared Docker sandbox for the same workspace, its live container hash must match the requested mounts and policy, and it must not expose elevated execution, host control, host-wide sessions, persisted host/node execution, or unclassified plugin and MCP tools. If the target policy or live container is broader, dispatch leaves the card unclaimed and reports the incompatible state.
+
+## Related
+
+- [Workboard plugin](/plugins/workboard) — cards that materialize a managed worktree
+- [Configuration reference](/gateway/config-runtime#worktreeroot) — where `worktreeRoot` is set

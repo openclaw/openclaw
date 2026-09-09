@@ -466,4 +466,5 @@ the same policy under `streaming.progress`:
 - [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) - message lifecycle and delivery
 - [Retry](/concepts/retry) - retry behavior on delivery failure
+- [Typing indicators](/concepts/typing-indicators) - typing state shown while a turn is in flight
 - [Channels](/channels) - per-channel streaming support

@@ -798,3 +798,4 @@ resolved agent workspace rather than assuming the default workspace.
 - [Webhooks](/automation/cron-jobs#webhooks)
 - [Configuration](/gateway/config-hooks#hooks)
 - [Agent workspace](/concepts/agent-workspace)
+- [Standing orders](/automation/standing-orders)
