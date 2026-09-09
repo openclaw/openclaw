@@ -86,7 +86,16 @@ describe("sessions_send tool description", () => {
   });
 });
 
-describe("sessions_spawn delegation guidance", () => {
+describe("sessions_spawn tool description", () => {
+  it("advertises thinking overrides for visible sessions", () => {
+    const description = describeSessionsSpawnTool();
+
+    expect(description).toContain("`thinking` is supported with `visible=true` for child sessions");
+    expect(description).not.toContain(
+      'omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`',
+    );
+  });
+
   it("bounds API investigation handoffs without delegating quick lookups", () => {
     const description = describeSessionsSpawnTool();
     expect(description).toContain(
