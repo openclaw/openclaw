@@ -236,7 +236,8 @@ export type CreateResponseBody = z.infer<typeof CreateResponseBodySchema>;
 // ─────────────────────────────────────────────────────────────────────────────
 
 type OutputTextContentPart = Extract<ContentPart, { type: "output_text" }>;
-type OutputStatus = "in_progress" | "completed";
+// Output items may end incomplete when the response hit its output-token budget.
+type OutputStatus = "in_progress" | "completed" | "incomplete";
 
 export type OutputItem =
   | (Omit<Extract<ItemParam, { type: "message" }>, "id" | "role" | "content" | "status"> & {
@@ -269,6 +270,10 @@ export type ResponseResource = {
   output: OutputItem[];
   usage: Usage;
   error?: { code: string; message: string } | undefined;
+  // Mirrors the OpenAI Responses incomplete_details contract; only
+  // max_output_tokens is reachable because provider content_filter outcomes
+  // map to failed responses instead.
+  incomplete_details?: { reason: "max_output_tokens" } | undefined;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

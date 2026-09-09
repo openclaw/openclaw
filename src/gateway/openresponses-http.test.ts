@@ -2813,6 +2813,66 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await ensureResponseConsumed(res);
   });
 
+  it("reports output-budget truncation as incomplete on the non-streaming path", async () => {
+    const port = enabledPort;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "A partial answer cut off by the output token budget mid-sent" }],
+      meta: { stopReason: "length" },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "write a long story",
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      status?: string;
+      incomplete_details?: { reason?: string };
+      output?: Array<Record<string, unknown>>;
+    };
+    expect(json.status).toBe("incomplete");
+    expect(json.incomplete_details?.reason).toBe("max_output_tokens");
+    expect(json.output?.map((item) => item.type)).toEqual(["message"]);
+    expect(json.output?.[0]?.status).toBe("incomplete");
+    expect(json.output?.[0]?.phase).toBe("final_answer");
+    await ensureResponseConsumed(res);
+  });
+
+  it("carries output-budget truncation as incomplete on the streaming path", async () => {
+    const port = enabledPort;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "A streamed partial answer cut off by the output token budget mid-" }],
+      meta: { stopReason: "length" },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "write another long story",
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+    const completed = events.find((event) => event.event === "response.completed");
+    expect(completed).toBeDefined();
+    const completedPayload = JSON.parse(completed?.data ?? "{}") as {
+      response?: {
+        status?: string;
+        incomplete_details?: { reason?: string };
+        output?: Array<Record<string, unknown>>;
+      };
+    };
+    expect(completedPayload.response?.status).toBe("incomplete");
+    expect(completedPayload.response?.incomplete_details?.reason).toBe("max_output_tokens");
+    expect(completedPayload.response?.output?.[0]?.status).toBe("incomplete");
+    expect(completedPayload.response?.output?.[0]?.phase).toBe("final_answer");
+  });
+
   it("rejects an unsatisfied function tool_choice on the non-streaming path", async () => {
     const port = enabledPort;
     agentCommandMock.mockClear();

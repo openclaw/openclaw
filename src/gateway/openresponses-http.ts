@@ -360,6 +360,7 @@ function createResponseResource(params: {
   output: OutputItem[];
   usage?: Usage;
   error?: { code: string; message: string };
+  incomplete?: boolean;
 }): ResponseResource {
   return {
     id: params.id,
@@ -370,6 +371,7 @@ function createResponseResource(params: {
     output: params.output,
     usage: params.usage ?? createEmptyUsage(),
     error: params.error,
+    ...(params.incomplete ? { incomplete_details: { reason: "max_output_tokens" as const } } : {}),
   };
 }
 
@@ -801,16 +803,21 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
+      // Preserve the agent's authoritative output-budget outcome: a reply that
+      // ended on stopReason "length" is partial, so the response must say
+      // incomplete instead of claiming a completed answer.
+      const truncatedByOutputBudget = stopReason === "length";
       const response = createResponseResource({
         ...responseIdentity,
         model,
-        status: "completed",
+        status: truncatedByOutputBudget ? "incomplete" : "completed",
+        incomplete: truncatedByOutputBudget,
         output: [
           createAssistantOutputItem({
             id: outputItemId,
             text: assistantText || "No response from OpenClaw.",
             phase: "final_answer",
-            status: "completed",
+            status: truncatedByOutputBudget ? "incomplete" : "completed",
           }),
         ],
         usage,
@@ -862,6 +869,9 @@ export async function handleOpenResponsesHttpRequest(
   let closed = false;
   let unsubscribe = () => {};
   let finalUsage: Usage | undefined;
+  // Mirrors the chat-completions finalFinishReason capture: true when the agent
+  // turn ended on stopReason "length" and the streamed answer is partial.
+  let finalTruncatedByOutputBudget = false;
   let finalizeRequested: { status: ResponseResource["status"]; errorMessage?: string } | null =
     null;
   let finalizeScheduled = false;
@@ -937,7 +947,7 @@ export async function handleOpenResponsesHttpRequest(
           finalizeRequested.status === "completed" && !finalToolCalls
             ? "final_answer"
             : "commentary",
-        status: "completed",
+        status: finalTruncatedByOutputBudget ? "incomplete" : "completed",
       });
 
       writeSseEvent(res, {
@@ -971,7 +981,13 @@ export async function handleOpenResponsesHttpRequest(
       const finalResponse = createResponseResource({
         ...responseIdentity,
         model,
-        status: finalizeRequested.status,
+        status:
+          finalizeRequested.status === "failed"
+            ? "failed"
+            : finalTruncatedByOutputBudget
+              ? "incomplete"
+              : "completed",
+        incomplete: finalizeRequested.status !== "failed" && finalTruncatedByOutputBudget,
         output,
         usage,
         ...(finalizeRequested.status === "failed"
@@ -1218,6 +1234,7 @@ export async function handleOpenResponsesHttpRequest(
       }
 
       finalResultText = resultPayloadText;
+      finalTruncatedByOutputBudget = stopReason === "length";
       finalToolCalls =
         stopReason === "tool_calls" && pendingToolCalls?.length ? pendingToolCalls : undefined;
       maybeFinalize();
