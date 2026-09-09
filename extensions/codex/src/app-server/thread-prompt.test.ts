@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { describe, expect, it } from "vitest";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
@@ -192,13 +193,12 @@ describe("buildDeveloperInstructions delegation guidance", () => {
 
 describe("buildDeveloperInstructions UI presentation guidance", () => {
   const uiTools = ["show_widget", "dashboard", "portal", "message"].map(
-    (name) =>
-      ({
-        type: "function",
-        name,
-        description: `Use ${name}`,
-        inputSchema: { type: "object", properties: name === "message" ? { clawhub: {} } : {} },
-      }) satisfies CodexDynamicToolSpec,
+    (name): CodexDynamicToolFunctionSpec => ({
+      type: "function",
+      name,
+      description: `Use ${name}`,
+      inputSchema: { type: "object", properties: name === "message" ? { clawhub: {} } : {} },
+    }),
   );
 
   it.each([
