@@ -4,8 +4,8 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
 import { buildUsageFilterOptions } from "./query.ts";
+import { usageSession, zeroCost } from "./test-helpers/usage-fixtures.test-support.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { usageSession, zeroCost } from "./usage-fixtures.test-support.ts";
 import { renderUsage } from "./view.ts";
 
 const noop = vi.fn();

@@ -1,4 +1,4 @@
-import type { UsageSessionEntry, UsageTotals } from "./types.ts";
+import type { UsageSessionEntry, UsageTotals } from "../types.ts";
 
 export const chartTotals = {
   input: 1_200_000,

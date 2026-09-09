@@ -10,7 +10,7 @@ import {
   emptyTotals,
   emptyUsageResponses,
   chartTotals as totals,
-} from "../pages/usage/usage-fixtures.test-support.ts";
+} from "../pages/usage/test-helpers/usage-fixtures.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   takeControlUiViewportScreenshot,
