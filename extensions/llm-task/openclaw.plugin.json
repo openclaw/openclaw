@@ -1,6 +1,6 @@
 {
   "id": "llm-task",
-  "categories": ["tools"],
+  "categories": ["agent-orchestration", "developer-tools"],
   "doctorContract": {
     "configRepair": true
   },

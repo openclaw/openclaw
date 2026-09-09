@@ -1,6 +1,6 @@
 {
   "id": "tokenjuice",
-  "categories": ["runtime"],
+  "categories": ["context", "developer-tools"],
   "activation": {
     "onStartup": false
   },

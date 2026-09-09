@@ -1,6 +1,6 @@
 {
   "id": "beam",
-  "categories": ["runtime"],
+  "categories": ["developer-tools", "inbox-collaboration"],
   "activation": {
     "onStartup": false,
     "onConfigPaths": ["plugins.entries.beam"]

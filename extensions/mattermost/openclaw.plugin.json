@@ -1,6 +1,6 @@
 {
   "id": "mattermost",
-  "categories": ["channels"],
+  "categories": ["channels", "inbox-collaboration"],
   "name": "Mattermost",
   "description": "OpenClaw Mattermost channel plugin.",
   "doctorContract": {

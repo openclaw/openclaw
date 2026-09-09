@@ -1,6 +1,6 @@
 {
   "id": "clickclack",
-  "categories": ["channels", "tools"],
+  "categories": ["channels", "inbox-collaboration"],
   "name": "ClickClack",
   "description": "OpenClaw ClickClack channel plugin.",
   "doctorContract": {

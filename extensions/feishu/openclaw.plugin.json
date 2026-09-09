@@ -1,6 +1,6 @@
 {
   "id": "feishu",
-  "categories": ["channels", "tools"],
+  "categories": ["channels", "documents-files", "inbox-collaboration"],
   "doctorContract": {
     "configRepair": true
   },

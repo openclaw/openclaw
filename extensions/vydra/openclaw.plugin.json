@@ -1,6 +1,6 @@
 {
   "id": "vydra",
-  "categories": ["models", "voice", "media"],
+  "categories": ["media", "voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false

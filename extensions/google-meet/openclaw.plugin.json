@@ -1,6 +1,6 @@
 {
   "id": "google-meet",
-  "categories": ["voice", "tools"],
+  "categories": ["voice", "inbox-collaboration"],
   "doctorContract": {
     "configRepair": true
   },

@@ -1,6 +1,6 @@
 {
   "id": "crabbox",
-  "categories": ["runtime", "tools"],
+  "categories": ["infrastructure", "agent-orchestration"],
   "doctorContract": {
     "stateMigrations": [{ "id": "crabbox-warm-profile-v3", "doctorOnly": true }]
   },

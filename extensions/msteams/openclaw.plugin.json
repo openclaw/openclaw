@@ -1,6 +1,6 @@
 {
   "id": "msteams",
-  "categories": ["channels"],
+  "categories": ["channels", "inbox-collaboration"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [

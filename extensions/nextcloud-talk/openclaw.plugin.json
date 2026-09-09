@@ -1,6 +1,6 @@
 {
   "id": "nextcloud-talk",
-  "categories": ["channels"],
+  "categories": ["channels", "inbox-collaboration"],
   "doctorContract": {
     "configRepair": true
   },
