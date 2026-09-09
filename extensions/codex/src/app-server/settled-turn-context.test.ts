@@ -32,7 +32,7 @@ function message(value: unknown, identity: string): AgentMessage {
   return attachCodexMirrorIdentity(value as AgentMessage, identity);
 }
 
-function settledTurn() {
+function settledTurn(): [AgentMessage, AgentMessage, AgentMessage] {
   return [
     message({ role: "user", content: "Send it." }, "turn-2:prompt"),
     message(
@@ -252,6 +252,69 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     ]);
     expect(historyMessages).toEqual(before);
   });
+
+  it.each([
+    { budget: "items", overflow: 0 },
+    { budget: "items", overflow: 1 },
+    { budget: "bytes", overflow: 0 },
+    { budget: "bytes", overflow: 1 },
+  ])(
+    "preserves current evidence at the $budget limit (overflow=$overflow)",
+    async ({ budget, overflow }) => {
+      const settledMessages = settledTurn();
+      const expected = [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Send it." }] },
+        { type: "function_call", call_id: "call-2", name: "message", arguments: "{}" },
+        { type: "function_call_output", call_id: "call-2", output: "sent" },
+      ];
+      if (budget === "items") {
+        for (let index = 0; index < 197 + overflow; index += 1) {
+          settledMessages.splice(
+            -1,
+            0,
+            message(
+              { role: "assistant", content: [{ type: "text", text: "Working." }] },
+              `turn-2:text-${index}`,
+            ),
+          );
+          expected.splice(-1, 0, {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Working." }],
+          });
+        }
+      } else {
+        const bytes = expected.reduce(
+          (sum, item) => sum + Buffer.byteLength(JSON.stringify(item)),
+          0,
+        );
+        const prompt = "Send it." + "x".repeat(512 * 1024 - bytes + overflow);
+        settledMessages[0] = attachUpstreamUserText(settledMessages[0], prompt);
+        expected[0] = {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: prompt }],
+        };
+      }
+      const historyMessages = [
+        message({ role: "user", content: "Older context." }, "older:prompt"),
+        ...settledMessages,
+      ];
+      const before = structuredClone(historyMessages);
+      const context = await captureContext({
+        historyMessages,
+        mirroredMessages: settledMessages,
+        settledMessages,
+      });
+      if (overflow) {
+        expect(context).toBeUndefined();
+      } else {
+        expect(context).toBeDefined();
+        expect(context?.data).toEqual(expected);
+      }
+      expect(historyMessages).toEqual(before);
+    },
+  );
 
   it.each([false, true])(
     "keeps tool pairs atomic across steering (oversized=%s)",

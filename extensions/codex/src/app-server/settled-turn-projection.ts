@@ -375,7 +375,7 @@ export class SettledTurnPriorContext {
     this.active = undefined;
   }
 
-  private trim(currentCount: number, currentBytes: number): void {
+  private trim(currentCount: number, currentBytes: number): boolean {
     while (
       this.count + currentCount + (this.omitted ? 1 : 0) > MAX_RESPONSE_ITEMS ||
       this.bytes + currentBytes + (this.omitted ? responseItemBytes(OMITTED_HISTORY) : 0) >
@@ -383,14 +383,15 @@ export class SettledTurnPriorContext {
     ) {
       const oldest = this.groups.shift();
       if (!oldest) {
-        throw new CodexHistoryRejection(
-          currentCount + 1 > MAX_RESPONSE_ITEMS ? "item_limit" : "byte_limit",
-        );
+        // Current evidence already passed its own limits. Only the advisory
+        // notice cannot fit; the finalizer instructions also warn about omissions.
+        return false;
       }
       this.count -= oldest.items.length;
       this.bytes -= oldest.bytes;
       this.omitted = true;
     }
+    return this.omitted;
   }
 
   prependTo(current: JsonValue[]): JsonValue[] {
@@ -398,7 +399,7 @@ export class SettledTurnPriorContext {
       throw new CodexHistoryRejection("incomplete_pairing");
     }
     this.finishGroup();
-    this.trim(
+    const includeNotice = this.trim(
       current.length,
       current.reduce<number>((bytes, item) => bytes + responseItemBytes(item), 0),
     );
@@ -413,7 +414,7 @@ export class SettledTurnPriorContext {
       }
     }
     return [
-      ...(this.omitted ? [OMITTED_HISTORY] : []),
+      ...(includeNotice ? [OMITTED_HISTORY] : []),
       ...this.groups.flatMap((group) => group.items),
       ...current,
     ];
