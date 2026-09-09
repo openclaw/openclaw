@@ -86,11 +86,39 @@ openclaw tui --local
 
 Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter; press again to close it.
 
+## Questions
+
+When the agent calls [`ask_user`](/tools/ask-user), the TUI opens a question
+prompt for the active session. This works in Gateway mode and local mode
+(`openclaw chat` or `openclaw tui --local`). Prompts with up to three questions
+show one at a time, with a stepper and the time remaining.
+
+Use arrow keys or number keys to choose an option, then Enter to continue.
+For multi-select questions, toggle the choices you want and confirm them.
+**Other…** always lets you type your own answer, and **Skip** declines the entire prompt.
+After the final question, the TUI submits the answers and shows a compact
+system notice.
+
+Press Esc to collapse the prompt and return to the composer. The question
+stays pending with a slim status indicator; `/question` reopens it. A normal
+reply still answers eligible pending questions from an active run. Expired
+questions and questions answered elsewhere close automatically. Reconnecting
+or switching sessions restores pending questions for the selected session.
+In local mode, pending questions last only for the current TUI process.
+
+Gateway-connected [`secrets`](/tools/secrets) requests use a masked input that
+renders bullets and keeps the value out of chat and input history. The prompt
+shows the entry name, reason, and proposed allowed hosts. Hosts are read-only
+here: submitting accepts the displayed list; use the Control UI to edit it.
+Local mode cannot fulfill store-bound requests; use `openclaw secrets store`
+or the Control UI with a running Gateway. Enter credentials only in a masked
+prompt, never in the composer.
+
 ## Keyboard shortcuts
 
 - Enter: send message
 - Shift+Enter or Ctrl+J: insert a newline without sending
-- Esc: abort active run
+- Esc: collapse an open question prompt, or abort the active run from the composer
 - Ctrl+C: clear input (press twice to exit)
 - Ctrl+D: exit
 - Ctrl+L: model picker
@@ -113,6 +141,7 @@ Core:
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model|default>` (or `/models`; `default` clears the session override)
+- `/question` (reopen the active session's pending question)
 
 Gateway-connected model updates honor the optional
 [`agents.defaults.modelSelectionScope`](/gateway/config-agents/models#agentsdefaultsmodelselectionscope)

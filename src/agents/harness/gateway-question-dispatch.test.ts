@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
+import { isEmbeddedMode, setEmbeddedMode } from "../../infra/embedded-mode.js";
+import {
+  EmbeddedQuestionBroker,
+  clearEmbeddedQuestionBroker,
+  setEmbeddedQuestionBroker,
+} from "../../infra/embedded-question-broker.js";
 import { createDeferredCore as deferred } from "../../shared/deferred.js";
 import {
   createAskUserTool,
@@ -10,7 +16,9 @@ import {
 } from "../tools/ask-user-tool.js";
 import {
   QuestionAnswerUnconfirmedError,
+  resolveAgentQuestionGatewayCall,
   type AgentHarnessQuestionGatewayCall,
+  type AgentQuestionDispatcher,
 } from "./gateway-question-dispatch.js";
 import {
   cancelPendingAgentQuestionForSession,
@@ -29,6 +37,27 @@ const sessionKey = "agent:main:question-dispatch";
 const questions = [
   { id: "answer", header: "Answer", question: "Continue?", isOther: true, options: [] },
 ];
+const protocolQuestions = questions.map(({ id, ...question }) => ({ ...question, questionId: id }));
+
+async function withEmbeddedBroker(
+  embedded: boolean,
+  registered: boolean,
+  run: (broker: EmbeddedQuestionBroker) => Promise<void>,
+) {
+  const previousMode = isEmbeddedMode();
+  const broker = new EmbeddedQuestionBroker();
+  setEmbeddedMode(embedded);
+  if (registered) {
+    setEmbeddedQuestionBroker(broker);
+  }
+  try {
+    await run(broker);
+  } finally {
+    clearEmbeddedQuestionBroker(broker);
+    broker.stop();
+    setEmbeddedMode(previousMode);
+  }
+}
 
 function startQuestion(
   fixture: Fixture,
@@ -106,6 +135,144 @@ const ownerCases = (["harness", "ask_user"] as const).flatMap((owner) =>
 );
 
 describe("question dispatch ownership", () => {
+  it.each([
+    { embedded: true, registered: true },
+    { embedded: true, registered: false },
+    { embedded: false, registered: true },
+  ])("routes locally only for embedded=$embedded, registered=$registered", async (mode) => {
+    await withQuestionGateway(async (fixture) => {
+      await withEmbeddedBroker(mode.embedded, mode.registered, async (broker) => {
+        const call = resolveAgentQuestionGatewayCall();
+        await call(
+          "question.request",
+          {},
+          {
+            id: "routing-question",
+            questions: protocolQuestions,
+          },
+        );
+        const local = mode.embedded && mode.registered;
+        expect(broker.list().questions).toHaveLength(local ? 1 : 0);
+        expect(fixture.manager.list()).toHaveLength(local ? 0 : 1);
+        expect(fixture.requests.map((request) => request.method)).toEqual(
+          local ? [] : ["question.request"],
+        );
+        await call("question.resolve", {}, { id: "routing-question", cancel: true });
+      });
+    });
+  });
+
+  it.each(["legacy", "version-2"] as const)(
+    "preserves an explicit %s dispatcher while the embedded broker is registered",
+    async (kind) => {
+      await withEmbeddedBroker(true, true, async (broker) => {
+        const dispatched: string[] = [];
+        const custom: AgentHarnessQuestionGatewayCall = async (method) => {
+          dispatched.push(method);
+          return { questions: [] };
+        };
+        const dispatcher: AgentQuestionDispatcher = {
+          version: 2,
+          call: ({ method, options, params }) => custom(method, options, params),
+        };
+        const call = resolveAgentQuestionGatewayCall(kind === "legacy" ? custom : dispatcher);
+        expect(await call("question.list", {}, {})).toEqual({ questions: [] });
+        expect(dispatched).toEqual(["question.list"]);
+        expect(broker.list().questions).toEqual([]);
+      });
+    },
+  );
+
+  it("keeps plain replies answerable locally and refuses retired source input", async () => {
+    await withEmbeddedBroker(true, true, async (broker) => {
+      const requested = deferred();
+      broker.subscribe((event) => {
+        if (event.event === "question.requested") {
+          requested.resolve();
+        }
+      });
+      const run = createAskUserTool({ sessionKey }).execute("local-question", {
+        questions: [{ ...questions[0], options: [{ label: "Continue" }, { label: "Stop" }] }],
+      });
+      try {
+        await requested.promise;
+        await expect(
+          claimPendingAgentQuestionAnswer({
+            sessionKey,
+            text: "obsolete",
+            authority: {
+              kind: "source-bound",
+              assertCurrent: () => {
+                throw new Error("retired source");
+              },
+            },
+          }),
+        ).rejects.toThrow("retired source");
+        expect(broker.list().questions).toHaveLength(1);
+        await expect(
+          claimPendingAgentQuestionAnswer({ sessionKey, text: "Continue" }),
+        ).resolves.toBe(true);
+        expect((await run).details).toMatchObject({
+          status: "answered",
+          answers: { answers: { answer: ["Continue"] } },
+        });
+      } finally {
+        broker.stop();
+        await run;
+      }
+    });
+  });
+
+  it("rechecks source authority after loading the local dispatcher and before resolving", async () => {
+    await withEmbeddedBroker(true, true, async (broker) => {
+      const request = broker.request({
+        questions: protocolQuestions,
+      });
+      let active = true;
+      const resolving = resolveAgentQuestionGatewayCall()(
+        "question.resolve",
+        {},
+        { id: request.id, answers: { answers: { answer: ["obsolete"] } } },
+        {
+          dispatchAuthority: {
+            version: 2,
+            kind: "source-bound",
+            assertCurrent: () => {
+              if (!active) {
+                throw new Error("retired source");
+              }
+            },
+          },
+        },
+      );
+      active = false;
+      await expect(resolving).rejects.toThrow("retired source");
+      expect(broker.get({ id: request.id }).question.status).toBe("pending");
+    });
+  });
+
+  it("keeps shutdown cancellation on the original local owner after deregistration", async () => {
+    await withEmbeddedBroker(true, true, async (broker) => {
+      const call = resolveAgentQuestionGatewayCall();
+      await call(
+        "question.request",
+        {},
+        {
+          id: "shutdown-question",
+          questions: protocolQuestions,
+        },
+      );
+      clearEmbeddedQuestionBroker(broker);
+      setEmbeddedMode(false);
+      expect(await call("question.resolve", {}, { id: "shutdown-question", cancel: true })).toEqual(
+        {
+          status: "cancelled",
+        },
+      );
+      expect(broker.list().questions).toEqual([]);
+    });
+  });
+
   it.each(ownerCases)(
     "preserves $owner question ownership across $stage",
     async ({ owner, stage }) => {

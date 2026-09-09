@@ -60,8 +60,22 @@ agent's stated reason, and an editable list of allowed hosts, so you have the
 final say on where the credential may be used. If the name already exists, the
 prompt says so and shows when and by whom the entry was last updated;
 submitting replaces the stored value. The Gateway preserves submitted values
-exactly, including leading or trailing whitespace. Web and Apple request fields
+exactly, including leading or trailing whitespace. Web, TUI, and Apple request fields
 are single-line; use the CLI's `--value-file` input for multiline credentials.
+
+The Gateway-connected TUI also accepts requests through a masked input: typed
+characters appear as bullets and are never added to the chat log or input
+history. The prompt shows the entry name, reason, and proposed allowed hosts.
+The host list is read-only in the TUI; submitting accepts the displayed list.
+Use the Control UI if you need to edit it before submitting. **Skip** declines
+the request; Esc leaves it pending, and `/question` reopens it. Never enter a
+credential in the ordinary composer.
+
+Local mode (`openclaw chat` or `openclaw tui --local`) cannot fulfill store-bound
+requests. The agent receives a blocker directing the operator to run
+`openclaw secrets store` or use the Control UI with a running Gateway. The local
+question prompt supports masked input, but that alone does not provide the
+Gateway's secret-store write and runtime refresh flow.
 
 If the agent omits a host proposal, a replacement request starts with the entry's
 current hosts; a new entry starts with an empty list. An explicitly empty proposal
@@ -100,7 +114,7 @@ arrived (`no_answer`). It should state the blocker or continue with best judgmen
 never ask you to paste the credential into chat.
 
 iOS, macOS, and Android render the same card with a masked secret field.
-Control UI and native app cards arrive through the existing Gateway connection
+Control UI, TUI, and native app cards arrive through the existing Gateway connection
 and do not require `gateway.publicOrigin` or a public link.
 
 Chat channels never accept the value. On Telegram, Discord, and similar
