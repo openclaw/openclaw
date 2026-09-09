@@ -1,5 +1,11 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  inspectLegacySkillWorkshopMigration,
+  migrateLegacySkillWorkshopProposals,
+} from "../commands/doctor-skill-workshop-sqlite.js";
+import { createAppliedLegacyProposal } from "../commands/doctor-skill-workshop-sqlite.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
@@ -18,6 +24,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
+import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 
 describe("automatic Skill Workshop migration", () => {
   let state: OpenClawTestState;
@@ -28,6 +35,136 @@ describe("automatic Skill Workshop migration", () => {
 
   afterEach(async () => {
     await state.cleanup();
+  });
+
+  async function seedSidecar(name: string, workspaceDir: string) {
+    const content = "---\nname: procedure\ndescription: Saved procedure\n---\n\n# Procedure\n";
+    const record = {
+      ...createAppliedLegacyProposal({
+        id: `${name}-20260901-1234567890`,
+        title: name,
+        description: "Saved procedure",
+        content,
+        target: { skillKey: name, skillDir: path.join(workspaceDir, "skills", name) },
+      }),
+      status: "pending" as const,
+      appliedAt: undefined,
+    };
+    const relativeDir = `skill-workshop/proposals/${record.id}`;
+    const metadata = JSON.stringify(record);
+    const file = await state.writeText(`${relativeDir}/proposal.json`, metadata);
+    await state.writeText(`${relativeDir}/PROPOSAL.md`, content);
+    return { record, file, metadata };
+  }
+
+  it.each([
+    { item: "proposal", candidates: ["alpha", "beta"] },
+    { item: "proposal", candidates: [] },
+    { item: "backup", candidates: ["alpha", "beta"] },
+    { item: "backup", candidates: [] },
+  ])(
+    "continues Doctor with $item ownership candidates $candidates",
+    async ({ item, candidates }) => {
+      const ambiguousWorkspace = state.path("unresolved-workspace");
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: { workspace: state.workspaceDir },
+            ...Object.fromEntries(candidates.map((id) => [id, { workspace: ambiguousWorkspace }])),
+          },
+        },
+      };
+      await state.writeConfig(config);
+      const eligible = await seedSidecar("eligible", state.workspaceDir);
+      const preserved =
+        item === "proposal"
+          ? await seedSidecar("unresolved", ambiguousWorkspace)
+          : await (async () => {
+              const metadata = JSON.stringify({
+                schema: "openclaw.skill-collection-backup.v1",
+                id: "legacy-backup",
+                createdAt: "2026-09-01T00:00:00.000Z",
+                workspaceDir: ambiguousWorkspace,
+                skillDirs: [],
+                resultSkillDirs: [],
+                resultSkillHashes: {},
+              });
+              const file = await state.writeText(
+                "skill-workshop/collection-backups/0000000000000000/legacy-backup/manifest.json",
+                metadata,
+              );
+              return { file, metadata };
+            })();
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const result = await autoMigrateLegacyState({
+          cfg: config,
+          env: state.env,
+          homedir: () => state.home,
+          doctorOnlyStateMigrations: true,
+          legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        });
+        const workshop = result.stepReceipts.find((receipt) => receipt.id === "skill-workshop");
+        expect(workshop).toMatchObject({ outcome: "warning" });
+        expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
+        const warning = workshop?.warnings.join("\n");
+        expect(warning).toContain(
+          item === "proposal"
+            ? path.dirname(preserved.file)
+            : path.dirname(path.dirname(preserved.file)),
+        );
+        expect(warning).toContain(`candidate agents: ${candidates.join(", ") || "none"}`);
+        await expect(fs.readFile(preserved.file, "utf8")).resolves.toBe(preserved.metadata);
+        await expect(
+          inspectLegacySkillWorkshopMigration({ config, env: state.env }),
+        ).resolves.toMatchObject({
+          externalProposalCount: 0,
+        });
+      }
+      await expect(fs.access(eligible.file)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        inspectSkillProposal(eligible.record.id, { config, agentId: "main", env: state.env }),
+      ).resolves.toMatchObject({
+        record: { status: "pending", target: { source: "openclaw-workshop" } },
+      });
+    },
+  );
+
+  it("discovers unreadable backup roots before importing sidecars", async () => {
+    const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    const eligible = await seedSidecar("eligible", state.workspaceDir);
+    await state.writeText("skill-workshop/collection-backups", "not a directory");
+
+    await expect(
+      migrateLegacySkillWorkshopProposals({ config, env: state.env }),
+    ).rejects.toMatchObject({ code: "ENOTDIR" });
+    await expect(fs.readFile(eligible.file, "utf8")).resolves.toBe(eligible.metadata);
+  });
+
+  it("keeps a corrupt proposal fatal alongside recoverable ownership warnings", async () => {
+    const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    await state.writeConfig(config);
+    await seedSidecar("unresolved", state.path("unconfigured-workspace"));
+    const corrupt = await seedSidecar("corrupt", state.workspaceDir);
+    await fs.writeFile(path.join(path.dirname(corrupt.file), "PROPOSAL.md"), "corrupt draft");
+
+    const result = await autoMigrateLegacyState({
+      cfg: config,
+      env: state.env,
+      homedir: () => state.home,
+      doctorOnlyStateMigrations: true,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+    expect(result.stepReceipts.find((receipt) => receipt.id === "skill-workshop")).toMatchObject({
+      outcome: "refused",
+      warnings: [
+        expect.stringContaining("draft hash does not match"),
+        expect.stringContaining("owning agent could not be inferred"),
+      ],
+    });
+    expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).toThrow("Doctor stopped");
+    await expect(fs.readFile(corrupt.file, "utf8")).resolves.toBe(corrupt.metadata);
   });
 
   it.each([15, 16])(
