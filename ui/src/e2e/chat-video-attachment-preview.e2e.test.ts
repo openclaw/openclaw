@@ -4,7 +4,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Video attachment previews" });
-// Synthetic H.264/yuv420p, 320×180, one second. No recorded user content.
+// Synthetic VP9/yuv420p, 320×180, one second; works without proprietary codecs.
 const video = readFileSync(new URL("./fixtures/video-poster.mp4", import.meta.url));
 
 suite.define(() => {
