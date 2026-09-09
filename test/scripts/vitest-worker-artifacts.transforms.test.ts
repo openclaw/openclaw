@@ -10,15 +10,9 @@ const it = createWorkerArtifactTest();
 const concurrent = process.platform !== "win32";
 
 describe("fresh compiled subprocess invocation", { concurrent }, () => {
-  it.for(
-    (["single", "projects"] as const).flatMap((layout) =>
-      (["fresh generations", "source mode", "source and config edits"] as const).map(
-        (invariant) => ({ layout, invariant }),
-      ),
-    ),
-  )(
-    "preserves filesystem transforms for $invariant ($layout)",
-    ({ layout, invariant }, { workerArtifacts }) =>
+  it.for((["single", "projects"] as const).map((layout) => ({ layout })))(
+    "preserves filesystem transforms across fresh generations, source mode, and edits ($layout)",
+    ({ layout }, { workerArtifacts }) =>
       workerArtifacts.fixtureLifetime.run(async () => {
         const { node } = workerArtifacts.createFixtureCommands();
         const directory = workerArtifacts.fixtureDirectory();
@@ -100,30 +94,26 @@ describe("fresh compiled subprocess invocation", { concurrent }, () => {
         expect(
           JSON.parse(fs.readFileSync(path.join(cacheDirectory, "_metadata.json"), "utf8")),
         ).toEqual({ lockfileHash: expect.stringMatching(/^[a-f\d]{8}$/u) });
-        if (invariant === "fresh generations") {
-          await launch("compiled");
-          expect(counts(), "unchanged parents must reuse filesystem transforms").toEqual([1, 1]);
-        } else if (invariant === "source mode") {
-          await launch("source");
-          expect(counts()).toEqual([2, 2]);
-          await launch("compiled");
-          expect(counts()).toEqual([2, 2]);
-        } else {
-          fs.writeFileSync(value, 'export const value: string = "second";');
-          await launch("compiled", "second");
-          expect(counts()).toEqual([2, 1]);
-          fs.writeFileSync(
-            config,
-            fs
-              .readFileSync(config, "utf8")
-              .replace(
-                `replacement:${JSON.stringify(value)}`,
-                `replacement:${JSON.stringify(configuredValue)}`,
-              ),
-          );
-          await launch("compiled", "configured");
-          expect(counts()).toEqual([3, 2]);
-        }
+        await launch("compiled");
+        expect(counts(), "unchanged parents must reuse filesystem transforms").toEqual([1, 1]);
+        await launch("source");
+        expect(counts()).toEqual([2, 2]);
+        await launch("compiled");
+        expect(counts()).toEqual([2, 2]);
+        fs.writeFileSync(value, 'export const value: string = "second";');
+        await launch("compiled", "second");
+        expect(counts()).toEqual([3, 2]);
+        fs.writeFileSync(
+          config,
+          fs
+            .readFileSync(config, "utf8")
+            .replace(
+              `replacement:${JSON.stringify(value)}`,
+              `replacement:${JSON.stringify(configuredValue)}`,
+            ),
+        );
+        await launch("compiled", "configured");
+        expect(counts()).toEqual([4, 3]);
       }),
   );
 });
