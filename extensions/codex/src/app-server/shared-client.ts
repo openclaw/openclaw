@@ -46,6 +46,7 @@ import {
   isCodexDesktopGenerationCurrent,
   waitForCodexDesktopGeneration,
 } from "./desktop-generation.js";
+import { ownCodexInferenceClient } from "./inference-routing.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import {
   isManagedCodexDesktopCommand,
@@ -1156,6 +1157,15 @@ async function startInitializedCodexAppServerClient(
           ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
         }),
       );
+      if (
+        startOptions.transport === "stdio" &&
+        nativeCommandAtStart &&
+        !desktopGeneration &&
+        !isManagedCodexDesktopCommand(startOptions.command) &&
+        !isCodexAppServerProxyLaunch(startOptions.args)
+      ) {
+        ownCodexInferenceClient(client);
+      }
       if (runtimeArtifactModule && runtimeArtifact) {
         runtimeArtifactModule.bindCodexAppServerRuntimeArtifact(client, runtimeArtifact);
       }

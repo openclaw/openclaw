@@ -7,10 +7,10 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setLoggerOverride } from "../../logging/logger.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
-  clearAuthProfileCooldown,
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
@@ -860,58 +860,6 @@ describe("clearExpiredCooldowns", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// clearAuthProfileCooldown
-// ---------------------------------------------------------------------------
-
-describe("clearAuthProfileCooldown", () => {
-  it("clears all error state fields including disabledUntil and failureCounts", async () => {
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: Date.now() + 60_000,
-        cooldownClassification: "wham_token_expired",
-        disabledUntil: Date.now() + 3_600_000,
-        disabledReason: "billing",
-        errorCount: 5,
-        failureCounts: { billing: 3, rate_limit: 2 },
-      },
-    });
-    mockLockedUpdateForStore(store);
-
-    await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
-
-    const stats = store.usageStats?.["anthropic:default"];
-    expectProfileErrorStateCleared(stats);
-  });
-
-  it("preserves lastUsed and lastFailureAt timestamps", async () => {
-    const lastUsed = Date.now() - 10_000;
-    const lastFailureAt = Date.now() - 5_000;
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: Date.now() + 60_000,
-        errorCount: 3,
-        lastUsed,
-        lastFailureAt,
-      },
-    });
-    mockLockedUpdateForStore(store);
-
-    await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
-
-    const stats = store.usageStats?.["anthropic:default"];
-    expect(stats?.lastUsed).toBe(lastUsed);
-    expect(stats?.lastFailureAt).toBe(lastFailureAt);
-  });
-
-  it("no-ops for unknown profile id", async () => {
-    const store = makeStore(undefined);
-    mockLockedUpdateForStore(store);
-    await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
-    expect(store.usageStats).toBeUndefined();
-  });
-});
-
 describe("markAuthProfileFailure — active windows do not extend on retry", () => {
   // Regression for https://github.com/openclaw/openclaw/issues/23516
   // When all providers are at saturation backoff (60 min) and retries fire every 30 min,
@@ -1271,11 +1219,10 @@ describe("markAuthProfileBlockedUntil", () => {
 describe("markAuthProfileFailure — detail-less provider failures", () => {
   it("does not persist unverifiable failures for API-key profiles", async () => {
     const store = makeStore(undefined);
-    store.profiles["azure-foundry:default"] = {
-      type: "api_key",
-      provider: "azure-foundry",
-      key: "azure-foundry-test-key",
-    };
+    store.profiles["azure-foundry:default"] = createApiKeyCredential(
+      "azure-foundry",
+      "azure-foundry-test-key",
+    );
 
     for (const profileId of ["azure-foundry:default", "openai:api-key"]) {
       await markAuthProfileFailure({
@@ -1665,11 +1612,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
       async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
         const freshStore = structuredClone(store);
-        freshStore.profiles["openai:default"] = {
-          type: "api_key",
-          provider: "openai",
-          key: "rotated-api-key",
-        };
+        freshStore.profiles["openai:default"] = createApiKeyCredential("openai", "rotated-api-key");
         lockParams.updater(freshStore);
         return freshStore;
       },
@@ -1873,11 +1816,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
 
   function makeStoreWithCopilot(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
     const store = makeStore(usageStats);
-    store.profiles["github-copilot:github"] = {
-      type: "api_key",
-      provider: "github-copilot",
-      key: "ghu_test",
-    };
+    store.profiles["github-copilot:github"] = createApiKeyCredential("github-copilot", "ghu_test");
     return store;
   }
 

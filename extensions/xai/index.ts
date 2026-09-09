@@ -196,6 +196,7 @@ export default defineSingleProviderPluginEntry({
         envVar: "XAI_API_KEY",
         promptMessage: "Enter xAI API key",
         defaultModel: XAI_DEFAULT_MODEL_REF,
+        preserveExistingPrimary: true,
         applyConfig: (cfg) => applyXaiConfig(cfg),
         wizard: {
           groupLabel: "xAI (Grok)",
@@ -260,9 +261,17 @@ export default defineSingleProviderPluginEntry({
           }),
         });
       },
-      staticRun: async () => ({
-        provider: buildXaiProvider(),
-      }),
+      staticRun: async (ctx) => {
+        const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        const authMode =
+          auth.mode === "oauth"
+            ? "oauth"
+            : auth.mode === "token" &&
+                isXaiGrokProxyBaseUrl(ctx.config.models?.providers?.[PROVIDER_ID]?.baseUrl)
+              ? "token"
+              : undefined;
+        return { provider: buildXaiProvider("openai-responses", authMode) };
+      },
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),

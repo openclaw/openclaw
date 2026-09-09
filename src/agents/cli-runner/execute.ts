@@ -26,6 +26,7 @@ import {
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
+import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { runCliCleanup } from "./cleanup.js";
@@ -243,51 +244,6 @@ export async function executePreparedCliRun(
     !nodePlacement && context.claudeSkillsPluginArgs.length > 0
       ? [...resolvedArgs, ...context.claudeSkillsPluginArgs]
       : resolvedArgs;
-  const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
-    config: params.config,
-    workspaceDir: context.workspaceDir,
-    provider: params.provider,
-    modelId: context.modelId,
-    authProfileId: context.effectiveAuthProfileId,
-    thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
-    executionMode: params.executionMode ?? "agent",
-    // Node runs project the native subset only: gateway-loopback MCP tools do
-    // not exist on the node, and auto-approval must not cross that boundary.
-    toolAvailability:
-      params.cliToolAvailability && nodePlacement
-        ? { native: params.cliToolAvailability.native, openClaw: [] }
-        : params.cliToolAvailability,
-    useResume,
-    baseArgs: baseArgsWithSkills,
-  });
-  if (
-    params.cliToolAvailability &&
-    context.backendResolved.toolAvailabilityEnforcement === "execution-args" &&
-    !resolvedExecutionArgs
-  ) {
-    throw new Error(
-      `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
-    );
-  }
-  const executionBaseArgs = nodePlacement
-    ? stripGatewayLocalClaudeArgs(resolvedExecutionArgs ?? baseArgsWithSkills)
-    : (resolvedExecutionArgs ?? baseArgsWithSkills);
-  const args = buildCliArgs({
-    backend: nodePlacement
-      ? { ...backend, systemPromptArg: undefined, systemPromptFileArg: undefined }
-      : backend,
-    baseArgs: Array.from(executionBaseArgs),
-    modelId: context.normalizedModel,
-    sessionId: resolvedSessionId,
-    systemPrompt: nodePlacement || usePluginOwnedExecution ? undefined : systemPromptArg,
-    systemPromptFilePath: systemPromptFile?.filePath,
-    imagePaths: imagePayload.imagePaths,
-    promptArg: argsPrompt,
-    useResume,
-    forkResume: params.forkCliSessionOnResume,
-    resumeAt: params.cliSessionResumeAt,
-    sendSystemPromptOnResume: resendSystemPromptForSoftResume,
-  });
 
   const cliLiveOwnerKey = buildCliLiveOwnerKey({
     agentAccountId: params.agentAccountId,
@@ -539,18 +495,77 @@ export async function executePreparedCliRun(
           });
         }
       }
-      if (logOutputText) {
-        logCliInvocation({
-          args,
-          command: executionCommand,
-          env,
-          systemPromptArg: backend.systemPromptArg,
-          modelArg: backend.modelArg,
-          imageArg: backend.imageArg,
-          argsPrompt,
-          log: (message) => cliBackendLog.info(message),
+      // Process supervision can add a scope wait after the CLI queue and backend setup.
+      const resolveExecutionArgs = () => {
+        assertCurrent();
+        const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
+          config: params.config,
+          workspaceDir: context.workspaceDir,
+          provider: params.provider,
+          modelId: context.modelId,
+          authProfileId: context.effectiveAuthProfileId,
+          thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
+          fastMode:
+            params.fastMode === undefined
+              ? undefined
+              : resolveFastModeForElapsed({
+                  mode: params.fastMode,
+                  startedAtMs: params.fastModeStartedAtMs ?? context.started,
+                  fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+                }).enabled,
+          executionMode: params.executionMode ?? "agent",
+          // Node runs project the native subset only: gateway-loopback MCP tools do
+          // not exist on the node, and auto-approval must not cross that boundary.
+          toolAvailability:
+            params.cliToolAvailability && nodePlacement
+              ? { native: params.cliToolAvailability.native, openClaw: [] }
+              : params.cliToolAvailability,
+          useResume,
+          baseArgs: baseArgsWithSkills,
         });
-      }
+        if (
+          params.cliToolAvailability &&
+          context.backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+          !resolvedExecutionArgs
+        ) {
+          throw new Error(
+            `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
+          );
+        }
+        const executionBaseArgs = nodePlacement
+          ? stripGatewayLocalClaudeArgs(resolvedExecutionArgs ?? baseArgsWithSkills)
+          : (resolvedExecutionArgs ?? baseArgsWithSkills);
+        const args = buildCliArgs({
+          backend: nodePlacement
+            ? { ...backend, systemPromptArg: undefined, systemPromptFileArg: undefined }
+            : backend,
+          baseArgs: Array.from(executionBaseArgs),
+          modelId: context.normalizedModel,
+          sessionId: resolvedSessionId,
+          systemPrompt: nodePlacement || usePluginOwnedExecution ? undefined : systemPromptArg,
+          systemPromptFilePath: systemPromptFile?.filePath,
+          imagePaths: imagePayload.imagePaths,
+          promptArg: argsPrompt,
+          useResume,
+          forkResume: params.forkCliSessionOnResume,
+          resumeAt: params.cliSessionResumeAt,
+          sendSystemPromptOnResume: resendSystemPromptForSoftResume,
+        });
+
+        if (logOutputText) {
+          logCliInvocation({
+            args,
+            command: executionCommand,
+            env,
+            systemPromptArg: backend.systemPromptArg,
+            modelArg: backend.modelArg,
+            imageArg: backend.imageArg,
+            argsPrompt,
+            log: (message) => cliBackendLog.info(message),
+          });
+        }
+        return args;
+      };
       const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
         config: params.config,
         lane: params.lane,
@@ -588,7 +603,7 @@ export async function executePreparedCliRun(
         executionCommand,
         executionArgv0,
         executionLeadingArgv,
-        executionArgs: args,
+        resolveExecutionArgs,
         env,
         prompt,
         ...(promptContext ? { promptContext } : {}),

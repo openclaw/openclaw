@@ -21,12 +21,101 @@ const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
 
 export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${SANDBOX_PINNED_MUTATION_PYTHON.replaceAll("'", `'\\''`)}'`;
 
-function buildPinnedMutationPlan(params: {
-  args: string[];
-  checks: PathSafetyCheck[];
-}): SandboxFsCommandPlan {
+export type PinnedSandboxOperation =
+  | {
+      kind: "read";
+      pinned: PinnedSandboxEntry;
+      maxBytes?: number;
+    }
+  | {
+      kind: "write" | "create";
+      pinned: PinnedSandboxEntry;
+      mkdir: boolean;
+    }
+  | {
+      kind: "mkdirp" | "readdir";
+      pinned: PinnedSandboxDirectoryEntry;
+    }
+  | {
+      kind: "remove";
+      pinned: PinnedSandboxEntry;
+      recursive?: boolean;
+      force?: boolean;
+    }
+  | {
+      kind: "copy";
+      source: PinnedSandboxEntry;
+      destination: PinnedSandboxEntry;
+      mkdir: boolean;
+    }
+  | {
+      kind: "rename";
+      source: PinnedSandboxEntry;
+      destination: PinnedSandboxEntry;
+    };
+
+function pinnedEntryArgs(pinned: PinnedSandboxEntry): string[] {
+  return [pinned.mountRootPath, pinned.relativeParentPath, pinned.basename];
+}
+
+/** Encode only already-admitted pinned facts; transport and path checks stay with each bridge. */
+export function buildPinnedMutationArgs(operation: PinnedSandboxOperation): string[] {
+  switch (operation.kind) {
+    case "read":
+      return [
+        operation.kind,
+        ...pinnedEntryArgs(operation.pinned),
+        ...(operation.maxBytes === undefined ? [] : [String(operation.maxBytes)]),
+      ];
+    case "write":
+    case "create":
+      return [operation.kind, ...pinnedEntryArgs(operation.pinned), operation.mkdir ? "1" : "0"];
+    case "mkdirp":
+    case "readdir":
+      return [operation.kind, operation.pinned.mountRootPath, operation.pinned.relativePath];
+    case "remove":
+      return [
+        operation.kind,
+        ...pinnedEntryArgs(operation.pinned),
+        operation.recursive ? "1" : "0",
+        operation.force === false ? "0" : "1",
+      ];
+    case "copy":
+    case "rename":
+      break;
+  }
+  return [
+    operation.kind,
+    ...pinnedEntryArgs(operation.source),
+    ...pinnedEntryArgs(operation.destination),
+    operation.kind === "rename" || operation.mkdir ? "1" : "0",
+  ];
+}
+
+type CheckedPinnedOperation =
+  | (Exclude<PinnedSandboxOperation, { kind: "read" | "copy" | "rename" }> & {
+      check: PathSafetyCheck;
+    })
+  | (Extract<PinnedSandboxOperation, { kind: "copy" | "rename" }> & {
+      sourceCheck: PathSafetyCheck;
+      destinationCheck: PathSafetyCheck;
+    });
+
+export function buildPinnedMutationPlan(operation: CheckedPinnedOperation): SandboxFsCommandPlan {
+  const checks =
+    operation.kind === "copy" || operation.kind === "rename"
+      ? [operation.sourceCheck, operation.destinationCheck]
+      : [operation.check];
+  if (operation.kind === "remove" || operation.kind === "rename") {
+    const check = operation.kind === "remove" ? operation.check : operation.sourceCheck;
+    checks[0] = {
+      target: check.target,
+      options: { ...check.options, aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget },
+    };
+  }
+  const args = buildPinnedMutationArgs(operation);
   return {
-    checks: params.checks,
+    checks,
     recheckBeforeCommand: true,
     // -c executes reliably on older Python builds while stdin carries payload bytes.
     script: [
@@ -44,139 +133,6 @@ function buildPinnedMutationPlan(params: {
       `python_script=${SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL}`,
       'exec "$python_cmd" -c "$python_script" "$@"',
     ].join("\n"),
-    args: params.args,
+    args,
   };
-}
-
-export function buildPinnedWritePlan(params: {
-  check: PathSafetyCheck;
-  pinned: PinnedSandboxEntry;
-  mkdir: boolean;
-}): SandboxFsCommandPlan {
-  return buildPinnedMutationPlan({
-    checks: [params.check],
-    args: [
-      "write",
-      params.pinned.mountRootPath,
-      params.pinned.relativeParentPath,
-      params.pinned.basename,
-      params.mkdir ? "1" : "0",
-    ],
-  });
-}
-
-export function buildPinnedCreatePlan(params: {
-  check: PathSafetyCheck;
-  pinned: PinnedSandboxEntry;
-  mkdir: boolean;
-}): SandboxFsCommandPlan {
-  return buildPinnedMutationPlan({
-    checks: [params.check],
-    args: [
-      "create",
-      params.pinned.mountRootPath,
-      params.pinned.relativeParentPath,
-      params.pinned.basename,
-      params.mkdir ? "1" : "0",
-    ],
-  });
-}
-
-export function buildPinnedCopyPlan(params: {
-  sourceCheck: PathSafetyCheck;
-  destinationCheck: PathSafetyCheck;
-  source: PinnedSandboxEntry;
-  destination: PinnedSandboxEntry;
-  mkdir: boolean;
-}): SandboxFsCommandPlan {
-  return buildPinnedMutationPlan({
-    checks: [params.sourceCheck, params.destinationCheck],
-    args: [
-      "copy",
-      params.source.mountRootPath,
-      params.source.relativeParentPath,
-      params.source.basename,
-      params.destination.mountRootPath,
-      params.destination.relativeParentPath,
-      params.destination.basename,
-      params.mkdir ? "1" : "0",
-    ],
-  });
-}
-
-export function buildPinnedMkdirpPlan(params: {
-  check: PathSafetyCheck;
-  pinned: PinnedSandboxDirectoryEntry;
-}): SandboxFsCommandPlan {
-  return buildPinnedMutationPlan({
-    checks: [params.check],
-    args: ["mkdirp", params.pinned.mountRootPath, params.pinned.relativePath],
-  });
-}
-
-export function buildPinnedReadDirectoryPlan(params: {
-  check: PathSafetyCheck;
-  pinned: PinnedSandboxDirectoryEntry;
-}): SandboxFsCommandPlan {
-  return buildPinnedMutationPlan({
-    checks: [params.check],
-    args: ["readdir", params.pinned.mountRootPath, params.pinned.relativePath],
-  });
-}
-
-export function buildPinnedRemovePlan(params: {
-  check: PathSafetyCheck;
-  pinned: PinnedSandboxEntry;
-  recursive?: boolean;
-  force?: boolean;
-}): SandboxFsCommandPlan {
-  return buildPinnedMutationPlan({
-    checks: [
-      {
-        target: params.check.target,
-        options: {
-          ...params.check.options,
-          aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget,
-        },
-      },
-    ],
-    args: [
-      "remove",
-      params.pinned.mountRootPath,
-      params.pinned.relativeParentPath,
-      params.pinned.basename,
-      params.recursive ? "1" : "0",
-      params.force === false ? "0" : "1",
-    ],
-  });
-}
-
-export function buildPinnedRenamePlan(params: {
-  fromCheck: PathSafetyCheck;
-  toCheck: PathSafetyCheck;
-  from: PinnedSandboxEntry;
-  to: PinnedSandboxEntry;
-}): SandboxFsCommandPlan {
-  return buildPinnedMutationPlan({
-    checks: [
-      {
-        target: params.fromCheck.target,
-        options: {
-          ...params.fromCheck.options,
-          aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget,
-        },
-      },
-      params.toCheck,
-    ],
-    args: [
-      "rename",
-      params.from.mountRootPath,
-      params.from.relativeParentPath,
-      params.from.basename,
-      params.to.mountRootPath,
-      params.to.relativeParentPath,
-      params.to.basename,
-      "1",
-    ],
-  });
 }

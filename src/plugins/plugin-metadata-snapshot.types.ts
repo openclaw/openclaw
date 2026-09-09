@@ -80,7 +80,10 @@ export type PluginMetadataRegistryView = Pick<
 > &
   Partial<Pick<PluginMetadataSnapshot, "declaredProviderOwners">>;
 
-export type PluginMetadataManifestView = Pick<PluginMetadataSnapshot, "index" | "plugins">;
+export type PluginMetadataManifestView = Pick<
+  PluginMetadataSnapshot,
+  "index" | "plugins" | "byPluginId"
+>;
 
 export type LoadPluginMetadataSnapshotParams = {
   config?: OpenClawConfig;

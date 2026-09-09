@@ -418,7 +418,8 @@ vi.mock("../utils.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/official-external-install-records.js", () => ({
+vi.mock("../plugins/official-external-install-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/official-external-install-records.js")>()),
   resolveTrustedSourceLinkedOfficialClawHubSpec: vi.fn(() => undefined),
   resolveTrustedSourceLinkedOfficialNpmSpec: vi.fn(() => undefined),
 }));
@@ -1369,8 +1370,12 @@ describe("update-cli", () => {
     outcomes: [],
   });
 
-  const mockNpmPluginOutcomes = (outcomes: unknown[], changed = false) => {
-    updateNpmInstalledPlugins.mockResolvedValueOnce({ changed, config: baseConfig, outcomes });
+  const mockNpmPluginOutcomes = (
+    outcomes: unknown[],
+    changed = false,
+    config: OpenClawConfig = baseConfig,
+  ) => {
+    updateNpmInstalledPlugins.mockResolvedValueOnce({ changed, config, outcomes });
   };
 
   const postCoreConvergenceResult = (
@@ -4015,6 +4020,154 @@ describe("update-cli", () => {
       );
     },
   );
+
+  it.each(
+    [false, true].flatMap((json) =>
+      [
+        { label: "legacy version", fields: { version: "2026.9.2" } },
+        { label: "resolved version", fields: { resolvedVersion: "2026.9.2" } },
+        {
+          label: "resolved version with stale alias",
+          fields: { resolvedVersion: "2026.9.2", version: "2026.9.1" },
+        },
+      ].map(({ label, fields }) => ({ label, fields, json })),
+    ),
+  )("reports retained official pin advisories ($label, json=$json)", async ({ fields, json }) => {
+    const installPath = createCaseDir("retained-pin");
+    fsSync.mkdirSync(installPath, { recursive: true });
+    fsSync.writeFileSync(
+      path.join(installPath, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/discord",
+        version: "2026.9.2",
+      }),
+    );
+    mockFileBackedPathExists();
+    const message =
+      "discord is pinned to @openclaw/discord@2026.9.2 (installed 2026.9.2); " +
+      "registry latest resolves to 2026.9.3. Pass `openclaw plugins update " +
+      "@openclaw/discord@latest` to replace this version pin.";
+    const records: Record<string, PluginInstallRecord> = {
+      discord: { source: "npm", spec: "@openclaw/discord@2026.9.2", installPath, ...fields },
+    };
+    mockNpmPluginOutcomes(
+      [
+        {
+          pluginId: "discord",
+          status: "unchanged",
+          currentVersion: "2026.9.2",
+          nextVersion: "2026.9.3",
+          message,
+        },
+      ],
+      false,
+      { ...baseConfig, plugins: { ...baseConfig.plugins, installs: records } },
+    );
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      ...postCoreConvergenceResult(),
+      installRecords: records,
+    });
+    const { updatePluginsAfterCoreUpdate } = await import("./update-cli/update-command-plugins.js");
+    const result = await updatePluginsAfterCoreUpdate({
+      root: process.cwd(),
+      channel: "stable",
+      configSnapshot: baseSnapshot,
+      configWriteOptions: {},
+      timeoutMs: 60_000,
+      json,
+    });
+    expect(result.status).toBe("warning");
+    expect(result.changed).toBe(false);
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        pluginId: "discord",
+        reason: "retained-plugin-pin",
+        message: expect.stringContaining(message),
+      }),
+    ]);
+    expect(result.npm.outcomes[0]?.status).toBe("unchanged");
+    expect(records.discord).toEqual({
+      source: "npm",
+      spec: "@openclaw/discord@2026.9.2",
+      installPath,
+      ...fields,
+    });
+    const output = stripAnsi(getLogOutput());
+    expect(output.includes(message)).toBe(!json);
+  });
+
+  it.each([
+    { name: "same version", nextVersion: "2026.9.2" },
+    { name: "unknown registry version", nextVersion: undefined },
+    { name: "invalid registry version", nextVersion: "unknown" },
+    { name: "older registry version", nextVersion: "2026.9.1" },
+    { name: "repaired record", version: "2026.9.3" },
+    { name: "removed record", removed: true },
+    { name: "third-party package", spec: "third-party-plugin@2026.9.2" },
+    { name: "git source", source: "git" as const },
+    { name: "ClawHub source", source: "clawhub" as const },
+    { name: "version range", spec: "@openclaw/discord@^2026.9.2" },
+    { name: "bare selector", spec: "@openclaw/discord" },
+    { name: "default tag", spec: "@openclaw/discord@latest" },
+    { name: "explicit non-default tag", spec: "@openclaw/discord@beta" },
+    { name: "replaced exact pin", spec: "@openclaw/discord@2026.9.3" },
+    { name: "repaired resolved record", resolvedVersion: "2026.9.3" },
+    { name: "package replacement", beforeSpec: "third-party-plugin@2026.9.2" },
+  ])("does not warn for $name during post-core convergence", async (entry) => {
+    const installPath = createCaseDir("excluded-pin");
+    fsSync.mkdirSync(installPath, { recursive: true });
+    fsSync.writeFileSync(
+      path.join(installPath, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/discord",
+        version: "2026.9.2",
+      }),
+    );
+    mockFileBackedPathExists();
+    const record: PluginInstallRecord = {
+      source: entry.source ?? "npm",
+      spec: entry.spec ?? "@openclaw/discord@2026.9.2",
+      installPath,
+      version: entry.version ?? "2026.9.2",
+      ...("resolvedVersion" in entry ? { resolvedVersion: entry.resolvedVersion } : {}),
+    };
+    const beforeRecords: Record<string, PluginInstallRecord> = {
+      discord: {
+        ...record,
+        spec: "beforeSpec" in entry ? entry.beforeSpec : record.spec,
+        version: "2026.9.2",
+        ...("resolvedVersion" in entry ? { resolvedVersion: "2026.9.2" } : {}),
+      },
+    };
+    mockNpmPluginOutcomes(
+      [
+        {
+          pluginId: "discord",
+          status: "unchanged",
+          currentVersion: "2026.9.2",
+          nextVersion: "nextVersion" in entry ? entry.nextVersion : "2026.9.3",
+          message: "Retained version.",
+        },
+      ],
+      false,
+      { ...baseConfig, plugins: { ...baseConfig.plugins, installs: beforeRecords } },
+    );
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      ...postCoreConvergenceResult(),
+      installRecords: entry.removed ? {} : { discord: record },
+    });
+    const { updatePluginsAfterCoreUpdate } = await import("./update-cli/update-command-plugins.js");
+    const result = await updatePluginsAfterCoreUpdate({
+      root: process.cwd(),
+      channel: "stable",
+      configSnapshot: baseSnapshot,
+      configWriteOptions: {},
+      timeoutMs: 60_000,
+      json: true,
+    });
+    expect(result.status).toBe("ok");
+    expect(result.warnings).toEqual([]);
+  });
 
   it("preserves typed repair outcomes from post-core convergence", async () => {
     const consentOutcome = {

@@ -1,9 +1,11 @@
 // Plugin-catalog fixtures for the Control UI mock dev harness.
 import { createHash } from "node:crypto";
 import type {
+  PluginCatalogEntry,
   PluginDeclaredSurface,
   PluginsInspectResult,
 } from "../packages/gateway-protocol/src/schema/plugins.js";
+import type { ControlUiMockGateway } from "../ui/src/test-helpers/control-ui-e2e.ts";
 
 export function buildPluginCatalogMock() {
   const entry = (params: {
@@ -17,7 +19,7 @@ export function buildPluginCatalogMock() {
     featured?: boolean;
     hasIcon?: boolean;
     install?: { source: "official"; pluginId: string };
-  }) => ({
+  }): PluginCatalogEntry => ({
     id: params.id,
     name: params.name,
     description: params.description,
@@ -141,7 +143,7 @@ export function buildPluginCatalogMock() {
 }
 
 /** Parameterized plugins.inspect fixtures for the consent dialog and detail overlay. */
-export function buildPluginInspectMock() {
+function buildPluginInspectMock() {
   const emptyDeclared: PluginDeclaredSurface = {
     channels: [],
     providers: [],
@@ -258,49 +260,145 @@ export function buildPluginInspectMock() {
   return { cases };
 }
 
-export function buildPluginSetEnabledMock() {
-  const plugin = buildPluginCatalogMock().plugins.find((entry) => entry.id === "discord");
-  const inspection = buildPluginInspectMock().cases.find(
-    (entry) => entry.match.pluginId === "discord",
-  )?.response;
-  if (!plugin || !inspection) {
-    throw new Error("Discord mock plugin fixtures are missing");
+function installPluginLifecycleMock(
+  catalog: ReturnType<typeof buildPluginCatalogMock>,
+  inspections: ReturnType<typeof buildPluginInspectMock>,
+): void {
+  const gateway = (window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+    .openclawControlUiE2eGateway;
+  if (!gateway) {
+    return;
   }
-
-  return {
-    cases: [
-      {
-        match: {
-          pluginId: plugin.id,
-          enabled: true,
-          acknowledgeCapabilities: { reviewToken: inspection.reviewToken },
-        },
-        response: {
-          ok: true,
-          plugin: { ...plugin, enabled: true, state: "enabled" },
-          restartRequired: true,
-        },
-      },
-      {
-        match: { pluginId: plugin.id, enabled: true },
-        response: {
-          __mockError: {
-            code: "INVALID_REQUEST",
-            message: 'Plugin "discord" requires capability consent',
-            details: {
-              capabilityConsentCode: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-              pluginId: plugin.id,
-              reviewToken: inspection.reviewToken,
-              widened: {
-                providers: ["discord-intelligence"],
-                tools: ["discord_moderate"],
-                contracts: ["tools: discord_moderate"],
-              },
-              acceptedAt: "2026-08-20T14:03:00Z",
-            },
+  const plugins = new Map(catalog.plugins.map((plugin) => [plugin.id, plugin]));
+  const details = new Map(inspections.cases.map((entry) => [entry.match.pluginId, entry.response]));
+  let discordConsented = false;
+  gateway.setRequestHandler("plugins.search", ({ params, respond }) => {
+    const query = ((params as { query?: string }).query ?? "").toLowerCase();
+    respond({
+      results: catalog.plugins
+        .filter((plugin) => plugin.install && plugin.name.toLowerCase().includes(query))
+        .map((plugin) => ({
+          score: 1,
+          package: {
+            name: `openclaw/${plugin.id}`,
+            displayName: plugin.name,
+            family: "code-plugin",
+            channel: "official",
+            isOfficial: true,
+            runtimeId: plugin.id,
+            summary: plugin.description,
           },
-        },
-      },
-    ],
-  };
+        })),
+    });
+  });
+  gateway.setRequestHandler("plugins.list", ({ respond }) => {
+    respond({ ...catalog, plugins: [...plugins.values()] });
+  });
+  for (const method of [
+    "plugins.inspect",
+    "plugins.install",
+    "plugins.setEnabled",
+    "plugins.uninstall",
+  ]) {
+    gateway.setRequestHandler(method, ({ params: input, respond }) => {
+      const params = (input ?? {}) as {
+        pluginId?: string;
+        source?: string;
+        packageName?: string;
+        enabled?: boolean;
+        acknowledgeCapabilities?: { reviewToken?: string };
+      };
+      const plugin =
+        params.source === "clawhub"
+          ? [...plugins.values()].find(
+              (entry) => entry.install && `openclaw/${entry.id}` === params.packageName,
+            )
+          : params.pluginId
+            ? plugins.get(params.pluginId)
+            : undefined;
+      const inspection = plugin ? details.get(plugin.id) : undefined;
+      const reject = (message: string) =>
+        respond({ __mockError: { code: "INVALID_REQUEST", message } });
+      if (!plugin || !inspection) {
+        reject("Unknown mock plugin; refresh the plugin catalog.");
+        return;
+      }
+      if (method === "plugins.inspect") {
+        respond({
+          ...inspection,
+          plugin: { ...inspection.plugin, installed: plugin.installed, enabled: plugin.enabled },
+        });
+        return;
+      }
+      if (method === "plugins.install") {
+        if ((params.source !== "official" && params.source !== "clawhub") || !plugin.install) {
+          reject("This mock plugin has no official install action.");
+          return;
+        }
+        Object.assign(plugin, {
+          installed: true,
+          enabled: true,
+          state: "enabled",
+          removable: true,
+        });
+      } else if (method === "plugins.setEnabled") {
+        if (!plugin.installed || typeof params.enabled !== "boolean") {
+          reject("Install the plugin before changing its enabled state.");
+          return;
+        }
+        if (plugin.id === "discord" && params.enabled && !discordConsented) {
+          if (params.acknowledgeCapabilities?.reviewToken !== inspection.reviewToken) {
+            respond({
+              __mockError: {
+                code: "INVALID_REQUEST",
+                message: 'Plugin "discord" requires capability consent',
+                details: {
+                  capabilityConsentCode: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+                  pluginId: plugin.id,
+                  reviewToken: inspection.reviewToken,
+                  widened: {
+                    providers: inspection.declared.providers,
+                    tools: inspection.declared.tools,
+                    contracts: inspection.declared.contracts,
+                  },
+                },
+              },
+            });
+            return;
+          }
+          discordConsented = true;
+        }
+        plugin.enabled = params.enabled;
+        plugin.state = params.enabled ? "enabled" : "disabled";
+      } else {
+        if (!plugin.installed || !plugin.removable) {
+          reject("This mock plugin cannot be removed.");
+          return;
+        }
+        // Official entries remain discoverable; externally installed entries leave the catalog.
+        if (plugin.install) {
+          Object.assign(plugin, {
+            installed: false,
+            enabled: false,
+            state: "not-installed",
+            removable: false,
+          });
+        } else {
+          plugins.delete(plugin.id);
+        }
+        respond({
+          ok: true,
+          pluginId: plugin.id,
+          restartRequired: true,
+          removed: ["config entry", "install record", "plugin directory"],
+        });
+        return;
+      }
+      respond({ ok: true, plugin, restartRequired: true });
+    });
+  }
+}
+
+export function pluginLifecycleMockInitScript(): string {
+  return `(() => { const __name = (target) => target; (${installPluginLifecycleMock.toString()})(${JSON.stringify(buildPluginCatalogMock())}, ${JSON.stringify(buildPluginInspectMock())}); })();`;
 }

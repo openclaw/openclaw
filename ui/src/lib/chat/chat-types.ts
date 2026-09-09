@@ -354,6 +354,8 @@ export type ToolCard = {
   messageId?: string;
   /** UI-local preview identity for results without a call or transcript id. */
   previewRevision?: string;
+  /** Tab actions can identify a route without a previewable page URL. */
+  browserTab?: BrowserTabTarget;
   preview?:
     | {
         kind: "canvas";

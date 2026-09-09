@@ -948,12 +948,21 @@ export async function buildIMessageInboundContext(params: {
       }]\n${decision.replyContext.body}\n[/Replying]`
     : "";
 
+  const senderDisplayName = normalizeNonEmpty(params.message.sender_name ?? "");
+  const directConversationName =
+    senderDisplayName ??
+    normalizeNonEmpty(params.message.chat_name ?? "") ??
+    decision.senderNormalized;
+  const conversationName = decision.isGroup
+    ? (normalizeNonEmpty(params.message.chat_name ?? "") ?? undefined)
+    : directConversationName;
+
   const fromLabel = formatInboundFromLabel({
     isGroup: decision.isGroup,
     groupLabel: params.message.chat_name ?? undefined,
     groupId: chatId !== undefined ? String(chatId) : "unknown",
     groupFallback: "Group",
-    directLabel: decision.senderNormalized,
+    directLabel: directConversationName,
     directId: decision.sender,
   });
 
@@ -963,7 +972,7 @@ export async function buildIMessageInboundContext(params: {
     timestamp: decision.createdAt,
     body: `${decision.agentBodyText ?? decision.bodyText}${replySuffix}`,
     chatType: decision.isGroup ? "group" : "direct",
-    sender: { name: decision.senderNormalized, id: decision.sender },
+    sender: { name: senderDisplayName ?? decision.senderNormalized, id: decision.sender },
     previousTimestamp: params.previousTimestamp,
     envelope: envelopeOptions,
   });
@@ -1039,7 +1048,7 @@ export async function buildIMessageInboundContext(params: {
     from: imessageFrom,
     sender: {
       id: decision.sender,
-      name: decision.senderNormalized,
+      name: senderDisplayName ?? decision.senderNormalized,
       isSelf: params.message.is_from_me === true,
     },
     conversation: {
@@ -1053,7 +1062,7 @@ export async function buildIMessageInboundContext(params: {
               id: decision.isGroup ? String(chatId) : decision.senderNormalized,
             },
           }),
-      label: fromLabel,
+      label: conversationName,
     },
     route: {
       agentId: decision.route.agentId,

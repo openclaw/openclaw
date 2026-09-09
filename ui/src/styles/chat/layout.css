@@ -954,7 +954,6 @@ openclaw-chat-page {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  text-decoration: none;
   transition: color 150ms ease-out;
 }
 
@@ -1115,8 +1114,8 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 
 .chat-audio-player__toggle {
@@ -1144,7 +1143,7 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player__toggle:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -1200,7 +1199,7 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player__seek:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 4px;
 }
 
@@ -1235,7 +1234,7 @@ openclaw-chat-video-player {
 
 .chat-audio-player__waveform:has(.chat-audio-player__seek:focus-visible) {
   border-radius: 4px;
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -1274,7 +1273,7 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player__volume:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -1316,18 +1315,35 @@ openclaw-chat-video-player {
 }
 
 .chat-bubble--reply-target {
-  animation: chat-reply-target-highlight 1.4s ease-out;
+  isolation: isolate;
 }
 
-@keyframes chat-reply-target-highlight {
+.chat-bubble--reply-target::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--bg-hover);
+  opacity: 0;
+  pointer-events: none;
+  content: "";
+  animation: chat-reply-target-flash var(--duration) ease-out;
+}
+
+@keyframes chat-reply-target-flash {
   0%,
-  35% {
-    outline: 2px solid color-mix(in srgb, var(--accent) 80%, transparent);
-    outline-offset: 3px;
+  20% {
+    opacity: 0.6;
   }
   100% {
-    outline: 2px solid transparent;
-    outline-offset: 6px;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-bubble--reply-target::after {
+    animation: none;
+    opacity: 0.6;
   }
 }
 
@@ -2105,7 +2121,6 @@ openclaw-chat-video-player {
   gap: 8px;
   min-width: 0;
   color: var(--text);
-  text-decoration: none;
 }
 
 .chat-pr__link--static {
@@ -2351,7 +2366,6 @@ button.chat-pr__diff {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
-  text-decoration: none;
   white-space: nowrap;
 }
 
@@ -2515,6 +2529,8 @@ button.chat-pr__diff {
    not a blue information callout inside it. Match the Question surface so the
    frame does not change shape when composition is unavailable. */
 .agent-chat__disabled-banner.agent-chat__disabled-banner--replacement.callout {
+  position: relative;
+  z-index: 1;
   border: 1px solid var(--chat-composer-hairline, var(--border));
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
@@ -2688,20 +2704,12 @@ button.chat-pr__diff {
     --chat-composer-top-margin: 6px;
   }
 
-  .chat-inline-approval {
-    width: calc(100% - 8px);
-  }
-
   .chat-main__conversation
     > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before,
   .chat-main__conversation
     > openclaw-plugin-view[data-plugin-composer]
     .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
     inset-inline: calc(var(--chat-thread-gutter) - var(--chat-mobile-edge-inset, 4px));
-  }
-
-  .session-suggestions {
-    width: calc(100% - 8px);
   }
 }
 

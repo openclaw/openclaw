@@ -527,7 +527,6 @@ describe("CronPage editor state sync", () => {
       expect(request).toHaveBeenCalledWith("models.list", {
         agentId: scenario.expectedAgentId,
         view: "configured",
-        preparedOnly: true,
       });
     });
 

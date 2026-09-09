@@ -22,9 +22,12 @@ or `pnpm release:candidate`. Selected lanes still need terminal evidence.
 Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
 performance and soak requirements keep their existing gates.
 
-Freeze the product-complete pre-changelog commit and its target context as the
-**Code SHA/ref**, and select one trusted workflow commit and context as the
-**Tooling SHA/ref**, then run:
+Prepare the complete history manifest and substantive version-matched release
+notes before freezing the product-complete commit and its target context as the
+**Code SHA/ref**. Package source preflight requires a matching release section;
+an empty placeholder is not preparation. If the notes are final, this commit
+can also be the **Release SHA**. Select one trusted workflow commit and context
+as the **Tooling SHA/ref**, then run:
 
 ```bash
 TOOLING_SHA="<recorded-full-main-ancestor-sha>"
@@ -151,8 +154,9 @@ All reads use the normal cache-aware GitHub route; cache and request latency can
 add to these intervals. The helper retains its 12-hour wait deadline. Successful
 temporary-ref cleanup still requires parent completion and strict evidence
 verification. Failed validations retain both refs for reruns and diagnosis. The
-Validation SHA equals the Code SHA for product validation or the Release SHA
-for changelog-only validation; it is not a third release identity. The workflow
+Validation SHA is the exact commit being qualified: the Code SHA, which can
+also be the Release SHA, or a later changelog-only Release SHA. It is not a
+third release identity. The workflow
 rejects malformed or mismatched expected SHAs before child dispatch. Every
 child must report the same Tooling SHA. Pass
 `-f reuse_evidence=false` to force a fresh run. Regular release-branch runs
@@ -195,35 +199,54 @@ wrong-SHA tag, parent mismatch, or disallowed parent state fails closed. Other
 privileged writers require their dependent enforcement changes before the
 protected-tag publication route is globally complete.
 
-## Extended-stable exception
+## Extended-stable validation
 
-Extended-stable publish requires a run whose workflow and target are both the
-canonical branch:
+Extended-stable validation uses the same checked helper with an immutable
+trusted-main Tooling SHA. Keep the exact candidate, Tooling SHA, canonical
+context, and workflow transport separate:
 
 ```bash
-RELEASE_SHA="$(git rev-parse HEAD)"
-gh workflow run full-release-validation.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f ref=extended-stable/YYYY.M.33 \
-  -f expected_sha="$RELEASE_SHA" \
-  -f release_profile=stable
+VALIDATION_SHA="<exact-candidate-sha>"
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+CONTEXT_REF="extended-stable/YYYY.M.33"
+pnpm ci:full-release \
+  --sha "$VALIDATION_SHA" \
+  --target-ref "$CONTEXT_REF" \
+  --workflow-sha "$TOOLING_SHA" \
+  -f release_profile=stable \
+  -f run_release_soak=true \
+  -f fail_fast=false \
+  -f rerun_group=all \
+  -f reuse_evidence=false \
+  -f dispatch_release_evidence=false
 ```
 
-Do not use `pnpm ci:full-release` or `release-ci/*`. Publish binds the run's
-branch, head/target SHA, manifest `workflowRef`, ID, and attempt to the canonical
-branch and release commit.
+The helper creates `release-ci/<tooling-prefix>-<unique-id>` at the Tooling SHA,
+dispatches from that named branch, supplies the trusted-main identity, and uses
+the exact Validation SHA for both `ref` and `expected_sha` with the canonical
+branch in `target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch
+or tag, not a raw SHA. Outside extended-stable validation, a direct
+canonical-branch dispatch is valid only when its head is also the trusted
+workflow implementation. Current extended-stable validation uses distinct
+trusted-main tooling and therefore requires the immutable helper.
 
 Backport product failures; make the smallest behavior-preserving repair for
 frozen-target tooling; retry provider, approval, or runner failures without a
 source change. Any branch change needs a complete new run. Do not omit required
 package, installer, update, channel, or live behavior because the target is old.
 
-For a regular release, when the Code SHA is green, generate and commit only
-`CHANGELOG.md`. This new commit is the **Release SHA**. Run the same helper for
-the Release SHA. Product evidence is reused only when GitHub proves the Release
-SHA descends from the Code SHA and the complete changed path set is exactly
-`CHANGELOG.md`; npm preflight and package/install acceptance still run on the
-Release SHA.
+For a regular release whose qualified Code SHA already contains final notes,
+use that same commit as the **Release SHA**. Retain its successful full
+validation parent and exact prepared publication artifacts; no extra commit or
+validation run is needed solely to separate those roles.
+
+If notes change after qualification, commit only `CHANGELOG.md` as a new
+Release SHA and run the same helper for that commit. Product evidence reuse is
+optional and requires GitHub to prove that the Release SHA descends from the
+green Code SHA with a complete changed path set of exactly `CHANGELOG.md`.
+That path records `changelog-only-release-v1` and still qualifies the changed
+package and image bytes. Any other source change returns to full Code
+validation. See [Releasing](/reference/RELEASING) for the publication sequence.
 
 The conceptual phases map to current inputs:
 
@@ -702,10 +725,13 @@ classification and actual conclusion; an advisory failure can coexist with a
 passing release decision. Keep its diagnostic artifacts for follow-up rather
 than reporting that lane as passed.
 
-For a regular release, record both Code SHA and Release SHA, the reuse policy
-and changed-path set, the green Code SHA parent run, and the lightweight Release
-SHA parent run. For extended-stable, record the canonical branch, exact release
-SHA, fresh parent run id and attempt, workflow ref, every child run, and any
+For a regular release, record Code SHA and Release SHA even when they are the
+same commit. In that case, retain the successful full validation parent and
+its exact prepared publication artifacts for both roles. For a later
+changelog-only Release SHA using evidence reuse, also record the reuse policy,
+complete changed-path set, green Code SHA parent run, and Release SHA parent
+run. For extended-stable, record the canonical branch, exact release SHA,
+fresh parent run id and attempt, workflow ref, every child run, and any
 frozen-target compatibility repair or intentional omission.
 
 Useful artifacts:

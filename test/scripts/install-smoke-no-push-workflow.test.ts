@@ -675,6 +675,7 @@ describe("install smoke no-push root image transport", () => {
       expect(step(consumer, pair.testName).env).toMatchObject({
         OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR:
           "${{ runner.temp }}/install-smoke-candidate-payload",
+        OPENCLAW_INSTALL_SMOKE_NODE_VERSION: "${{ env.NODE_VERSION }}",
         OPENCLAW_INSTALL_SMOKE_GROUP: pair.group,
       });
     }

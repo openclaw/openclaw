@@ -360,7 +360,7 @@ export async function executePluginArtifactActivation(
   });
   if (result.applied) {
     runtime.log(
-      "Artifact installed. Restart the Gateway to load backend changes, then inspect the plugin's Control UI activation status.",
+      "Artifact installed. After the Gateway restarts, inspect the plugin's Control UI activation status.",
     );
   }
   return result;

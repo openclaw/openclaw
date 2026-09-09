@@ -1038,7 +1038,7 @@ a withdrawal, not a fallback to older instructions.
 
 Ordinary incognito turns can reuse unchanged generic policy, but changed or emptied
 policy is rejected without sending another native turn or discarding the live
-conversation. Turn-scoped collaboration instructions remain a separate surface.
+conversation. Parent-local model-request instructions remain a separate surface.
 See [Hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) for recovery.
 
 Codex normally handles `AGENTS.md` itself through native project-doc discovery.
@@ -1054,20 +1054,19 @@ For OpenClaw workspace parity, local tool notes live in the `## Tools` section
 of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
 Codex harness forwards the other bootstrap files as developer instructions:
 
-- `SOUL.md`, `IDENTITY.md`, and `USER.md` are forwarded as **turn-scoped**
-  collaboration instructions. Native Codex subagents do not inherit them,
-  which keeps subagent turns from picking up the parent agent's persona and
-  user profile.
-- The compact loaded OpenClaw skills list is also forwarded as turn-scoped
-  collaboration developer instructions, so native Codex subagents do not
-  inherit it either.
+- On the managed bundled stdio app-server, `SOUL.md`, `IDENTITY.md`, and
+  `USER.md` are added to **parent-only model request instructions**. The
+  private relay leaves native base/catalog instructions and history intact,
+  so newly delivered persona and user-profile context are not automatically
+  inherited by native Codex subagents.
+- The compact loaded OpenClaw skills list uses the same parent-local layer.
 - Heartbeat turns receive generic initiative guidance through collaboration
   mode. Monitor cron scratch is appended to the heartbeat prompt instead of
   injected as workspace context.
 - `MEMORY.md` content from the configured agent workspace is not pasted into
   native Codex turn input when memory tools are available for that
   workspace; when it exists, the harness adds a small workspace-memory
-  pointer to turn-scoped collaboration developer instructions and Codex
+  pointer to the parent-local instruction layer and Codex
   should use `memory_search` or `memory_get` when durable memory is relevant.
   If tools are disabled, memory search is unavailable, or the active
   workspace differs from the agent memory workspace, `MEMORY.md` uses the
@@ -1080,6 +1079,23 @@ Codex harness forwards the other bootstrap files as developer instructions:
   If prompt fitting drops or truncates the block, a later turn introduces it again.
   Tracking is process-local; reference content
   remains ordinary user input in native history.
+
+The managed relay supports native API-key and ChatGPT accounts on the standard
+OpenAI endpoints and also works with Gateway-owned inference plus `remote-exec`. Its HTTP and WebSocket hops honor
+the Gateway's HTTP(S) proxy and TLS configuration. Native login, token refresh,
+backend routing, and approval-reviewer checks stay native-owned. It rejects oversized
+prepared context instead of truncating it (256 KiB maximum); model request bodies
+and WebSocket frames are bounded at 32 MiB. Reduce bootstrap/skills budgets or
+attached context when those limits are exceeded.
+
+Custom commands, Desktop attachments, external Unix/WebSocket connections,
+non-OpenAI native providers, custom upstream endpoints, unsupported native account
+modes, locked upstream configuration, and native `features.respect_system_proxy` profiles keep the legacy
+collaboration carrier, which model-owned catalog instructions
+can replace. A warning and unverified persona accounting identify that the
+workaround is not active. OpenClaw does not reroute or shut down those sessions.
+Previously embedded persona, conversation text, and explicit task handoffs are
+not removed from existing histories or full-history forks.
 
 ## Environment overrides
 

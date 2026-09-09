@@ -713,6 +713,7 @@ describe("chat pane initialization", () => {
     const authStatus = { ts: 1, providers: [] };
     const request = createGatewayRequestMock(async (method) => {
       switch (method) {
+        case "models.list":
         case "chat.metadata":
           return { commands: [], models, swarmEnabled: false };
         case "models.authStatus":

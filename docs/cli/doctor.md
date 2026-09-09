@@ -91,6 +91,14 @@ legacy workspace setup, legacy session stores, and exec approvals. Malformed or
 conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
 
+Update-time Doctor omits project-clone inspection, SQLite database-size advice,
+active tool-schema warnings, and workspace backup and memory suggestions. These
+diagnostics do not migrate state or establish restart readiness. Doctor names
+the omitted checks in its output; run `openclaw doctor` after the update to
+inspect them. Update-time Doctor still runs required repairs and final session,
+database, workspace-state, and exec-approval readiness checks. A successful
+update does not mean the omitted diagnostics passed.
+
 This maintenance window also applies when repair ultimately finds no changes.
 Runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
 Custom state directories remain runtime-only and do not adopt a native service.
@@ -689,6 +697,7 @@ restored artifacts with SQLite rows before importing.
 - If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` leaves the file unchanged and exits with an error instead of writing a partial replacement. The error points to `openclaw config validate` for the exact parse position and explains how to edit or regenerate the config.
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Doctor still reports gateway/service health and applies non-service repairs, but skips service install/start/restart/bootstrap and legacy service cleanup.
 - Doctor reports the managed Gateway's applied heap limit and the adaptive derivation used for the current host or container memory limit. Use `openclaw gateway status` for the same report outside a repair pass.
+- Doctor and `openclaw gateway status` skip systemd content repair advice when the manager reports a masked or otherwise unloaded unit. Loaded-unit checks, readable-file fallback after a failed manager query, and unrelated backup or credential diagnostics remain active.
 - On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to rewrite the managed base unit. If a systemd drop-in overrides `ExecStart=` or `WorkingDirectory=`, inspect it with `systemctl --user cat <unit>.service` and update or remove that drop-in yourself; reinstalling the base does not replace it. `Environment=` drop-ins remain supported.
 - `doctor --fix --non-interactive` preserves the installed gateway service definition, including during update repair. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.

@@ -3,6 +3,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
+import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import {
   repairRejectedCompactionReplayInSessionManager,
   repairRejectedThinkingReplayInSessionManager,
@@ -95,13 +96,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
     sessionManager.appendMessage(
       asAppendMessage({ role: "user", content: "follow-up", timestamp: 3 }),
     );
-    sessionManager.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "follow-up answer" }],
-        timestamp: 4,
-      }),
-    );
+    sessionManager.appendMessage(asAppendMessage(timestampedTextAssistant("follow-up answer", 4)));
 
     const result = repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
@@ -121,13 +116,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
   it("does not rewrite sessions without active-branch thinking blocks", () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    sessionManager.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "visible answer" }],
-        timestamp: 2,
-      }),
-    );
+    sessionManager.appendMessage(asAppendMessage(timestampedTextAssistant("visible answer", 2)));
 
     const beforeLeafId = sessionManager.getLeafId();
     const result = repairRejectedThinkingReplayInSessionManager({ sessionManager });

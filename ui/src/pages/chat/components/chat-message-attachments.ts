@@ -39,6 +39,7 @@ import {
   type ChatMediaResource,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+import type { AttachmentSidebarState } from "./chat-sidebar-content-types.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
 type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
@@ -71,7 +72,7 @@ type ManagedAttachmentAvailability =
       refreshAfter?: number;
       refreshAttempts?: number;
     }
-  | { status: "unavailable"; reason: string; checkedAt: number };
+  | { status: "unavailable"; reason: string; checkedAt: number; error?: true };
 
 function unavailableManagedAttachment(): ManagedAttachmentAvailability {
   return {
@@ -267,6 +268,9 @@ function resolveManagedAttachmentAvailability(
         }
       } catch {
         availability = handleResolutionFailure();
+        if (availability.status === "unavailable") {
+          availability = { ...availability, error: true };
+        }
       }
       if (!isChatMediaResourceCurrent(resource)) {
         return null;
@@ -327,6 +331,7 @@ function resolveAttachmentSource(
       status: assistantAvailability.status,
       reason:
         assistantAvailability.status === "unavailable" ? assistantAvailability.reason : undefined,
+      error: assistantAvailability.status === "unavailable" && assistantAvailability.unconfirmed,
       onAllow:
         assistantAvailability.status === "unavailable" && assistantAvailability.canAllow
           ? () => retryAssistantAttachmentAvailability(attachment.url, options, true)
@@ -347,6 +352,7 @@ function resolveAttachmentSource(
     return {
       status: managedAvailability.status,
       reason: managedAvailability.status === "unavailable" ? managedAvailability.reason : undefined,
+      error: managedAvailability.status === "unavailable" && managedAvailability.error,
       onRetry:
         managedAvailability.status === "unavailable" &&
         attachment.artifactId &&
@@ -477,12 +483,23 @@ export function renderAssistantAttachments(
               voiceNote: attachment.isVoiceNote === true,
               ...(hasLiveSidebarSource
                 ? {
-                    resolveSource: (sidebarUpdate, runtime) => {
+                    resolveSource: (sidebarUpdate, runtime): AttachmentSidebarState => {
                       const next = resolveAttachmentSource(attachment, {
                         ...runtime,
                         onRequestUpdate: sidebarUpdate,
                       });
-                      return next.status === "available" ? next.source : null;
+                      if (next.status === "available") {
+                        return { status: "ready", ...next.source };
+                      }
+                      if (next.status === "checking") {
+                        return { status: "pending" };
+                      }
+                      return next.error
+                        ? {
+                            status: "error",
+                            reason: next.reason ?? t("chat.attachments.unavailable"),
+                          }
+                        : { status: "unavailable" };
                     },
                   }
                 : {}),

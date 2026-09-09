@@ -294,6 +294,7 @@ export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): Mo
 
 export type PreparedModelRuntimeCatalogAccess = Readonly<{
   isCurrent: () => boolean;
+  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
   readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
   loadFullModelCatalog: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
@@ -341,7 +342,7 @@ export function createPreparedModelRuntimeSnapshot(
     ...(pluginRegistry ? { pluginRegistry } : {}),
     ...(messageToolCatalog ? { messageToolCatalog } : {}),
     ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
-    modelCatalog,
+    modelCatalog: catalogAccess.withRefreshStatus(modelCatalog),
     readFullModelCatalog: catalogAccess.readFullModelCatalog,
     loadFullModelCatalog: catalogAccess.loadFullModelCatalog,
     configuredRuntimeModels,

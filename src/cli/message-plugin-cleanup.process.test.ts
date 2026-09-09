@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -82,9 +84,8 @@ export default { id: plugin.id, register(api) {
 
     const result = await runCliProcessChild({
       nodeArgs: [
-        "--import",
-        "tsx",
-        "src/entry.ts",
+        // Share immutable CLI code; each case still owns a fresh process and plugin lifecycle.
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
         "message",
         "send",
         "--dry-run",

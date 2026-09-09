@@ -37,6 +37,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
   -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
+  -e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -107,6 +108,8 @@ OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
+OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"
+export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
 
@@ -174,13 +177,13 @@ printf "%s\n" "$status_json"
 STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
 
 assert_package_dry_run() {
-  local expected_kind="$1" expected_channel="$2"
-  shift 2
+  local expected_kind="$1" expected_channel="$2" selection="$3"
+  shift 3
   local preview
   preview="$(openclaw update --dry-run --json --no-restart "$@")"
   printf "%s\n" "$preview"
   UPDATE_JSON="$preview" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
-    assert-dry-run "$expected_kind" "$expected_channel"
+    assert-dry-run "$expected_kind" "$expected_channel" "$selection"
   node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 }
 dev_channel_args=(--channel dev)
@@ -188,12 +191,17 @@ dev_channel_args=(--channel dev)
 if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
   echo "==> package dry-run channel and one-off tag precedence"
   openclaw config set update.channel dev
-  assert_package_dry_run git dev
-  assert_package_dry_run git dev --channel dev
-  assert_package_dry_run git dev --channel dev --tag beta
-  assert_package_dry_run package dev --tag beta
-  assert_package_dry_run package stable --channel stable
-  dev_channel_args=()
+  assert_package_dry_run git dev stored
+  assert_package_dry_run git dev explicit --channel dev
+  assert_package_dry_run git dev explicit --channel dev --tag beta
+  assert_package_dry_run package dev stored --tag beta
+  assert_package_dry_run package stable explicit --channel stable
+  # 7.33 reports a stored dev channel as a package update even though an
+  # explicit --channel dev selects Git. Keep the explicit selector for the
+  # destructive admission and actual switch probes on that frozen contract.
+  if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then
+    dev_channel_args=()
+  fi
 fi
 
 echo "==> ordinary untracked files still block Git admission"
@@ -227,7 +235,11 @@ node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel 
 
 status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
-STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
+if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" = "1" ]; then
+  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
+else
+  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
+fi
 
 echo "==> git -> package stable channel"
 set +e

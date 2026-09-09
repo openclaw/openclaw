@@ -44,7 +44,7 @@ import "./get-reply.test-runtime-mocks.js";
 registerGetReplyBaselineBypass();
 
 type LoadModelCatalogFn =
-  typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog;
+  typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog;
 
 const mocks = vi.hoisted(() => ({
   buildStatusReply: vi.fn(),
@@ -66,7 +66,7 @@ vi.mock("./commands-status.js", () => ({
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: mocks.loadModelCatalog,
+  readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../../agents/workspace.js", () => ({

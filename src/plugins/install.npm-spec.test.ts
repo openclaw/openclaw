@@ -3086,7 +3086,7 @@ describe("installPluginFromNpmSpec", () => {
     ).toBe(false);
   });
 
-  it("treats dangerouslyForceUnsafeInstall as a no-op for npm-spec installs", async () => {
+  it("installs npm packages without built-in dangerous-code scanning", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const warnings: string[] = [];
     mockNpmViewAndInstall({
@@ -3100,7 +3100,6 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: "dangerous-plugin@1.0.0",
-      dangerouslyForceUnsafeInstall: true,
       npmDir: npmRoot,
       logger: {
         info: () => {},

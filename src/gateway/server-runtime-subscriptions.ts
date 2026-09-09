@@ -22,6 +22,7 @@ import {
   onAgentRuntimeEvent,
 } from "../infra/agent-events.js";
 import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
+import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -387,12 +388,14 @@ export function startGatewayEventSubscriptions(params: {
         evt.projectSessionLifecycle !== false &&
         trackedOwnerIsCurrent &&
         claimIsComplete;
+      const writeContext = captureAgentRunTerminalWriteContext(evt.runId);
       const prepareTerminalPersistence = (sessionKey: string) => {
         const persistence = sessionLifecyclePersistence.observe({
           sessionKey,
           ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
           event: evt,
           ...(terminalAuthority ? { authority: terminalAuthority } : {}),
+          ...(writeContext ? { writeContext } : {}),
           ...(clientRunId !== evt.runId ? { clientRunId } : {}),
         });
         if (terminalAuthority) {
@@ -424,22 +427,25 @@ export function startGatewayEventSubscriptions(params: {
           () => settleTrackedTerminal({ runId: evt.runId, clientRunId }),
           () => settleTrackedTerminal({ runId: evt.runId, clientRunId, persisted: false }),
         );
+        return persistence;
       };
       if (canPersistTerminal) {
         if (knownSessionKey) {
-          prepareTerminalPersistence(knownSessionKey);
+          const persistence = prepareTerminalPersistence(knownSessionKey);
+          writeContext?.track(persistence);
         } else {
           // Context cleanup can precede a terminal event. Resolve its persisted
           // run mapping before the lazy chat handler consumes the same event.
-          terminalPreparation = getSessionKeyModule().then(({ resolveSessionKeyForRun }) => {
+          terminalPreparation = getSessionKeyModule().then(async ({ resolveSessionKeyForRun }) => {
             const sessionKey = resolveSessionKeyForRun(
               evt.runId,
               sessionAgentId ? { agentId: sessionAgentId } : undefined,
             );
             if (sessionKey) {
-              prepareTerminalPersistence(sessionKey);
+              await prepareTerminalPersistence(sessionKey);
             }
           });
+          writeContext?.track(terminalPreparation);
         }
       }
     } else if (lifecyclePhase === "start") {

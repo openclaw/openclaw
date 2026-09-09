@@ -62,7 +62,7 @@ vi.mock("../agents/model-catalog.js", async () => {
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: loadModelCatalog,
+  readPreparedModelCatalog: loadModelCatalog,
 }));
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
@@ -105,7 +105,7 @@ function setCompatibleActiveMediaUnderstandingRegistry(
 describe("runCapability image skip", () => {
   beforeAll(async () => {
     vi.doMock("../agents/prepared-model-catalog.js", () => {
-      return { loadPreparedModelCatalog: loadModelCatalog };
+      return { readPreparedModelCatalog: loadModelCatalog };
     });
     ({ buildProviderRegistry, resolveAutoImageModel, runCapability } = await import("./runner.js"));
     ({ applyMediaUnderstanding } = await import("./apply.js"));

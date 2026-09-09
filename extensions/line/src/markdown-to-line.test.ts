@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   stripMarkdown,
   processLineMessage,
-  convertTableToFlexBubble,
   convertCodeBlockToFlexBubble,
   hasMarkdownToConvert,
 } from "./markdown-to-line.js";
@@ -33,17 +32,15 @@ Some deleted content.`);
   });
 });
 
-describe("convertTableToFlexBubble", () => {
+describe("processLineMessage table cards", () => {
   it("replaces empty cells with placeholders", () => {
-    const table = {
-      headers: ["A", "B"],
-      rows: [["", ""]],
+    const result = processLineMessage("| A | B |\n|---|---|\n| | |");
+    expect(result.flexMessages).toHaveLength(1);
+    const bubble = requireEntry(result.flexMessages, 0, "empty-cell table flex message")
+      .contents as {
+      body: { contents: Array<{ contents?: Array<{ contents?: Array<{ text: string }> }> }> };
     };
-
-    const bubble = convertTableToFlexBubble(table);
-    const body = bubble.body as {
-      contents: Array<{ contents?: Array<{ contents?: Array<{ text: string }> }> }>;
-    };
+    const body = bubble.body;
     const rowsBox = requireEntry(body.contents, 2, "third flex body content") as {
       contents: Array<{ contents: Array<{ text: string }> }>;
     };

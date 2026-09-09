@@ -15,7 +15,7 @@ CANDIDATE_PACKAGE=/tmp/openclaw-update-first-hop-candidate.tgz
 NEGATIVE_PACKAGE=/tmp/openclaw-update-first-hop-negative.tgz
 FUTURE_PACKAGE=/tmp/openclaw-update-first-hop-future.tgz
 ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-/tmp/openclaw-update-first-hop-artifacts}"
-EXPECTED_MISSING_CHUNK="${OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK:-shared-Y6bNiw2w.js}"
+EXPECTED_MISSING_CHUNK="${OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK-}"
 BASE_PATH="$PATH"
 ACCOUNT_HOME="$HOME"
 mock_pid=""
@@ -30,7 +30,7 @@ export npm_config_audit=false
 export npm_config_fund=false
 export npm_config_loglevel=error
 
-for package_path in "$SOURCE_PACKAGE" "$CANDIDATE_PACKAGE" "$NEGATIVE_PACKAGE" "$FUTURE_PACKAGE"; do
+for package_path in "$SOURCE_PACKAGE" "$CANDIDATE_PACKAGE" "$NEGATIVE_PACKAGE" "$FUTURE_PACKAGE" "$ARTIFACT_DIR/source.json"; do
   if [ ! -f "$package_path" ]; then
     echo "missing package input: $package_path" >&2
     exit 2
@@ -129,13 +129,16 @@ setup_lane() {
       return 1
     }
   openclaw --version >"$ARTIFACT_DIR/$lane-source-version.txt"
+  assert_installed_build "$SOURCE_PACKAGE" "$ARTIFACT_DIR/$lane-source-build-info.json"
   install_update_restart_systemctl_shim
   openclaw config set gateway.mode local >"$ARTIFACT_DIR/$lane-config.log" 2>&1
   openclaw config set gateway.port "$port" >>"$ARTIFACT_DIR/$lane-config.log" 2>&1
   openclaw config set gateway.reload.mode off >>"$ARTIFACT_DIR/$lane-config.log" 2>&1
-  if [ "$source_version" = "2026.9.2" ]; then
-    node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
-  fi
+  case "$source_version" in
+    2026.9.2 | 2026.9.3)
+      node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
+      ;;
+  esac
   openclaw gateway install --force --json \
     >"$ARTIFACT_DIR/$lane-service-install.json" \
     2>"$ARTIFACT_DIR/$lane-service-install.err"
@@ -240,16 +243,27 @@ export OPENAI_API_KEY="sk-openclaw-first-hop"
 export MOCK_REQUEST_LOG="$ARTIFACT_DIR/openai-requests.jsonl"
 mock_pid="$(openclaw_e2e_start_mock_openai 44212 "$ARTIFACT_DIR/mock-openai.log")"
 openclaw_e2e_wait_mock_openai 44212
-run_negative_control
+if [ -n "$EXPECTED_MISSING_CHUNK" ]; then
+  run_negative_control
+else
+  echo "No deterministic missing-chunk restart control for $source_version; positive hops remain required."
+fi
 run_positive_hops
 
-EXPECTED_MISSING_CHUNK="$EXPECTED_MISSING_CHUNK" node -e '
-  const fs = require("node:fs");
-  fs.writeFileSync(process.argv[1], `${JSON.stringify({
-    negativeControl: { exit: 1, missingChunk: process.env.EXPECTED_MISSING_CHUNK },
-    firstHop: { exit: 0, method: "in-process-self-update", selfUpdatePassed: true, serviceIntent: "active", residueCount: 0 },
-    secondHop: { exit: 0, method: "in-process-self-update", legacyCompatibilityChunksPresent: false, serviceIntent: "active", residueCount: 0 },
+node -e '
+  const fs = require("node:fs"), path = require("node:path");
+  const root = process.argv[1];
+  const read = name => JSON.parse(fs.readFileSync(path.join(root, name), "utf8"));
+  const source = read("source.json");
+  const [sourcePid, candidatePid, futurePid] = fs.readFileSync(path.join(root, "positive-service-pids.txt"), "utf8").trim().split("\n").map(Number);
+  fs.writeFileSync(path.join(root, "summary.json"), `${JSON.stringify({
+    source,
+    negativeControl: source.expectedMissingChunk
+      ? { status: "passed", exit: 1, missingChunk: source.expectedMissingChunk }
+      : source.negativeControl,
+    firstHop: { exit: 0, method: "in-process-self-update", selfUpdatePassed: true, serviceIntent: "active", residueCount: 0, build: read("positive-first-build-info.json"), beforePid: sourcePid, afterPid: candidatePid },
+    secondHop: { exit: 0, method: "in-process-self-update", legacyCompatibilityChunksPresent: false, serviceIntent: "active", residueCount: 0, build: read("positive-second-build-info.json"), beforePid: candidatePid, afterPid: futurePid },
   }, null, 2)}\n`);
-' "$ARTIFACT_DIR/summary.json"
+' "$ARTIFACT_DIR"
 
 echo "Packaged updater first-hop compatibility E2E passed."

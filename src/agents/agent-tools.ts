@@ -677,6 +677,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       config: execRuntimeConfig,
       preparedRunEnvironment,
       reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
+      reviewTranscript: options?.exec?.reviewTranscript,
       trigger: options?.trigger,
       node: options?.exec?.node ?? execConfig.node,
       pathPrepend: mergeGatewayAgentCliPath(options?.exec?.pathPrepend ?? execConfig.pathPrepend),

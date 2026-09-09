@@ -13,7 +13,7 @@ import type {
   ExecSecurity,
   ExecTarget,
 } from "../infra/exec-approvals.js";
-import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
@@ -46,6 +46,8 @@ export type ExecToolDefaults = {
   /** Host-prepared non-secret environment and store projection exclusions. */
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
   autoReviewer?: ExecAutoReviewer;
+  /** Reads current attempt context only when a command needs review. */
+  reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
   agentId?: string;
   backgroundMs?: number;
   cleanupMs?: number;

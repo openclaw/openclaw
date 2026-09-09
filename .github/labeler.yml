@@ -15,6 +15,7 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+          - "docs/plugins/sdk-runtime/**"
 "plugin: linux-node":
   - changed-files:
       - any-glob-to-any-file:
@@ -41,6 +42,7 @@
       - any-glob-to-any-file:
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+          - "docs/channels/discord/**"
 "channel: irc":
   - changed-files:
       - any-glob-to-any-file:
@@ -191,6 +193,7 @@
           - "qa/scenarios/**"
           - "docs/maturity/**"
           - "docs/concepts/qa-e2e-automation.md"
+          - "docs/concepts/qa-e2e-automation/**"
           - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
 "channel: signal":
@@ -203,6 +206,7 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+          - "docs/channels/slack/**"
 "channel: sms":
   - changed-files:
       - any-glob-to-any-file:
@@ -597,6 +601,7 @@
       - any-glob-to-any-file:
           - "extensions/codex/**"
           - "docs/plugins/codex-harness.md"
+          - "docs/plugins/codex-harness/**"
           - "docs/plugins/codex-harness-reference.md"
           - "docs/plugins/codex-harness-runtime.md"
           - "docs/plugins/codex-supervision.md"

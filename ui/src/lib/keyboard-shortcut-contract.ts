@@ -4,19 +4,20 @@ type KeyboardShortcutModifier = "mod" | "ctrl" | "shift" | "alt";
 type ShortcutDefinition<Key extends string> = {
   readonly modifiers: readonly KeyboardShortcutModifier[];
   readonly key: Key;
+  readonly platformSpecific?: boolean;
 };
 
 export const KEYBOARD_SHORTCUT_COMBOS = {
-  commandPalette: { modifiers: ["mod"], key: "k" },
+  commandPalette: { modifiers: ["mod"], key: "k", platformSpecific: true },
   keyboardShortcuts: { modifiers: ["mod"], key: "/" },
-  toggleSidebar: { modifiers: ["mod"], key: "b" },
+  toggleSidebar: { modifiers: ["mod"], key: "b", platformSpecific: true },
   debugOverlay: { modifiers: ["mod", "shift"], key: "d" },
   appearanceSettings: { modifiers: ["mod", "shift"], key: "Comma" },
   escape: { modifiers: [], key: "Escape" },
   sendMessage: { modifiers: [], key: "Enter" },
   modifiedEnter: { modifiers: ["mod"], key: "Enter" },
   newline: { modifiers: ["shift"], key: "Enter" },
-  transcriptSearch: { modifiers: ["mod"], key: "f" },
+  transcriptSearch: { modifiers: ["mod"], key: "f", platformSpecific: true },
   terminalPanel: { modifiers: ["ctrl"], key: "Backquote" },
   homePanel: { modifiers: ["mod", "shift"], key: "h" },
   workspaceFiles: { modifiers: ["mod", "shift"], key: "b" },
@@ -76,9 +77,8 @@ export function formatKeyboardShortcutCombo(
   return formatKeyboardShortcutParts(combo, applePlatform).join(applePlatform ? "" : "+");
 }
 
-// "mod" = exactly one of Meta/Ctrl, matching the command palette's shipped
-// either-modifier behavior; it also makes mod-chords reachable on non-Apple
-// platforms where the previously meta-only sidebar/workspace chords were dead.
+// Most mod-chords accept either modifier. Platform-specific chords reserve
+// native editing keys (Mac Ctrl+B/F/K) for the focused text field.
 export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: KeyboardEvent): boolean {
   if (event.isComposing || event.key === "Dead" || event.keyCode === 229) {
     return false;
@@ -86,7 +86,8 @@ export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: Keyboa
   const wantsMod = combo.modifiers.includes("mod");
   const wantsCtrl = combo.modifiers.includes("ctrl");
   const primaryModifierMatches = wantsMod
-    ? event.metaKey !== event.ctrlKey
+    ? event.metaKey !== event.ctrlKey &&
+      (!combo.platformSpecific || event.metaKey === isApplePlatform())
     : !event.metaKey && event.ctrlKey === wantsCtrl;
   // "/" and Backquote ignore Shift: some layouts need Shift to produce "/",
   // and the shipped terminal chord accepts Ctrl+Shift+` (layouts where the

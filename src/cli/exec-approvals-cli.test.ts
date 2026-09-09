@@ -855,6 +855,21 @@ describe("exec approvals CLI", () => {
     expect(loggedOutput()).toContain("Writing local approvals.");
   });
 
+  it("keeps --json output parseable when the allowlist write happens locally", async () => {
+    const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+    updateExecApprovals.mockClear();
+    defaultRuntime.log.mockClear();
+    defaultRuntime.writeJson.mockClear();
+
+    await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname", "--json"]);
+
+    expect(updateExecApprovals).toHaveBeenCalledWith(
+      expect.objectContaining({ baseHash: "hash-local" }),
+    );
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(loggedOutput()).not.toContain("Writing local approvals.");
+  });
+
   it.each(["add", "remove"])(
     "rejects an unknown agent before allowlist %s persistence",
     async (operation) => {
