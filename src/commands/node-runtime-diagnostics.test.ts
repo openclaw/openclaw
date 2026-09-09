@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
+import { runDoctorLintCli } from "./doctor-lint.js";
 import { statusCommand } from "./status.command.js";
 
-const service = vi.hoisted(() => ({
+const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
   resolveNodeRuntimeInfo: vi.fn(),
 }));
 const runtime = {
@@ -12,15 +14,19 @@ const runtime = {
   exit: vi.fn(),
 };
 
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
 vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
   isDefaultInstallIdentity: () => true,
 }));
 vi.mock("../daemon/service.js", () => ({
-  resolveGatewayService: () => ({ readCommand: service.readCommand }),
+  resolveGatewayService: () => ({ readCommand: mocks.readCommand }),
 }));
 vi.mock("../daemon/runtime-paths.js", () => ({
-  resolveNodeRuntimeInfo: service.resolveNodeRuntimeInfo,
+  resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
 }));
 vi.mock("./status-json-command.ts", () => ({
   assertStatusUsageAgentScope: () => {},
@@ -29,10 +35,10 @@ vi.mock("./status-json-command.ts", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  service.readCommand.mockResolvedValue({
+  mocks.readCommand.mockResolvedValue({
     programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
   });
-  service.resolveNodeRuntimeInfo.mockResolvedValue({
+  mocks.resolveNodeRuntimeInfo.mockResolvedValue({
     status: "unsupported",
     version: "22.23.2",
     sqliteVersion: "3.50.2",
@@ -46,6 +52,34 @@ afterEach(() => {
 });
 
 describe("Node runtime diagnostics command surfaces", () => {
+  it("keeps Node repair guidance visible when config validation fails", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      path: "/tmp/openclaw.json",
+      issues: [{ path: "gateway.mode", message: "Required" }],
+    });
+    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "22.23.2" } });
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      expect(await runDoctorLintCli(runtime, { json: true })).toBe(1);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "core/doctor/final-config-validation" }),
+          expect.objectContaining({
+            checkId: "core/doctor/node-runtime",
+            fixHint: expect.stringContaining("nvm install 26"),
+          }),
+        ]),
+      );
+    } finally {
+      stdout.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("registers Doctor findings for the CLI and recorded service runtimes", async () => {
     vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "26.0.0" } });
     const checks = await resolveDoctorContributionHealthChecks();
@@ -74,7 +108,7 @@ describe("Node runtime diagnostics command surfaces", () => {
   });
 
   it("reports an uninspectable service without claiming its Node is unsupported", async () => {
-    service.resolveNodeRuntimeInfo.mockResolvedValue({
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue({
       status: "probe-failed",
       error: new Error("unavailable"),
     });

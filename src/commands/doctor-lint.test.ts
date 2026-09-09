@@ -321,34 +321,6 @@ describe("runDoctorLintCli", () => {
     }
   });
 
-  it("keeps Node repair guidance visible when config validation fails", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: false,
-      config: {},
-      path: "/tmp/openclaw.json",
-      issues: [{ path: "gateway.mode", message: "Required" }],
-    });
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "22.23.2" } });
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      expect(await runDoctorLintCli(runtime, { json: true })).toBe(1);
-      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ checkId: "core/doctor/final-config-validation" }),
-          expect.objectContaining({
-            checkId: "core/doctor/node-runtime",
-            fixHint: expect.stringContaining("nvm install 26"),
-          }),
-        ]),
-      );
-    } finally {
-      stdout.mockRestore();
-      vi.unstubAllGlobals();
-    }
-  });
-
   it("rejects unknown --only health check ids instead of reporting a false-clean run", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
