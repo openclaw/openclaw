@@ -173,11 +173,12 @@ required there:
 ```
 
 The Gateway verifies the HMAC-SHA256 over the exact request bytes, rejects
-timestamps outside `toleranceSeconds` (default 300) as replays, and treats the
-sender's `webhook-id` as the idempotency key when the request carries none.
-Provide `secret` as an array while the sender rotates its secret. Invalid or
-missing signatures return `401` and count against the same throttle as bad
-tokens. See [Mapping details](/gateway/config-hooks#mapping-details).
+timestamps outside `toleranceSeconds` (default 300) as replays, and uses the
+sender's `webhook-id` as the delivery's replay identity. Provide `secret` as an
+array while the sender rotates its secret. Invalid or missing signatures return
+`401` and count against the same throttle as bad tokens. A signed mapping needs
+its own custom `match.path`; `/hooks/agent` and `/hooks/wake` always require the
+token. See [Mapping details](/gateway/config-hooks#mapping-details).
 
 <AccordionGroup>
   <Accordion title="POST /hooks/wake">

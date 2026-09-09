@@ -111,22 +111,69 @@ export function normalizeHookMappingSignature(
   };
 }
 
+/** Built-in hook endpoints always keep the shared-token contract; a mapping signature never admits them. */
+export const HOOK_BUILT_IN_PATHS: ReadonlySet<string> = new Set(["agent", "wake"]);
+
+export type HookPathSignatureOwner = {
+  mappingId: string;
+  signature: HookMappingSignatureResolved;
+};
+
+function normalizeHookPath(hookPath: string): string {
+  return hookPath.trim().replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
 /**
- * Signature policy for a request path, decided before the body is trusted: the
- * first mapping whose `match.path` covers the path owns authentication for it,
- * mirroring the first-match dispatch order. Source matching needs the payload
- * and therefore cannot influence authentication.
+ * Signature policy for a custom request path, decided before the body is
+ * trusted. A signed mapping must be the only mapping able to match its path
+ * (enforced by `assertHookSignatureMappingsExclusive`), so the mapping that
+ * authenticates the request is the mapping that dispatches it. Built-in
+ * `agent` and `wake` never authenticate by signature.
  */
 export function resolveHookPathSignature(
   mappings: readonly HookMappingResolved[],
   hookPath: string,
-): HookMappingSignatureResolved | undefined {
-  const normalizedPath = hookPath.trim().replace(/^\/+/, "").replace(/\/+$/, "");
+): HookPathSignatureOwner | undefined {
+  const normalizedPath = normalizeHookPath(hookPath);
+  if (!normalizedPath || HOOK_BUILT_IN_PATHS.has(normalizedPath)) {
+    return undefined;
+  }
   for (const mapping of mappings) {
     if (mapping.matchPath && mapping.matchPath !== normalizedPath) {
       continue;
     }
-    return mapping.signature;
+    return mapping.signature ? { mappingId: mapping.id, signature: mapping.signature } : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * A signed mapping owns its path exclusively: it needs an explicit custom
+ * `match.path` (never a built-in endpoint), and no other mapping may match
+ * that path, whether by the same `match.path` or by omitting `match.path`.
+ * Otherwise a request could authenticate with one mapping's secret and
+ * dispatch another mapping's action via `match.source`. Returns the first
+ * violation as a message, or undefined.
+ */
+export function findHookSignatureMappingConflict(
+  mappings: readonly { id: string; matchPath?: string; signature?: unknown }[],
+): string | undefined {
+  for (const mapping of mappings) {
+    if (!mapping.signature) {
+      continue;
+    }
+    if (!mapping.matchPath) {
+      return `Hook mapping "${mapping.id}" declares a signature but no match.path; signed mappings must own an explicit custom path`;
+    }
+    if (HOOK_BUILT_IN_PATHS.has(mapping.matchPath)) {
+      return `Hook mapping "${mapping.id}" cannot sign the built-in hook path "${mapping.matchPath}"`;
+    }
+    const overlap = mappings.find(
+      (other) => other !== mapping && (!other.matchPath || other.matchPath === mapping.matchPath),
+    );
+    if (overlap) {
+      return `Hook mapping "${mapping.id}" declares a signature for path "${mapping.matchPath}" but mapping "${overlap.id}" can also match that path; a signed path must belong to one mapping`;
+    }
   }
   return undefined;
 }

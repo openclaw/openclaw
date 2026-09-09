@@ -12,6 +12,7 @@ import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
+  findHookSignatureMappingConflict,
   type HookMappingSignatureResolved,
   normalizeHookMappingSignature,
 } from "./hooks-signature.js";
@@ -216,7 +217,7 @@ export function resolveHookMappings(
   const gmailMaxBodyBytes = resolveGmailHookMaxBodyBytes(
     resolveGmailHookMaxBytes(hooks?.gmail?.maxBytes),
   );
-  return mappings.map((mapping, index) => {
+  const resolved = mappings.map((mapping, index) => {
     const normalized = normalizeHookMapping(mapping, index, transformsDir);
     // Every gmail-path mapping (preset or the documented custom restricted
     // reader) receives gog's batch payloads, so all of them inherit the
@@ -226,6 +227,11 @@ export function resolveHookMappings(
     }
     return normalized;
   });
+  const signatureConflict = findHookSignatureMappingConflict(resolved);
+  if (signatureConflict) {
+    throw new Error(signatureConflict);
+  }
+  return resolved;
 }
 
 export async function applyHookMappings(

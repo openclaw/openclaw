@@ -91,9 +91,20 @@ describe("gateway hook sender signatures", () => {
         | undefined;
       expect(call?.job?.payload?.externalContentSource).toBe("webhook");
 
-      // webhook-id doubles as the idempotency key: a redelivery replays, it does not re-run.
+      // The verified webhook-id is the replay identity: a redelivery replays, it does not re-run,
+      // and unsigned headers (Idempotency-Key, a bearer the signed path never checks) cannot mint
+      // a fresh identity for the same signed bytes.
       const replayed = await post(port, "/hooks/ambush", BODY, { headers: signedHeaders("msg_1") });
       expect(replayed.status).toBe(200);
+      const replayedNewKey = await post(port, "/hooks/ambush", BODY, {
+        headers: { ...signedHeaders("msg_1"), "Idempotency-Key": "fresh-key" },
+      });
+      expect(replayedNewKey.status).toBe(200);
+      const replayedNewBearer = await post(port, "/hooks/ambush", BODY, {
+        token: "some-other-token",
+        headers: signedHeaders("msg_1"),
+      });
+      expect(replayedNewBearer.status).toBe(200);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
       // The signature is mandatory on that path: the shared token alone is not enough.
@@ -118,13 +129,21 @@ describe("gateway hook sender signatures", () => {
       expect(stale.status).toBe(401);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
-      // Paths without a signature mapping keep the token contract.
+      // Built-in endpoints and unsigned paths keep the token contract, and a signature
+      // that is valid for the mapped path buys nothing there.
       const wakeNoAuth = await post(port, "/hooks/wake", JSON.stringify({ text: "Ping" }));
       expect(wakeNoAuth.status).toBe(401);
+      const wakeSigned = await post(port, "/hooks/wake", BODY, { headers: signedHeaders("msg_6") });
+      expect(wakeSigned.status).toBe(401);
       const wakeToken = await post(port, "/hooks/wake", JSON.stringify({ text: "Ping" }), {
         token: HOOK_TOKEN,
       });
       expect(wakeToken.status).toBe(200);
+      const agentToken = await post(port, "/hooks/agent", JSON.stringify({ message: "Do it" }), {
+        token: HOOK_TOKEN,
+      });
+      expect(agentToken.status).toBe(200);
+      await waitForCronRuns(2);
     });
   });
 });

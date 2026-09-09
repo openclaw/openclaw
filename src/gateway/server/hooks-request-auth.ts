@@ -14,8 +14,10 @@ export type HookRequestAdmission =
       ok: true;
       /** Body already read when a signature had to be verified over the raw bytes. */
       body?: HookRequestBody;
-      /** Verified sender delivery id (`webhook-id`), usable as an idempotency fallback. */
+      /** Verified sender delivery id (`webhook-id`); the replay identity for signed deliveries. */
       signedDeliveryId?: string;
+      /** Mapping whose secret authenticated the request; scopes its replay cache. */
+      signedMappingId?: string;
     }
   | { ok: false };
 
@@ -84,10 +86,9 @@ export async function admitHookRequest(params: {
 }): Promise<HookRequestAdmission> {
   const { req, res, hooksConfig, subPath, clientKey, limiter } = params;
   const reject = () => sendHookUnauthorized({ res, clientKey, limiter, warn: params.warn });
-  const pathSignature = subPath
-    ? resolveHookPathSignature(hooksConfig.mappings, subPath)
-    : undefined;
-  if (!pathSignature) {
+  const owner = subPath ? resolveHookPathSignature(hooksConfig.mappings, subPath) : undefined;
+  const pathSignature = owner?.signature;
+  if (!owner || !pathSignature) {
     if (!safeEqualSecret(params.token, hooksConfig.token)) {
       reject();
       return { ok: false };
@@ -114,5 +115,10 @@ export async function admitHookRequest(params: {
     return { ok: false };
   }
   limiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
-  return { ok: true, body: body.value, signedDeliveryId: verification.deliveryId };
+  return {
+    ok: true,
+    body: body.value,
+    signedDeliveryId: verification.deliveryId,
+    signedMappingId: owner.mappingId,
+  };
 }

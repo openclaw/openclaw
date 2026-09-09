@@ -41,6 +41,55 @@ describe("config hooks signature", () => {
     expect(res.issues.map((issue) => issue.path)).toContain("hooks.mappings.0.signature.scheme");
   });
 
+  it("requires an explicit custom match.path on signed mappings", () => {
+    for (const match of [undefined, { path: "agent" }, { path: "/wake/" }]) {
+      const res = validateConfigObjectWithPlugins({
+        agents: { entries: { openclaw: {} } },
+        hooks: {
+          enabled: true,
+          token: "hook-secret",
+          mappings: [
+            {
+              ...(match ? { match } : {}),
+              action: "agent",
+              messageTemplate: "x",
+              signature: { scheme: "standard-webhooks", secret: SECRET },
+            },
+          ],
+        },
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues.map((issue) => issue.path)).toContain("hooks.mappings.0.signature");
+      }
+    }
+  });
+
+  it("rejects another mapping that can match a signed path", () => {
+    for (const other of [{ match: { path: "ambush", source: "x" } }, {}]) {
+      const res = validateConfigObjectWithPlugins({
+        agents: { entries: { openclaw: {} } },
+        hooks: {
+          enabled: true,
+          token: "hook-secret",
+          mappings: [
+            {
+              match: { path: "ambush" },
+              action: "agent",
+              messageTemplate: "x",
+              signature: { scheme: "standard-webhooks", secret: SECRET },
+            },
+            { ...other, action: "agent", messageTemplate: "y" },
+          ],
+        },
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues.map((issue) => issue.path)).toContain("hooks.mappings.0.signature");
+      }
+    }
+  });
+
   it("rejects an empty secret list", () => {
     const res = validateConfigObjectWithPlugins(
       hooksConfig({ scheme: "standard-webhooks", secret: [] }),

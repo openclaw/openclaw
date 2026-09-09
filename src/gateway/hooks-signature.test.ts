@@ -2,6 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import {
   decodeStandardWebhooksSecret,
+  findHookSignatureMappingConflict,
   normalizeHookMappingSignature,
   resolveHookPathSignature,
   verifyStandardWebhooksSignature,
@@ -200,13 +201,53 @@ describe("resolveHookPathSignature", () => {
   );
   const mappings = [
     { id: "ambush", matchPath: "ambush", action: "agent" as const, signature },
-    { id: "open", action: "agent" as const },
+    { id: "open", matchPath: "open", action: "agent" as const },
   ];
 
-  test("the first path-matching mapping owns authentication", () => {
-    expect(resolveHookPathSignature(mappings, "ambush")).toBe(signature);
-    expect(resolveHookPathSignature(mappings, "/ambush/")).toBe(signature);
+  test("returns the mapping that owns a signed custom path", () => {
+    expect(resolveHookPathSignature(mappings, "ambush")).toEqual({
+      mappingId: "ambush",
+      signature,
+    });
+    expect(resolveHookPathSignature(mappings, "/ambush/")).toEqual({
+      mappingId: "ambush",
+      signature,
+    });
+    expect(resolveHookPathSignature(mappings, "open")).toBeUndefined();
     expect(resolveHookPathSignature(mappings, "gmail")).toBeUndefined();
     expect(resolveHookPathSignature([], "ambush")).toBeUndefined();
+  });
+
+  test("never authenticates the built-in agent and wake endpoints by signature", () => {
+    const wildcard = [{ id: "all", action: "agent" as const, signature }];
+    expect(resolveHookPathSignature(wildcard, "agent")).toBeUndefined();
+    expect(resolveHookPathSignature(wildcard, "wake")).toBeUndefined();
+    expect(resolveHookPathSignature(wildcard, "")).toBeUndefined();
+  });
+});
+
+describe("findHookSignatureMappingConflict", () => {
+  const signed = { id: "ambush", matchPath: "ambush", signature: {} };
+
+  test("accepts a signed mapping that owns its path", () => {
+    expect(
+      findHookSignatureMappingConflict([signed, { id: "gmail", matchPath: "gmail" }]),
+    ).toBeUndefined();
+  });
+
+  test("rejects signed mappings without a custom path", () => {
+    expect(findHookSignatureMappingConflict([{ id: "all", signature: {} }])).toMatch(/match\.path/);
+    expect(
+      findHookSignatureMappingConflict([{ id: "a", matchPath: "agent", signature: {} }]),
+    ).toMatch(/built-in/);
+  });
+
+  test("rejects any other mapping that can match the signed path", () => {
+    expect(
+      findHookSignatureMappingConflict([signed, { id: "other", matchPath: "ambush" }]),
+    ).toMatch(/belong to one mapping/);
+    expect(findHookSignatureMappingConflict([{ id: "wildcard" }, signed])).toMatch(
+      /belong to one mapping/,
+    );
   });
 });

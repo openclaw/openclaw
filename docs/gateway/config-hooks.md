@@ -189,12 +189,16 @@ hook path.
 | `signature.secret`           | unset                       | `whsec_<base64>` signing secret (at least 16 bytes), or an array of them during a rotation overlap.                                                     |
 | `signature.toleranceSeconds` | `300`                       | Maximum clock skew accepted for `webhook-timestamp`; older or future-dated deliveries are rejected as replays.                                          |
 
-A mapping with `signature` owns authentication for its `match.path`: the first
-mapping whose path matches decides, before the body is trusted, so `match.source`
-cannot influence it. The signature is verified over the exact request bytes with
-HMAC-SHA256 (Standard Webhooks / Svix scheme); the shared hook token is neither
-required nor sufficient on that path. Verified deliveries reuse `webhook-id` as
-the replay identity when no `Idempotency-Key` is sent.
+A mapping with `signature` owns authentication for its `match.path`, decided
+before the body is trusted. A signed mapping must declare an explicit custom
+`match.path` (never `agent` or `wake`, which always keep the token contract),
+and no other mapping may match that path, by the same `match.path` or by
+omitting one; config validation rejects such overlaps so the mapping that
+authenticates a request is the mapping that dispatches it. The signature is
+verified over the exact request bytes with HMAC-SHA256 (Standard Webhooks /
+Svix scheme); the shared hook token is neither required nor sufficient on that
+path. A signed delivery's replay identity is its verified `webhook-id` under
+that mapping; unsigned `Idempotency-Key` or bearer headers do not change it.
 
 Templates support `{{payload.field}}` or `{{field}}`, array indexing such as
 `{{messages[0].subject}}`, `{{headers.x-event-type}}`, `{{query.kind}}`, `{{path}}`,

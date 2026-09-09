@@ -375,10 +375,17 @@ export function createHooksRequestHandler(
     }
 
     const payload = asRecord(parsedBody);
-    // Signed senders identify each delivery by webhook-id; reuse it for replay
-    // safety when the producer sends no explicit idempotency key.
-    const idempotencyKey =
-      resolveHookIdempotencyKey({ payload, headers }) ?? admission.signedDeliveryId;
+    // A signed delivery's replay identity is the verified webhook-id under the
+    // mapping that authenticated it. Unsigned headers (Idempotency-Key, a
+    // bearer token the signed path never validates) must not mint a fresh
+    // identity, or a captured request replays as a new run.
+    const signedAuthority = admission.signedMappingId
+      ? `signature:${admission.signedMappingId}`
+      : undefined;
+    const replayAuthority = signedAuthority ?? token;
+    const idempotencyKey = signedAuthority
+      ? admission.signedDeliveryId
+      : resolveHookIdempotencyKey({ payload, headers });
     // Later mapped validation errors must report any wake outcome that already occurred.
     let wakeResult: WakeResult | undefined;
     const sendHookError = (error: string) =>
@@ -505,7 +512,7 @@ export function createHooksRequestHandler(
       }
       const replayKey = buildHookReplayCacheKey({
         pathKey: "agent",
-        token,
+        token: replayAuthority,
         idempotencyKey,
         dispatchScope: {
           agentId: target.effectiveAgentId,
@@ -648,7 +655,7 @@ export function createHooksRequestHandler(
             }
             const replayKey = buildHookReplayCacheKey({
               pathKey: subPath || "mapping",
-              token,
+              token: replayAuthority,
               // Fan-out producers (gog gmail) send no idempotency key, yet a
               // non-2xx batch response makes them redeliver the same batch.
               // Deriving item identity from the dispatch scope lets retries
