@@ -22,7 +22,7 @@ import {
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
-import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaMigrationVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   hasRecognizedRetiredCommitmentsSchema,
@@ -367,7 +367,7 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   pathname: string,
 ): OpenClawStateDatabaseSchemaMigration[] {
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
-  const userVersion = readStateSchemaContentVersion(db);
+  const userVersion = readStateSchemaMigrationVersion(db);
   if (
     userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
     tableExists(db, "commitments") &&
