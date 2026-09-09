@@ -16,7 +16,7 @@ import {
   renderPluginCardSummary,
   renderPluginStateStatus,
 } from "./plugin-card.ts";
-import { pluginArtPath } from "./presentation.ts";
+import { resolvePluginCatalogIconUrl } from "./presentation.ts";
 
 export type PluginDiscoveryIntent = "all" | "bundled" | "trending" | "official" | "featured";
 
@@ -83,18 +83,16 @@ function renderCatalogIcon(
   plugin: PluginDiscoveryEntry,
   props: PluginCatalogResultsProps,
 ): TemplateResult {
-  const pluginId = plugin.local.pluginId;
-  const packageIcon = pluginId ? props.pluginIconUrls[pluginId] : undefined;
-  if (packageIcon) {
-    return html`<img class="plugins-icon" src=${packageIcon} alt="" />`;
-  }
-  const catalogIcon = plugin.catalog.imageUrl ? props.iconUrls[plugin.catalog.imageUrl] : undefined;
-  if (catalogIcon) {
-    return html`<img src=${catalogIcon} alt="" />`;
-  }
-  const legacyArt = pluginId ? pluginArtPath(pluginId) : null;
-  return legacyArt
-    ? html`<img src=${legacyArt} alt="" loading="lazy" decoding="async" />`
+  const iconUrl = resolvePluginCatalogIconUrl(
+    {
+      pluginId: plugin.local.pluginId,
+      packageName: plugin.catalog.packageName,
+      imageUrl: plugin.catalog.imageUrl,
+    },
+    props,
+  );
+  return iconUrl
+    ? html`<img class="plugins-icon" src=${iconUrl} alt="" loading="lazy" decoding="async" />`
     : categoryIcon(plugin.catalog.icon);
 }
 

@@ -5,6 +5,7 @@ type CatalogIconControllerHost = {
   getFetchContext: () => PluginIconFetchContext;
   isConnected: () => boolean;
   onUrlsChange: (urls: Record<string, string>) => void;
+  onLoadingChange?: () => void;
 };
 
 export class CatalogIconController {
@@ -13,6 +14,10 @@ export class CatalogIconController {
   private urls: Record<string, string> = {};
 
   constructor(private readonly host: CatalogIconControllerHost) {}
+
+  isLoading(key: string): boolean {
+    return this.requests.has(key);
+  }
 
   sync(entries: readonly PluginDiscoveryEntry[], extraUrls: readonly string[] = []): void {
     const eligible = new Set([
@@ -32,6 +37,7 @@ export class CatalogIconController {
       if (!eligible.has(iconUrl)) {
         controller.abort();
         this.requests.delete(iconUrl);
+        this.host.onLoadingChange?.();
       }
     }
     if (changed) {
@@ -52,6 +58,7 @@ export class CatalogIconController {
       URL.revokeObjectURL(blobUrl);
     }
     this.requests.clear();
+    this.host.onLoadingChange?.();
     this.misses.clear();
     if (Object.keys(this.urls).length > 0) {
       this.publish({});
@@ -61,6 +68,7 @@ export class CatalogIconController {
   private fetch(iconUrl: string): void {
     const controller = new AbortController();
     this.requests.set(iconUrl, controller);
+    this.host.onLoadingChange?.();
     void fetchCatalogIconBlobUrl({
       iconUrl,
       ...this.host.getFetchContext(),
@@ -87,6 +95,7 @@ export class CatalogIconController {
       .finally(() => {
         if (this.requests.get(iconUrl) === controller) {
           this.requests.delete(iconUrl);
+          this.host.onLoadingChange?.();
         }
       });
   }

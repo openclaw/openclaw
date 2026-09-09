@@ -192,6 +192,30 @@ export function pluginArtPath(id: string): string | null {
     : null;
 }
 
+export function resolvePluginCatalogIconUrl(
+  plugin: { pluginId?: string; packageName?: string; imageUrl?: string },
+  urls: {
+    pluginIconUrls: Readonly<Record<string, string>>;
+    iconUrls: Readonly<Record<string, string>>;
+  },
+  failedUrls?: ReadonlySet<string>,
+): string | null {
+  const packageIcon = plugin.pluginId ? urls.pluginIconUrls[plugin.pluginId] : undefined;
+  const catalogIcon = plugin.imageUrl ? urls.iconUrls[plugin.imageUrl] : undefined;
+  // A package's identity takes precedence over a colliding runtime id so third-party
+  // packages cannot borrow first-party art. Uninstalled packages have no local id.
+  const artIdentity = plugin.packageName
+    ? OPENCLAW_PLUGIN_ART_ID.test(plugin.packageName)
+      ? plugin.packageName
+      : undefined
+    : plugin.pluginId;
+  return (
+    [packageIcon, catalogIcon, artIdentity ? pluginArtPath(artIdentity) : null].find(
+      (url): url is string => Boolean(url && !failedUrls?.has(url)),
+    ) ?? null
+  );
+}
+
 /**
  * Deterministic two-stop gradients for plugins without bundled art so every
  * tile keeps a distinct identity instead of an empty box.

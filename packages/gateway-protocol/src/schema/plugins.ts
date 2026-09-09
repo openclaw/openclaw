@@ -347,6 +347,7 @@ export const PluginDiscoveryCategorySchema = closedObject({
 
 export const PluginDiscoveryCatalogFactsSchema = closedObject({
   name: NonEmptyString,
+  packageName: Type.Optional(NonEmptyString),
   summary: Type.Optional(Type.String()),
   family: Type.Optional(Type.Union([Type.Literal("code-plugin"), Type.Literal("bundle-plugin")])),
   author: Type.Optional(NonEmptyString),

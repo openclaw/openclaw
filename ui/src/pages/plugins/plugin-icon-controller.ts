@@ -5,6 +5,7 @@ type PluginIconControllerHost = {
   getFetchContext: () => PluginIconFetchContext;
   isConnected: () => boolean;
   onUrlsChange: (urls: Record<string, string>) => void;
+  onLoadingChange?: () => void;
 };
 
 export class PluginIconController {
@@ -16,6 +17,10 @@ export class PluginIconController {
   private urls: Record<string, string> = {};
 
   constructor(private readonly host: PluginIconControllerHost) {}
+
+  isLoading(key: string): boolean {
+    return this.requests.has(key);
+  }
 
   reconcile(result: PluginListResult | null) {
     const eligiblePluginIds = new Set(
@@ -38,6 +43,7 @@ export class PluginIconController {
         clearTimeout(request.timeout);
         request.controller.abort();
         this.requests.delete(pluginId);
+        this.host.onLoadingChange?.();
       }
     }
     for (const pluginId of this.misses) {
@@ -56,22 +62,22 @@ export class PluginIconController {
       URL.revokeObjectURL(url);
     }
     this.requests.clear();
+    this.host.onLoadingChange?.();
     this.misses.clear();
     this.publish({});
   }
 
   sync(result: PluginListResult | null, renderedPluginIds: ReadonlySet<string>) {
     for (const plugin of result?.plugins ?? []) {
-      if (
-        !plugin.hasIcon ||
-        !renderedPluginIds.has(plugin.id) ||
-        this.urls[plugin.id] ||
-        this.misses.has(plugin.id) ||
-        this.requests.has(plugin.id)
-      ) {
-        continue;
+      if (plugin.hasIcon && renderedPluginIds.has(plugin.id)) {
+        this.load(plugin.id);
       }
-      this.fetch(plugin.id);
+    }
+  }
+
+  load(pluginId: string): void {
+    if (!this.urls[pluginId] && !this.misses.has(pluginId) && !this.requests.has(pluginId)) {
+      this.fetch(pluginId);
     }
   }
 
@@ -86,6 +92,7 @@ export class PluginIconController {
       clearTimeout(request.timeout);
       request.controller.abort();
       this.requests.delete(pluginId);
+      this.host.onLoadingChange?.();
     }
     const url = this.urls[pluginId];
     if (url) {
@@ -110,6 +117,7 @@ export class PluginIconController {
     );
     const request = { controller, timeout };
     this.requests.set(pluginId, request);
+    this.host.onLoadingChange?.();
     void fetchPluginIconBlobUrl({
       pluginId,
       ...this.host.getFetchContext(),
@@ -137,6 +145,7 @@ export class PluginIconController {
         clearTimeout(timeout);
         if (this.requests.get(pluginId) === request) {
           this.requests.delete(pluginId);
+          this.host.onLoadingChange?.();
         }
       });
   }

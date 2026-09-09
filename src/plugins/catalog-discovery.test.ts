@@ -1,4 +1,6 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { PluginDiscoveryEntrySchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { joinClawHubPluginCatalog, resolvePluginDiscoveryIdentity } from "./catalog-discovery.js";
 
 const remote = {
@@ -23,6 +25,8 @@ describe("plugin discovery identity and local join", () => {
 
     expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(id).not.toContain(remote.packageName);
+    expect(plugin?.catalog).toMatchObject({ packageName: remote.packageName });
+    expect(Value.Check(PluginDiscoveryEntrySchema, plugin)).toBe(true);
     expect(resolvePluginDiscoveryIdentity(id)).toEqual({
       origin: "clawhub",
       identity: remote.packageName,
@@ -132,7 +136,11 @@ describe("plugin discovery identity and local join", () => {
     expect(all.map((item) => item.catalog.name)).toEqual(["Memory Plus"]);
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
-      catalog: { categories: ["tools", "web"], official: false },
+      catalog: {
+        packageName: bundledOnly.packageName,
+        categories: ["tools", "web"],
+        official: false,
+      },
       local: {
         present: true,
         action: "install",

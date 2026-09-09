@@ -36,6 +36,7 @@ openclaw-chat-clawhub-card {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  border-radius: var(--radius-sm);
 }
 
 .chat-clawhub-card__icon > svg {
@@ -83,4 +84,9 @@ openclaw-chat-clawhub-card {
     justify-content: flex-end;
     width: 100%;
   }
+}
+
+.chat-clawhub-card__status-skeleton {
+  width: 144px;
+  height: 38px;
 }

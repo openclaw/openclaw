@@ -46,12 +46,14 @@ describe("CatalogIconController", () => {
     });
 
     controller.sync([entry]);
+    expect(controller.isLoading(entry.catalog.imageUrl)).toBe(true);
     await vi.waitFor(() =>
       expect(published.at(-1)).toEqual({
         "https://cdn.example.com/test.png": "blob:test-icon",
       }),
     );
 
+    expect(controller.isLoading(entry.catalog.imageUrl)).toBe(false);
     controller.sync([]);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:test-icon");
     expect(published.at(-1)).toEqual({});
@@ -79,12 +81,15 @@ describe("CatalogIconController", () => {
     });
 
     controller.sync([entry]);
+    expect(controller.isLoading(entry.catalog.imageUrl)).toBe(true);
     await vi.waitFor(() => expect(fetchIcon).toHaveBeenCalledTimes(1));
     controller.reset();
+    expect(controller.isLoading(entry.catalog.imageUrl)).toBe(false);
     rejectFirst?.(new Error("aborted"));
     await vi.waitFor(() => expect(fetchIcon).toHaveBeenCalledTimes(1));
 
     controller.sync([entry]);
+    expect(controller.isLoading(entry.catalog.imageUrl)).toBe(true);
     await vi.waitFor(() =>
       expect(published.at(-1)).toEqual({
         "https://cdn.example.com/test.png": "blob:retried-icon",

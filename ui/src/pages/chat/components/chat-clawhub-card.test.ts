@@ -13,6 +13,12 @@ import {
 } from "../../plugins/plugins-page.test-support.ts";
 import "./chat-clawhub-card.ts";
 
+const iconFetch = vi.hoisted(() => ({ catalog: vi.fn(), plugin: vi.fn() }));
+vi.mock("../../plugins/icon-loader.ts", () => ({
+  fetchCatalogIconBlobUrl: (...args: unknown[]) => iconFetch.catalog(...args),
+  fetchPluginIconBlobUrl: (...args: unknown[]) => iconFetch.plugin(...args),
+}));
+
 const recommendation: ClawHubRecommendation = {
   type: "clawhub",
   kind: "plugin",
@@ -48,6 +54,8 @@ function mount(handler: (method: string, params: unknown) => Promise<unknown>) {
 describe("ClawHub chat recommendations", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
+    iconFetch.catalog.mockReset().mockResolvedValue(null);
+    iconFetch.plugin.mockReset().mockResolvedValue(null);
   });
   afterEach(() => {
     document.body.replaceChildren();
@@ -113,17 +121,23 @@ describe("ClawHub chat recommendations", () => {
 
   it("does not present a stale installed badge when status fails, and retries visibly", async () => {
     let fail = true;
+    const retry = deferred<ReturnType<typeof detail>>();
     const { card } = mount(async () => {
       if (fail) {
         throw new Error("Catalog unavailable");
       }
-      return detail(false);
+      return retry.promise;
     });
     Object.assign(card, { recommendation: { ...recommendation, installed: true } });
     await vi.waitFor(() => expect(card.textContent).toContain("Status unavailable"));
     expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
     fail = false;
     card.querySelector<HTMLButtonElement>(".chat-clawhub-card__dismiss")!.click();
+    await vi.waitFor(() =>
+      expect(card.querySelector(".chat-clawhub-card__status-skeleton")).not.toBeNull(),
+    );
+    expect(card.textContent).not.toContain("Checking installation");
+    retry.resolve(detail(false));
     await vi.waitFor(() =>
       expect(card.querySelector(".chat-clawhub-card__install")).not.toBeNull(),
     );
@@ -135,6 +149,8 @@ describe("ClawHub chat recommendations", () => {
     const old = deferred<ReturnType<typeof detail>>();
     const { card, harness, request } = mount(() => old.promise);
     await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    expect(card.querySelector(".skeleton")).not.toBeNull();
+    expect(card.textContent).not.toContain("Checking installation");
     const next = createClient(async () => detail(false));
     harness.emit(next.client, true);
     await vi.waitFor(() =>
@@ -144,6 +160,91 @@ describe("ClawHub chat recommendations", () => {
     await old.promise;
     await Promise.resolve();
     expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
+  });
+
+  it.each(["catalog", "plugin"] as const)(
+    "keeps %s artwork skeletons through fetch and image decoding, then clears errors",
+    async (owner) => {
+      const pending = deferred<string>();
+      iconFetch[owner].mockReturnValue(pending.promise);
+      const result = detail(owner === "plugin");
+      Object.assign(
+        result.plugin.catalog,
+        owner === "catalog" ? { imageUrl: "https://example.com/icon.png" } : {},
+      );
+      Object.assign(result.plugin.local, owner === "plugin" ? { pluginId: "custom-channel" } : {});
+      const { card } = mount(async () => result);
+      await vi.waitFor(() => expect(iconFetch[owner]).toHaveBeenCalledOnce());
+      expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).not.toBeNull();
+      expect(card.querySelector(".chat-clawhub-card__status-skeleton")).toBeNull();
+      pending.resolve("blob:whatsapp-icon");
+      await vi.waitFor(() =>
+        expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:whatsapp-icon"),
+      );
+      expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).not.toBeNull();
+      card.querySelector("img")!.dispatchEvent(new Event("load"));
+      await vi.waitFor(() => expect(card.querySelector(".skeleton")).toBeNull());
+      expect(card.querySelector("img")!.hidden).toBe(false);
+      expect(card.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false");
+      card.querySelector("img")!.dispatchEvent(new Event("error"));
+      await vi.waitFor(() => expect(card.querySelector("img")).toBeNull());
+      expect(card.querySelector(".skeleton")).toBeNull();
+      expect(card.querySelector(".chat-clawhub-card__icon svg")).not.toBeNull();
+    },
+  );
+
+  it.each(["stalled secondary", "failed primary"] as const)(
+    "retains usable artwork with a %s image",
+    async (failure) => {
+      const catalog = deferred<string | null>();
+      iconFetch.catalog.mockReturnValue(catalog.promise);
+      iconFetch.plugin.mockResolvedValue("blob:package");
+      const result = detail(true);
+      Object.assign(result.plugin.catalog, {
+        packageName: "@openclaw/whatsapp",
+        imageUrl: "https://example.com/catalog.png",
+      });
+      Object.assign(result.plugin.local, { pluginId: "whatsapp" });
+      const { card } = mount(async () => result);
+      await vi.waitFor(() =>
+        expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:package"),
+      );
+      if (failure === "stalled secondary") {
+        card.querySelector("img")!.dispatchEvent(new Event("load"));
+        await vi.waitFor(() => expect(card.querySelector(".skeleton")).toBeNull());
+        expect(card.querySelector("img")!.hidden).toBe(false);
+      } else {
+        card.querySelector("img")!.dispatchEvent(new Event("error"));
+        await vi.waitFor(() =>
+          expect(card.querySelector("img")?.getAttribute("src")).toBe("/plugin-art/whatsapp.webp"),
+        );
+        card.querySelector("img")!.dispatchEvent(new Event("error"));
+        catalog.resolve("blob:catalog");
+        await vi.waitFor(() =>
+          expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:catalog"),
+        );
+        card.querySelector("img")!.dispatchEvent(new Event("error"));
+        await vi.waitFor(() =>
+          expect(card.querySelector(".chat-clawhub-card__icon svg")).not.toBeNull(),
+        );
+        expect(card.querySelector(".skeleton")).toBeNull();
+      }
+      catalog.resolve(null);
+    },
+  );
+
+  it("uses bundled first-party WhatsApp artwork before installation without a registry image URL", async () => {
+    const result = detail(false);
+    Object.assign(result.plugin.catalog, { packageName: "@openclaw/whatsapp" });
+    const { card } = mount(async () => result);
+    await vi.waitFor(() =>
+      expect(card.querySelector("img")?.getAttribute("src")).toBe("/plugin-art/whatsapp.webp"),
+    );
+    expect(card.querySelector(".chat-clawhub-card__icon.skeleton")).not.toBeNull();
+    card.querySelector("img")!.dispatchEvent(new Event("load"));
+    await vi.waitFor(() => expect(card.querySelector(".skeleton")).toBeNull());
+    expect(card.querySelector(".chat-clawhub-card__install")?.textContent?.trim()).toBe("Install");
+    expect(iconFetch.plugin).not.toHaveBeenCalled();
   });
 
   it("retains validated assistant cards and rejects cards pasted into a user message", () => {

@@ -4699,7 +4699,6 @@ export const en: TranslationMap & {
   login: {},
   chat: {
     clawhub: {
-      checking: "Checking installation…",
       retryStatus: "Status unavailable · Retry",
       viewDetails: "View details",
     },

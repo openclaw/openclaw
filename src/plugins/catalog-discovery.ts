@@ -152,6 +152,7 @@ export function joinClawHubPluginCatalog(params: {
       id: encodePluginDiscoveryId(plugin.packageName),
       catalog: {
         name: plugin.displayName,
+        packageName: plugin.packageName,
         ...(plugin.summary ? { summary: plugin.summary } : {}),
         family: plugin.family,
         ...(plugin.ownerHandle ? { author: plugin.ownerHandle } : {}),
@@ -218,6 +219,7 @@ function projectLocalDiscoveryEntry(
     id: encodeLocalPluginDiscoveryId(localDiscoveryIdentity(plugin)),
     catalog: {
       name: plugin.name,
+      ...(plugin.packageName ? { packageName: plugin.packageName } : {}),
       ...(plugin.description ? { summary: plugin.description } : {}),
       official: false,
       categories: localDiscoveryCategories(plugin),

@@ -101,10 +101,8 @@ describe("renderPluginCatalogResults", () => {
 
   it("focuses unified search and places discovery chips before grouped sections", async () => {
     const container = mount(baseProps());
-    await new Promise((resolve) => setTimeout(resolve, 40));
-
     const search = container.querySelector<HTMLInputElement>('input[type="search"]');
-    expect(document.activeElement).toBe(search);
+    await vi.waitFor(() => expect(document.activeElement).toBe(search));
     expect(
       [...container.querySelectorAll(".plugin-catalog-chip")].map((chip) =>
         chip.textContent?.trim(),
@@ -125,6 +123,92 @@ describe("renderPluginCatalogResults", () => {
       container.querySelectorAll(".plugin-catalog-grid--results .plugin-catalog-card"),
     ).toHaveLength(1);
   });
+
+  it.each<{
+    name: string;
+    packageName: string;
+    pluginId: string | undefined;
+    installed?: boolean;
+    imageUrl?: string;
+    pluginIconUrls: Record<string, string>;
+    iconUrls: Record<string, string>;
+    expected: string | undefined;
+  }>([
+    {
+      name: "uninstalled first-party artwork",
+      packageName: "@openclaw/whatsapp",
+      pluginId: undefined,
+      pluginIconUrls: {},
+      iconUrls: {},
+      expected: "/plugin-art/whatsapp.webp",
+    },
+    {
+      name: "third-party identity without first-party artwork",
+      packageName: "@community/whatsapp",
+      pluginId: "whatsapp",
+      pluginIconUrls: {},
+      iconUrls: {},
+      expected: undefined,
+    },
+    {
+      name: "unscoped third-party identity without first-party artwork",
+      packageName: "whatsapp",
+      pluginId: "whatsapp",
+      pluginIconUrls: {},
+      iconUrls: {},
+      expected: undefined,
+    },
+    {
+      name: "installed package icon before catalog imagery",
+      packageName: "@openclaw/whatsapp",
+      pluginId: "whatsapp",
+      installed: true,
+      imageUrl: "https://example.com/icon.png",
+      pluginIconUrls: { whatsapp: "blob:package-icon" },
+      iconUrls: { "https://example.com/icon.png": "blob:catalog-icon" },
+      expected: "blob:package-icon",
+    },
+    {
+      name: "catalog icon before bundled artwork",
+      packageName: "@openclaw/whatsapp",
+      pluginId: undefined,
+      imageUrl: "https://example.com/icon.png",
+      pluginIconUrls: {},
+      iconUrls: { "https://example.com/icon.png": "blob:catalog-icon" },
+      expected: "blob:catalog-icon",
+    },
+  ])(
+    "renders $name",
+    ({ packageName, pluginId, installed, imageUrl, pluginIconUrls, iconUrls, expected }) => {
+      const entry = plugin("catalog-entry");
+      const container = mount(
+        baseProps({
+          query: "whatsapp",
+          result: {
+            items: [
+              {
+                ...entry,
+                catalog: { ...entry.catalog, packageName, imageUrl },
+                local: {
+                  ...entry.local,
+                  pluginId,
+                  installed: installed ?? false,
+                  enabled: installed ?? false,
+                  state: installed ? "enabled" : "not-installed",
+                },
+              },
+            ],
+          },
+          pluginIconUrls,
+          iconUrls,
+        }),
+      );
+
+      expect(container.querySelector(".plugin-catalog-card__art img")?.getAttribute("src")).toBe(
+        expected,
+      );
+    },
+  );
 
   it("caps grouped sections at two desktop rows and opens the selected category", () => {
     const onCategoryChange = vi.fn();
