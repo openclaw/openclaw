@@ -569,9 +569,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}plugins`);
       const explore = page.getByRole("region", { name: "Explore plugins" });
       await explore.getByRole("heading", { name: "Featured", exact: true }).waitFor();
-      const categoryLabels = await explore.locator(".plugin-catalog-chips button").allTextContents();
+      const categoryLabels = await explore
+        .locator(".plugin-catalog-chips button")
+        .allTextContents();
       expect(categoryLabels.map((label) => label.trim()).join(" | ")).toBe(
-        "All | Featured | Trending | Channels | Models | Memory | Context | Voice | Web | Media | Security | Integrations | Developer tools | Infrastructure | Documents & files | Inbox & collaboration | Productivity | Scheduling | Finance & payments | Sales & marketing | Data & analytics | Agent orchestration | Research | Other",
+        "All | Featured | Trending | Channels | Models | Agent runtimes | Memory | Context | Voice | Web | Media | Security | Integrations | Developer tools | Infrastructure | Documents & files | Inbox & collaboration | Productivity | Scheduling | Finance & payments | Sales & marketing | Data & analytics | Agent orchestration | Research | Other",
       );
       const sections = explore.locator(".plugin-catalog-section");
       expect((await sections.locator("h2").allTextContents()).slice(0, 2)).toEqual([

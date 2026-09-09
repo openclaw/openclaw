@@ -55,6 +55,7 @@ const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
   activity: icons.activity,
   "book-open": icons.book,
   brain: icons.brain,
+  bot: icons.bot,
   database: icons.database,
   "git-branch": icons.gitPullRequest,
   globe: icons.globe,

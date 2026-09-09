@@ -14,6 +14,7 @@ describe("@openclaw/plugin-package-contract", () => {
     expect(PLUGIN_CATEGORY_SLUGS).toEqual([
       "channels",
       "models",
+      "agent-runtimes",
       "memory",
       "context",
       "voice",

@@ -115,7 +115,8 @@ local proof.
 
     Choose one [catalog category](/plugins/manifest#catalog-categories) for the
     plugin's main user purpose. This generic example uses `other`; a calendar
-    plugin would use `scheduling`, and a coding helper would use `developer-tools`.
+    plugin would use `scheduling`, a coding helper would use `developer-tools`,
+    and an agent execution backend would use `agent-runtimes`.
 
     Every plugin needs a manifest, even with no config. Runtime tools must
     appear in `contracts.tools` so OpenClaw can discover ownership without

@@ -35,6 +35,7 @@ export const EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS = [
 export const PLUGIN_CATEGORY_SLUGS = [
   "channels",
   "models",
+  "agent-runtimes",
   "memory",
   "context",
   "voice",
