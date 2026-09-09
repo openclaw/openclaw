@@ -192,12 +192,11 @@ async function runMainCronCase(
   });
   await cron.start();
 
-  let bodyFailure: { error: unknown } | undefined;
-  try {
+  const runBody = async () => {
     // Fault cases must unwind the same fixture owner as the normal scheduler cases.
     if (exercise) {
       await exercise({ cron, heartbeatRunner, getReplySpy });
-      return;
+      return undefined;
     }
     if (options.heartbeatPaused) {
       setHeartbeatsEnabled(false);
@@ -325,26 +324,41 @@ async function runMainCronCase(
       expect(cron.getJob(job.id)).toBeUndefined();
     }
     return { expectedMainSessionKey, sandbox, terminal };
+  };
+  let result: Awaited<ReturnType<typeof runBody>>;
+  let bodyFailure: { error: unknown } | undefined;
+  try {
+    result = await runBody();
   } catch (error) {
     bodyFailure = { error };
-    throw error;
-  } finally {
-    try {
-      cron.stop();
-      // In-flight cron runs still need their heartbeat waiter. Stopping its
-      // owner first aborts and retains that wake instead of settling the run.
-      const drained = await waitForActiveCronJobs(5_000);
-      expect(drained).toEqual({ drained: true, active: 0 });
-      await vi.waitFor(() => expect(getQueueSize(CommandLane.Cron)).toBe(0), { timeout: 5_000 });
-    } catch (error) {
-      if (bodyFailure) {
-        throw new AggregateError([bodyFailure.error, error], "Cron fixture and cleanup failed");
-      }
-      throw error;
-    } finally {
-      heartbeatRunner.stop();
-    }
   }
+  let cleanupFailure: { error: unknown } | undefined;
+  try {
+    cron.stop();
+    // In-flight cron runs still need their heartbeat waiter. Stopping its
+    // owner first aborts and retains that wake instead of settling the run.
+    const drained = await waitForActiveCronJobs(5_000);
+    expect(drained).toEqual({ drained: true, active: 0 });
+    await vi.waitFor(() => expect(getQueueSize(CommandLane.Cron)).toBe(0), { timeout: 5_000 });
+  } catch (error) {
+    cleanupFailure = { error };
+  } finally {
+    heartbeatRunner.stop();
+  }
+  if (bodyFailure && cleanupFailure) {
+    throw new AggregateError(
+      [bodyFailure.error, cleanupFailure.error],
+      "Cron fixture and cleanup failed",
+      { cause: bodyFailure.error },
+    );
+  }
+  if (bodyFailure) {
+    throw bodyFailure.error;
+  }
+  if (cleanupFailure) {
+    throw cleanupFailure.error;
+  }
+  return result;
 }
 
 describe("main cron with the real heartbeat runner", () => {
@@ -524,11 +538,12 @@ describe("main cron with the real heartbeat runner", () => {
         if (bodyFailed) {
           throw bodyError;
         }
-      }).catch((error: unknown) => error);
+      }).catch((caughtError: unknown) => caughtError);
       expect(stopHeartbeat).toHaveBeenCalledOnce();
       if (bodyFailed) {
         expect(error).toBeInstanceOf(AggregateError);
         expect((error as AggregateError).errors).toEqual([bodyError, drainError]);
+        expect((error as AggregateError).cause).toBe(bodyError);
       } else {
         expect(error).toBe(drainError);
       }
