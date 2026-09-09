@@ -107,3 +107,7 @@ marks the profile blocked until Codex's advertised reset time and lets auth
 ordering rotate to the next `openai:*` profile, without changing the selected
 model or dropping out of the Codex harness. Once the reset time passes, the
 subscription profile is eligible again.
+
+Chat `/status` reports the authentication mode from the selected runtime's current
+prepared account. A native login stays distinct from an OpenClaw profile; it does
+not satisfy an unavailable explicit profile pin.
