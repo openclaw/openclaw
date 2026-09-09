@@ -103,13 +103,14 @@ describe("resolvePdfModelConfigForTool", () => {
     });
   });
 
-  it("prefers anthropic when available for native PDF support", () => {
+  it("prefers the OpenAI primary provider with native PDF support and retains Anthropic fallback", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const cfg = withDefaultModel("openai/gpt-5.4");
-    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })?.primary).toBe(
-      ANTHROPIC_PDF_MODEL,
-    );
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "openai/gpt-5.6-sol",
+      fallbacks: [ANTHROPIC_PDF_MODEL],
+    });
   });
 
   it("uses anthropic primary when provider is anthropic", () => {

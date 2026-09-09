@@ -23,7 +23,7 @@ const pdfMetadataSnapshot = createPluginMetadataSnapshotFixture({
       mediaUnderstandingProviderMetadata: {
         anthropic: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
         google: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
-        openai: { capabilities: ["image"], nativeDocumentInputs: [] },
+        openai: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
       },
     },
   ],
@@ -94,6 +94,38 @@ describe("parsePageRange", () => {
 });
 
 describe("providerSupportsNativePdf", () => {
+  it("enables OpenAI only for the public Responses transport", () => {
+    withPluginMetadataSnapshotScope(pdfMetadataSnapshot, () => {
+      for (const baseUrl of [
+        "https://api.openai.com",
+        "https://api.openai.com/v1",
+        "https://api.openai.com:443/v1",
+        "https://api.openai.com./v1/",
+      ]) {
+        expect(providerSupportsNativePdf("openai", "openai-responses", baseUrl)).toBe(true);
+      }
+      for (const baseUrl of [
+        "http://api.openai.com/v1",
+        "https://api.openai.com:8443/v1",
+        "https://user@api.openai.com/v1",
+        "https://api.openai.com/v1?proxy=1",
+        "https://api.openai.com/v1/responses",
+        "https://proxy.example.com/v1",
+      ]) {
+        expect(providerSupportsNativePdf("openai", "openai-responses", baseUrl)).toBe(false);
+      }
+      expect(
+        providerSupportsNativePdf(
+          "openai",
+          "openai-chatgpt-responses",
+          "https://chatgpt.com/backend-api/codex",
+        ),
+      ).toBe(false);
+      expect(providerSupportsNativePdf("openai", "openai-responses")).toBe(false);
+      expect(providerSupportsNativePdf("openai")).toBe(false);
+    });
+  });
+
   it.each([
     ["anthropic", true],
     ["google", true],

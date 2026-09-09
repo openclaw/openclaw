@@ -46,7 +46,7 @@ import {
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import { hasToolModelConfig } from "./model-config.helpers.js";
-import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
+import { anthropicAnalyzePdf, geminiAnalyzePdf, openaiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
@@ -67,6 +67,9 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
+// OpenAI documents 50 MB per request and strictly less per file. Use decimal
+// bytes conservatively because the provider does not specify a binary unit.
+const OPENAI_PDF_MAX_BYTES = 50_000_000;
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
@@ -247,7 +250,20 @@ async function runPdfPrompt(params: {
           authStorage: resolved.authStorage,
         });
 
-        if (providerSupportsNativePdf(provider)) {
+        // Preserve OpenAI extraction for text-only models, filtering/decryption,
+        // and file limits. Check original bytes before base64 allocation.
+        const openaiNeedsExtraction =
+          provider === "openai" &&
+          (!model.input?.includes("image") ||
+            Boolean(params.password) ||
+            Boolean(params.pageNumbers?.length) ||
+            params.pdfBuffers.some(({ buffer }) => buffer.length >= OPENAI_PDF_MAX_BYTES) ||
+            params.pdfBuffers.reduce((total, { buffer }) => total + buffer.length, 0) >
+              OPENAI_PDF_MAX_BYTES);
+        if (
+          providerSupportsNativePdf(provider, model.api, model.baseUrl) &&
+          !openaiNeedsExtraction
+        ) {
           if (params.password) {
             throw new Error(
               `password is not supported with native PDF providers (${provider}/${modelId}). Remove password, or use a non-native model for encrypted PDFs.`,
@@ -289,6 +305,26 @@ async function runPdfPrompt(params: {
               modelId,
               prompt: params.prompt,
               pdfs,
+              baseUrl: model.baseUrl,
+              requestConfig: {
+                headers: model.headers,
+                request: getModelProviderRequestTransport(model),
+              },
+              signal: params.signal,
+            });
+            return { text, provider, model: modelId, native: true };
+          }
+
+          if (provider === "openai" && model.api === "openai-responses") {
+            // ChatGPT/Codex OAuth uses a distinct request protocol and remains
+            // on the extraction fallback until that transport supports files.
+            params.signal?.throwIfAborted();
+            const text = await openaiAnalyzePdf({
+              apiKey,
+              modelId,
+              prompt: params.prompt,
+              pdfs,
+              maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
               baseUrl: model.baseUrl,
               requestConfig: {
                 headers: model.headers,
@@ -425,7 +461,7 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const description =
-    'Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects a page range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';
+    'Analyze PDF(s): Anthropic/Google/OpenAI Responses native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects a page range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both use extraction with OpenAI; unsupported with Anthropic/Google).';
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   return {
