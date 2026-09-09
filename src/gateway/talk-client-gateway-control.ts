@@ -21,7 +21,6 @@ import type { RealtimeVoiceAgentControlResult } from "../talk/agent-run-control.
 import type {
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceCloseDisposition,
-  RealtimeVoiceGatewayControl,
   RealtimeVoiceToolCallEvent,
 } from "../talk/provider-types.js";
 import {
@@ -38,30 +37,13 @@ import type {
   LifecycleBoundTalkAgentConsult,
   ReusableTalkAgentConsult,
   TalkAgentConsultRequest,
-  TalkAgentConsultLifecycleMethods,
 } from "./talk-client-agent-consult.types.js";
+import type {
+  GatewayControlCommands,
+  GatewayControlOwner,
+} from "./talk-client-gateway-control.types.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
-
-type GatewayControlOwner = {
-  adoptProvider: (closeProvider: () => Promise<void>) => Promise<void>;
-  activate: () => void;
-  assertOpen: () => void;
-  close: (options?: {
-    preserveLogicalSession?: boolean;
-    preserveRuns?: boolean;
-    skipProvider?: boolean;
-  }) => Promise<void>;
-  connId: string;
-  control: RealtimeVoiceGatewayControl & Required<Pick<RealtimeVoiceGatewayControl, "bindControl">>;
-  runAgentConsult: RealtimeVoiceAgentConsultRunner & TalkAgentConsultLifecycleMethods;
-  sessionTarget: PreparedTalkSessionTarget;
-  voiceSessionId: string;
-};
-
-type GatewayControlCommands = Parameters<
-  NonNullable<RealtimeVoiceGatewayControl["bindControl"]>
->[0];
 
 const owners = new Map<string, GatewayControlOwner>();
 const pendingOwners = new Set<GatewayControlOwner>();
