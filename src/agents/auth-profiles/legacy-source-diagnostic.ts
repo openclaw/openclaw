@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shortenHomePath } from "../../utils.js";
 import {
+  couldResolveProviderIdForAuth,
   hasUnresolvedProviderAuthEndpoint,
   resolveProviderIdForAuth,
 } from "../provider-auth-aliases.js";
@@ -295,6 +296,28 @@ export function assertAuthProfileMigrationStateAtDatabasePath(
   ) {
     // The activated secrets snapshot for this owner is empty. Only an explicit
     // lifecycle clear/reload may remove the error and publish migrated SQLite rows.
+    throw error;
+  }
+}
+
+/** A selected row cannot escape its own owner's fence by changing endpoint aliases. */
+export function assertAuthProfileCredentialMigrationStateAtDatabasePath(
+  databasePath: string,
+  provider: string,
+  config?: OpenClawConfig,
+): void {
+  const error = migrationRequiredByDatabase.get(databasePath);
+  if (!error) {
+    return;
+  }
+  const requested = resolveProviderIdForAuth(provider, { config });
+  if (
+    !error.affectedProviders ||
+    hasUnresolvedProviderAuthEndpoint(provider, { config }) ||
+    error.affectedProviders.some((affected) =>
+      couldResolveProviderIdForAuth(affected, requested, { config }),
+    )
+  ) {
     throw error;
   }
 }

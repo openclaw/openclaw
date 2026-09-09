@@ -108,6 +108,33 @@ export function hasUnresolvedProviderAuthEndpoint(
   );
 }
 
+/** Limit missing-endpoint ambiguity to realms an eligible alias can actually select. */
+export function couldResolveProviderIdForAuth(
+  provider: string,
+  target: string,
+  params?: ProviderAuthAliasLookupParams,
+): boolean {
+  if (resolveProviderIdForAuth(provider, params) === target) {
+    return true;
+  }
+  const normalized = normalizeProviderId(provider);
+  if (params?.storedCredential || resolveProviderAuthEndpoint(normalized, params?.config)) {
+    return false;
+  }
+  for (const candidate of resolveProviderAuthAliasCandidates(params).get(normalized) ?? []) {
+    if (!shouldUsePluginAuthAliases(candidate.plugin, params)) {
+      continue;
+    }
+    if (candidate.target === target && (!candidate.baseUrls || candidate.baseUrls.length > 0)) {
+      return true;
+    }
+    if (!candidate.baseUrls) {
+      break;
+    }
+  }
+  return false;
+}
+
 /** Resolve canonical auth provider aliases from plugin metadata. */
 export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,

@@ -24,6 +24,7 @@ import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
+  assertAuthProfileCredentialMigrationStateAtDatabasePath,
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationReady,
   assertAuthProfileMigrationStateAtDatabasePath,
@@ -114,7 +115,26 @@ import {
   type PreparedAuthProfileStoreOwner,
 } from "./sqlite.js";
 import { buildPersistedAuthProfileState, loadPersistedAuthProfileState } from "./state.js";
-import type { AuthProfileStore } from "./types.js";
+import type {
+  AuthProfileCredentialSource,
+  AuthProfileStore,
+  RuntimeAuthProfileStore,
+} from "./types.js";
+
+function withCredentialSources(
+  store: AuthProfileStore,
+  databasePath: string,
+): RuntimeAuthProfileStore {
+  return {
+    ...store,
+    runtimeCredentialSources: Object.fromEntries(
+      Object.entries(store.profiles).map(([profileId, credential]) => [
+        profileId,
+        { databasePath, provider: credential.provider },
+      ]),
+    ),
+  };
+}
 
 type LoadAuthProfileStoreOptions = {
   /** Limit a credential-read refusal to the provider being resolved; writes stay owner-wide. */
@@ -1609,7 +1629,10 @@ export function createAuthProfileStoreRuntime(
       });
     }
     const synced = maybeSyncPersistedExternalCliAuthProfiles({
-      store: store ?? createEmptyAuthProfileStore(),
+      store:
+        store && effectiveOptions?.onReadOwner
+          ? withCredentialSources(store, effectiveOptions.database?.path ?? databasePath)
+          : (store ?? createEmptyAuthProfileStore()),
       agentDir: effectiveAgentDir,
       options: effectiveOptions,
     });
@@ -1675,12 +1698,13 @@ export function createAuthProfileStoreRuntime(
 
   /** Retain read owners, never copies of their migration refusals, for a session facade. */
   function createAuthProfileStoreReadScope(agentDir: string, config: OpenClawConfig | undefined) {
-    const mode = authProfileRuntimeMode.getStore();
+    let mode = authProfileRuntimeMode.getStore();
     const env = { ...(mode?.kind === "agent-dir" ? mode.env : process.env) };
     const effectiveAgentDir = mode?.kind === "agent-dir" ? mode.agentDir : agentDir;
     const owners = new Map<string, AuthProfileReadOwner>();
     if (mode?.kind === "agent-dir" && mode.sharedStore) {
       const databasePath = resolveSharedAuthPath(env);
+      mode = { ...mode, sharedStore: withCredentialSources(mode.sharedStore, databasePath) };
       owners.set(databasePath, {
         databasePath,
         candidates: resolveLegacyAuthProfileSourceCandidates({ env }),
@@ -1720,6 +1744,17 @@ export function createAuthProfileStoreRuntime(
         [...owners.keys()]
           .map((databasePath) => getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath))
           .filter((snapshot) => snapshot !== undefined),
+      assertCredentialReady: (source: AuthProfileCredentialSource, baseUrl?: string) => {
+        const requestConfig =
+          config && baseUrl !== undefined
+            ? projectModelProviderConfig(config, source.provider, { baseUrl })
+            : config;
+        assertAuthProfileCredentialMigrationStateAtDatabasePath(
+          source.databasePath,
+          source.provider,
+          requestConfig,
+        );
+      },
       assertProviderReady: (provider?: string, baseUrl?: string) => {
         const requestConfig =
           config && provider && baseUrl !== undefined

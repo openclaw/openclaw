@@ -183,7 +183,12 @@ Session migration guards use the same pinned runtime config as model discovery
 and the requested model's endpoint to resolve endpoint-dependent provider aliases.
 Prepared session views retain canonical profiles from both owners and validate
 their SecretRefs; migration metadata does not filter these profiles. The
-endpoint-aware request guards decide admission. If the requested provider needs
+endpoint-aware request guards decide admission. Each selected credential also
+retains its physical source owner through merges and async resolution. A refusal
+held by that owner continues to fence matching credentials imported by another
+process until an explicit lifecycle clear/reload. The other owner's credentials
+remain independent. This provenance is runtime-only and is never stored in SQLite.
+If the requested provider needs
 an endpoint to identify its credential realm and that context is missing, any
 pending migration refusal blocks it. An explicitly configured unrelated endpoint
 remains usable.
