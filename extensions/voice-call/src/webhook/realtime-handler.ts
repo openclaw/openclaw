@@ -2097,8 +2097,19 @@ export class RealtimeCallHandler {
         console.log(
           `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${failed ? "error" : "ok"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
         );
+        if (!speechStream) {
+          await submitFinalToolResult(result);
+          if (!failed) {
+            this.consumePartialUserTranscript(
+              callId,
+              userTranscriptOwner,
+              state.partialUserTranscript,
+            );
+          }
+          return;
+        }
         if (failed) {
-          speechStream?.cancel();
+          speechStream.cancel();
         }
         const finalText = failed
           ? undefined
@@ -2127,10 +2138,9 @@ export class RealtimeCallHandler {
           : failed
             ? { error: truncateRealtimeConsultResult(error ?? "unknown") }
             : result;
-        const speechFinish =
-          finalText && speechStream
-            ? await speechStream.finish(finalText)
-            : { suppressResponse: false };
+        const speechFinish = finalText
+          ? await speechStream.finish(finalText)
+          : { suppressResponse: false };
         const providerResult = speechFinish.fallbackText
           ? { text: speechFinish.fallbackText }
           : boundedResult;

@@ -2193,7 +2193,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("keeps the non-streaming final append bounded and minimal", async () => {
+  it("preserves the existing non-streaming final result", async () => {
     let callbacks: RealtimeBridgeRequest | undefined;
     const submitToolResult = vi.fn();
     const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
@@ -2204,10 +2204,11 @@ describe("RealtimeCallHandler path routing", () => {
       manager: { getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-bounded-final")) },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    handler.registerToolHandler("openclaw_agent_consult", async () => ({
+    const originalResult = {
       text: "x".repeat(10_000),
       hiddenMetadata: "y".repeat(10_000),
-    }));
+    };
+    handler.registerToolHandler("openclaw_agent_consult", async () => originalResult);
     const server = await startRealtimeServer(handler);
 
     try {
@@ -2231,13 +2232,7 @@ describe("RealtimeCallHandler path routing", () => {
           const finalCall = submitToolResult.mock.calls.find(
             ([, result]) => result && typeof result === "object" && "text" in result,
           );
-          expect(finalCall).toBeDefined();
-          const result = finalCall?.[1] as Record<string, unknown>;
-          expect(Object.keys(result)).toEqual(["text"]);
-          expect(result.text).toEqual(expect.any(String));
-          expect((result.text as string).length).toBeLessThanOrEqual(1_800);
-          expect(result.text).toMatch(/\[truncated\]$/);
-          expect(finalCall?.[2]).toBeUndefined();
+          expect(finalCall).toEqual(["call-bounded", originalResult, undefined]);
         });
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
