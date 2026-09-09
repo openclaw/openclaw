@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
 
@@ -15,6 +16,11 @@ export function resolveSessionGitCoauthorPrompt(params: {
     return undefined;
   }
   if (parseCronRunScopeSuffix(params.sessionKey).runId !== undefined) {
+    return undefined;
+  }
+  // Incognito sessions keep no durable participant history, and the Codex runtime
+  // freezes their generic instructions for the live thread, so they never carry credit.
+  if (isIncognitoSessionKey(params.sessionKey)) {
     return undefined;
   }
   try {

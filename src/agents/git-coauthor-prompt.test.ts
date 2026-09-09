@@ -69,6 +69,12 @@ describe("resolveSessionGitCoauthorPrompt", () => {
       agentId: "main",
       sessionKey: "agent:main:cron:nightly:run:11111111-1111-1111-1111-111111111111",
     },
+    {
+      name: "an incognito session",
+      config: {},
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-two-turns",
+    },
   ])("skips credit lookup with $name", ({ config, agentId, sessionKey }) => {
     vi.mocked(resolveGitCoauthorAttribution).mockReturnValue({
       trailers,
