@@ -122,6 +122,10 @@ describe("worker node enrollment", () => {
         path.join(packageRoot, "node-runtime-update.mjs"),
         "export const update = true;",
       ),
+      fs.writeFile(
+        path.join(packageRoot, "node-runtime-recovery.mjs"),
+        "export const recovery = true;",
+      ),
       fs.writeFile(path.join(packageRoot, "dist/entry.js"), "export const ready = true;"),
       fs.writeFile(
         path.join(packageRoot, "dist/build-info.json"),

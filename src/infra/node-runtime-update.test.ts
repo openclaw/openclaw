@@ -7,7 +7,7 @@ import { resolveUpdatedNodeRuntime } from "../../node-runtime-update.mjs";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
-  exists: vi.fn<(value: string) => boolean>(),
+  realpath: vi.fn<(value: string) => string>(),
   spawn:
     vi.fn<
       (
@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
-  existsSync: mocks.exists,
+  realpathSync: mocks.realpath,
 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -70,7 +70,12 @@ it.each([
       }
     `,
     );
-    mocks.exists.mockImplementation((value) => value === candidate);
+    mocks.realpath.mockImplementation((value) => {
+      if (value === candidate) {
+        return value;
+      }
+      throw new Error("missing candidate");
+    });
     mocks.spawn.mockImplementation((_file, args, options) =>
       childProcess.spawnSync(
         process.execPath,
@@ -81,7 +86,7 @@ it.each([
 
     expect(await resolveUpdatedNodeRuntime(home)).toBe(lossless ? candidate : null);
     expect(mocks.spawn).toHaveBeenCalledOnce();
-    expect(mocks.spawn.mock.calls[0]?.[2].timeout).toBe(10_000);
+    expect(mocks.spawn.mock.calls[0]?.[2].timeout).toBe(5_000);
     const result = mocks.spawn.mock.results[0];
     if (result?.type !== "return") {
       throw new Error("Runtime probe did not return");

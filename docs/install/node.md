@@ -21,7 +21,17 @@ Upgrade Node before updating OpenClaw to avoid SQLite TEXT truncation. See [Node
 
 ### Update from the CLI
 
-If you run `openclaw` with an incompatible Node.js in an interactive terminal, the CLI offers:
+If you run `openclaw` with an incompatible Node.js, startup first checks for an
+already available compatible runtime: the private OpenClaw runtime, the Node
+recorded in the managed Gateway service, Node on PATH, then nvm, fnm, Volta, and
+Homebrew defaults. Each candidate must pass the same SQLite capability checks as
+normal startup. The first passing runtime retries the original command without
+prompting, including non-interactive Doctor commands launched by older updaters.
+Arguments, working directory, environment, standard streams, and exit status are
+preserved. Commands with an exact process-identity requirement cannot use this
+recovery.
+
+If none is available and you are in an interactive terminal, the CLI offers:
 
 ```text
 Update NodeJS: Y/N [N]:

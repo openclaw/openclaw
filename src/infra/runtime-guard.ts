@@ -230,6 +230,11 @@ export async function assertSupportedRuntime(
     }
     return;
   }
+  // CLI entrypoints supply argv; later checks and sealed workers retain their runtime.
+  if (details.kind === "node" && argv) {
+    const { recoverNodeRuntime } = await import("../../node-runtime-recovery.mjs");
+    await recoverNodeRuntime();
+  }
   if (
     details.kind === "node" &&
     canRunOpenClawNodeDiagnostics(details.version, details.hasNodeSqlite) &&

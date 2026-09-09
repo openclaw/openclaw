@@ -25,6 +25,10 @@ async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
     path.join(fixtureRoot, "node-runtime-update.mjs"),
   );
   await fs.copyFile(
+    path.resolve(process.cwd(), "node-runtime-recovery.mjs"),
+    path.join(fixtureRoot, "node-runtime-recovery.mjs"),
+  );
+  await fs.copyFile(
     path.resolve(process.cwd(), "node-sqlite.mjs"),
     path.join(fixtureRoot, "node-sqlite.mjs"),
   );
@@ -205,6 +209,14 @@ describe("openclaw launcher", () => {
           }
           Object.defineProperty(process.stdin, "isTTY", { value: ${params.tty ?? true} });
           Object.defineProperty(process.stderr, "isTTY", { value: ${params.tty ?? true} });
+          const realpath = fs.realpathSync;
+          fs.realpathSync = (filename, ...options) => {
+            const file = String(filename);
+            if (path.basename(file) === "node" && file !== process.execPath && file !== ${JSON.stringify(nodePath)}) {
+              throw Object.assign(new Error("runtime absent from fixture"), { code: "ENOENT" });
+            }
+            return realpath(filename, ...options);
+          };
           const original = childProcess.spawnSync;
           childProcess.spawnSync = (command, args, options) => {
             if (command !== ${JSON.stringify(process.platform === "darwin" ? "/bin/bash" : "bash")}) return original(command, args, options);
@@ -224,7 +236,7 @@ describe("openclaw launcher", () => {
         path.join(root, "dist", "entry.js"),
         `
         if (!process.getBuiltinModule?.("node:sqlite")) throw new Error("native diagnostic reader loaded without node:sqlite");
-        process.stdout.write(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), path: process.env.PATH }));
+        process.stdout.write(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), path: process.env.PATH, recovered: process.env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" }));
         process.exitCode = 17;
       `,
       );
@@ -271,8 +283,9 @@ describe("openclaw launcher", () => {
         args,
         cwd: fixture.root,
         path: expect.any(String),
+        recovered: true,
       });
-      expect(output.path.split(path.delimiter)[0]).toBe(path.dirname(fixture.nodePath));
+      expect(output.path).toBe(process.env.PATH);
       expect(JSON.parse(await fs.readFile(fixture.installLog, "utf8"))).toEqual({
         command: process.platform === "darwin" ? "/bin/bash" : "bash",
         args: [
@@ -347,9 +360,7 @@ describe("openclaw launcher", () => {
       const result = fixture.run("", args);
       expect(result.status, result.stderr).toBe(17);
       expect(result.stderr).not.toContain("Update NodeJS:");
-      expect(JSON.parse(result.stdout).path.split(path.delimiter)[0]).toBe(
-        path.dirname(fixture.nodePath),
-      );
+      expect(JSON.parse(result.stdout)).toMatchObject({ path: process.env.PATH, recovered: true });
       await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
     });
 

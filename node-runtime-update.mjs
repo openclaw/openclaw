@@ -1,30 +1,9 @@
 // This module must run on unsupported Node versions, before importing dist or dependencies.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { nodeRuntimeFailure, SQLITE_CAPABILITY_PROBE } from "./node-sqlite.mjs";
-
-function isUsableNode(nodePath) {
-  if (!existsSync(nodePath)) {
-    return false;
-  }
-  const result = spawnSync(
-    nodePath,
-    [
-      "-e",
-      `const probe = ${SQLITE_CAPABILITY_PROBE}; process.stdout.write(JSON.stringify({ version: process.versions.node, probe }));`,
-    ],
-    { encoding: "utf8", timeout: 10_000, windowsHide: true },
-  );
-  try {
-    const details = JSON.parse(result.stdout);
-    return result.status === 0 && !nodeRuntimeFailure(details.version, details.probe);
-  } catch {
-    return false;
-  }
-}
+import { isUsableNode } from "./node-runtime-recovery.mjs";
 
 function canInstallPrivateNode() {
   if (!["x64", "arm64"].includes(process.arch)) {
