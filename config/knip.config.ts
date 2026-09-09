@@ -16,6 +16,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/render-proof-video.mts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
   // mobile-release-authority invokes this helper from composite-action YAML.
@@ -565,6 +566,8 @@ const config = {
     },
     ui: {
       entry: [
+        // The standalone proof-video skill imports this developer API by path.
+        "src/test-helpers/proof-video.ts!",
         "index.html!",
         "src/main.ts!",
         "src/lib/browser-redact.ts!",

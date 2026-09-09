@@ -2481,7 +2481,18 @@
                       "gateway/prometheus",
                       "gateway/logging",
                       "gateway/diagnostics",
-                      "gateway/troubleshooting"
+                      "gateway/troubleshooting",
+                      {
+                        "group": "Troubleshooting",
+                        "pages": [
+                          "gateway/troubleshooting/updates-and-rollbacks",
+                          "gateway/troubleshooting/skills-and-model-providers",
+                          "gateway/troubleshooting/agent-replies-and-control-ui",
+                          "gateway/troubleshooting/gateway-service-and-process",
+                          "gateway/troubleshooting/config-validation-and-probes",
+                          "gateway/troubleshooting/channel-delivery-and-tools"
+                        ]
+                      }
                     ]
                   },
                   {
@@ -2492,6 +2503,21 @@
                       "gateway/restart-recovery",
                       "gateway/cloud-sessions",
                       "gateway/cloud-workers",
+                      {
+                        "group": "Cloud Workers",
+                        "pages": [
+                          "gateway/cloud-workers/warm-images",
+                          "gateway/cloud-workers/per-project-default-profiles",
+                          "gateway/cloud-workers/setup-and-bundle-installation",
+                          "gateway/cloud-workers/verify-the-profile",
+                          "gateway/cloud-workers/dispatching-a-session",
+                          "gateway/cloud-workers/placement-and-machine-selection",
+                          "gateway/cloud-workers/session-lifecycle",
+                          "gateway/cloud-workers/desktop",
+                          "gateway/cloud-workers/security-model",
+                          "gateway/cloud-workers/troubleshooting"
+                        ]
+                      },
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"
                     ]
@@ -2610,6 +2636,15 @@
                     "pages": [
                       "nodes/computer-use",
                       "nodes/talk",
+                      {
+                        "group": "Talk mode",
+                        "pages": [
+                          "nodes/talk/realtime-sessions",
+                          "nodes/talk/session-ownership",
+                          "nodes/talk/macos-relay",
+                          "nodes/talk/client-ui"
+                        ]
+                      },
                       "nodes/voicewake",
                       "nodes/location-command"
                     ]
@@ -2909,6 +2944,19 @@
                   },
                   "plugins/sdk-subpaths",
                   "plugins/sdk-entrypoints",
+                  {
+                    "group": "Plugin entry points",
+                    "pages": [
+                      "plugins/sdk-entrypoints/tool-policy-and-sandbox",
+                      "plugins/sdk-entrypoints/package-entries",
+                      "plugins/sdk-entrypoints/define-tool-plugin",
+                      "plugins/sdk-entrypoints/define-plugin-entry",
+                      "plugins/sdk-entrypoints/native-providers",
+                      "plugins/sdk-entrypoints/define-channel-plugin-entry",
+                      "plugins/sdk-entrypoints/define-setup-plugin-entry",
+                      "plugins/sdk-entrypoints/registration-mode"
+                    ]
+                  },
                   "plugins/sdk-runtime",
                   {
                     "group": "Plugin runtime helpers",
@@ -3011,6 +3059,18 @@
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
                   "reference/database-schemas",
+                  {
+                    "group": "Database schemas",
+                    "pages": [
+                      "reference/database-schemas/layout",
+                      "reference/database-schemas/versioning",
+                      "reference/database-schemas/personal-data",
+                      "reference/database-schemas/storage-changes",
+                      "reference/database-schemas/agent-schema-history",
+                      "reference/database-schemas/state-schema-history",
+                      "reference/database-schemas/integrity-and-recovery"
+                    ]
+                  },
                   "reference/memory-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",
@@ -3129,6 +3189,16 @@
                       "ci/runners",
                       "ci/capacity",
                       "ci/release-validation",
+                      {
+                        "group": "Release validation",
+                        "pages": [
+                          "ci/release-validation/full-release-validation",
+                          "ci/release-validation/live-and-e2e-shards",
+                          "ci/release-validation/package-acceptance",
+                          "ci/release-validation/install-smoke-and-docker-e2e",
+                          "ci/release-validation/plugin-prerelease"
+                        ]
+                      },
                       "ci/scheduled-workflows",
                       "ci/local-proof"
                     ]
@@ -3168,7 +3238,32 @@
                 "group": "FAQ",
                 "pages": [
                   "help/faq",
+                  {
+                    "group": "FAQ topics",
+                    "pages": [
+                      "help/faq/what-is-openclaw",
+                      "help/faq/skills-and-automation",
+                      "help/faq/sandboxing-and-memory",
+                      "help/faq/where-things-live-on-disk",
+                      "help/faq/config-basics",
+                      "help/faq/remote-gateways-and-nodes",
+                      "help/faq/env-vars",
+                      "help/faq/sessions-and-chats",
+                      "help/faq/gateway-ports-and-remote-mode",
+                      "help/faq/logging-and-debugging",
+                      "help/faq/media-and-attachments",
+                      "help/faq/security-and-access-control",
+                      "help/faq/chat-commands-and-stopping"
+                    ]
+                  },
                   "help/faq-first-run",
+                  {
+                    "group": "First-run FAQ",
+                    "pages": [
+                      "help/faq-first-run/quick-start",
+                      "help/faq-first-run/providers-and-hosting"
+                    ]
+                  },
                   "help/faq-models"
                 ]
               },

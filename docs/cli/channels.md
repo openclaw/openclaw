@@ -45,8 +45,10 @@ For `add`, `login`, `logout`, `remove`, and `resolve`, or `capabilities --channe
 use `--agent <id>` to select the workspace used for channel plugin discovery.
 The option works before or after the subcommand; a subcommand value takes precedence.
 Without it, discovery uses the configured System Agent or the existing sole/legacy owner.
-An explicit fleet with no such owner requires `--agent`. Selecting a workspace
-does not create account routing bindings; guided setup asks about routing separately.
+In an interactive guided `channels add`, an explicit fleet with no such owner
+prompts for the setup owner before workspace-scoped discovery; flag-driven or
+non-interactive setup still requires `--agent`. Selecting a workspace does not
+create account routing bindings; guided setup asks about routing separately.
 
 `add`, `login`, `logout`, and `remove` also take `--account <id>`. Omitting it selects the
 default account. A blank value is rejected instead of falling back to the default, as with
@@ -54,6 +56,10 @@ the dead-letter commands, so an unset shell variable cannot silently select an a
 did not name.
 
 ## Status / capabilities / resolve / logs
+
+`capabilities` and `resolve` reject explicitly empty or whitespace-only `--account`
+values. Omit the option to keep each command's default or broader account scope;
+do not pass an empty shell variable to request that scope.
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`

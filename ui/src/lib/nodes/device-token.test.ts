@@ -6,9 +6,9 @@ import {
   clearDeviceAuthToken,
   loadCurrentDeviceAuthToken,
   loadDeviceAuthToken,
-  rotateDeviceToken,
   storeDeviceAuthToken,
 } from "./index.ts";
+import { rotateDeviceToken } from "./page-operations.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

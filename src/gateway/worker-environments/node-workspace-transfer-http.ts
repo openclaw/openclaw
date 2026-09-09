@@ -196,12 +196,20 @@ export function createNodeWorkspaceTransferHttpCallback(
           clientAbort.signal,
           AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
         ]);
-        const abortRequest = () => {
+        const abortTransfer = () => {
+          // The request can be fully read and destroyed while its uploader still
+          // awaits staging validation on the open response.
+          if (!res.destroyed) {
+            res.destroy(signal.reason instanceof Error ? signal.reason : undefined);
+          }
           if (!req.destroyed) {
             req.destroy(signal.reason instanceof Error ? signal.reason : undefined);
           }
         };
-        signal.addEventListener("abort", abortRequest, { once: true });
+        signal.addEventListener("abort", abortTransfer, { once: true });
+        if (signal.aborted) {
+          abortTransfer();
+        }
         const stillCurrent = () => !signal.aborted && service.isAuthorizationCurrent(authorization);
         try {
           if (route.kind === "manifest" || route.kind === "pack") {
@@ -295,7 +303,7 @@ export function createNodeWorkspaceTransferHttpCallback(
             throw error;
           }
         } finally {
-          signal.removeEventListener("abort", abortRequest);
+          signal.removeEventListener("abort", abortTransfer);
           stopWatchingDisconnect();
         }
       },

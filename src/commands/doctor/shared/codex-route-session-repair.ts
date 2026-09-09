@@ -44,6 +44,7 @@ import type {
   CodexSessionRouteRepairSummary,
   SessionRouteRepairResult,
 } from "./codex-route-types.js";
+import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
 import {
   createRetiredModelRefRepairResolver,
   repairRetiredSessionModelRef,
@@ -62,7 +63,7 @@ function rewriteSessionModelPair(params: {
   providerKey: "modelProvider" | "providerOverride";
   modelKey: "model" | "modelOverride";
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-}): boolean {
+}): { changed: boolean; runtime?: string } {
   const provider = normalizeString(params.entry[params.providerKey]);
   const model =
     typeof params.entry[params.modelKey] === "string" ? params.entry[params.modelKey] : undefined;
@@ -83,7 +84,7 @@ function rewriteSessionModelPair(params: {
         })
       : false);
   if (blockedIdentity) {
-    return false;
+    return { changed: false };
   }
   if (isLegacyCodexProviderId(provider)) {
     params.entry[params.providerKey] = "openai";
@@ -93,15 +94,75 @@ function rewriteSessionModelPair(params: {
         params.entry[params.modelKey] = modelId;
       }
     }
-    return true;
+    return { changed: true, runtime: "codex" };
   }
   const canonicalModel =
     legacyProviderModelRef && toCanonicalOpenAIModelRef(legacyProviderModelRef);
-  if (!canonicalModel) {
+  if (canonicalModel) {
+    params.entry[params.modelKey] = canonicalModel;
+    return { changed: true, runtime: "codex" };
+  }
+  const scopedRuntimeRef =
+    model && (!provider || ["claude-cli", "google-gemini-cli"].includes(provider))
+      ? migrateLegacyRuntimeModelRef(model)
+      : null;
+  const rawRef = scopedRuntimeRef ? model : provider && model ? `${provider}/${model}` : model;
+  const migrated = scopedRuntimeRef ?? (rawRef ? migrateLegacyRuntimeModelRef(rawRef) : null);
+  if (
+    !migrated ||
+    (rawRef &&
+      isBlockedLegacyCodexModelRef({
+        modelRef: rawRef,
+        blockedModelIdentities: params.blockedModelIdentities,
+      }))
+  ) {
+    return { changed: false };
+  }
+  let changed = false;
+  if (params.entry[params.providerKey] !== migrated.provider) {
+    params.entry[params.providerKey] = migrated.provider;
+    changed = true;
+  }
+  if (params.entry[params.modelKey] !== migrated.model) {
+    params.entry[params.modelKey] = migrated.model;
+    changed = true;
+  }
+  return { changed, runtime: migrated.runtime };
+}
+
+function isCodexSessionRoute(entry: SessionEntry): boolean {
+  return (
+    isLegacyCodexProviderId(entry.modelProvider) ||
+    isLegacyCodexProviderId(entry.providerOverride) ||
+    (sessionProviderAllowsScopedModelRef(normalizeString(entry.modelProvider)) &&
+      isOpenAICodexModelRef(entry.model)) ||
+    (sessionProviderAllowsScopedModelRef(normalizeString(entry.providerOverride)) &&
+      isOpenAICodexModelRef(entry.modelOverride)) ||
+    normalizeRuntimeString(entry.agentRuntimeOverride) === "codex"
+  );
+}
+
+function normalizeCodexSessionHarness(
+  entry: SessionEntry,
+  legacyCodexHarness: boolean,
+  wasCodexRoute: boolean,
+): boolean {
+  if (!legacyCodexHarness && !wasCodexRoute && !isCodexSessionRoute(entry)) {
     return false;
   }
-  params.entry[params.modelKey] = canonicalModel;
-  return true;
+  let changed = false;
+  if (
+    normalizeRuntimeString(entry.agentHarnessId) === "codex-cli" ||
+    (legacyCodexHarness && entry.agentHarnessId === undefined)
+  ) {
+    entry.agentHarnessId = "codex";
+    changed = true;
+  }
+  if (normalizeRuntimeString(entry.agentRuntimeOverride) === "codex-cli") {
+    entry.agentRuntimeOverride = "codex";
+    changed = true;
+  }
+  return changed;
 }
 
 function sessionProviderAllowsScopedModelRef(provider: string | undefined): boolean {
@@ -128,16 +189,11 @@ function clearStaleCodexFallbackNotice(
   return true;
 }
 
-function preserveRepairedSessionRuntimeIntent(entry: SessionEntry): boolean {
+function clearRepairedCodexSessionHarness(entry: SessionEntry): boolean {
   const harnessRuntime = normalizeRuntimeString(entry.agentHarnessId);
-  const overrideRuntime = normalizeRuntimeString(entry.agentRuntimeOverride);
   let changed = false;
   if (entry.agentHarnessId !== undefined && harnessRuntime !== "openclaw") {
     delete entry.agentHarnessId;
-    changed = true;
-  }
-  if (overrideRuntime !== "openclaw" && entry.agentRuntimeOverride !== "codex") {
-    entry.agentRuntimeOverride = "codex";
     changed = true;
   }
   return changed;
@@ -197,19 +253,25 @@ function repairCodexSessionStoreRoutes(params: {
     if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       continue;
     }
-    const changedRuntimeModelRoute = rewriteSessionModelPair({
+    const legacyCodexHarness = normalizeRuntimeString(entry.agentHarnessId) === "codex-cli";
+    const wasCodexRoute = isCodexSessionRoute(entry);
+    const hasSelectedOverride = Boolean(entry.modelOverride?.trim());
+    const runtimeWasExplicit =
+      entry.agentRuntimeOverride !== undefined &&
+      normalizeRuntimeString(entry.agentRuntimeOverride) !== "auto";
+    const runtimeModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "modelProvider",
       modelKey: "model",
       blockedModelIdentities: params.blockedModelIdentities,
     });
-    const changedOverrideModelRoute = rewriteSessionModelPair({
+    const overrideModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "providerOverride",
       modelKey: "modelOverride",
       blockedModelIdentities: params.blockedModelIdentities,
     });
-    if (changedOverrideModelRoute) {
+    if (overrideModelRoute.changed) {
       entry.modelOverrideRouteResolution = "resolved";
     }
     const changedProviderlessOverride = repairProviderlessCodexSessionOverride(
@@ -217,14 +279,30 @@ function repairCodexSessionStoreRoutes(params: {
       params.blockedModelIdentities,
     );
     const changedModelRoute =
-      changedRuntimeModelRoute || changedOverrideModelRoute || changedProviderlessOverride;
+      runtimeModelRoute.changed || overrideModelRoute.changed || changedProviderlessOverride;
     const changedFallbackNotice = clearStaleCodexFallbackNotice(
       entry,
       params.blockedModelIdentities,
     );
-    const changedRuntimePins = changedModelRoute
-      ? preserveRepairedSessionRuntimeIntent(entry)
-      : false;
+    const selectedRuntime = changedProviderlessOverride
+      ? "codex"
+      : hasSelectedOverride
+        ? overrideModelRoute.runtime
+        : runtimeModelRoute.runtime;
+    const changedRuntimePins =
+      !runtimeWasExplicit &&
+      selectedRuntime !== undefined &&
+      entry.agentRuntimeOverride !== selectedRuntime;
+    if (changedRuntimePins) {
+      entry.agentRuntimeOverride = selectedRuntime;
+    }
+    const changedCodexRuntimeHarness =
+      selectedRuntime === "codex" ? clearRepairedCodexSessionHarness(entry) : false;
+    const changedCodexHarness = normalizeCodexSessionHarness(
+      entry,
+      legacyCodexHarness,
+      wasCodexRoute,
+    );
     // Providerless route repair first needs the legacy profile prefix; only the
     // auth migration owner's exact collision-aware map may rewrite its identity.
     const mappedAuthProfileId =
@@ -249,6 +327,8 @@ function repairCodexSessionStoreRoutes(params: {
       !changedModelRoute &&
       !changedFallbackNotice &&
       !changedRuntimePins &&
+      !changedCodexRuntimeHarness &&
+      !changedCodexHarness &&
       !changedAuthProfile &&
       !changedRetiredModel
     ) {

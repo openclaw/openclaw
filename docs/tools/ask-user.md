@@ -106,6 +106,10 @@ Example answered result:
 }
 ```
 
+The outer `answers` is the protocol's `QuestionAnswers` envelope; its inner
+`answers` map is keyed by `questionId`, with an array of selected values per
+question.
+
 ## Model guidance
 
 The model-facing contract tells the agent to:

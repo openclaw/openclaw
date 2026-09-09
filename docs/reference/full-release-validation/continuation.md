@@ -82,6 +82,73 @@ not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
 
+### Read publication observations
+
+An optional publication selector adds a read-only view beside validation status:
+
+```bash
+pnpm frv status --run <parent-run-id> --publication-run <publish-parent-run-id>
+pnpm frv status --run <parent-run-id> --publication-run <publish-parent-run-id> --json
+```
+
+The JSON response retains the validation fields and adds `publication`. The
+selector is valid only on `status`; it does not change `continue` or `verify`.
+The FRV root still needs an attempt-aware, all-group immutable plan.
+
+The reader pins the publication attempt observed at entry. It authenticates the
+FRV and publication workflow identities independently, then joins supported
+`release-postpublish-diagnostics` version 1 evidence to the exact validation
+manifest recorded by that publisher. An original plan from attempt 1 can bind a
+final validation manifest from attempt 2. The two attempts are reported
+separately; neither is silently replaced with the latest attempt.
+Linked children retain their own observed tooling SHA/ref. The recorded normal
+ClawHub ref can differ from an alpha publisher's ref.
+
+This view reports observations, **not release authorization or current registry
+visibility**. Writer selection, verification selection, job conclusions,
+registry readback, binding and asset checks remain separate. Failed publishers
+can retain successful readback and partial package results. Docker and VCR
+remain parent jobs; VCR copy, smoke and alias values are API step conclusions.
+Detached Windows acknowledgement, its pre-upload marker and the current child
+conclusion are separate observations. The normal ClawHub dispatch record is not
+a complete child inventory.
+
+Prepared-release activation remains unknown without an authenticated link to
+its external owner. A successful inner publisher or skipped finalize job does
+not prove activation. Supplied historical child IDs retain unknown recorded
+attempts where the diagnostic lacks them. Legacy success receipts without an
+exact publisher attempt, unsupported schemas and absent diagnostics do not
+become success by inference. The protected publication ref need not still
+exist for this historical observation; live privileged writers must still
+perform their own final authority checks.
+
+Exit 0 means collection completed, not that publication passed. Missing or
+expired historical evidence can produce exit 0 with an explicit unverified
+relationship. Contradictory identities, access/transport errors, incomplete
+pagination, truncated diagnostics and changing attempts produce exit 1 with
+classified partial output. There is no automatic restart or recovery action.
+An unrelated child failure leaves an already authenticated publisher/validation
+link verified while marking collection incomplete, provided final parent
+identity checks still pass. Changes to either joined parent invalidate that
+relationship; an unreadable final parent makes it unverified. These checks
+also run after a collection failure, within the original read budget.
+Final checks bind immutable run/workflow/repository/ref/SHA identity and attempt.
+Same-attempt lifecycle or display changes do not invalidate that relationship;
+reported lifecycle values remain observations from their individual reads.
+
+Reads use the selected GitHub CLI credential route, explicit authenticated
+GETs, exact artifact metadata/digests and bounded ZIP inspection. Limits are
+three minutes overall, twenty seconds per request, 256 requests, 32 observed
+runs, eight attempts per validation child, ten pages of 100 records, 2 MiB per
+JSON response/archive, 1 MiB per expanded artifact (128 KiB for diagnostics),
+32 MiB cumulative response bytes and 256 KiB output. A limit is an incomplete
+observation, never proof of absence. If output is oversized, the reader retains
+authenticated publisher/validation linkage and surface observations, limits each
+job/package list to four entries with explicit omission counts, and marks any
+omitted validation detail. It does not replace known results with unknowns.
+No registry reads, candidate execution, reruns, dispatches or release mutations
+occur.
+
 ### Post-merge continuation proof
 
 Use the non-release `FRV Proof Broker` and `FRV Proof Fixture` workflows only

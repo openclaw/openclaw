@@ -51,17 +51,7 @@ describe("xai tool auth helpers", () => {
   it("returns source metadata and managed markers for fallback auth", () => {
     expect(
       resolveFallbackXaiAuth({
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: { source: "file", provider: "vault", id: "/xai/tool-key" },
-                },
-              },
-            },
-          },
-        },
+        plugins: xaiWebSearchSecretRefPlugins("file", "vault", "/xai/tool-key"),
       }),
     ).toEqual({
       apiKey: NON_ENV_SECRETREF_MARKER,
@@ -180,17 +170,7 @@ describe("xai tool auth helpers", () => {
           defaults: { env: "selected" },
           providers: declaration ? { selected: declaration } : undefined,
         },
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: { source: "env", provider: "selected", id: "XAI_API_KEY" },
-                },
-              },
-            },
-          },
-        },
+        plugins: xaiWebSearchSecretRefPlugins("env", "selected", "XAI_API_KEY"),
       };
 
       expect(isXaiToolEnabled({ sourceConfig, auth })).toBe(false);

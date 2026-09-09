@@ -140,6 +140,22 @@
     "target": "Talk 模式"
   },
   {
+    "source": "Talk realtime sessions and delegation",
+    "target": "Talk 实时会话与委派"
+  },
+  {
+    "source": "Talk session ownership",
+    "target": "Talk 会话归属"
+  },
+  {
+    "source": "Talk on macOS and the Gateway relay",
+    "target": "macOS 上的 Talk 与 Gateway 中继"
+  },
+  {
+    "source": "Talk client UI",
+    "target": "Talk 客户端界面"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },
@@ -554,6 +570,18 @@
   {
     "source": "VPS hosting",
     "target": "VPS 托管"
+  },
+  {
+    "source": "Fly.io",
+    "target": "Fly.io"
+  },
+  {
+    "source": "Hetzner",
+    "target": "Hetzner"
+  },
+  {
+    "source": "exe.dev",
+    "target": "exe.dev"
   },
   {
     "source": "Linux server",
@@ -1004,6 +1032,58 @@
     "target": "常见问题"
   },
   {
+    "source": "What is OpenClaw?",
+    "target": "什么是 OpenClaw？"
+  },
+  {
+    "source": "Skills and automation",
+    "target": "Skills 与自动化"
+  },
+  {
+    "source": "Sandboxing and memory",
+    "target": "沙箱与记忆"
+  },
+  {
+    "source": "Where things live on disk",
+    "target": "磁盘上的文件位置"
+  },
+  {
+    "source": "Config basics",
+    "target": "配置基础"
+  },
+  {
+    "source": "Remote gateways and nodes",
+    "target": "远程 Gateway 与节点"
+  },
+  {
+    "source": "Env vars and .env loading",
+    "target": "环境变量与 .env 加载"
+  },
+  {
+    "source": "Sessions and multiple chats",
+    "target": "会话与多个聊天"
+  },
+  {
+    "source": "Gateway ports, already running, and remote mode",
+    "target": "Gateway 端口、已在运行与远程模式"
+  },
+  {
+    "source": "Logging and debugging",
+    "target": "日志与调试"
+  },
+  {
+    "source": "Media and attachments",
+    "target": "媒体与附件"
+  },
+  {
+    "source": "Security and access control",
+    "target": "安全与访问控制"
+  },
+  {
+    "source": "Chat commands, aborting tasks, and stopping a run",
+    "target": "聊天命令、中止任务与停止运行"
+  },
+  {
     "source": "Ollama Web Search",
     "target": "Ollama Web 搜索"
   },
@@ -1250,6 +1330,38 @@
   {
     "source": "Plugin entry points",
     "target": "插件入口点"
+  },
+  {
+    "source": "Plugin SDK tool policy and sandbox helpers",
+    "target": "插件 SDK 工具策略与沙箱辅助方法"
+  },
+  {
+    "source": "Plugin SDK package entries",
+    "target": "插件 SDK 包入口"
+  },
+  {
+    "source": "Plugin SDK defineToolPlugin helper",
+    "target": "插件 SDK defineToolPlugin 辅助方法"
+  },
+  {
+    "source": "Plugin SDK definePluginEntry helper",
+    "target": "插件 SDK definePluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK native provider factories",
+    "target": "插件 SDK 原生提供方工厂"
+  },
+  {
+    "source": "Plugin SDK defineChannelPluginEntry helper",
+    "target": "插件 SDK defineChannelPluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK defineSetupPluginEntry helper",
+    "target": "插件 SDK defineSetupPluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK registration mode",
+    "target": "插件 SDK 注册模式"
   },
   {
     "source": "Plugin hooks",
@@ -1892,6 +2004,90 @@
     "target": "故障排查"
   },
   {
+    "source": "Updates and rollbacks",
+    "target": "更新与回滚"
+  },
+  {
+    "source": "Skills and model providers",
+    "target": "Skills 与模型提供商"
+  },
+  {
+    "source": "Agent replies and Control UI",
+    "target": "智能体回复与 Control UI"
+  },
+  {
+    "source": "Gateway service and process",
+    "target": "Gateway 网关服务与进程"
+  },
+  {
+    "source": "Config validation and probes",
+    "target": "配置校验与探针"
+  },
+  {
+    "source": "Channel delivery and tools",
+    "target": "渠道投递与工具"
+  },
+  {
+    "source": "Configuration",
+    "target": "配置"
+  },
+  {
+    "source": "Configuration examples",
+    "target": "配置示例"
+  },
+  {
+    "source": "Configuration: hot reload",
+    "target": "配置：热重载"
+  },
+  {
+    "source": "Configuration: strict validation",
+    "target": "配置：严格校验"
+  },
+  {
+    "source": "Remote access",
+    "target": "远程访问"
+  },
+  {
+    "source": "Multiple gateways on the same host",
+    "target": "同一主机上的多个 Gateway 网关"
+  },
+  {
+    "source": "Background exec and process tool",
+    "target": "后台执行与进程工具"
+  },
+  {
+    "source": "Scheduled tasks: troubleshooting",
+    "target": "定时任务：故障排查"
+  },
+  {
+    "source": "Browser (OpenClaw-managed)",
+    "target": "浏览器（OpenClaw 托管）"
+  },
+  {
+    "source": "Anthropic",
+    "target": "Anthropic"
+  },
+  {
+    "source": "Token use and costs",
+    "target": "Token 用量与成本"
+  },
+  {
+    "source": "OpenAI-compatible endpoints",
+    "target": "OpenAI 兼容端点"
+  },
+  {
+    "source": "Provider configuration",
+    "target": "提供商配置"
+  },
+  {
+    "source": "Local models",
+    "target": "本地模型"
+  },
+  {
+    "source": "Logs",
+    "target": "日志"
+  },
+  {
     "source": "Update troubleshooting",
     "target": "更新故障排查"
   },
@@ -1950,6 +2146,102 @@
   {
     "source": "Cloud workers plan",
     "target": "云端工作节点计划"
+  },
+  {
+    "source": "Cloud worker warm images",
+    "target": "云工作机预热镜像"
+  },
+  {
+    "source": "Per-project default profiles",
+    "target": "按项目的默认配置档"
+  },
+  {
+    "source": "Worker setup and bundle installation",
+    "target": "工作机初始化与套件安装"
+  },
+  {
+    "source": "Verify a cloud worker profile",
+    "target": "验证云工作机配置档"
+  },
+  {
+    "source": "Dispatching a cloud session",
+    "target": "派发云会话"
+  },
+  {
+    "source": "Placement and machine selection",
+    "target": "放置位置与机器选择"
+  },
+  {
+    "source": "Cloud session lifecycle and durability",
+    "target": "云会话生命周期与持久性"
+  },
+  {
+    "source": "Cloud Worker Desktop",
+    "target": "云工作机桌面"
+  },
+  {
+    "source": "Cloud worker security model",
+    "target": "云工作机安全模型"
+  },
+  {
+    "source": "Cloud worker troubleshooting",
+    "target": "云工作机故障排查"
+  },
+  {
+    "source": "Warm images",
+    "target": "预热镜像"
+  },
+  {
+    "source": "Recover a paused capture",
+    "target": "恢复暂停的捕获"
+  },
+  {
+    "source": "Upgrade warm-image state",
+    "target": "升级预热镜像状态"
+  },
+  {
+    "source": "The setup command",
+    "target": "初始化命令"
+  },
+  {
+    "source": "Bundle installation",
+    "target": "套件安装"
+  },
+  {
+    "source": "Build a complete custom node package",
+    "target": "构建完整的自定义节点包"
+  },
+  {
+    "source": "Verify the profile",
+    "target": "验证配置档"
+  },
+  {
+    "source": "Dispatching a session",
+    "target": "派发会话"
+  },
+  {
+    "source": "Cloud child sessions",
+    "target": "云子会话"
+  },
+  {
+    "source": "Runtime support",
+    "target": "运行时支持"
+  },
+  {
+    "source": "Codex on a paired device",
+    "target": "在已配对设备上运行 Codex"
+  },
+  {
+    "source": "Choose a machine class per session",
+    "target": "为每个会话选择机器规格"
+  },
+  {
+    "source": "What survives a dead machine",
+    "target": "机器失效后仍然保留的内容"
+  },
+  {
+    "source": "Desktop (interactive)",
+    "target": "桌面（交互式）"
   },
   {
     "source": "Crabbox plugin",
@@ -2490,6 +2782,26 @@
   {
     "source": "Release validation workflows",
     "target": "发布验证工作流"
+  },
+  {
+    "source": "Full Release Validation",
+    "target": "完整发布验证"
+  },
+  {
+    "source": "Live and E2E shards",
+    "target": "实时与端到端分片"
+  },
+  {
+    "source": "Package Acceptance",
+    "target": "软件包验收"
+  },
+  {
+    "source": "Install smoke and Docker E2E",
+    "target": "安装冒烟与 Docker 端到端测试"
+  },
+  {
+    "source": "Plugin Prerelease",
+    "target": "插件预发布"
   },
   {
     "source": "Scheduled and maintenance workflows",
@@ -3460,6 +3772,34 @@
     "target": "SQLite 维护与会话迁移"
   },
   {
+    "source": "Database layout",
+    "target": "数据库布局"
+  },
+  {
+    "source": "Versioning contract",
+    "target": "版本契约"
+  },
+  {
+    "source": "Per-person and companion storage",
+    "target": "个人与配套设备存储"
+  },
+  {
+    "source": "Storage changes and release preflight",
+    "target": "存储变更与发布预检"
+  },
+  {
+    "source": "Agent schema history",
+    "target": "Agent 数据库 schema 历史"
+  },
+  {
+    "source": "State schema history",
+    "target": "状态数据库 schema 历史"
+  },
+  {
+    "source": "Integrity, troubleshooting, and recovery",
+    "target": "完整性、故障排查与恢复"
+  },
+  {
     "source": "Other checks and repairs",
     "target": "其他检查与修复"
   },
@@ -4010,5 +4350,13 @@
   {
     "source": "Docker",
     "target": "Docker"
+  },
+  {
+    "source": "FAQ: quick start and first-run setup",
+    "target": "常见问题：快速开始与首次运行设置"
+  },
+  {
+    "source": "FAQ: providers, hardware, and hosting",
+    "target": "常见问题：服务商、硬件与托管"
   }
 ]

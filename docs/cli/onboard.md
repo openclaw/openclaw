@@ -387,7 +387,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 ### Z.AI endpoint choices
 
 <Note>
-`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for your key: Coding Plan endpoints prefer `zai/glm-5.2` (falling back to `glm-5.1` if unavailable); general API endpoints default to `zai/glm-5.1`. To force a Coding Plan endpoint, pick `zai-coding-global` or `zai-coding-cn` directly.
+`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for your key: Coding Plan endpoints prefer `zai/glm-5.3`, falling back to `glm-5.1` and then `glm-4.7` when the key does not expose them; general API endpoints use the Z.AI provider default, `zai/glm-5.2`. To force a Coding Plan endpoint, pick `zai-coding-global` or `zai-coding-cn` directly.
 </Note>
 
 ```bash

@@ -67,6 +67,7 @@ import {
 } from "./prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { createPreparedPluginGeneration } from "./prepared-model-runtime.plugin-generation.js";
+import type { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import {
   listPreparedSyntheticAuthProviderRefs,
   prepareSyntheticAuth,
@@ -157,6 +158,7 @@ export async function prepareWorkspaceBuildGroup(
     getConfiguredHarnessRuntimes?: () => readonly string[];
     basePluginIds?: readonly string[];
     onStage?: (stage: string) => void;
+    registryResources?: PreparedModelRuntimeBuildResources;
   } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
@@ -194,16 +196,19 @@ export async function prepareWorkspaceBuildGroup(
   const preferBuiltPluginArtifacts =
     reusablePluginGeneration?.preferBuiltPluginArtifacts ??
     options.preferBuiltPluginArtifacts === true;
+  options.registryResources?.retainGeneration(reusablePluginGeneration);
+  const preparingRegistries = prepareWorkspacePluginRegistries(
+    input,
+    pluginMetadataSnapshot,
+    loadInboundPluginRegistry,
+    preferBuiltPluginArtifacts,
+    reusablePluginGeneration,
+    options.getConfiguredHarnessRuntimes,
+    options.basePluginIds,
+    options.registryResources,
+  );
   const { inboundPluginRegistry, runtimePluginRegistry, primaryRegistry } =
-    prepareWorkspacePluginRegistries(
-      input,
-      pluginMetadataSnapshot,
-      loadInboundPluginRegistry,
-      preferBuiltPluginArtifacts,
-      reusablePluginGeneration,
-      options.getConfiguredHarnessRuntimes,
-      options.basePluginIds,
-    );
+    preparingRegistries instanceof Promise ? await preparingRegistries : preparingRegistries;
   const reuseRuntimeFacts =
     reusablePluginGeneration && runtimePluginRegistry === reusablePluginGeneration.pluginRegistry;
   const resources = primaryRegistry && getPluginRegistryInspectionResources(primaryRegistry);
@@ -470,6 +475,7 @@ export async function prepareWorkspaceBuildGroup(
       reusablePluginGeneration,
       runtimePluginRegistry,
     });
+    options.registryResources?.bindGeneration(pluginGeneration);
     return {
       agentFacts,
       buildStats: {

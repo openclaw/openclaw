@@ -10,7 +10,7 @@ import {
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   getChatHistoryLoadState,
@@ -19,7 +19,7 @@ import {
 } from "./chat-history-state.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
 type LoadChatHistoryOptions = {
@@ -31,9 +31,9 @@ type LoadChatHistoryOptions = {
 type ChatErrorDetail = Extract<ChatEvent, { state: "error" }>["errorDetail"];
 
 export async function loadChatHistory(
-  state: ChatState,
+  state: ChatHistoryHost,
   opts: LoadChatHistoryOptions = {},
-): Promise<ChatHistoryResult | undefined> {
+): Promise<ObservedChatHistoryResult | undefined> {
   let sessionKey = state.sessionKey;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
@@ -48,6 +48,7 @@ export async function loadChatHistory(
   }
   const method = startup ? "chat.startup" : "chat.history";
   const client = state.client;
+  const sessions = state.sessions;
   const connectionEpoch = state.connectionEpoch;
   const hydration = startup ? waitForInitialChatSnapshot(state) : undefined;
   if (hydration) {
@@ -59,6 +60,7 @@ export async function loadChatHistory(
       !current ||
       !state.connected ||
       state.client !== client ||
+      state.sessions !== sessions ||
       state.connectionEpoch !== connectionEpoch ||
       !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
       (isUiSelectedGlobalSessionKey(state, sessionKey) &&
@@ -77,6 +79,7 @@ export async function loadChatHistory(
         opts.supersedeInFlight !== true &&
         active.startup &&
         active.client === client &&
+        active.sessions === sessions &&
         active.connectionEpoch === connectionEpoch &&
         active.sessionKey === sessionKey &&
         active.requestAgentId === requestAgentId
@@ -110,6 +113,7 @@ export async function loadChatHistory(
     inFlight.phase === "in-flight" &&
     inFlight.key === requestKey &&
     inFlight.client === client &&
+    inFlight.sessions === sessions &&
     inFlight.connectionEpoch === connectionEpoch
   ) {
     return inFlight.promise;
@@ -125,6 +129,7 @@ export async function loadChatHistory(
     state,
     client,
     connectionEpoch,
+    sessions,
     sessionKey,
     requestAgentId,
     method,
@@ -137,6 +142,7 @@ export async function loadChatHistory(
       if (result) {
         setChatHistoryLoad(state, {
           phase: "committed",
+          sessions,
           client,
           connectionEpoch,
           sessionKey,
@@ -149,6 +155,7 @@ export async function loadChatHistory(
           resolveUiSelectedSessionAgentId(state) === requestAgentId) &&
         (!state.connected ||
           current.client !== state.client ||
+          current.sessions !== state.sessions ||
           current.connectionEpoch !== state.connectionEpoch)
       ) {
         setChatHistoryLoad(state, {
@@ -168,6 +175,7 @@ export async function loadChatHistory(
   });
   setChatHistoryLoad(state, {
     phase: "in-flight",
+    sessions,
     client,
     connectionEpoch,
     key: requestKey,
@@ -180,25 +188,13 @@ export async function loadChatHistory(
 }
 
 export function resumePendingChatHistoryLoad(
-  state: ChatState,
-): Promise<ChatHistoryResult | undefined> | undefined {
+  state: ChatHistoryHost,
+): Promise<ObservedChatHistoryResult | undefined> | undefined {
   const load = getChatHistoryLoadState(state);
   if (load.phase === "pending-connection" || (load.phase === "failed" && load.retryable)) {
     return loadChatHistory(state, { startup: load.startup, deferBranches: true });
   }
   return undefined;
-}
-
-export function retryChatHistoryLoad(
-  state: ChatState,
-): Promise<ChatHistoryResult | undefined> | undefined {
-  const load = getChatHistoryLoadState(state);
-  if (load.phase !== "failed") {
-    return undefined;
-  }
-  const retry = loadChatHistory(state, { startup: load.startup });
-  state.requestUpdate?.();
-  return retry;
 }
 
 export function applyChatAgentsList(

@@ -39,6 +39,7 @@ type CompactSplitTimingGenerationSpec = {
 export type CompactSplitTimingKey = {
   expectedParts: number;
   generationKey: string;
+  parentShardName: string;
   part: number;
   selectorKey: string;
 };
@@ -59,6 +60,7 @@ export function parseCompactSplitTimingKey(value: string): CompactSplitTimingKey
   return {
     expectedParts,
     generationKey: `${match[1]}#generation-${match[2]}#parts-${expectedParts}`,
+    parentShardName: match[1]!.slice(0, match[1]!.lastIndexOf("#selector-")),
     part,
     selectorKey: match[1]!,
   };

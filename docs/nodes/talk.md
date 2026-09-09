@@ -22,272 +22,35 @@ For replies dominated by fenced code, `talk.speak` uses a short spoken message d
 
 Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone): native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the realtime path included in normal Watch setup; see [standalone voice setup](/platforms/ios#standalone-voice).
 
-## Choose a Talk voice from chat
+## Talk documentation pages
 
-After setting `talk.provider` and the matching `talk.providers.<provider>` configuration, use `/voice status` to inspect the active provider and voice, `/voice list [limit]` to list its available voices, and `/voice set <voiceId|name>` to save a provider-scoped selection. Discord exposes the same command natively as `/talkvoice`.
+Talk mode is documented on this page and four child pages, one per reader job.
+This page keeps the voice directives and the `talk` configuration reference.
+Open the child page that matches your task.
 
-Status and list are read-only. Setting a voice requires the message-channel owner or a Gateway client with `operator.admin`. Configuration, provider lookup, unknown-voice, and permission failures are returned visibly in chat. A masked API-key value in `/voice status` describes config only; it does not verify credential availability.
+| Page                                                                   | Read it when                                                                          |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [Talk realtime sessions and delegation](/nodes/talk/realtime-sessions) | You are wiring realtime Talk: voice selection, delegation, steering, and transcripts. |
+| [Talk session ownership](/nodes/talk/session-ownership)                | You need agent and session resolution, control authority, or close semantics.         |
+| [Talk on macOS and the Gateway relay](/nodes/talk/macos-relay)         | You run Talk on macOS or enable the streamed realtime Gateway relay.                  |
+| [Talk client UI](/nodes/talk/client-ui)                                | You need the macOS, Apple Watch, or Android client controls and behavior.             |
 
-Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`. A newer GPT-Live spoken task also supersedes the running delegation.
+## Where each section moved
 
-Thin audio clients can request `gateway-control-v1` in
-`talk.client.create.capabilities`. OpenAI GA Realtime requires a Platform API
-key for this mode. The released GPT-Live route keeps its existing ChatGPT OAuth
-or Platform authentication; unlisted routes require Platform authentication.
-Requesting Gateway control does not switch the selected model.
+Every section heading from the previous single-page version keeps its anchor
+here, so an existing link such as `/nodes/talk#session-ownership` still
+resolves. Each entry points at the page that now holds the content.
 
-Success returns `clientControl: { owner: "gateway" }`, a 60-second single-use
-`clientSecret`, and the relative offer URL `/plugins/openai/realtime/calls`.
-The client posts an audio-only SDP offer and opens no provider data channel.
-The Gateway attaches the provider's server sideband and owns tools or native
-agent delegation, transcripts, steering, cancellation, and call cleanup while
-media continues directly between the client and OpenAI. Negotiated sessions
-share a two-session limit per client connection, including pending offers.
-Unsupported combinations, including GA with OAuth only, fail visibly instead
-of falling back to client-owned control. Existing browser clients omit this
-capability and keep their data channel and client transcript reporting.
-
-In Gateway-controlled native calls and native Gateway relays, the provider's
-delegation starts each host action. Final speech transcripts are saved to history;
-they neither trigger actions nor repeat a delegation's action. Status keeps the
-current task running, cancellation stops it, and redirects or follow-ups target
-that call's active work. When the call has no active task, status and cancellation
-return a spoken no-active-run response, even if another call on the same connection
-and agent session has work in progress. Ordinary requests such as “Check the
-weather” still start tasks while idle. Genuine new tasks retain the native
-delegation replacement behavior.
-
-These calls disable provider-generated delegation acknowledgments at creation.
-OpenClaw sends one neutral receipt when it launches a real task; status and
-cancellation requests wait for the host result instead, without waiting for final
-speech transcription. A full control queue produces a spoken refusal; retry after
-the pending controls finish. A task receipt is not confirmation that a model or
-tool has started, and submitting a spoken result is not proof of audible delivery.
-
-Closing a native transport fences new delegations and late provider delivery;
-already accepted agent work retains its own cancellation lifetime. Spoken run
-cancellation is separate from ending the audio connection. Gateway-controlled
-native sessions acknowledge cancellation without speaking the canceled task's
-partial answer, empty-result fallback, or failed-task retry prompt. Timeouts
-remain failures rather than being silently treated as cancellations.
-
-Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
-
-Gateway-controlled native WebRTC calls receive shared-session history as quoted
-historical background in their instructions, not as the new call's own user or
-assistant messages. This background can include prior calls and backing-agent
-answers; it does not establish the current call's live task state. It retains
-the newest history within 16 entries, 800 characters per entry, and 8,000 UTF-8
-bytes including labels and quoting. This changes neither saved transcripts nor
-chat display. Native calls without negotiated host input control and direct
-WebSocket conversation seeds keep their existing representation.
-
-Generated agent-consult prompts are internal input, not spoken user turns. New
-consult records are hidden from chat and excluded from later model context, while
-the active consult still receives the full question, context, and response style.
-Raw archives and [session exports](/tools/slash-commands) remain lossless. Existing
-consult records without the exclusion flag are not rewritten and remain eligible
-for model context.
-
-Chat-backed Talk stores the spoken answer without a second copy of the
-successful consult answer in visible history; the internal answer remains in the
-raw transcript and model context. Tool activity, progress, errors, and interrupted
-replies retain their existing visibility.
-
-Direct provider-owned consultations keep their own final answer visible in Chat.
-Accepted work can outlive a closed or replaced audio connection, so a spoken
-replacement is not guaranteed. If speech also arrives, both records may be visible;
-OpenClaw preserves the answer rather than guessing that the spoken text replaces it.
-
-OpenAI GA browser Talk keeps provider conversation order even when an assistant
-reply finishes before the user's transcription or item announcements arrive out
-of order. Text streams immediately in the call view; late predecessor metadata
-places it beside the correct reply. Stopping a call drains finalized speech,
-skips unfinished transcriptions, and records a browser console warning for
-missing transcriptions or unresolved conversation links.
-
-Google Live saves complete utterances during the call, including Gemini 3.1
-transcriptions that omit an explicit transcription-finished flag. Partial text
-stays provisional until the provider's completion boundary.
-
-Voice-originated consult runs require a new, exact spoken confirmation before high-impact actions such as sending messages, controlling nodes, browser/computer actions, service changes, destructive shell commands, or publication. The gate applies to runs started through `talk.client.toolCall`, the Gateway relay, and GPT-Live sideband delegations. The confirmation applies only to the canonical final execution arguments and is consumed once; if a policy or hook rewrites the approved action, OpenClaw blocks it until the rewritten action is confirmed. Unrelated concurrent runs remain unaffected. When a call closes, OpenClaw can send a compact **Voice call changes** digest for mutating tools to the session's last non-WebChat delivery target.
-
-Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
-
-Transcription providers can advertise their model choices in `talk.catalog.transcription.providers[].models`. Pass `model` to `talk.session.create` to override the configured transcription model for that session. Omitting it keeps the provider configuration, then the matching `agents.defaults.voiceModel`, then the provider's own default.
-
-Browser Video Talk is available for OpenAI Realtime WebRTC and Google Live
-provider-WebSocket sessions. OpenAI gets a single bounded JPEG when
-`describe_view` asks for visual context; it does not receive a continuous
-camera track. Google Live receives bounded JPEG frames directly from the
-browser at up to one frame per second, while `describe_view` reports the
-camera-stream state. In both cases, camera frames bypass the Gateway, and
-stopping Talk releases the camera and microphone tracks.
-
-Browser Talk shows startup progress while preparing the session, waiting for
-microphone access, and connecting. Talk and dictation show microphone guidance
-while the browser's capture request is pending: bring the tab to the foreground
-and allow access if prompted. The browser can keep an unanswered permission
-request pending. In Talk, **Stop voice input** cancels startup and releases any
-microphone stream granted after cancellation.
-
-Browser Talk acquires the microphone before creating the provider session, so
-time spent granting permission does not consume a short-lived connection token.
-If session creation fails, Talk releases the microphone before reporting the error.
-
-If OpenAI cannot transcribe an utterance, browser Talk shows the provider's error
-without ending the call or inventing a transcript. You can speak again; audio
-responses continue independently of input transcription.
-
-If the microphone disconnects or its permission is revoked, browser Talk ends
-the call and shows an error. Choose an available **Microphone input**, restore
-permission if needed, and start Talk again. An unexpected GPT-Live connection
-loss also ends the call with an error; automatic reconnection is not supported.
-
-## Session ownership
-
-`talk.client.create` and realtime `talk.session.create` resolve their session before
-loading profile context or starting a provider. An agent-prefixed `sessionKey`
-selects that agent. Otherwise, Talk uses `talk.agentId`, then the configured system
-agent or an unambiguous default agent. Without an owner in a multi-agent Gateway,
-set `talk.agentId` or send an agent-prefixed key.
-
-`talk.catalog` also requires an unambiguous Talk owner and checks it before
-discovering providers, so missing ownership returns its setup error promptly.
-
-Omitting `sessionKey` selects the same owned main session as a bare `main` key;
-both enforce sharing, incognito, and operator-role restrictions. Main aliases
-honor `session.scope` and the configured [main session](/concepts/main-session) key. A shared fixed store retains
-its recorded owner for unqualified keys, and conflicting explicit ownership is rejected
-even when a main alias becomes `global`. If routing or access changes during
-startup, creation fails rather than switching sessions; retry the request.
-
-Client tool calls, Gateway-owned provider consultations, and steering retain the prepared agent,
-canonical session key, and store. Agent replies stay in the same session as voice
-transcripts, including under global scope, while the original key continues to
-identify the voice call. Provider-attached controls and `talk.session.steer` select
-only work bound to that logical voice call. Reusing `voiceSessionId` to replace a
-browser transport preserves control of its accepted work. The legacy
-`talk.client.steer` RPC remains session-scoped: it selects owned work by
-`sessionKey`, not by a voice call ID.
-
-Native steering uses the current caller's tool policy and session permissions. The
-host captures the actual backend attempt's authority after policy preparation and
-checks that exact owner again before delivering a control. Changed caller authority, tool
-allowlists, permission modes, or closed/replaced attempts can produce
-`tool_authority_mismatch`; a run ID or copied fingerprint does not authorize steering.
-Direct voice input does not acquire trace or client-tool capabilities. Chat-backed
-Talk keeps the authenticated caller's normal chat authority, including its reviewer
-and client capabilities, but disables task suggestions because Talk cannot accept
-them. Status and cancellation do not require a tool-policy projection. Controls
-capture their target before queue or transcript waits; they never move to a task
-that starts later. A control received before backend registration returns a visible
-no-active-run response rather than waiting for an unrelated future task.
-
-When a source-bound native control is routed to a pending question, its answer
-or image-triggered cancellation is checked again immediately before Gateway
-dispatch, after registration, input persistence, and connection preparation.
-Closing or reassigning the source before that check rejects the stale input
-without cancelling the independent backing question or run; a later valid
-answer can still use the same question. An answer already consumed by the
-question remains accepted if the source closes while its response returns.
-Delayed confirmation uses the question's existing deadline. If confirmation is
-lost entirely, Talk reports that it could not confirm the input and does not send
-it again as steering; check the conversation before retrying.
-This applies to controls routed through pending-question input, not universal
-interception of spoken answers by every voice provider.
-
-Managed-room handoffs do not yet supply current-speaker tool authority. Room
-attachment alone cannot authorize steering; status and cancellation remain available.
-
-Keep the original `sessionKey` for client transcript, tool-call, and close requests.
-`talk.client.close` requires both that exact key and the returned `voiceSessionId`;
-an equivalent storage alias is not a replacement. A `talk.client.toolCall` acknowledgement
-returns `agentId`, `agentSessionKey`, and `runId`; use that exact target for chat
-cancellation, history, and completion events, including when the canonical key is `global`. Transcription-only sessions
-without a key remain sessionless and do not select a default chat.
-
-## Behavior (macOS)
-
-- Always-on overlay while Talk mode is enabled.
-- **Listening &rarr; Thinking &rarr; Speaking** phase transitions.
-- Phase notifications are best-effort: a failed update does not start the local Gateway or restart its tunnel. Starting Talk retains normal connection recovery.
-- On a short pause (silence window), the current transcript is sent.
-- Replies are written to WebChat (same as typing).
-- **Interrupt on speech** (default on): if the user talks while the assistant is speaking, playback stops and the interruption timestamp is noted for the next prompt.
-
-## Realtime Talk over the Gateway relay (macOS)
-
-macOS defaults to the native path above: Apple Speech recognition, Gateway chat, and `talk.speak`
-playback. It switches to a streamed realtime session only when `talk.realtime` selects all three
-of these together:
-
-| Key         | Required value  |
-| ----------- | --------------- |
-| `mode`      | `realtime`      |
-| `transport` | `gateway-relay` |
-| `brain`     | `agent-consult` |
-
-Any other combination — including a partially set one — keeps the native path.
-
-```json5
-{
-  talk: {
-    realtime: {
-      provider: "openai",
-      providers: {
-        openai: {
-          model: "gpt-realtime-2.1",
-          speakerVoice: "cedar",
-        },
-      },
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-    },
-  },
-}
-```
-
-The Mac must also opt in locally with **Settings > Voice & Talk > Use realtime Gateway relay**.
-This preference defaults off and stays on that Mac; Gateway config alone never activates the
-streamed path. Keep `transport: "webrtc"` for browser or iOS client-owned sessions; macOS uses
-the relay only when the config explicitly selects `gateway-relay`.
-
-The Gateway must also advertise `gateway-relay` and `agent-consult` for the selected provider in
-`talk.catalog`. Realtime requires macOS 26 or newer, matching Voice Wake; on older versions the
-Talk and Voice Wake controls are unavailable.
-
-On Apple clients, relay playback stays active until the device finishes the queued audio, not
-until an estimated duration expires. Playback acknowledgments and microphone echo suppression
-follow that completion; pause, barge-in, and cancellation can still stop playback earlier.
-
-### When realtime cannot start
-
-Talk never silently sits idle. If the relay fails to start — no Gateway route, rejected
-credentials, or an unsupported model — the failure is logged, the overlay shows the reason, and
-Talk falls back to the native speech path for that session.
-
-Once a session is running, a dropped relay reconnects on a bounded retry schedule (roughly 0.5 s
-then 2 s). If those attempts are exhausted, the overlay reports
-`Realtime disconnected repeatedly — using native speech` and the next start bypasses realtime.
-Losing the microphone mid-session closes the relay and takes the same route.
-
-Relay output cancellation is turn-scoped. Clients copy the current `turnId` from the
-`talk.event` audio envelope. Matching ids return `applied`, stale ids return `stale`, and
-sessions without an active turn return `idle`. Older clients that omit `turnId` still cancel
-the current turn:
-
-```json
-{
-  "method": "talk.session.cancelOutput",
-  "params": {
-    "sessionId": "relay-session-id",
-    "turnId": "turn-7",
-    "reason": "barge-in"
-  }
-}
-```
+- <a id="choose-a-talk-voice-from-chat" />[Choose a Talk voice from chat](/nodes/talk/realtime-sessions#choose-a-talk-voice-from-chat)
+- <a id="session-ownership" />[Session ownership](/nodes/talk/session-ownership#session-ownership)
+- <a id="behavior-(macos)" />[Behavior (macOS)](</nodes/talk/macos-relay#behavior-(macos)>)
+- <a id="behavior-macos" />[Behavior (macOS)](/nodes/talk/macos-relay#behavior-macos)
+- <a id="realtime-talk-over-the-gateway-relay-(macos)" />[Realtime Talk over the Gateway relay (macOS)](</nodes/talk/macos-relay#realtime-talk-over-the-gateway-relay-(macos)>)
+- <a id="realtime-talk-over-the-gateway-relay-macos" />[Realtime Talk over the Gateway relay (macOS)](/nodes/talk/macos-relay#realtime-talk-over-the-gateway-relay-macos)
+- <a id="when-realtime-cannot-start" />[When realtime cannot start](/nodes/talk/macos-relay#when-realtime-cannot-start)
+- <a id="macos-ui" />[macOS UI](/nodes/talk/client-ui#macos-ui)
+- <a id="apple-watch-ui" />[Apple Watch UI](/nodes/talk/client-ui#apple-watch-ui)
+- <a id="android-ui" />[Android UI](/nodes/talk/client-ui#android-ui)
 
 ## Voice directives in replies
 
@@ -433,62 +196,6 @@ and unlisted GPT-Live routes remain Platform-key-only.
 | `realtime.instructions`                  | -                                           | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt.                                                                                                                                                                            |
 
 `talk.catalog` exposes canonical provider ids and registry aliases, each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags, and the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally; treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`; the current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
-
-## macOS UI
-
-- Menu bar: **Voice & Talk Settings…** opens the native **Voice & Talk** settings page.
-- Native settings: **Use realtime Gateway relay** is a local, default-off opt-in for this Mac.
-- **Open in Dashboard** hands provider, model, voice, and transport setup to Control UI **Settings → Talk** under **Connections**.
-- Menu bar: **Talk Mode** starts or stops the current Talk session.
-- Overlay: the orb renders the universal talk waveform (shared with iOS, watchOS, and Android). Listening follows the live mic level, Speaking follows the actual TTS playback envelope, Thinking breathes softly. Click the orb to pause/resume, double-click to stop speaking, click X to exit Talk mode.
-
-## Apple Watch UI
-
-Tap **Connect Apple Watch** in iPhone **Settings → Apple Watch**, then open
-**Talk on Watch** and tap **Start**. Voice is included without a separate enable
-setting; setup alone does not activate the microphone. The Watch asks you to choose an agent when
-more than one is available, creates a separate chat for the call, and shows
-the latest speech transcripts with **Mute** and **End** controls. It does not run
-the agent or stock Codex runtime locally.
-
-Keep the app in the foreground until connected. Established calls use
-background audio; an unfinished startup stops if backgrounded. Physical
-wrist-down, speaker routing, cellular handoff, and long-call endurance remain
-unverified. Simulator results and macOS provider-audio probes are not proof of
-Watch background behavior. See [Watch setup and limits](/platforms/ios#standalone-voice).
-
-## Android UI
-
-- Android's main navigation is **Home**, **Chat**, and **Settings**. Voice input
-  lives in the Chat composer rather than a separate Voice tab.
-- Tap the composer microphone for on-device dictation. Long-press it to record
-  a voice-note attachment. Start continuous Talk from the Talk waveform.
-- Dictation, voice-note recording, and Talk are mutually exclusive microphone
-  paths; starting one stops or blocks the others.
-- Realtime Talk prefers a connected Bluetooth Classic or BLE headset
-  microphone; if it disconnects, the app requests another headset input or
-  falls back to the default microphone, restoring the default preference once
-  capture stops.
-- Realtime Talk requests Android communication mode and audio focus, using a
-  connected external output or the built-in speaker. Microphone audio is sent
-  during playback only while acoustic echo cancellation is enabled and the
-  communication mode and focus remain active. Without echo cancellation,
-  microphone audio is not sent during playback. Android presentation timestamps
-  estimate playback completion when available. Routes without usable timestamps use
-  approximate playback position plus the nominal PCM duration; this cannot
-  guarantee that all acoustic output has drained on every device.
-- Losing audio focus or encountering a playback-device failure ends realtime
-  Talk with an error. Interruption clears queued output before capture resumes;
-  stopped sessions cannot acknowledge playback through a replacement Gateway.
-- Realtime **Thinking** follows provider response generation or an accepted
-  OpenClaw consult, not input transcription, which may finish after the answer.
-  Direct replies without a provider or Gateway response-start signal stay
-  **Listening** until output arrives. Empty completed responses return to **Listening**;
-  buffered audio stays **Speaking** until playback drains.
-- Dictation and voice-note recording stop when the app leaves the foreground or
-  the user leaves Chat.
-- Talk Mode keeps running until toggled off or the node disconnects, using Android's microphone foreground-service type while active.
-- Android supports `pcm_16000`, `pcm_22050`, `pcm_24000`, and `pcm_44100` output formats for low-latency `AudioTrack` streaming.
 
 ## Notes
 

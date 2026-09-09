@@ -21,8 +21,14 @@ The [Control UI](/web/control-ui) already highlights inline tool diffs and sessi
 <Steps>
   <Step title="Install the plugin">
     ```bash
-    openclaw plugins install diffs
+    openclaw plugins install clawhub:@openclaw/diffs
     ```
+
+    `diffs` and its language pack ship as separate packages rather than with
+    OpenClaw, so the install needs a scoped locator. The `clawhub:` prefix
+    selects the ClawHub copy of `@openclaw/diffs`; use
+    `npm:@openclaw/diffs` to install from npm instead.
+
   </Step>
   <Step title="Enable the plugin">
     ```json5
