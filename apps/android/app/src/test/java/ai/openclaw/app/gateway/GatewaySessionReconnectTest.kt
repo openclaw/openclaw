@@ -22,6 +22,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -30,6 +31,7 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import okio.ByteString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -506,6 +508,188 @@ class GatewaySessionReconnectTest {
         assertEquals(listOf("first-socket", "second-first", "seqGap", "second-after-gap"), received.toList())
       } finally {
         shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun preUpgradeDeadlinePublishesFailureWithoutWaitingForTheTransportCallback() =
+    runBlocking {
+      val created = CompletableDeferred<Pair<WebSocket, WebSocketListener>>()
+      val replacementCreated = CompletableDeferred<Pair<WebSocket, WebSocketListener>>()
+      val reconnected = CompletableDeferred<Unit>()
+      val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+      val attempts = AtomicInteger()
+      val sends = AtomicInteger()
+      val cancellations = AtomicInteger()
+      val connected = AtomicInteger()
+      val harness =
+        createReconnectHarness(
+          connectTimeoutMs = 2_000,
+          onConnected = {
+            connected.incrementAndGet()
+            reconnected.complete(Unit)
+          },
+          webSocketFactory = { _, request, listener ->
+            attempts.incrementAndGet()
+            val socket =
+              object : WebSocket {
+                override fun request(): Request = request
+
+                override fun queueSize(): Long = 0
+
+                override fun send(text: String): Boolean {
+                  sends.incrementAndGet()
+                  val frame = Json.parseToJsonElement(text).jsonObject
+                  if (frame["method"]?.jsonPrimitive?.content == "connect") {
+                    listener.onMessage(this, connectResponseFrame(frame.getValue("id").jsonPrimitive.content))
+                  }
+                  return true
+                }
+
+                override fun send(bytes: ByteString): Boolean = true.also { sends.incrementAndGet() }
+
+                override fun close(
+                  code: Int,
+                  reason: String?,
+                ): Boolean = true
+
+                override fun cancel() {
+                  cancellations.incrementAndGet()
+                }
+              }
+            if (!created.complete(socket to listener)) replacementCreated.complete(socket to listener)
+            socket
+          },
+          onConnectFailure = { error, _ -> failure.complete(error) },
+        )
+      var transport: Pair<WebSocket, WebSocketListener>? = null
+      try {
+        connectNodeSession(harness.session, 18789)
+        transport = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { created.await() }
+        assertEquals(
+          "NETWORK_UNREACHABLE",
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { failure.await() }.code,
+        )
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) {
+          while (cancellations.get() == 0) delay(10)
+        }
+        repeat(3) { connectNodeSession(harness.session, 18790) }
+        assertEquals(1, attempts.get())
+        val (socket, listener) = checkNotNull(transport)
+        listener.onOpen(
+          socket,
+          Response
+            .Builder()
+            .request(socket.request())
+            .protocol(Protocol.HTTP_1_1)
+            .code(101)
+            .message("Upgrade")
+            .build(),
+        )
+        listener.onMessage(socket, LIFECYCLE_CONNECT_CHALLENGE_FRAME)
+        assertEquals(0, connected.get())
+        assertEquals(0, sends.get())
+        listener.onFailure(socket, IOException("cancelled"), null)
+        val replacement = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { replacementCreated.await() }
+        transport = replacement
+        replacement.second.onOpen(
+          replacement.first,
+          Response
+            .Builder()
+            .request(replacement.first.request())
+            .protocol(Protocol.HTTP_1_1)
+            .code(101)
+            .message("Upgrade")
+            .build(),
+        )
+        replacement.second.onMessage(replacement.first, LIFECYCLE_CONNECT_CHALLENGE_FRAME)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { reconnected.await() }
+        assertEquals(2, attempts.get())
+        assertEquals(1, connected.get())
+      } finally {
+        harness.session.disconnect()
+        transport?.let { (socket, listener) -> listener.onFailure(socket, IOException("cancelled"), null) }
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
+        harness.sessionJob.cancelAndJoin()
+      }
+    }
+
+  @Test
+  fun replacementCleanupDeadlineIsVisibleUnlessExplicitlyDisconnected() =
+    runBlocking {
+      for (disconnectBeforeDeadline in listOf(false, true)) {
+        val created = CompletableDeferred<Pair<WebSocket, WebSocketListener>>()
+        val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+        val attempts = AtomicInteger()
+        val harness =
+          createReconnectHarness(
+            connectTimeoutMs = 2_000,
+            webSocketFactory = { _, request, listener ->
+              attempts.incrementAndGet()
+              val socket =
+                object : WebSocket {
+                  override fun request(): Request = request
+
+                  override fun queueSize(): Long = 0
+
+                  override fun send(text: String): Boolean = false
+
+                  override fun send(bytes: ByteString): Boolean = false
+
+                  override fun close(
+                    code: Int,
+                    reason: String?,
+                  ): Boolean = false
+
+                  override fun cancel() = Unit
+                }
+              created.complete(socket to listener)
+              socket
+            },
+            onConnectFailure = { error, _ -> failure.complete(error) },
+          )
+        var transport: Pair<WebSocket, WebSocketListener>? = null
+        try {
+          connectNodeSession(harness.session, 18789)
+          transport = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { created.await() }
+          connectNodeSession(harness.session, 18790)
+          assertFalse(failure.isCompleted)
+          if (disconnectBeforeDeadline) harness.session.disconnect()
+
+          if (disconnectBeforeDeadline) {
+            assertNull(withTimeoutOrNull(2_500) { failure.await() })
+          } else {
+            assertEquals("transport-cleanup", withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { failure.await() }.details?.reason)
+          }
+          assertEquals(1, attempts.get())
+        } finally {
+          harness.session.disconnect()
+          transport?.let { (socket, listener) -> listener.onFailure(socket, IOException("cancelled"), null) }
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
+          harness.sessionJob.cancelAndJoin()
+        }
+      }
+    }
+
+  @Test
+  fun realUpgradeThatNeverRespondsProducesTypedNetworkTimeout() =
+    runBlocking {
+      val server = MockWebServer()
+      server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+      server.start()
+      val failure = CompletableDeferred<GatewaySession.ErrorShape>()
+      val harness =
+        createReconnectHarness(connectTimeoutMs = 2_000) { error, _ -> failure.complete(error) }
+      try {
+        connectNodeSession(harness.session, server.port)
+        val error = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { failure.await() }
+        assertEquals("NETWORK_UNREACHABLE", error.code)
+        assertEquals("timeout", error.details?.reason)
+        assertTrue(server.requestCount >= 1)
+      } finally {
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
+        harness.sessionJob.cancelAndJoin()
+        server.shutdown()
       }
     }
 
@@ -1926,6 +2110,8 @@ class GatewaySessionReconnectTest {
     onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult = {
       GatewaySession.InvokeResult.ok("""{"handled":true}""")
     },
+    connectTimeoutMs: Long = 20_000,
+    webSocketFactory: ((OkHttpClient, Request, WebSocketListener) -> WebSocket)? = null,
     onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
   ): ReconnectHarness {
     val app = RuntimeEnvironment.getApplication()
@@ -1943,6 +2129,8 @@ class GatewaySessionReconnectTest {
         onConnectFailure = onConnectFailure,
         onEvent = onEvent,
         onInvoke = onInvoke,
+        connectTimeoutMs = connectTimeoutMs,
+        webSocketFactory = webSocketFactory,
       )
     return ReconnectHarness(session = session, sessionJob = sessionJob)
   }

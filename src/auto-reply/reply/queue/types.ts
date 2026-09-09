@@ -63,7 +63,7 @@ export type ResolveQueueSettingsParams = {
   pluginDebounceMs?: number;
 };
 
-export type QueueDedupeMode = "message-id" | "prompt" | "none";
+export type QueueDedupeMode = "message-id" | "none";
 
 type QueueInsertPosition = "tail" | "front";
 

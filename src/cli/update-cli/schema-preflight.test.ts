@@ -4,16 +4,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { checkTargetDatabaseSchemasForContexts } from "./schema-preflight.js";
+import { checkTargetDatabaseSchemasForContexts, hasSchemaRefusal } from "./schema-preflight.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -23,6 +25,57 @@ afterEach(() => {
 });
 
 describe("target-release database schema preflight", () => {
+  it.each([
+    { outcome: "accepts compatible", version: OPENCLAW_AGENT_SCHEMA_VERSION, refusal: false },
+    { outcome: "refuses newer", version: OPENCLAW_AGENT_SCHEMA_VERSION + 1, refusal: true },
+  ])("$outcome agent schemas committed to active WAL", async ({ version, refusal }) => {
+    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-update-wal-state-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const config: OpenClawConfig = { agents: { list: [{ id: "main" }] } };
+    openOpenClawStateDatabase({ env });
+    const agentPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    // Capture before opening the writer: closing another main-file descriptor
+    // in its process would release the writer's POSIX locks.
+    const databaseBefore = fs.readFileSync(agentPath);
+    const agent = new DatabaseSync(agentPath);
+    try {
+      agent.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+      agent.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+      // Keep the committed schema change in WAL while the connection remains open.
+      agent.exec(`PRAGMA user_version = ${version};`);
+      const walBefore = fs.readFileSync(`${agentPath}-wal`);
+      expect(databaseBefore.readUInt32BE(60)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+      expect(walBefore.length).toBeGreaterThan(32);
+
+      const result = await checkTargetDatabaseSchemasForContexts(
+        { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
+        [{ config, env }],
+      );
+
+      expect(result.indeterminate).toEqual([]);
+      expect(result.incompatible).toEqual(
+        refusal
+          ? [
+              expect.objectContaining({
+                kind: "agent",
+                path: agentPath,
+                foundVersion: version,
+                supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+              }),
+            ]
+          : [],
+      );
+      expect(hasSchemaRefusal(result)).toBe(refusal);
+      expect(fs.readFileSync(agentPath)).toEqual(databaseBefore);
+      expect(fs.readFileSync(`${agentPath}-wal`)).toEqual(walBefore);
+    } finally {
+      agent.close();
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "deduplicates caller and managed aliases of one physical database",
     async () => {
@@ -78,6 +131,7 @@ describe("target-release database schema preflight", () => {
     expect(result.indeterminate).toEqual([
       expect.objectContaining({ kind: "agent", path: agentPath }),
     ]);
+    expect(hasSchemaRefusal(result)).toBe(true);
     expect(fs.readFileSync(statePath)).toEqual(stateBefore);
     const inspectedState = new DatabaseSync(statePath, { readOnly: true });
     try {
@@ -126,6 +180,7 @@ describe("target-release database schema preflight", () => {
       [configuredPath, unregisteredPath, registeredCustomPath].toSorted(),
     );
     expect(result.indeterminate).toEqual([]);
+    expect(hasSchemaRefusal(result)).toBe(true);
     expect(
       before.map(({ pathname }) => ({
         pathname,

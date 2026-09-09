@@ -898,6 +898,32 @@ describe("sessions view", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("does not invent thinking choices for an empty session profile", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            modelProvider: "thinking-fixture",
+            model: "no-effort",
+            thinkingLevels: [],
+          }),
+        ),
+        expandedSessionKey: "agent:main:main",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector<HTMLSelectElement>("tbody select");
+    expect(thinking).not.toBeNull();
+    expect(Array.from(thinking?.options ?? []).map((option) => option.value)).toEqual([""]);
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Unknown");
+  });
+
   it("renders and patches provider-owned thinking ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();

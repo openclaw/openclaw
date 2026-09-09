@@ -30,7 +30,7 @@ export function readChatHistoryMessageSeq(message: unknown): number | undefined 
   return asPositiveSafeInteger(metadata?.seq);
 }
 
-function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
+export function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
   if (messages.length <= max) {
     return messages;
   }

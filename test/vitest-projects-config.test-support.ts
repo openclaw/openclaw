@@ -73,7 +73,6 @@ function listNormalFullSuiteTestFiles(): string[] {
   const e2eNamedIntegrationTests = new Set([
     "src/gateway/gateway.test.ts",
     "src/gateway/server.startup-matrix-migration.integration.test.ts",
-    "src/gateway/sessions-history-http.test.ts",
   ]);
   return globSync(["**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"], {
     cwd: process.cwd(),

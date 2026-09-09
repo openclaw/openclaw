@@ -236,7 +236,12 @@ it.concurrent.each([
             report.commands.some(
               ({ args }) =>
                 args.join(" ") ===
-                "sparse-checkout set --no-cone /.github/actions/ /scripts/ios-screenshot-evidence.mjs /scripts/lib/direct-run.mjs",
+                [
+                  "sparse-checkout set --no-cone /.github/actions/ /scripts/ios-screenshot-evidence.mjs /scripts/lib/direct-run.mjs",
+                  ...(linux
+                    ? ["/scripts/lib/release-upgrade-baseline.mjs /scripts/lib/release-version.mjs"]
+                    : []),
+                ].join(" "),
             ),
           ).toBe(true);
           expect(report.commands.at(-1)?.args).toEqual([
@@ -330,10 +335,11 @@ it.concurrent.each([
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
     };
     const releasePolicy = Object.fromEntries(
-      ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].map((name) => [
-        name,
-        readFileSync(name, "utf8"),
-      ]),
+      [
+        "scripts/lib/release-context.mjs",
+        "scripts/lib/release-version.mjs",
+        "scripts/lib/release-upgrade-baseline.mjs",
+      ].map((name) => [name, readFileSync(name, "utf8")]),
     );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
@@ -425,7 +431,10 @@ it.concurrent.each([
           for (const [name, contents] of Object.entries(candidateEvidenceScripts)) {
             writeFileSync(path.join(source, name), contents);
           }
-          run("add", action, ...Object.keys(evidenceScripts));
+          for (const name of Object.keys(releasePolicy)) {
+            writeFileSync(path.join(source, name), "throw new Error('candidate policy');\n");
+          }
+          run("add", action, ...Object.keys(evidenceScripts), ...Object.keys(releasePolicy));
           run("commit", "--no-gpg-sign", "-m", "selected candidate");
           revision = run("rev-parse", "HEAD");
         } else if (workflow === "missing") {
@@ -535,12 +544,32 @@ it.concurrent.each([
           }
         }
         for (const [name, contents] of Object.entries(releasePolicy)) {
-          expect(existsSync(path.join(harness, name))).toBe(preflight);
-          if (preflight) {
+          const ownsPolicy = preflight
+            ? name !== "scripts/lib/release-upgrade-baseline.mjs"
+            : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
+          expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
+          if (ownsPolicy) {
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
             writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
           }
+        }
+        if (kind === "linux-node") {
+          const versions = path.join(root, "published-versions.json");
+          writeFileSync(versions, JSON.stringify(["2026.9.1", "2026.9.2", "2026.9.3"]));
+          const resolved = spawnSync(
+            process.execPath,
+            [
+              path.join(harness, "scripts/lib/release-upgrade-baseline.mjs"),
+              "--candidate-version",
+              "2026.9.3",
+              "--versions-json",
+              versions,
+            ],
+            { cwd: workspace, encoding: "utf8" },
+          );
+          expect(resolved.status, resolved.stderr).toBe(0);
+          expect(resolved.stdout.trim()).toBe("openclaw@2026.9.2");
         }
         if (posix) {
           // Git tracks only executable state; checkout materialization applies the process umask.
@@ -555,6 +584,9 @@ it.concurrent.each([
             "/.github/actions/",
             "/scripts/ios-screenshot-evidence.mjs",
             "/scripts/lib/direct-run.mjs",
+            ...(kind === "linux-node"
+              ? ["/scripts/lib/release-upgrade-baseline.mjs", "/scripts/lib/release-version.mjs"]
+              : []),
           ]);
         }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");

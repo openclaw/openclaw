@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import {
+  appendSessionTranscriptReport,
   appendTranscriptMessage,
   replaceSessionEntry,
   replaceTranscriptEvents,
@@ -170,6 +171,70 @@ function readTail(scope: TranscriptScope, offset?: number) {
     ignoreCliSessionImports: true,
   });
 }
+
+describe("chat history custom reports", () => {
+  it("delivers a committed failure notice once through the cursor and refreshed history", async () => {
+    const { scope } = await createTranscript();
+    await appendTranscriptMessage(scope, {
+      eventId: "question",
+      message: { role: "user", content: "Please help." },
+    });
+    const before = await readTail(scope);
+    if (!before.deltaCursor) {
+      throw new Error("Expected a cursor before the failure report");
+    }
+    for (const report of [
+      {
+        customType: "run-failed-before-reply",
+        content: "This turn ended before a reply: The request timed out.",
+        display: true,
+      },
+      { customType: "private-report", content: "PRIVATE_REPORT", display: false },
+      { customType: "openclaw.runtime-context", content: "PRIVATE_CONTEXT", display: true },
+    ]) {
+      await expect(
+        appendSessionTranscriptReport(scope, {
+          kind: "custom",
+          customTypes: [report.customType],
+          selectReport: () => ({ ...report, details: { error: "PRIVATE_DIAGNOSTIC" } }),
+        }),
+      ).resolves.toMatchObject({ ok: true });
+    }
+    await appendTranscriptMessage(scope, {
+      eventId: "follow-up",
+      message: { role: "user", content: "Please try again." },
+    });
+
+    const delta = readDelta(scope, before.deltaCursor);
+    expect(delta).toMatchObject({
+      kind: "delta",
+      messages: [
+        {
+          messageSeq: 2,
+          message: {
+            role: "custom",
+            customType: "run-failed-before-reply",
+            content: "This turn ended before a reply: The request timed out.",
+            timestamp: expect.any(Number),
+            __openclaw: { seq: 2, transcriptPosition: { rawSeq: 2 } },
+          },
+        },
+        { messageId: "follow-up", messageSeq: 3 },
+      ],
+    });
+    if (delta.kind !== "delta") {
+      throw new Error("Expected the committed report delta");
+    }
+    expect(delta.messages).toHaveLength(2);
+    const refreshed = await readTail(scope);
+    expect(refreshed.pagination?.totalMessages).toBe(3);
+    expect(refreshed.messages).toHaveLength(3);
+    expect(refreshed.messages.slice(1)).toEqual(delta.messages.map((envelope) => envelope.message));
+    expect(JSON.stringify(delta)).not.toContain("PRIVATE_");
+    expect(JSON.stringify(refreshed.messages)).not.toContain("PRIVATE_");
+    expect(readDelta(scope, delta.deltaCursor)).toMatchObject({ kind: "delta", messages: [] });
+  });
+});
 
 describe("chat history commentary cursor reconciliation", () => {
   it.each([false, true])(

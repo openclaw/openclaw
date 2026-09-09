@@ -26,6 +26,7 @@ function expectTransparentDispatchWrapperCase(params: {
   argv: string[];
   wrapper: string;
   effectiveArgv: string[];
+  dispatchChainComplete: boolean;
 }) {
   expect(isDispatchWrapperExecutable(params.wrapper)).toBe(true);
   expect(unwrapKnownDispatchWrapperInvocation(params.argv)).toEqual({
@@ -36,7 +37,9 @@ function expectTransparentDispatchWrapperCase(params: {
   expect(resolveDispatchWrapperTrustPlan(params.argv)).toEqual({
     argv: params.effectiveArgv,
     wrappers: [params.wrapper],
+    wrapperInvocations: [{ wrapper: params.wrapper, sourceArgv: params.argv }],
     policyBlocked: false,
+    dispatchChainComplete: params.dispatchChainComplete,
   });
 }
 
@@ -309,7 +312,9 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     expect(resolveDispatchWrapperTrustPlan(["env", "--", "bash", "-lc", "echo hi"])).toEqual({
       argv: ["bash", "-lc", "echo hi"],
       wrappers: ["env"],
+      wrapperInvocations: [{ wrapper: "env", sourceArgv: ["env", "--", "bash", "-lc", "echo hi"] }],
       policyBlocked: false,
+      dispatchChainComplete: true,
     });
   });
 
@@ -325,7 +330,9 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
         argv,
         wrappers: [],
+        wrapperInvocations: [],
         policyBlocked: false,
+        dispatchChainComplete: true,
       });
     },
   );
@@ -335,61 +342,73 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       argv: ["caffeinate", "-d", "-t", "60", "bash", "-lc", "echo hi"],
       wrapper: "caffeinate",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
       wrapper: "nice",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["nohup", "--", "bash", "-lc", "echo hi"],
       wrapper: "nohup",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["sandbox-exec", "-p", "(allow default)", "bash", "-lc", "echo hi"],
       wrapper: "sandbox-exec",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["sandbox-exec", "-D", "PROFILE", "bash", "-lc", "echo hi"],
       wrapper: "sandbox-exec",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["stdbuf", "-o", "L", "bash", "-lc", "echo hi"],
       wrapper: "stdbuf",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["time", "-p", "bash", "-lc", "echo hi"],
       wrapper: "time",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["flock", "--timeout=2", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
       wrapper: "flock",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["flock", "--close", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
       wrapper: "flock",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["flock", "--no-fork", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
       wrapper: "flock",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["flock", "--", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
       wrapper: "flock",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     {
       argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
       wrapper: "timeout",
       effectiveArgv: ["bash", "-lc", "echo hi"],
+      dispatchChainComplete: true,
     },
     ...(process.platform === "darwin"
       ? [
@@ -397,16 +416,18 @@ describe("resolveDispatchWrapperTrustPlan", () => {
             argv: ["arch", "-arm64", "bash", "-lc", "echo hi"],
             wrapper: "arch",
             effectiveArgv: ["bash", "-lc", "echo hi"],
+            dispatchChainComplete: true,
           },
           {
             argv: ["xcrun", "bash", "-lc", "echo hi"],
             wrapper: "xcrun",
             effectiveArgv: ["bash", "-lc", "echo hi"],
+            dispatchChainComplete: false,
           },
         ]
       : []),
-  ])("keeps transparent wrapper handling in sync for %s", ({ argv, wrapper, effectiveArgv }) => {
-    expectTransparentDispatchWrapperCase({ argv, wrapper, effectiveArgv });
+  ])("keeps transparent wrapper handling in sync for %s", (fixture) => {
+    expectTransparentDispatchWrapperCase(fixture);
   });
 
   test("unwraps transparent wrapper chains", () => {
@@ -415,7 +436,12 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     ).toEqual({
       argv: ["bash", "-lc", "echo hi"],
       wrappers: ["nohup", "nice"],
+      wrapperInvocations: [
+        { wrapper: "nohup", sourceArgv: ["nohup", "nice", "-n", "5", "bash", "-lc", "echo hi"] },
+        { wrapper: "nice", sourceArgv: ["nice", "-n", "5", "bash", "-lc", "echo hi"] },
+      ],
       policyBlocked: false,
+      dispatchChainComplete: true,
     });
   });
 
@@ -429,7 +455,9 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     ).toEqual({
       argv: ["arch", "-arm64", "bash", "-lc", "echo hi"],
       wrappers: [],
+      wrapperInvocations: [],
       policyBlocked: true,
+      dispatchChainComplete: false,
       blockedWrapper: "arch",
     });
   });
@@ -438,7 +466,11 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     expect(resolveDispatchWrapperTrustPlan(["env", "FOO=bar", "bash", "-lc", "echo hi"])).toEqual({
       argv: ["env", "FOO=bar", "bash", "-lc", "echo hi"],
       wrappers: ["env"],
+      wrapperInvocations: [
+        { wrapper: "env", sourceArgv: ["env", "FOO=bar", "bash", "-lc", "echo hi"] },
+      ],
       policyBlocked: true,
+      dispatchChainComplete: false,
       blockedWrapper: "env",
     });
   });
@@ -453,7 +485,14 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     ).toEqual({
       argv: ["script", "-q", "/tmp/session.log", "bash", "-lc", "echo hi"],
       wrappers: ["script"],
+      wrapperInvocations: [
+        {
+          wrapper: "script",
+          sourceArgv: ["script", "-q", "/tmp/session.log", "bash", "-lc", "echo hi"],
+        },
+      ],
       policyBlocked: true,
+      dispatchChainComplete: false,
       blockedWrapper: "script",
     });
   });
@@ -465,7 +504,9 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
       argv,
       wrappers: ["time"],
+      wrapperInvocations: [{ wrapper: "time", sourceArgv: argv }],
       policyBlocked: true,
+      dispatchChainComplete: false,
       blockedWrapper: "time",
     });
   });
@@ -476,7 +517,11 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     ).toEqual({
       argv: ["timeout", "5s", "bash", "-lc", "echo hi"],
       wrappers: ["nohup"],
+      wrapperInvocations: [
+        { wrapper: "nohup", sourceArgv: ["nohup", "timeout", "5s", "bash", "-lc", "echo hi"] },
+      ],
       policyBlocked: true,
+      dispatchChainComplete: false,
       blockedWrapper: "timeout",
     });
   });

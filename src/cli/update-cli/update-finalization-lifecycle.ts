@@ -15,6 +15,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { watchCliExitAfterOutput } from "../one-shot-exit.js";
 import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
 import { getPendingCliDisposers } from "../runtime-cleanup.js";
+import { UpdateFinalizationOutput } from "./update-finalization-output.js";
 import { inspectUpdateFinalizationChildren } from "./update-finalization-processes.js";
 
 // Local metadata/backup/completion work gets 30s; Doctor gets 2m for migrations,
@@ -79,10 +80,12 @@ export class UpdateFinalizationLifecycle {
     active: { phase: Phase; step: string },
     status: "in_progress" | "completed" | "failed",
     at: number,
+    detail?: string,
   ): void {
     const step = {
       step: active.step,
       status,
+      ...(detail ? { detail } : {}),
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
     };
     defaultRuntime.error(`[update finalize] ${JSON.stringify(step)}`);
@@ -106,6 +109,7 @@ export class UpdateFinalizationLifecycle {
     const active = { phase, step: `finalize:${phase}`, startedAtMs };
     this.active = active;
     this.record(active, "in_progress", startedAtMs);
+    const output = new UpdateFinalizationOutput();
     const heartbeat = setInterval(() => {
       try {
         if (this.runId) {
@@ -121,14 +125,14 @@ export class UpdateFinalizationLifecycle {
       }
     }, UPDATE_RUN_HEARTBEAT_MS);
     heartbeat.unref();
-    const end = (result: Outcome) => {
+    const end = (result: Outcome, detail?: string) => {
       this.phaseTimings.push({
         phase,
         startedOffsetMs: Math.max(0, Math.round(startedAt - this.startedAt)),
         durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
         outcome: result,
       });
-      this.record(active, result === "failed" ? "failed" : "completed", Date.now());
+      this.record(active, result === "failed" ? "failed" : "completed", Date.now(), detail);
     };
     // Borrowed invocations keep awaiting the phase without taking over their host's lifetime.
     if (hasCliProcessScope()) {
@@ -144,10 +148,16 @@ export class UpdateFinalizationLifecycle {
           } finally {
             this.stopChildren();
           }
-          end("failed");
+          const doctorOutput = output.snapshot();
+          // Persist received output with the failed phase before the existing finish.
+          // Child inventory remains separate and is never process-kill authority.
+          end("failed", doctorOutput ? formatDoctorOutputDetail(doctorOutput) : undefined);
           const error = `Update finalization timed out in ${phase} after ${budgetMs}ms`;
           this.finishLedger(1, error);
           writeSync(2, `${error}\n`);
+          if (doctorOutput) {
+            writeSync(2, `[update finalize] Doctor output: ${JSON.stringify(doctorOutput)}\n`);
+          }
           writeSync(
             2,
             `[update finalize] Stalled phase children: ${JSON.stringify(diagnostics)}\n`,
@@ -156,7 +166,7 @@ export class UpdateFinalizationLifecycle {
           if (this.json) {
             writeSync(
               1,
-              `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings, ...diagnostics })}\n`,
+              `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings, ...diagnostics, ...(doctorOutput ? { doctorOutput } : {}) })}\n`,
             );
           }
         } finally {
@@ -165,7 +175,7 @@ export class UpdateFinalizationLifecycle {
       }, budgetMs);
     }
     try {
-      const result = await run();
+      const result = await output.run(run);
       end(outcome?.(result) ?? "completed");
       return result;
     } catch (error) {
@@ -175,6 +185,7 @@ export class UpdateFinalizationLifecycle {
       clearInterval(heartbeat);
       clearTimeout(this.timer);
       this.active = undefined;
+      output.close();
     }
   }
 
@@ -246,4 +257,16 @@ export class UpdateFinalizationLifecycle {
       this.deferredExitWatch = watch;
     }
   }
+}
+
+function formatDoctorOutputDetail(
+  output: NonNullable<ReturnType<UpdateFinalizationOutput["snapshot"]>>,
+) {
+  return [
+    `Doctor ${output.phase} received output:`,
+    ...(["stdout", "stderr"] as const).map((name) => {
+      const stream = output[name];
+      return `${name} ${stream.receivedBytes} bytes, last ${stream.lastOutputAgeMs ?? "none"}ms: ${"omitted" in stream ? `[omitted: ${stream.omitted}]` : stream.excerpt}`;
+    }),
+  ].join("\n");
 }

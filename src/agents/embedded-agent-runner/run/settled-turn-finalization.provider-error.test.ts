@@ -72,6 +72,26 @@ describe("prepared provider errors after settled tools", () => {
     );
   });
 
+  it("finalizes an exact terminated transport stream reported through the completed assistant", () => {
+    const base = createSettledProviderFailureAttempt({ terminal: { kind: "ok" } });
+    const assistant = base.currentAttemptCompletedAssistant;
+    if (!assistant) {
+      throw new Error("Missing failed assistant");
+    }
+    assistant.errorMessage = "terminated";
+    assistant.errorCode = undefined;
+    const attempt = projectSettledProviderFailureAttempt(base);
+    expect(attempt).toMatchObject({
+      terminal: { kind: "ok" },
+      settledTurnFinalizationContext: { source: "openclaw-transcript" },
+    });
+    const request = prepareRequest(attempt);
+    expect(request.payloadsWithToolMedia).toEqual([expect.objectContaining({ isError: true })]);
+    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
+      "Do not repeat completed tool calls",
+    );
+  });
+
   it.each(["earlier user turn", "current commentary substring"])(
     "does not attribute current output to %s",
     (source) => {

@@ -462,3 +462,4 @@ reload behavior, and legacy cleanup, see
 - [Building plugins](/plugins/building-plugins) - native plugin authoring guide
 - [Plugin SDK overview](/plugins/sdk-overview) - runtime registration, hooks, and API fields
 - [Plugin manifest](/plugins/manifest) - manifest and package metadata
+- [Context engines](/concepts/context-engine) - pluggable context assembly plugins

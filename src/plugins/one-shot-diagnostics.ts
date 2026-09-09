@@ -1,6 +1,7 @@
 /** Starts diagnostics exporter plugin services for one-shot CLI embedded agent runs. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -68,50 +69,79 @@ export async function startOneShotDiagnosticsExporters(params: {
   if (!isOtelExportConfigured(config)) {
     return null;
   }
-  const [{ loadOpenClawPlugins }, { startPluginServices }] = await Promise.all([
+  const [{ acquirePluginRegistryForInspection }, { startPluginServices }] = await Promise.all([
     import("./loader.js"),
     import("./services.js"),
   ]);
   // Scoped, non-activating load: honors the same plugin enablement config as
   // the gateway's startup load without replacing the active runtime registry
   // the embedded run resolves providers/tools from.
-  const registry = loadOpenClawPlugins({
+  const acquired = await acquirePluginRegistryForInspection({
     config,
     onlyPluginIds: [...ONE_SHOT_DIAGNOSTICS_SERVICE_IDS],
-    activate: false,
     preferBuiltPluginArtifacts: true,
   });
-  // The scope-piggyback loader rules (e.g. dreaming sidecars) can widen a
-  // scoped load, so re-filter to the flush-safe exporter allowlist.
-  const services = registry.services.filter((entry) =>
-    ONE_SHOT_DIAGNOSTICS_SERVICE_IDS.has(entry.service.id),
-  );
-  if (services.length === 0) {
-    // diagnostics-otel is an external plugin, so "enabled in config, never
-    // installed" is an ordinary state. Say so: the run would otherwise export
-    // nothing with nothing explaining why.
-    log.warn(
-      "diagnostics.otel is enabled but the diagnostics-otel plugin is not installed or not enabled; this run exports no telemetry.",
-    );
-    return null;
-  }
-  const handle = await startPluginServices({
-    registry: { ...registry, services },
-    config,
-    oneShotStopTimeouts: {
-      eventDrainMs: ONE_SHOT_DIAGNOSTICS_DRAIN_TIMEOUT_MS,
-      serviceStopMs: ONE_SHOT_DIAGNOSTICS_FLUSH_TIMEOUT_MS,
-    },
-  });
-  return {
-    stop: async () => {
-      try {
-        await handle.stop();
-      } catch (error) {
-        for (const failure of error instanceof AggregateError ? error.errors : [error]) {
-          log.warn(`one-shot diagnostics shutdown failed: ${String(failure)}`);
-        }
-      }
-    },
+  const work = new AsyncWorkScope();
+  let servicesHandle: Awaited<ReturnType<typeof startPluginServices>> | undefined;
+  let shutdown: { stopping: Promise<void>; released: Promise<void> } | undefined;
+  const reportShutdownFailure = (error: unknown) => {
+    for (const failure of error instanceof AggregateError ? error.errors : [error]) {
+      log.warn(`one-shot diagnostics shutdown failed: ${String(failure)}`);
+    }
   };
+  const release = async () => {
+    await work.drain();
+    await acquired.release();
+  };
+  const stop = () => {
+    // Every caller retains physical cleanup, including callers after a bounded stop settled.
+    const trackCaller = captureAsyncWorkTracker();
+    if (!shutdown) {
+      const stopping = work.track(async () => {
+        try {
+          await servicesHandle?.stop();
+        } catch (error) {
+          reportShutdownFailure(error);
+        }
+      });
+      // Cleanup must run even if a retained callback restores a closed caller scope.
+      const released = stopping.then(release, release).catch(reportShutdownFailure);
+      shutdown = { stopping, released };
+    }
+    const { stopping, released } = shutdown;
+    void trackCaller(() => released).catch(reportShutdownFailure);
+    return stopping;
+  };
+  try {
+    // The scope-piggyback loader rules (e.g. dreaming sidecars) can widen a
+    // scoped load, so re-filter to the flush-safe exporter allowlist.
+    const services = acquired.registry.services.filter((entry) =>
+      ONE_SHOT_DIAGNOSTICS_SERVICE_IDS.has(entry.service.id),
+    );
+    if (services.length === 0) {
+      // Enabled but not installed is ordinary; explain why this run exports nothing.
+      log.warn(
+        "diagnostics.otel is enabled but the diagnostics-otel plugin is not installed or not enabled; this run exports no telemetry.",
+      );
+      await release().catch(reportShutdownFailure);
+      return null;
+    }
+    servicesHandle = await work.track(() =>
+      startPluginServices({
+        registry: { ...acquired.registry, services },
+        config,
+        oneShotStopTimeouts: {
+          eventDrainMs: ONE_SHOT_DIAGNOSTICS_DRAIN_TIMEOUT_MS,
+          serviceStopMs: ONE_SHOT_DIAGNOSTICS_FLUSH_TIMEOUT_MS,
+        },
+        onHandle: (handle) => {
+          servicesHandle = handle;
+        },
+      }),
+    );
+    return { stop };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
 }

@@ -28,10 +28,7 @@ describe("worker environment service", () => {
   });
 
   it("keeps maintenance off reconciliation and allocation while shutdown aborts and drains it", async () => {
-    let finish!: () => void;
-    const pending = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+    const { promise: pending, resolve: finish } = createDeferred();
     const maintainProviders = vi.fn(async (_signal: AbortSignal) => pending);
     const workerService = support.createService(support.createProvider(), { maintainProviders });
     let stopped = false;
@@ -79,10 +76,7 @@ describe("worker environment service", () => {
   it("reconciles unrelated leases concurrently", async () => {
     support.seedReady("worker-concurrent-a");
     support.seedReady("worker-concurrent-b");
-    let release: (() => void) | undefined;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: blocked, resolve: release } = createDeferred();
     const inspected: WorkerLifecycleLease[] = [];
     const provider = support.createProvider({
       inspect: async (lease) => {
@@ -191,10 +185,7 @@ describe("worker environment service", () => {
   });
 
   it("waits for timed-out provider work during shutdown", async () => {
-    let finishProvision: (() => void) | undefined;
-    const provisionPending = new Promise<void>((resolve) => {
-      finishProvision = resolve;
-    });
+    const { promise: provisionPending, resolve: finishProvision } = createDeferred();
     const provision = vi.fn(async () => {
       await provisionPending;
       return { leaseId: "lease-stop-timeout", ssh: support.SSH_ENDPOINT };
@@ -285,14 +276,8 @@ describe("worker environment service", () => {
     support.seedReady(environmentId);
     const inspect = vi.fn(async () => ({ status: "active" as const }));
     const workerService = support.createService(support.createProvider({ inspect }));
-    let releaseGuard: (() => void) | undefined;
-    const guardPending = new Promise<void>((resolve) => {
-      releaseGuard = resolve;
-    });
-    let signalGuardStarted: (() => void) | undefined;
-    const guardStarted = new Promise<void>((resolve) => {
-      signalGuardStarted = resolve;
-    });
+    const { promise: guardPending, resolve: releaseGuard } = createDeferred();
+    const { promise: guardStarted, resolve: signalGuardStarted } = createDeferred();
     const uninstallGuard = workerService.installReconcileEnvironmentGuard(
       async (_guardedEnvironmentId, reconcileCore) => {
         signalGuardStarted?.();
@@ -325,14 +310,8 @@ describe("worker environment service", () => {
       support.seedReady(environmentId);
       const inspect = vi.fn(async () => ({ status: "active" as const }));
       const workerService = support.createService(support.createProvider({ inspect }));
-      let releaseGuard: (() => void) | undefined;
-      const guardPending = new Promise<void>((resolve) => {
-        releaseGuard = resolve;
-      });
-      let signalGuardStarted: (() => void) | undefined;
-      const guardStarted = new Promise<void>((resolve) => {
-        signalGuardStarted = resolve;
-      });
+      const { promise: guardPending, resolve: releaseGuard } = createDeferred();
+      const { promise: guardStarted, resolve: signalGuardStarted } = createDeferred();
       let guardCompleted = false;
       const uninstallGuard = workerService.installReconcileEnvironmentGuard(
         async (_guardedEnvironmentId, reconcileCore) => {
@@ -364,10 +343,7 @@ describe("worker environment service", () => {
   );
 
   it("rejects a create queued before service shutdown once its lock is acquired", async () => {
-    let finishBootstrap: (() => void) | undefined;
-    const bootstrapPending = new Promise<void>((resolve) => {
-      finishBootstrap = resolve;
-    });
+    const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async () => {
       await bootstrapPending;
       return support.BOOTSTRAP_RECEIPT;
@@ -393,10 +369,7 @@ describe("worker environment service", () => {
   });
 
   it("drains a destroy accepted before service shutdown while it waits for the lock", async () => {
-    let finishBootstrap: (() => void) | undefined;
-    const bootstrapPending = new Promise<void>((resolve) => {
-      finishBootstrap = resolve;
-    });
+    const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async () => {
       await bootstrapPending;
       return support.BOOTSTRAP_RECEIPT;
@@ -429,10 +402,7 @@ describe("worker environment service", () => {
         throw new Error("reconcile database read failed");
       },
     };
-    let finishBootstrap: (() => void) | undefined;
-    const bootstrapPending = new Promise<void>((resolve) => {
-      finishBootstrap = resolve;
-    });
+    const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async () => {
       await bootstrapPending;
       return support.BOOTSTRAP_RECEIPT;
@@ -464,10 +434,7 @@ describe("worker environment service", () => {
 
   it("starts without blocking gateway startup and drains reconciliation on stop", async () => {
     support.seedReady("worker-slow-inspection");
-    let finishInspection: (() => void) | undefined;
-    const inspectionPending = new Promise<void>((resolve) => {
-      finishInspection = resolve;
-    });
+    const { promise: inspectionPending, resolve: finishInspection } = createDeferred();
     const inspect = vi.fn(async () => {
       await inspectionPending;
       return { status: "active" as const };

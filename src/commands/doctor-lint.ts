@@ -33,6 +33,7 @@ import {
   withPluginInstallRoots,
 } from "../plugins/install-root-context.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isPostCoreConvergencePass } from "./doctor/shared/update-phase.js";
 
@@ -66,6 +67,7 @@ type DoctorLintStateRunner = <T>(run: () => Promise<T>) => Promise<T>;
 
 const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
 const PROJECT_CLONE_SHAPE_CHECK_ID = "core/doctor/project-clone-shape";
+const SKILLS_READINESS_CHECK_ID = "core/doctor/skills-readiness";
 const AUTH_PROFILE_CHECK_ID = "core/doctor/auth-profiles";
 
 class DoctorLintStateSnapshotError extends Error {
@@ -95,7 +97,9 @@ export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
 ): Promise<number> {
-  const execution = await prepareDoctorLintExecution(runtime, opts);
+  const execution = await withArtifactPreservingStateReads(() =>
+    prepareDoctorLintExecution(runtime, opts),
+  );
   execution.writeOutput();
   return execution.exitCode;
 }
@@ -104,7 +108,9 @@ export async function runDoctorLintCli(
 export async function collectDoctorFindings(
   runtime: RuntimeEnv,
 ): Promise<readonly HealthFinding[]> {
-  const execution = await prepareDoctorLintExecution(runtime, { severityMin: "info" });
+  const execution = await withArtifactPreservingStateReads(() =>
+    prepareDoctorLintExecution(runtime, { severityMin: "info" }),
+  );
   return execution.findings;
 }
 
@@ -427,6 +433,10 @@ function withCoreLintContext(
     ...check,
     detect(_ctx, scope) {
       const detect = async () => await check.detect(ctx, scope);
+      if (check.id === SKILLS_READINESS_CHECK_ID) {
+        // Discovery needs source-profile eligibility; generated links use the private install roots.
+        return ctx.runWithPrivateStateSnapshot(() => ctx.runWithSourceState(detect));
+      }
       if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID || check.id === PROJECT_CLONE_SHAPE_CHECK_ID) {
         return ctx.runWithPrivateStateSnapshot(detect);
       }

@@ -29,7 +29,7 @@ route policy may select Codex only for an exact official HTTPS Platform
 Responses or ChatGPT Responses route with no authored request override; the
 `openai/*` prefix alone never selects Codex. Completions adapters, custom
 endpoints, and authored request behavior stay on OpenClaw. Plaintext official
-HTTP endpoints are rejected. See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+HTTP endpoints are rejected. See [OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime).
 
 Subscription Copilot refs (`github-copilot/*`) can be opted into the external
 GitHub Copilot agent runtime plugin, but that path is always explicit (never
@@ -66,7 +66,7 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
-For directly authored legacy model maps, `openclaw doctor --fix` copies the complete restriction into `modelPolicy.allow` when every ref is valid. If any ref needs provider qualification, Doctor preserves the entire legacy restriction and reports how to set an explicit policy. Until then, model-map edits still change the legacy restriction; no keys are silently dropped and no empty policy is substituted. Include-owned migrations retain the existing edit-owning-file requirement.
+Explicit `modelPolicy.allow` restrictions were introduced in v2026.8.1. For directly authored legacy model maps, `openclaw doctor --fix` copies the complete restriction into `modelPolicy.allow` when every ref is valid. If any ref needs provider qualification, Doctor preserves the entire legacy restriction and reports how to set an explicit policy. Until then, model-map edits still change the legacy restriction; no keys are silently dropped and no empty policy is substituted. Include-owned migrations retain the existing edit-owning-file requirement.
 
 ## Selection source and fallback strictness
 
@@ -91,8 +91,18 @@ configured or completed catalog. They do not start provider discovery, including
 after a restart. If the owner is not yet published, the request reports that the
 catalog is not ready. Retry after startup or an in-progress refresh finishes.
 Use an explicit Refresh action or `openclaw models list --refresh` to acquire
-provider inventory. Startup and turn-path capability preparation keep their
-separate runtime responsibilities.
+provider inventory. Model selection, subagent capability checks, and hook-model
+validation also use the published inventory. Missing capability facts do not
+start another provider discovery. Native runtime observations keep their separate
+owner and authentication requirements.
+
+Internal catalog loads default to passive reads. Without a published owner they
+use existing read-only facts. The public SDK's `loadPreparedModelCatalog` and legacy
+`loadModelCatalog` keep their writable default for compatibility and can acquire
+provider inventory. Pass `readOnly: true` for a passive SDK read. Explicit full
+refreshes keep inventory acquisition; explicit read-only requests keep their
+narrower refresh scope.
+
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication; a provider API key does not substitute for its
 native login.

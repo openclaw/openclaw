@@ -5,7 +5,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
-  createFailureRunAgentTurnParams,
+  createRunAgentTurnParams,
   createMockTypingSignaler,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
@@ -125,7 +125,7 @@ describe("executeAgentTurn: conversation failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {

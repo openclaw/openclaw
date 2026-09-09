@@ -282,4 +282,57 @@ describe("browser action input evaluate command", () => {
     ).rejects.toThrow("--timeout-ms must be a positive integer.");
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
+
+  it.each([false, 0, "", null, undefined])("preserves the successful value %j", async (value) => {
+    mocks.callBrowserRequest.mockResolvedValueOnce({ ok: true, result: value });
+    await createActionInputProgram().parseAsync(["browser", "evaluate", "--fn", "() => 0"], {
+      from: "user",
+    });
+    expect(getBrowserCliRuntimeCapture().defaultRuntime.writeJson).toHaveBeenCalledWith(
+      value ?? null,
+    );
+  });
+});
+
+describe("browser action dialog outcomes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it.each([
+    ["evaluate", "--fn", "() => confirm('Continue?')"],
+    ["press", "Enter"],
+    ["fill", "--fields", '[{"ref":"name","value":"Ada"}]'],
+    ["wait", "--fn", "() => confirm('Continue?')"],
+    ["batch", "--actions", '[{"kind":"press","key":"Enter"}]'],
+  ])("reports a pending dialog for %s", async (...args) => {
+    const result = {
+      ok: true,
+      blockedByDialog: true,
+      browserState: {
+        dialogs: {
+          pending: [{ id: "d1", type: "confirm", message: "Page content stays in JSON output" }],
+          recent: [],
+        },
+      },
+    };
+    mocks.callBrowserRequest.mockResolvedValueOnce(result);
+    await createActionInputProgram().parseAsync(["browser", ...args], { from: "user" });
+    const capture = getBrowserCliRuntimeCapture();
+    const text = capture.runtimeLogs.join("\n");
+    expect(text).toContain("blocked by a modal dialog");
+    expect(text).toContain('"d1"');
+    expect(text).toContain("--dialog-id");
+    expect(text).not.toContain("Page content stays in JSON output");
+    expect(capture.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(capture.defaultRuntime.exit).not.toHaveBeenCalled();
+
+    capture.resetRuntimeCapture();
+    vi.clearAllMocks();
+    mocks.callBrowserRequest.mockResolvedValueOnce(result);
+    await createActionInputProgram().parseAsync(["browser", "--json", ...args], { from: "user" });
+    expect(capture.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
+    expect(capture.runtimeLogs).toEqual([JSON.stringify(result, null, 2)]);
+  });
 });

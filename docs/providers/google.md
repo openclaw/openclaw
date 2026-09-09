@@ -510,4 +510,10 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
   <Card title="Music generation" href="/tools/music-generation" icon="music">
     Shared music tool parameters and provider selection.
   </Card>
+  <Card title="CLI backends" href="/gateway/cli-backends" icon="terminal">
+    Gemini CLI backend setup and runtime details.
+  </Card>
+  <Card title="Voice call plugin" href="/plugins/voice-call" icon="phone">
+    Audio bridge that consumes the Gemini Live realtime voice provider.
+  </Card>
 </CardGroup>

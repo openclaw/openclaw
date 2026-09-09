@@ -83,16 +83,12 @@ export function invalidateImageLightbox(state: ChatPageHost) {
   return state.imageLightboxRequestVersion;
 }
 
-async function loadPageAssistantIdentity(
-  state: ChatPageHost,
-  opts?: { sessionKey?: string; expectedSessionKey?: string },
-) {
+async function loadPageAssistantIdentity(state: ChatPageHost) {
   if (!state.client || !state.connected) {
     return;
   }
   const client = state.client;
-  const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
-  const expectedSessionKey = opts?.expectedSessionKey?.trim() || sessionKey;
+  const sessionKey = state.sessionKey.trim();
   const agentId = resolveAgentIdForSession({
     sessionKey,
     assistantAgentId: state.assistantAgentId,
@@ -109,7 +105,7 @@ async function loadPageAssistantIdentity(
       state.client !== client ||
       !state.connected ||
       state.assistantIdentityRequestVersion !== requestVersion ||
-      state.sessionKey.trim() !== expectedSessionKey ||
+      state.sessionKey.trim() !== sessionKey ||
       resolveAgentIdForSession(state) !== agentId ||
       !identity
     ) {

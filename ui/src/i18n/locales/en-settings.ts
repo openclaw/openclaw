@@ -243,6 +243,9 @@ const enSettings = {
       noFallback: "No fallback model",
       selectModel: "Select a model",
       noModels: "Configure a provider before selecting default models.",
+      discoveringMore: "Discovering more models…",
+      discoverFailed: "More models could not be discovered.",
+      retryDiscover: "Retry",
       thinkingHelpLabel: "About thinking defaults",
       thinkingHelp:
         "Sets the default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",

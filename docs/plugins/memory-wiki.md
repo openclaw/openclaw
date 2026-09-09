@@ -584,3 +584,4 @@ Set `render.createDashboards: true` (default).
 - [CLI: memory](/cli/memory)
 - [CLI: wiki](/cli/wiki)
 - [Plugin SDK overview](/plugins/sdk-overview)
+- [Memory LanceDB](/plugins/memory-lancedb)

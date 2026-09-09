@@ -22,6 +22,9 @@ const repositoryScriptEntries = [
   ".github/actions/mobile-release-authority/authority.mjs!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
+  ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
+  // setup-pnpm-store-cache invokes this helper from composite-action YAML.
+  ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
@@ -114,6 +117,8 @@ const repositoryScriptEntries = [
   "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
+  // The frozen compatibility shell invokes this CLI and imports it from inline bundle resolution.
+  "scripts/lib/frozen-target-source.mjs!",
   // CI loads the native Vitest reporter through its CLI path.
   "scripts/lib/vitest-resource-reporter.mts!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.

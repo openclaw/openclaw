@@ -533,7 +533,7 @@ Ordinary user-session transcripts, including retained, reset, and
 deleted-session archives, remain eligible until explicitly targeted.
 
 <Note>
-The [session-memory hook](/automation/hooks#session-memory) saves conversation
+The [session-memory hook](/automation/hooks/bundled-hooks#session-memory) saves conversation
 excerpts to `<workspace>/memory/`, which the `memory` source already indexes.
 If transcript indexing is also enabled, the same conversation can appear from
 both `memory` and `sessions`, resulting in overlapping search results and

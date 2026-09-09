@@ -20,7 +20,7 @@ import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
-  createFailureRunAgentTurnParams,
+  createRunAgentTurnParams,
   createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
@@ -50,7 +50,7 @@ describe("executeAgentTurn: terminal failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
@@ -181,7 +181,7 @@ describe("executeAgentTurn: terminal failures", () => {
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {

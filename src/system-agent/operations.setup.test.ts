@@ -567,7 +567,7 @@ describe("parseSystemAgentOperation", () => {
           channels: { telegram: { enabled: true } },
         });
       } else {
-        onVerifiedExecution?.({} as never, reboundBinding);
+        onVerifiedExecution?.(reboundBinding);
       }
       return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 17 };
     });

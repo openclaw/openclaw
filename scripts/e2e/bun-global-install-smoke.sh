@@ -41,13 +41,13 @@ INSTALL_LOG=""
 UNTRUSTED_LOG=""
 CLI_STATUS_LOG=""
 CLI_PLUGINS_LOG=""
-DIRECT_BUN_LOG=""
 MOCK_LOG=""
 MOCK_REQUEST_LOG=""
 LOCAL_AGENT_LOG=""
 GATEWAY_LOG=""
 GATEWAY_HEALTH_LOG=""
 GATEWAY_AGENT_LOG=""
+DIRECT_BUN_LOG=""
 
 cleanup() {
   openclaw_e2e_stop_process "${GATEWAY_PID:-}"
@@ -69,13 +69,13 @@ dump_debug_logs() {
     "$UNTRUSTED_LOG" \
     "$CLI_STATUS_LOG" \
     "$CLI_PLUGINS_LOG" \
-    "$DIRECT_BUN_LOG" \
     "$MOCK_LOG" \
     "$MOCK_REQUEST_LOG" \
     "$LOCAL_AGENT_LOG" \
     "$GATEWAY_LOG" \
     "$GATEWAY_HEALTH_LOG" \
-    "$GATEWAY_AGENT_LOG" >&2 || true
+    "$GATEWAY_AGENT_LOG" \
+    "$DIRECT_BUN_LOG" >&2 || true
 }
 
 prepare_ai_candidate() {
@@ -248,12 +248,15 @@ main() {
 
   local bun_path
   local bun_version
+  local direct_bun_status
   local gateway_port
   local mock_port
   local openclaw_entry
   local openclaw_bin
   local package_root
+  local runtime_label
   local success_marker
+  local -a runtime_command
   bun_path="$(command -v "$BUN_BIN")"
   bun_version="$("$bun_path" --version)"
   node scripts/e2e/lib/bun-global-install/assertions.mjs assert-bun-version "$bun_version"
@@ -303,6 +306,7 @@ NODE
   GATEWAY_LOG="$SMOKE_DIR/gateway.log"
   GATEWAY_HEALTH_LOG="$SMOKE_DIR/gateway-health.json"
   GATEWAY_AGENT_LOG="$SMOKE_DIR/gateway-agent.log"
+  DIRECT_BUN_LOG="$SMOKE_DIR/direct-bun.log"
 
   echo "==> Install packed OpenClaw with trusted lifecycle scripts on Bun $bun_version"
   run_with_timeout "$COMMAND_TIMEOUT_MS" \
@@ -341,19 +345,33 @@ NODE
   run_with_timeout "$COMMAND_TIMEOUT_MS" "$openclaw_bin" --help >/dev/null
 
   run_installed_cli() {
-    run_with_timeout "$COMMAND_TIMEOUT_MS" "$openclaw_bin" "$@"
+    run_with_timeout "$COMMAND_TIMEOUT_MS" "${runtime_command[@]}" "$@"
   }
 
-  echo "==> Installed package rejects direct Bun runtime execution"
-  DIRECT_BUN_LOG="$SMOKE_DIR/direct-bun.log"
-  if run_with_timeout "$COMMAND_TIMEOUT_MS" "$bun_path" "$openclaw_entry" --version \
-    >"$DIRECT_BUN_LOG" 2>&1; then
-    echo "OpenClaw unexpectedly ran under the unsupported Bun runtime" >&2
-    exit 1
+  echo "==> Installed package entry under Bun"
+  if run_with_timeout "$COMMAND_TIMEOUT_MS" \
+    "$bun_path" "$openclaw_entry" --version >"$DIRECT_BUN_LOG" 2>&1; then
+    cat "$DIRECT_BUN_LOG"
+    runtime_command=("$bun_path" "$openclaw_entry")
+    runtime_label="Bun"
+    run_installed_cli --help >/dev/null
+    pushd "$HOME" >/dev/null
+    run_with_timeout "$COMMAND_TIMEOUT_MS" "$bun_path" run --bun openclaw --version
+    popd >/dev/null
+  else
+    direct_bun_status=$?
+    if ! grep -Fq "Bun runtime is unsupported" "$DIRECT_BUN_LOG" || \
+      ! grep -Fq "node:sqlite" "$DIRECT_BUN_LOG"; then
+      cat "$DIRECT_BUN_LOG" >&2
+      return "$direct_bun_status"
+    fi
+    echo "==> Candidate explicitly requires Node runtime; continuing with Bun-installed launcher"
+    cat "$DIRECT_BUN_LOG"
+    runtime_command=("$openclaw_bin")
+    runtime_label="Node"
   fi
-  grep -F "Bun runtime is unsupported" "$DIRECT_BUN_LOG" >/dev/null
 
-  echo "==> OpenClaw image providers from Bun global install"
+  echo "==> OpenClaw image providers under $runtime_label"
   local providers_json
   providers_json="$(run_installed_cli infer image providers --json)"
   OPENCLAW_IMAGE_PROVIDERS_JSON="$providers_json" node scripts/e2e/lib/bun-global-install/assertions.mjs assert-image-providers
@@ -367,11 +385,11 @@ NODE
     "$mock_port" \
     "$gateway_port"
 
-  echo "==> Representative CLI state from Bun global install"
+  echo "==> Representative CLI state under $runtime_label"
   run_installed_cli status --json --timeout 1 >"$CLI_STATUS_LOG" 2>&1
   run_installed_cli plugins list --json >"$CLI_PLUGINS_LOG" 2>&1
 
-  echo "==> Local mocked agent turn from Bun global install"
+  echo "==> Local mocked agent turn under $runtime_label"
   MOCK_PID="$(openclaw_e2e_start_mock_openai "$mock_port" "$MOCK_LOG")"
   openclaw_e2e_wait_mock_openai "$mock_port"
   : >"$MOCK_REQUEST_LOG"
@@ -387,12 +405,12 @@ NODE
     "$LOCAL_AGENT_LOG" \
     "$MOCK_REQUEST_LOG"
 
-  echo "==> Gateway health and mocked agent turn from Bun global install"
+  echo "==> Gateway health and mocked agent turn under $runtime_label"
   : >"$MOCK_REQUEST_LOG"
   GATEWAY_PID="$(
     openclaw_e2e_start_tracked_process \
       "$GATEWAY_LOG" \
-      "$openclaw_bin" \
+      "${runtime_command[@]}" \
       gateway \
       --port "$gateway_port" \
       --bind loopback
@@ -413,22 +431,23 @@ NODE
     "$GATEWAY_AGENT_LOG" \
     "$MOCK_REQUEST_LOG"
 
-  echo "bun-global-install-smoke: Bun $bun_version package install and Node CLI/runtime OK"
+  echo "bun-global-install-smoke: Bun $bun_version install with $runtime_label CLI, local agent, and Gateway runtime OK"
 
   if [ -n "${OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH:-}" ]; then
     node --input-type=module - \
       "$OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH" \
       "$bun_path" \
       "$openclaw_bin" \
-      "$openclaw_version" <<'NODE'
+      "$openclaw_version" \
+      "$runtime_label" <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
 
-const [, , proofPath, bunPath, openclawPath, openclawVersion] = process.argv;
+const [, , proofPath, bunPath, openclawPath, openclawVersion, runtime] = process.argv;
 fs.mkdirSync(path.dirname(proofPath), { recursive: true });
 fs.writeFileSync(
   proofPath,
-  `${JSON.stringify({ bunPath, openclawPath, openclawVersion }, null, 2)}\n`,
+  `${JSON.stringify({ bunPath, openclawPath, openclawVersion, runtime }, null, 2)}\n`,
 );
 NODE
   fi

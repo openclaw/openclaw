@@ -186,6 +186,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ["literal", "shared-DTaQo6Hi.js"],
     ["mapped", "shared-Y6bNiw2w.js"],
     ["mapped", "shared-DTaQo6Hi.js"],
+    ["mapped", "shared-1Uyqkfns.js"],
     ["unrelated", ""],
     ["absent", ""],
   ])(

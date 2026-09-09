@@ -92,7 +92,7 @@ Decision tree:
 1. **Codex bind/control/thread/resume/steer/stop** -> native `/codex` command surface when the bundled `codex` plugin is enabled.
 2. **Codex as the embedded runtime** or the normal subscription-backed Codex agent experience -> `openai/<model>`.
 3. **OpenClaw explicitly chosen for an OpenAI model** -> keep the model ref as `openai/<model>` and set provider/model runtime policy to `agentRuntime.id: "openclaw"`. A selected `openai` OAuth profile is routed internally through OpenClaw's Codex-auth transport.
-4. **Legacy Codex model refs in config** -> repair with `openclaw doctor --fix` to `openai/<model>`; doctor keeps the Codex auth route by adding provider/model-scoped `agentRuntime.id: "codex"` where the old model ref implied it. Legacy **`codex-cli/*`** model refs repair to the same `openai/<model>` Codex app-server route; OpenClaw no longer keeps a bundled Codex CLI backend.
+4. **Legacy Codex model refs in config** -> repair with `openclaw doctor --fix` to `openai/<model>`; doctor keeps the Codex auth route by adding provider/model-scoped `agentRuntime.id: "codex"` where the old model ref implied it. Legacy **`codex-cli/*`** model refs repair to the same `openai/<model>` Codex app-server route; The bundled Codex CLI backend was removed in v2026.5.14.
 5. **ACP, acpx, or Codex ACP adapter explicitly requested** -> `runtime: "acp"` and `agentId: "codex"`.
 6. **Claude Code, Gemini CLI, OpenCode, Cursor, Droid, or another external harness** -> ACP/acpx, not the native sub-agent runtime.
 

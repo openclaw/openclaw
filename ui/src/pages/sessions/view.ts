@@ -3,14 +3,12 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-// Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
   SessionRunStatus,
-  GatewayThinkingLevelOption,
   FastMode,
   SessionCompactionCheckpoint,
   SessionsListResult,
@@ -30,9 +28,9 @@ import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
-  formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
+  resolveChatThinkingSelectState,
 } from "../../lib/chat/thinking.ts";
 import {
   formatDurationCompact,
@@ -44,9 +42,8 @@ import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
-import { isCronSessionKey } from "../../lib/session-display.ts";
+import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
-import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
@@ -169,7 +166,6 @@ export type SessionsProps = {
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
 };
 
-const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
@@ -186,30 +182,14 @@ function resolveThinkLevelOptions(
   row: GatewaySessionRow,
   defaults?: SessionsListResult["defaults"],
 ): readonly { value: string; label: string }[] {
-  const modelMatchesDefaults = sessionModelMatchesDefaults(row, defaults);
-  const defaultLabel = formatInheritedThinkingLabel(
-    row.thinkingDefault ?? (modelMatchesDefaults ? defaults?.thinkingDefault : undefined),
-  );
-  const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
-    ? row.thinkingLevels
-    : modelMatchesDefaults && defaults?.thinkingLevels?.length
-      ? defaults.thinkingLevels
-      : (row.thinkingOptions?.length
-          ? row.thinkingOptions
-          : modelMatchesDefaults && defaults?.thinkingOptions?.length
-            ? defaults.thinkingOptions
-            : DEFAULT_THINK_LEVELS
-        ).map((label) => ({
-          id: normalizeThinkingOptionValue(label),
-          label,
-        }));
-  return [
-    { value: "", label: defaultLabel },
-    ...options.map((option) => ({
-      value: normalizeThinkingOptionValue(option.id),
-      label: formatThinkingOverrideLabel(option.id, option.label),
-    })),
-  ];
+  const state = resolveChatThinkingSelectState({
+    catalog: [],
+    session: row,
+    defaults,
+    sessionKey: row.key,
+    sessionsResult: null,
+  });
+  return [{ value: "", label: state.inherited.displayLabel }, ...state.options];
 }
 
 function withCurrentLabeledOption(
@@ -285,12 +265,6 @@ const SESSION_KIND_ICONS = {
   global: icons.globe,
   unknown: icons.circle,
 } satisfies Record<GatewaySessionRow["kind"] | "cron", unknown>;
-
-// The server row kind never carries "cron" — cron is a key-shape fact, so the
-// display kind derives it from the key for the avatar, badge class, and label.
-function resolveSessionDisplayKind(row: GatewaySessionRow): GatewaySessionRow["kind"] | "cron" {
-  return isCronSessionKey(row.key) ? "cron" : row.kind;
-}
 
 // Kind glyph anchors each row; the dot mirrors isSessionRunActive so run
 // state also reads at the identity anchor while scanning the key column.
@@ -591,28 +565,6 @@ function renderSkeletonRows(columnCount: number) {
   );
 }
 
-function sortRows(
-  rows: GatewaySessionRow[],
-  column: "key" | "kind" | "updated" | "tokens",
-  dir: "asc" | "desc",
-): GatewaySessionRow[] {
-  const cmp = dir === "asc" ? 1 : -1;
-  return [...rows].toSorted((a, b) => {
-    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
-    if (pinnedDiff !== 0) {
-      return pinnedDiff;
-    }
-    const diff =
-      column === "key" || column === "kind"
-        ? (a[column] ?? "").localeCompare(b[column] ?? "")
-        : column === "updated"
-          ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
-          : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
-            (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
-    return diff * cmp;
-  });
-}
-
 function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
   const start = page * pageSize;
   return rows.slice(start, start + pageSize);
@@ -704,7 +656,7 @@ function sessionDetailItems(params: {
   const { row, updated, checkpointCount } = params;
   const details: Array<{ label: string; value: string }> = [
     { label: t("sessionsView.key"), value: row.key },
-    { label: t("sessionsView.kind"), value: row.kind },
+    { label: t("sessionsView.kind"), value: resolveSessionDisplayKind(row) },
     { label: t("sessionsView.updated"), value: updated },
     { label: t("sessionsView.tokens"), value: formatSessionTokens(row) },
     { label: t("sessionsView.compaction"), value: formatCheckpointCount(checkpointCount) },
@@ -974,7 +926,23 @@ function renderOverrideSelect(params: {
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const sorted = sortRows(rawRows, props.sortColumn, props.sortDir);
+  const direction = props.sortDir === "asc" ? 1 : -1;
+  const sorted = rawRows.toSorted((a, b) => {
+    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+    if (pinnedDiff !== 0) {
+      return pinnedDiff;
+    }
+    const diff =
+      props.sortColumn === "kind"
+        ? resolveSessionDisplayKind(a).localeCompare(resolveSessionDisplayKind(b))
+        : props.sortColumn === "key"
+          ? a.key.localeCompare(b.key)
+          : props.sortColumn === "updated"
+            ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
+            : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
+              (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
+    return diff * direction;
+  });
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
@@ -1592,7 +1560,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       </td>
       ${categoryMode ? renderCategoryCell(row, props) : nothing}
       <td>
-        <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
+        <span class=${kindClass}>${displayKind}</span>
       </td>
       <td class="session-status-col">
         <div class="session-status-stack">

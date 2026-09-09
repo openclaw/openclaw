@@ -125,6 +125,8 @@ exit "$probe_status"
       );
       expect(existsSync(path.join(root, "installed"))).toBe(true);
       expect(JSON.parse(readFileSync(capturePath, "utf8"))).toEqual({
+        agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+        channels: { discord: { enabled: true }, whatsapp: { enabled: true } },
         plugins: { enabled: false },
         gateway: {
           port: 18789,
@@ -425,13 +427,15 @@ ${conditional ? 'probe_status=0; phase preparation handler || probe_status=$?; e
     const configPath = path.join(root, "openclaw.json");
     const snapshotPath = path.join(root, "openclaw.authored.json");
     const authoredConfig =
-      '{"channels":{"discord":{"dm":{"policy":"allowlist","allowFrom":["123"]}}}}\n';
+      '{"meta":{"lastTouchedVersion":"2026.7.1-2"},"channels":{"discord":{"dm":{"policy":"allowlist","allowFrom":["123"]}}},"plugins":{"entries":{"matrix":{"enabled":true}}}}\n';
     writeFileSync(configPath, authoredConfig);
 
     const park = run("park-restart-probe", configPath, snapshotPath, "19876");
     expect(park.status, park.stderr).toBe(0);
     expect(readFileSync(snapshotPath, "utf8")).toBe(authoredConfig);
     expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
+      meta: { lastTouchedVersion: "2026.7.1-2" },
+      channels: { discord: { dm: { policy: "allowlist", allowFrom: ["123"] } } },
       plugins: { enabled: false },
       gateway: {
         port: 19876,

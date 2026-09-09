@@ -18,6 +18,8 @@ Talk mode covers these runtime shapes:
 
 Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
 
+For replies dominated by fenced code, `talk.speak` uses a short spoken message directing the listener to the screen. Inline code and ordinary prose remain part of the spoken reply.
+
 Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone): native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the realtime path included in normal Watch setup; see [standalone voice setup](/platforms/ios#standalone-voice).
 
 ## Choose a Talk voice from chat
@@ -381,7 +383,7 @@ identify the cause by itself; check the selected account, model, and voice.
 These rows describe implemented transport paths, not account entitlement or a
 successful live call on every device. iOS implements frameless transcripts and
 the Gateway offer exchange; Android retains an explicit GPT-Live model gate.
-For model capability limits, see [Discord voice policies](/channels/discord#voice-channels)
+For model capability limits, see [Discord voice policies](/channels/discord/voice-channels#voice-channels)
 and [Voice Call tools](/plugins/voice-call#realtime-voice-conversations).
 
 The Gateway-owned WebRTC route keeps OAuth and Platform credentials away from
@@ -501,3 +503,4 @@ Watch background behavior. See [Watch setup and limits](/platforms/ios#standalon
 - [Voice wake](/nodes/voicewake)
 - [Audio and voice notes](/nodes/audio)
 - [Media understanding](/nodes/media-understanding)
+- [Google Meet plugin](/plugins/google-meet)

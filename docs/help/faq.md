@@ -395,7 +395,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`.
     - `responsebody`, PDF export, download interception, and batch actions still require the managed browser path.
 
-    See [Browser](/tools/browser#existing-session-via-chrome-devtools-mcp) for the full comparison.
+    See [Browser](/tools/browser/existing-session#existing-session-via-chrome-devtools-mcp) for the full comparison.
 
   </Accordion>
 </AccordionGroup>
@@ -744,7 +744,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="How do I use Brave for browser control?">
-    Set `browser.executablePath` to your Brave binary (or any Chromium-based browser) and restart the Gateway. See [Browser](/tools/browser#use-brave-or-another-chromium-based-browser).
+    Set `browser.executablePath` to your Brave binary (or any Chromium-based browser) and restart the Gateway. See [Browser](/tools/browser/configuration#use-brave-or-another-chromium-based-browser).
   </Accordion>
 </AccordionGroup>
 
@@ -1470,7 +1470,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
     A safer baseline: Gateway bound to `loopback`, or exposed only through authenticated private access (tailnet, SSH tunnel, token/password auth, or a correctly configured trusted proxy); DMs in `pairing` or `allowlist` mode; group access limited to rooms you chose (group allowlists), with mention gating or sender allowlists where membership is broad or public; high-risk tools (`exec`, `browser`, `gateway`, `cron`) denied or tightly scoped for agents that read untrusted content; sandboxing enabled where tool execution needs a smaller blast radius.
 
-    Public binds without auth, open DMs/groups with tools, and exposed browser control are the findings to fix first. Details: [openclaw security audit](/gateway/security#openclaw-security-audit).
+    Public binds without auth, open DMs/groups with tools, and exposed browser control are the findings to fix first. Details: [openclaw security audit](/gateway/security/running-the-audit#openclaw-security-audit).
 
   </Accordion>
 

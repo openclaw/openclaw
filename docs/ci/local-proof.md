@@ -149,6 +149,32 @@ Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean `main`
 alongside `--fresh-pr`; it installs pinned Node/pnpm, verifies the SHA and
 package-manager pin, isolates `HOME`, installs dependencies, then executes the
 requested test.
+When an image supplies `/opt/crabbox/toolchain-archives`, the bootstrap copies
+the matching Node, pnpm wrapper, and pnpm native archives into private temporary
+storage and verifies the copied bytes against digests in the trusted script.
+It still extracts fresh Node and Corepack installations on every invocation;
+existing executables, adjacent checksums, and completion markers are not trust
+anchors. Missing or invalid cached archives use the authenticated download path.
+A candidate cannot advance the package-manager pin; update the trusted bootstrap
+and its digest anchors when advancing the toolchain.
+
+Trusted Linux hydration uses the shared Node compatibility selector and can
+seed a job-private Corepack home from the same authenticated pnpm archives.
+These runtime archives do not replace the frozen-lockfile dependency install
+or change the dependency-store cache keys.
+
+With `install-bun: "true"`, `setup-node-env` can also reuse the original pinned
+Bun 1.4.0 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
+It authenticates a private copy before extracting a fresh job-private `bun`
+and `bunx`, then publishes their directory after the Node PATH entry.
+The baseline archive is the default; the optimized x64 archive requires AVX
+and AVX2 evidence for every visible guest CPU. Missing CPU evidence uses baseline.
+A missing matching archive or an unsupported platform keeps the pinned npm
+installation path. A present corrupt or malformed archive fails setup instead
+of falling back to an existing Bun. `install-bun: "false"` skips both paths;
+it does not remove Bun already supplied by the runner. This reuse does not
+cover ARM, musl, or the untrusted bootstrap.
+
 Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.

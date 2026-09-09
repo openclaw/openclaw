@@ -463,8 +463,9 @@ function terminateForSqliteWalSplitBrain(
   databaseLabel: string | undefined,
 ): never {
   try {
+    // Worker stderr has no fd; write to the process sink before fatal containment.
     fs.writeSync(
-      process.stderr.fd,
+      2,
       `${JSON.stringify({
         level: "fatal",
         subsystem: "infra/sqlite-wal",

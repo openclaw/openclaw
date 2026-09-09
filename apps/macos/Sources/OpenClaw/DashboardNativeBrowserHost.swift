@@ -108,6 +108,12 @@ final class DashboardNativeBrowserHost {
         self.tabs.first { $0.id == tabId }?.browser.webView
     }
 
+    func presentationScope(for webView: WKWebView) -> String? {
+        guard !webView.isHiddenOrHasHiddenAncestor,
+              let tab = self.tabs.first(where: { $0.browser.webView === webView }) else { return nil }
+        return self.presentation(for: tab.id)?.key
+    }
+
     @discardableResult
     func open(tabId: String, url: URL) throws -> String {
         let requestedURL = try DashboardBrowserMessageHandler.url(url.absoluteString)
@@ -258,7 +264,7 @@ final class DashboardNativeBrowserHost {
         for tab in self.tabs {
             // One WKWebView cannot be in two scopes: the newest presenter wins.
             // Releasing it restores the older scope if that scope is still visible.
-            let presentation = self.presentations.values.filter { $0.tabId == tab.id }.max { $0.order < $1.order }
+            let presentation = self.presentation(for: tab.id)?.value
             guard let presentation else {
                 tab.browser.webView.isHidden = true
                 continue
@@ -267,6 +273,10 @@ final class DashboardNativeBrowserHost {
             tab.browser.webView.frame = frame
             tab.browser.webView.isHidden = frame.isEmpty
         }
+    }
+
+    private func presentation(for tabId: String) -> (key: String, value: Presentation)? {
+        self.presentations.filter { $0.value.tabId == tabId }.max { $0.value.order < $1.value.order }
     }
 
     private func requireWebView(_ tabId: String) throws -> WKWebView {

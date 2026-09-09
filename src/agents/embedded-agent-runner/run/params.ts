@@ -212,8 +212,6 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   /** Optional state environment for isolated Skill Workshop proposal persistence. */
   skillWorkshopProposalEnv?: NodeJS.ProcessEnv;
-  /** Shared completion latch for proposal-only review runs that checkpoint their batch. */
-  skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
   /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
   skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
   skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];

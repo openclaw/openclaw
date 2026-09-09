@@ -365,7 +365,12 @@ describe("native Browser panel ownership", () => {
       hit = panel;
       window.dispatchEvent(new Event("resize"));
       flushFrames();
-      expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: true });
+      expect(native.messages().at(-1)).toMatchObject({
+        type: "present",
+        visible: true,
+        scope: panel.dataset.nativeBrowserScope,
+      });
+      expect(panel.dataset.nativeBrowserScope).toBeTruthy();
       if (property === "presented") {
         panel.presented = false;
       } else {
@@ -375,6 +380,7 @@ describe("native Browser panel ownership", () => {
       expect(native.messages().at(-1)).toMatchObject({ type: "present", visible: false });
       panel.remove();
       expect(native.messages().at(-1)).toMatchObject({ type: "release-scope" });
+      expect(panel.hasAttribute("data-native-browser-scope")).toBe(false);
     },
   );
 

@@ -51,12 +51,11 @@ vi.mock("./register.setup.js", () => ({
   },
 }));
 
+import { registerCoreCliByName, registerCoreCliCommands } from "./command-registry-core.js";
 import {
-  getCoreCliCommandNames,
-  registerCoreCliByName,
-  registerCoreCliCommands,
-} from "./command-registry-core.js";
-import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
+  getCoreCliCommandNamesCore,
+  getCoreCliCommandsWithSubcommands,
+} from "./core-command-descriptors.js";
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",
@@ -80,7 +79,7 @@ describe("command-registry", () => {
   };
 
   it("includes both agent and agents in core CLI command names", () => {
-    const names = getCoreCliCommandNames();
+    const names = getCoreCliCommandNamesCore();
     expect(names).toContain("setup");
     expect(names).toContain("crestodian"); // hidden alias
     expect(names).toContain("mcp");
@@ -90,11 +89,11 @@ describe("command-registry", () => {
 
   it("only exposes Claws after an explicit process opt-in", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
-    expect(getCoreCliCommandNames()).not.toContain("claws");
+    expect(getCoreCliCommandNamesCore()).not.toContain("claws");
     expect(getCoreCliCommandsWithSubcommands()).not.toContain("claws");
 
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
-    expect(getCoreCliCommandNames()).toContain("claws");
+    expect(getCoreCliCommandNamesCore()).toContain("claws");
     expect(getCoreCliCommandsWithSubcommands()).toContain("claws");
 
     vi.unstubAllEnvs();
@@ -163,7 +162,7 @@ describe("command-registry", () => {
 
     expect(await registerCoreCliByName(program, testProgramContext, "doctor")).toBe(true);
 
-    const names = getCoreCliCommandNames();
+    const names = getCoreCliCommandNamesCore();
     expect(names).toContain("doctor");
     expect(names).toContain("dashboard");
     expect(names).toContain("reset");

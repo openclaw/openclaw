@@ -30,7 +30,6 @@ export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResu
     ariaLabel: label,
     descriptionId: helpId,
     sourceValue: params.sourceIdentity ?? value,
-    rowIdentity: params.rowIdentity,
     fallback,
     rows: 3,
     sensitiveState,

@@ -64,6 +64,36 @@ that label with `automations add|edit --display-name`. Use
 the stable name in list and detail views. The set and clear options cannot be
 combined.
 
+## Schedule types
+
+As an alternative to positional creation syntax, `automations add|create`
+accepts one of these schedule flags. `automations edit` uses the same flags
+to replace a job's schedule:
+
+- `--at <when>` schedules one run from an ISO timestamp or a duration such
+  as `20m`. Offset-less timestamps use UTC unless `--tz <iana>` is supplied.
+- `--every <duration>` sets a recurring interval such as `10m`, `1h`, or
+  `1d`.
+- `--cron <expression>` sets a five- or six-field cron schedule. Use
+  `--tz <iana>` for the evaluation timezone, `--exact` to disable staggering,
+  or `--stagger <duration>` to set a stagger window.
+- `--on-exit <shell>` starts a watched command and fires the job once when it
+  exits. `--on-exit-cwd <path>` sets that command's working directory and
+  requires `--on-exit`.
+- `--stream-command <json>` takes a nonempty JSON array of nonempty strings as the
+  arguments for a supervised long-lived command and fires the job from its
+  batched output. `--stream-cwd <path>` sets the source's working directory.
+  `--stream-mode line|match` selects every line or only matching lines;
+  match mode requires `--stream-match <regex>`, which is invalid in line mode.
+  `--stream-batch-ms <n>` sets the quiet-window delay in milliseconds, and
+  `--stream-max-batch-bytes <n>` sets the maximum UTF-8 bytes per batch.
+
+`--tz` applies to cron schedules and offset-less `--at` timestamps, while
+`--exact` and `--stagger` apply only to cron schedules. None of these three
+flags is valid with exit or stream schedules. See
+[Automation schedules](/automation/cron-jobs/schedules#schedule-types) for stream lifecycle,
+batching limits, and trigger details.
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.

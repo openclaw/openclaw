@@ -34,9 +34,7 @@ class ToolOutputComponent extends HyperlinkMarkdown {
   private literalOutput = new Text("", 0, 0);
 
   override setText(text: string, literal = false): void {
-    const sourceText = literal
-      ? tuiFormatters.sanitizeTerminalControlsAndBinary(text)
-      : tuiFormatters.sanitizeMarkdownSource(text);
+    const sourceText = tuiFormatters.sanitizeTerminalControlsAndBinary(text);
     if (this.sourceText === sourceText && this.literal === literal) {
       return;
     }

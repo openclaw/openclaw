@@ -91,6 +91,13 @@ function prepareDocsPublisher() {
       output,
     );
   }
+  fs.mkdirSync(path.join(target, "docs"));
+  fs.writeFileSync(path.join(target, "docs", "page.mdx"), "# Valid page\n");
+  fs.symlinkSync(
+    path.join(source, "node_modules"),
+    path.join(target, ".openclaw-sync", "node_modules"),
+    "junction",
+  );
 }
 
 function resolveRef(cwd, ref) {
@@ -446,7 +453,7 @@ async function command() {
     }
     return;
   }
-  if (["gh", "node", "pnpm", "go", "crabbox"].includes(mode)) {
+  if (["gh", "node", "npm", "pnpm", "go", "crabbox"].includes(mode)) {
     const cwd = insideOwnedPath(process.cwd());
     recordCommand(mode, cwd, args);
     if (options.performance && mode === "node") {
@@ -472,6 +479,20 @@ async function command() {
       process.exit(0);
     }
     await boundary(`consumer:${mode}`);
+    if (mode === "npm" && options.docsPublish) {
+      // Model npm ci's installed-lock output without downloading or modifying
+      // the real dependencies borrowed by the copied checker.
+      fs.mkdirSync(path.join(cwd, "node_modules"), { recursive: true });
+      fs.copyFileSync(
+        path.join(cwd, "package-lock.json"),
+        path.join(cwd, "node_modules", ".package-lock.json"),
+      );
+      process.exit(0);
+    }
+    if (mode === "node" && options.docsPublish && args[0] === ".openclaw-sync/check-docs-mdx.mts") {
+      const result = spawnSync(process.execPath, args, { stdio: "inherit" });
+      process.exit(result.status ?? 1);
+    }
     if (mode === "node" && options.docsPublish && args[0] === "--input-type=module") {
       const validator =
         "import fs from 'node:fs'; " +
@@ -624,6 +645,19 @@ async function command() {
       ? JSON.parse(fs.readFileSync(treeCounter, "utf8")) + 1
       : 1;
     await boundary(`${operation}:${resultAttempt}`);
+    if (operation === "rebase" && options.env?.FIXTURE_DOCS_MDX_AFTER_REBASE) {
+      fs.writeFileSync(
+        path.join(cwd, "docs", "page.mdx"),
+        options.env.FIXTURE_DOCS_MDX_AFTER_REBASE,
+      );
+    }
+    if (
+      operation === "rebase" &&
+      resultAttempt === 2 &&
+      options.env?.FIXTURE_DOCS_LOCK_AFTER_REBASE
+    ) {
+      fs.appendFileSync(path.join(cwd, "package-lock.json"), "\n");
+    }
     publish("tree-attempt.json", attempt);
     await record(process.pid, "parent", attempt);
     if (operation === "clone" || operation === "worktree") {
@@ -1007,7 +1041,7 @@ async function supervise() {
   }
   const extraTools = [
     ...(linux ? ["find"] : []),
-    ...(options.docsPublish ? ["rm"] : []),
+    ...(options.docsPublish ? ["rm", "npm"] : []),
     ...(options.performance ? ["curl", "tar", "sha256sum", "npm"] : []),
     ...(options.docsAgent ? ["date"] : []),
     ...(options.consumers ? ["gh", "node", "pnpm", "go"] : []),

@@ -134,7 +134,6 @@
 .dashboard-card__main {
   display: block;
   color: inherit;
-  text-decoration: none;
 }
 
 .dashboard-card__main:focus-visible {

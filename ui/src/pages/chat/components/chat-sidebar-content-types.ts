@@ -54,6 +54,12 @@ type AttachmentSidebarSource = {
   height?: number;
 };
 
+export type AttachmentSidebarState =
+  | { status: "pending" }
+  | ({ status: "ready" } & AttachmentSidebarSource)
+  | { status: "unavailable" }
+  | { status: "error"; reason: string };
+
 export type AttachmentSidebarRuntime = {
   sessionKey?: string;
   agentId?: string;
@@ -82,7 +88,7 @@ type AttachmentSidebarContent = {
   resolveSource?: (
     onRequestUpdate: () => void,
     runtime: AttachmentSidebarRuntime,
-  ) => AttachmentSidebarSource | null;
+  ) => AttachmentSidebarState;
   rawText?: string | null;
 };
 

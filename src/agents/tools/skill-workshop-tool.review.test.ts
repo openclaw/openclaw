@@ -592,6 +592,6 @@ describe("skill_workshop review mode", () => {
       }),
     ).rejects.toThrow("reached its proposal mutation limit");
     expect(proposalMutationBudget.mutatedProposalIds).toBeUndefined();
-    expect(proposalMutationBudget.failedMutations).toBe(1);
+    expect(proposalMutationBudget.remaining).toBe(0);
   });
 });
