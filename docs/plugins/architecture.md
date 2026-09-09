@@ -479,3 +479,4 @@ For the load pipeline, registry model, provider runtime hooks, Gateway HTTP rout
 - [Building plugins](/plugins/building-plugins)
 - [Plugin manifest](/plugins/manifest)
 - [Plugin SDK setup](/plugins/sdk-setup)
+- [Context engines](/concepts/context-engine)

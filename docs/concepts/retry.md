@@ -81,3 +81,4 @@ late result without authorizing another send.
 
 - [Model failover](/concepts/model-failover)
 - [Command queue](/concepts/queue)
+- [Streaming and chunking](/concepts/streaming)

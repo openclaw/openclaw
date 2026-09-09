@@ -431,3 +431,4 @@ resolve here.
 - [Plugin SDK setup](/plugins/sdk-setup)
 - [Building plugins](/plugins/building-plugins)
 - [Building channel plugins](/plugins/sdk-channel-plugins)
+- [Model providers](/concepts/model-providers)

@@ -60,3 +60,7 @@ for CJK substring matching is a future improvement.
 Use `sessions_search` for exact words or phrases from raw session transcripts. Use
 [`memory_search`](/concepts/memory-search) for durable memory files and semantic recall. The
 experimental session-memory corpus is the semantic complement to this exact transcript search.
+
+## Related
+
+- [Session tools](/concepts/session-tool) — the `sessions_*` tool surface that exposes this search

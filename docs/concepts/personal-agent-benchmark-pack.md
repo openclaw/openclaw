@@ -70,3 +70,8 @@ plugin workflow checks.
 
 Avoid adding a new runner, plugin, dependency, live transport, or model judge
 until the scenario catalog has enough stable cases to justify that surface.
+
+## Related
+
+- [QA channel](/channels/qa-channel) — the synthetic channel these scenarios run on
+- [QA overview](/concepts/qa-e2e-automation) — the wider QA stack and scenario authoring
