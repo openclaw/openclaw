@@ -162,7 +162,7 @@ beforeEach(async () => {
   });
   observed = [];
   origin = createHttpsServer(leaf, (_request, response) => response.end("ordinary-https"));
-  wss = new WebSocketServer({ noServer: true });
+  wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   wss.on("connection", (socket) => {
     socket.on("error", () => {});
     socket.send("ready");
