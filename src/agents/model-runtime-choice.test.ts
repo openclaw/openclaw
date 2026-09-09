@@ -4,6 +4,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { setPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}));
 vi.mock("./prepared-model-catalog.js", () => ({
@@ -20,11 +21,11 @@ const request = {
   runtimeId: "openclaw",
 };
 
-function publish(isCurrent = () => true) {
+function publish(isCurrent = () => true, config = cfg) {
   const entry = { provider: "fixture", id: "model", name: "Model" };
   const owner: PreparedModelRuntimeSnapshot = {
-    config: cfg,
-    observationConfig: cfg,
+    config,
+    observationConfig: config,
     catalogOwner: { agentId: "main", workspaceDir: "/tmp/runtime-choice" },
     agentId: "main",
     agentDir: "/tmp/runtime-choice/agent",
@@ -38,7 +39,8 @@ function publish(isCurrent = () => true) {
     configuredRuntimeModels: [],
     inlineProviderModels: [],
     createStores() {
-      throw new Error("Selection must not execute a model");
+      const authStorage = AuthStorage.inMemory({});
+      return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
     },
   };
   setPreparedModelRuntimeAuthStore(owner, {
@@ -55,13 +57,66 @@ describe("published runtime choice", () => {
     published.owner = undefined;
   });
 
-  it("refuses an unpublished or unobserved model", async () => {
+  it("refuses an unpublished or unresolved model", async () => {
     expect(await preparePublishedModelRuntimeChoice(request)).toMatchObject({
       kind: "unavailable",
     });
     publish();
     expect(
       await preparePublishedModelRuntimeChoice({ ...request, model: "unobserved" }),
+    ).toMatchObject({ kind: "unavailable" });
+  });
+
+  it("validates an off-catalog model through its configured route", async () => {
+    const config: OpenClawConfig = {
+      ...cfg,
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            baseUrl: "https://models.example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    let current = true;
+    publish(() => current, config);
+    const choice = await preparePublishedModelRuntimeChoice({
+      ...request,
+      cfg: config,
+      model: "off-catalog",
+    });
+    expect(choice.kind).toBe("ready");
+    if (choice.kind !== "ready") {
+      throw new Error("Expected the configured off-catalog route to be selectable");
+    }
+    expect(choice.validate()).toBeUndefined();
+    current = false;
+    expect(choice.validate()).toContain("not available");
+  });
+
+  it("does not grant an incompatible runtime to an off-catalog model", async () => {
+    const config: OpenClawConfig = {
+      ...cfg,
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            baseUrl: "https://models.example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    publish(() => true, config);
+    expect(
+      await preparePublishedModelRuntimeChoice({
+        ...request,
+        cfg: config,
+        model: "off-catalog",
+        runtimeId: "codex",
+      }),
     ).toMatchObject({ kind: "unavailable" });
   });
 

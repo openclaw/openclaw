@@ -1,6 +1,7 @@
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelKey } from "./model-ref-shared.js";
+import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
 
 /** Bind runtime selection and its commit check to the current published model owner. */
 export async function preparePublishedModelRuntimeChoice(params: {
@@ -54,11 +55,47 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : undefined,
     profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
   });
-  const entry = decisions.snapshot.entries.find(
+  let entry = decisions.snapshot.entries.find(
     (row) => modelKey(row.provider, row.id) === modelKey(params.provider, params.model),
   );
   if (!entry) {
-    return { kind: "unavailable", message: unavailable };
+    // Explicit selections may be outside finite browse inventory. The normal
+    // resolver still owns the requested model's provider and physical route.
+    const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
+    const { modelCatalogRowToEntry } = await import("./model-catalog-entry.js");
+    const selectedAuth = await decisions.evaluateEntry(
+      { provider: params.provider, id: params.model },
+      undefined,
+      params.runtimeId,
+    );
+    const authProfileMode = resolveProviderModelMaterializationAuthMode(
+      selectedAuth.selectedAuthMode,
+    );
+    if (selectedAuth.availability !== true || !authProfileMode) {
+      return { kind: "unavailable", message: unavailable };
+    }
+    const resolved = await resolveModelAsync(
+      params.provider,
+      params.model,
+      owner.agentDir,
+      owner.config,
+      {
+        agentId: owner.agentId ?? params.agentId,
+        workspaceDir: owner.workspaceDir,
+        preparedModelRuntime: owner,
+        agentRuntimeId: params.runtimeId,
+        allowBundledStaticCatalogFallback: true,
+        // Discovery must retain the prepared account instead of rereading live auth stores.
+        authProfileMode,
+        ...(selectedAuth.selectedProfileId
+          ? { authProfileId: selectedAuth.selectedProfileId }
+          : {}),
+      },
+    );
+    if (!resolved.model) {
+      return { kind: "unavailable", message: unavailable };
+    }
+    entry = modelCatalogRowToEntry(resolved.model);
   }
   const variants = decisions.snapshot.routeVariants.filter(
     (row) => modelKey(row.provider, row.id) === modelKey(entry.provider, entry.id),

@@ -93,14 +93,21 @@ function createModelsListEntryEvaluator(params: {
   runtimeOverride?: string;
   normalizeAuthProvider: (provider: string) => string;
 }): (
-  entry: ModelCatalogEntry,
+  entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,
   routeVariants?: readonly ModelCatalogEntry[],
   runtimeId?: string,
 ) => Promise<ModelAuthAvailabilityEvaluation> {
   const pending = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
   return (entry, routeVariants, runtimeId) => {
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
-    const cacheKey = JSON.stringify([resolveModelCatalogIdentityKey(entry), runtimeId]);
+    const observedRoutes = (routeVariants ?? [entry]).map(({ api, baseUrl }) => ({ api, baseUrl }));
+    const cacheKey = JSON.stringify([
+      resolveModelCatalogIdentityKey(entry),
+      runtimeId,
+      entry.api,
+      entry.baseUrl,
+      observedRoutes,
+    ]);
     const cached = pending.get(cacheKey);
     if (cached) {
       return cached;
@@ -129,10 +136,7 @@ function createModelsListEntryEvaluator(params: {
             : { api: entry.api, baseUrl: entry.baseUrl }),
           ...(preferredProfileId ? { preferredProfileId } : {}),
           ...(pinnedProfileId ? { pinnedProfileId } : {}),
-          observedRoutes: (routeVariants ?? [entry]).map((variant) => ({
-            api: variant.api,
-            baseUrl: variant.baseUrl,
-          })),
+          observedRoutes,
         }),
         ...(requestedRuntimeId ? { requestedRuntimeId } : {}),
       };

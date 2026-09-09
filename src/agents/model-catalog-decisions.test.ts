@@ -7,6 +7,7 @@ import {
   dualRoutes,
   platformRoute,
   routeResolverFactory,
+  subscriptionRoute,
 } from "./model-auth-availability.test-support.js";
 import {
   createModelCatalogDecisions,
@@ -147,6 +148,38 @@ describe("captured model decisions", () => {
 
   it("offers only the native runtime when no host credential exists", async () => {
     expect(await nativeOwner(true, true).runtimeChoices(entry)).toEqual(["codex"]);
+  });
+
+  it("rechecks physical route evidence after resolving an uncatalogued reference", async () => {
+    const owner = createModelCatalogDecisions({
+      cfg: {},
+      agentId: "main",
+      workspaceDir: "/tmp/catalog-workspace",
+      snapshot: { entries: [], routeVariants: [] },
+      metadataSnapshot: metadata,
+      preparedAuthStore: {
+        version: 1,
+        profiles: {
+          "openai:platform": { type: "api_key", provider: "openai", key: "synthetic-key" },
+        },
+      },
+      routeResolverFactory: () => (ref) => ({
+        ...dualRoutes,
+        routes: ref.observedRoutes?.some((route) => route.api === subscriptionRoute.api)
+          ? [subscriptionRoute]
+          : [platformRoute],
+      }),
+    });
+    expect(
+      await owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
+    ).toMatchObject({ availability: true, selectedProfileId: "openai:platform" });
+    expect(
+      await owner.evaluateEntry(
+        { ...entry, api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl },
+        undefined,
+        "openclaw",
+      ),
+    ).toMatchObject({ availability: false });
   });
 
   it("distinguishes unknown choices from authoritative empty choices", async () => {

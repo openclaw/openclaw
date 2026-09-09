@@ -120,8 +120,8 @@ describe("Codex app-server model catalog", () => {
   });
 
   it.each([
-    { transport: "unix", url: "unix:///tmp/native-catalog.sock" },
-    { transport: "websocket", url: "ws://127.0.0.1:12345" },
+    { transport: "unix", url: "unix:///tmp/native-catalog.sock", homeScope: "user" },
+    { transport: "websocket", url: "ws://127.0.0.1:12345", homeScope: "agent" },
   ])("uses the $transport server account without probing a local login", async (appServer) => {
     vi.mocked(probeCodexNativeAuth).mockResolvedValue(undefined);
     listModelsMock.mockResolvedValue({
@@ -134,7 +134,7 @@ describe("Codex app-server model catalog", () => {
         },
       ],
     });
-    const pluginConfig = { appServer: { ...appServer, homeScope: "user" } };
+    const pluginConfig = { appServer };
     expect(await owner.load(catalogParams, pluginConfig)).toContainEqual(
       expect.objectContaining({ id: "synthetic-opaque", nativeRuntime: "codex" }),
     );
