@@ -37,8 +37,8 @@ suite.define(() => {
       const [offset, leftGap, rightGap, height] = await visibleAvatar.evaluate((node) => {
         const group = node.closest(".chat-group")!;
         const body = group.querySelector(".chat-text")!.getBoundingClientRect();
-        const avatar = node.getBoundingClientRect();
-        return [avatar.y - body.y, body.x - avatar.right, avatar.x - body.right, body.height];
+        const box = node.getBoundingClientRect();
+        return [box.y - body.y, body.x - box.right, box.x - body.right, body.height] as const;
       });
       expect(Math.abs(offset)).toBeLessThanOrEqual(1);
       expect(self ? rightGap : leftGap).toBeGreaterThan(0);
