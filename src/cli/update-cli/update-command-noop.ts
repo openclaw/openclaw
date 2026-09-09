@@ -12,7 +12,8 @@ import {
   withOwnedManagedUpdateEnv,
 } from "./update-command-managed-context.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
-import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
+import type { FinishUpdateParams } from "./update-command-post-update-types.js";
+import { finishUpdate } from "./update-command-post-update.js";
 import {
   GatewayServiceUpdateOwnershipError,
   type ManagedServiceRootRedirect,

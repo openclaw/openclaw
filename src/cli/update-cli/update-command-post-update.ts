@@ -18,10 +18,11 @@ import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { formatCliCommand } from "../command-format.js";
 import { printResult } from "./progress.js";
-import { tryWriteCompletionCache, type FinishUpdateParams } from "./shared.js";
+import { tryWriteCompletionCache } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import type { FinishUpdateParams } from "./update-command-post-update-types.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
@@ -49,8 +50,6 @@ import {
   type PreManagedServiceStop,
 } from "./update-command-service.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
-
-export type { FinishUpdateParams } from "./shared.js";
 
 export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
   const shouldRestart =
