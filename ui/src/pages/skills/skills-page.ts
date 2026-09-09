@@ -49,6 +49,7 @@ export type SkillsRouteData = {
   selectedAgentId: string | null;
   report: SkillStatusReport | null;
   error: string | null;
+  clawhubRef?: string;
 };
 
 class SkillsPage extends OpenClawLightDomElement {
@@ -211,7 +212,12 @@ class SkillsPage extends OpenClawLightDomElement {
       this.routeDataEnabled = false;
       return;
     }
-    if (this.skillsAgentId && data.selectedAgentId && data.selectedAgentId !== this.skillsAgentId) {
+    if (
+      this.skillsAgentId &&
+      data.selectedAgentId &&
+      data.selectedAgentId !== this.skillsAgentId &&
+      !data.clawhubRef
+    ) {
       return;
     }
     this.skillsAgentId = data.selectedAgentId ?? this.skillsAgentId;
@@ -220,6 +226,9 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsError = data.error;
     if (data.report) {
       void loadClawHubSecurityVerdicts(this, data.report);
+    }
+    if (data.clawhubRef && data.clawhubRef !== this.clawhubDetailRef) {
+      void loadClawHubDetail(this, data.clawhubRef);
     }
   }
 

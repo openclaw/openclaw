@@ -4698,6 +4698,12 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    clawhub: {
+      notNow: "Not now",
+      checking: "Checking installation…",
+      retryStatus: "Status unavailable · Retry",
+      viewDetails: "View details",
+    },
     modelAccounts: {
       label: "Account for this chat",
       automatic: "Automatic (new-chat default)",

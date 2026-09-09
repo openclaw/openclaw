@@ -507,11 +507,8 @@ class PluginsPage extends OpenClawLightDomElement {
     const plugin = pluginId
       ? this.result?.plugins.find((entry) => entry.id === pluginId)
       : undefined;
-    if (!plugin?.installed || !detail) {
-      return;
-    }
     const scope = this.gateway.capture();
-    if (!scope) {
+    if (!plugin?.installed || !detail || !scope) {
       return;
     }
     try {
@@ -530,11 +527,8 @@ class PluginsPage extends OpenClawLightDomElement {
     const detail = id ? { id, result: null, error: null } : null;
     this.catalogDetail = detail;
     this.catalogDetailTab = "readme";
-    if (!detail) {
-      return;
-    }
     const scope = this.gateway.capture();
-    if (!scope) {
+    if (!detail || !scope) {
       return;
     }
     try {
@@ -542,6 +536,14 @@ class PluginsPage extends OpenClawLightDomElement {
       if (this.gateway.isCurrent(scope) && this.catalogDetail === detail) {
         this.catalogDetail = { ...detail, result };
         this.syncCatalogIcons();
+        if (new URLSearchParams(this.routeData?.location.search).get("action") === "install") {
+          // A chat-card link opens review only; the existing wizard owns install consent.
+          this.context.replace("plugins", {
+            pathname: this.routeData?.location.pathname,
+            search: "",
+          });
+          this.installWizardController.open(result);
+        }
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope) && this.catalogDetail === detail) {
@@ -560,15 +562,7 @@ class PluginsPage extends OpenClawLightDomElement {
       if (!this.gateway.isCurrent(scope)) {
         return;
       }
-      this.catalogIcons.sync(
-        [
-          ...(this.discovery.result?.items ?? []),
-          ...this.discovery.featured,
-          ...this.discovery.trending,
-          result.plugin,
-        ],
-        result.detail.author?.imageUrl ? [result.detail.author.imageUrl] : [],
-      );
+      this.syncCatalogIcons(result);
       this.installWizardController.open(result);
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
@@ -586,8 +580,7 @@ class PluginsPage extends OpenClawLightDomElement {
     });
   }
 
-  private syncCatalogIcons() {
-    const detail = this.catalogDetail?.result;
+  private syncCatalogIcons(detail = this.catalogDetail?.result) {
     this.icons.syncCatalog(
       [
         ...(this.discovery.result?.items ?? []),
@@ -597,10 +590,6 @@ class PluginsPage extends OpenClawLightDomElement {
       ],
       detail?.detail.author?.imageUrl ? [detail.detail.author.imageUrl] : [],
     );
-  }
-
-  private updateEnabled(pluginId: string, enabled: boolean, key?: string): Promise<void> {
-    return this.consentController.updateEnabled(pluginId, enabled, key);
   }
 
   private async uninstall(pluginId: string, rowKey: string): Promise<void> {
@@ -688,7 +677,7 @@ class PluginsPage extends OpenClawLightDomElement {
         },
         handlePluginIconError: (pluginId) => this.icons.handleInstalledError(pluginId),
         updateEnabled: (pluginId, enabled, rowKey) =>
-          void this.updateEnabled(pluginId, enabled, rowKey),
+          void this.consentController.updateEnabled(pluginId, enabled, rowKey),
         uninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
         patchConfig: (path, value) => {
           this.pluginConfigEditPending = true;

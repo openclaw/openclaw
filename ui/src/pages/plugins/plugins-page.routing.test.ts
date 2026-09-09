@@ -44,6 +44,53 @@ describe("PluginsPage routing", () => {
 
   afterEach(resetPluginsPageTestState);
 
+  it.each([false, true])(
+    "a chat install link opens review only when installed=%s permits it",
+    async (installed) => {
+      const detail = {
+        plugin: {
+          id: "ch_d2hhdHNhcHA",
+          catalog: { name: "WhatsApp", official: true, categories: [] },
+          local: {
+            present: installed,
+            installed,
+            enabled: false,
+            state: installed ? "disabled" : "not-installed",
+            action: installed ? "manage" : "install",
+          },
+        },
+        detail: {
+          origin: "clawhub",
+          packageName: "@openclaw/whatsapp",
+          topics: [],
+          configuration: [],
+          mcpServers: [],
+          skills: [],
+          versions: [],
+        },
+      };
+      const { client, request } = createClient(async (method) =>
+        method === "plugins.catalog.get" ? detail : createResult(),
+      );
+      const harness = createGateway(client);
+      const context = createContext(harness.gateway);
+      const routeData = createPluginsRouteData(
+        harness.gateway,
+        createResult(),
+        createPluginsRouteLocation("/plugins/ch_d2hhdHNhcHA?action=install"),
+      );
+      const { page } = await mountPage(context, routeData);
+      await vi.waitFor(() =>
+        expect(context.replace).toHaveBeenCalledWith("plugins", {
+          pathname: "/plugins/ch_d2hhdHNhcHA",
+          search: "",
+        }),
+      );
+      expect(Boolean(page.querySelector(".plugin-install-wizard"))).toBe(!installed);
+      expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
+    },
+  );
+
   it("switches between the Plugins and Skills workspace without reviving catalog tabs", async () => {
     const { client } = createClient(async (method) => {
       if (method === "plugins.catalog.categories") {
