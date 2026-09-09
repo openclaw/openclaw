@@ -18,6 +18,8 @@ import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export type PreparedModelRuntimeCatalogMode = "live" | "static";
 
+export type PreparedModelRuntimeResourceClaim = { release: () => void };
+
 export type PreparedMediaCapabilityProviderSource = Readonly<{
   registry: PluginRegistry;
   resources: Pick<PluginRegistryInspectionResources, "retain">;
@@ -214,6 +216,7 @@ export type PreparedModelRuntimeOwner = {
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  resourceClaim?: PreparedModelRuntimeResourceClaim;
   /** Explicit generation admitted for the current publication, when known. */
   pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;

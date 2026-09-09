@@ -19,7 +19,13 @@ import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
-import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import {
+  CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  readControlPlaneUpdateSentinelMeta,
+  UPDATE_RUN_ID_ENV,
+  type ControlPlaneUpdateSentinelMetaFile,
+} from "../../infra/update-control-plane-sentinel.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   buildPostCoreHandoffEnv,
   POST_CORE_UPDATE_ENV,
@@ -365,6 +371,18 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       requestedChannel: params.requestedChannel,
       sourceConfigPath: params.preUpdateConfig ? sourceConfigPath : undefined,
     });
+    const sentinelMeta = await readControlPlaneUpdateSentinelMeta(baseEnv);
+    if (sentinelMeta?.root) {
+      // Activation can replace a pnpm generation. Bind only this child to the
+      // activated root; the helper retains its original recovery/lease identity.
+      const sentinelPath = path.join(resultDir, "sentinel-meta.json");
+      const sentinel: ControlPlaneUpdateSentinelMetaFile = {
+        version: 1,
+        meta: { ...sentinelMeta, root: resolveUpdateInstallRoot(params.root) },
+      };
+      await fs.writeFile(sentinelPath, JSON.stringify(sentinel), { mode: 0o600 });
+      handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
+    }
     const child = spawn(nodeRunner, argv, {
       stdio: childStdio,
       env: {

@@ -6,7 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { isMissingPathError } from "../infra/errno.js";
-import { isSupportedBunVersion, isSupportedNodeVersion } from "../infra/runtime-guard.js";
+import {
+  isSupportedBunVersion,
+  isSupportedNodeVersion,
+  parseSemver,
+} from "../infra/runtime-guard.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
@@ -226,6 +230,7 @@ async function resolveRuntimeInfo(
     const sqliteSelectionError = parsed.sqliteSelectionError;
     if (
       !(typeof version === "string" || (runtime === "bun" && version === null)) ||
+      (runtime === "node" && typeof version === "string" && !parseSemver(version)) ||
       !(typeof sqliteVersion === "string" || sqliteVersion === null) ||
       !(typeof sqliteSelectionError === "string" || sqliteSelectionError == null)
     ) {
@@ -263,6 +268,14 @@ export function resolveBunRuntimeInfo(
   env: Record<string, string | undefined> = process.env,
 ) {
   return resolveRuntimeInfo(bunPath, "bun", execFileImpl, env);
+}
+
+/** Probes a recorded Node executable without inheriting service preloads or secrets. */
+export function resolveNodeRuntimeInfo(
+  nodePath: string,
+  env: Record<string, string | undefined> = process.env,
+) {
+  return resolveRuntimeInfo(nodePath, "node", execFileAsync, env);
 }
 
 async function isVersionManagedRealNodePath(
@@ -383,7 +396,7 @@ type RuntimePathOptions = {
 
 /** Resolves the Node binary the daemon should use for a node runtime. */
 export async function resolvePreferredNodePath(
-  params: RuntimePathOptions,
+  params: RuntimePathOptions & { preferCurrentExecPath?: boolean },
 ): Promise<string | undefined> {
   if (params.runtime !== "node") {
     return undefined;
@@ -396,7 +409,10 @@ export async function resolvePreferredNodePath(
   const currentNode = isNodeExecPath(currentExecPath, platform)
     ? await resolveRuntimeInfo(currentExecPath, "node", execFileImpl, env)
     : null;
-  if (currentNode?.status === "supported" && !isVersionManagedNodePath(currentExecPath, platform)) {
+  if (
+    currentNode?.status === "supported" &&
+    (params.preferCurrentExecPath || !isVersionManagedNodePath(currentExecPath, platform))
+  ) {
     return resolveStableNodePath(currentExecPath);
   }
 

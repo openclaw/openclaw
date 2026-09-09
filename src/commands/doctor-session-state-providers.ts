@@ -302,13 +302,11 @@ function scanEntryForOwner(params: {
     }
   }
   if (!routeAllowsOwner && !explicitOwnedOverride) {
-    const runtimeModel = normalizeString(params.entry.model);
-    const runtimeRef = runtimeModel
-      ? parseModelRef(runtimeModel, normalizeString(params.entry.modelProvider) ?? "", {
-          allowManifestNormalization: false,
-          allowPluginNormalization: false,
-        })
-      : null;
+    const runtimeRef = resolvePersistedOverrideModelRef({
+      defaultProvider: "",
+      overrideProvider: params.entry.modelProvider,
+      overrideModel: params.entry.model,
+    });
     if (runtimeRef && providerIds.has(normalizeProviderId(runtimeRef.provider))) {
       addReason(reasons, "runtime model state");
     }

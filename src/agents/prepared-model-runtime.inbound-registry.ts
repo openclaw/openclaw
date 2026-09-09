@@ -12,6 +12,7 @@ import {
   getActivePluginRuntimeSubagentMode,
 } from "../plugins/runtime.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import type { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
@@ -137,6 +138,12 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
   };
 }
 
+type PreparedWorkspacePluginRegistries = {
+  runtimePluginRegistry?: PluginRegistry;
+  inboundPluginRegistry?: PluginRegistry;
+  primaryRegistry?: PluginRegistry;
+};
+
 /** Prepares distinct generic-inbound and model-selected registries for one workspace generation. */
 export function prepareWorkspacePluginRegistries(
   input: PreparedModelRuntimeInput,
@@ -146,11 +153,8 @@ export function prepareWorkspacePluginRegistries(
   reusableGeneration?: PreparedModelRuntimePluginGeneration,
   getConfiguredHarnessRuntimes?: () => readonly string[],
   basePluginIds?: readonly string[],
-): {
-  runtimePluginRegistry?: PluginRegistry;
-  inboundPluginRegistry?: PluginRegistry;
-  primaryRegistry?: PluginRegistry;
-} {
+  registryResources?: PreparedModelRuntimeBuildResources,
+): PreparedWorkspacePluginRegistries | Promise<PreparedWorkspacePluginRegistries> {
   // Read-only catalog owners stay runtime-free. Executable probes opt in to provider runtime,
   // while non-core harness probes carry the exact selected plugin generation.
   if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
@@ -167,9 +171,12 @@ export function prepareWorkspacePluginRegistries(
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   primaryRegistry ??= reusableGeneration?.mediaCapabilityProviderSource?.registry ?? baseRegistry;
   let loadedPrimaryRegistry: PluginRegistry | undefined;
+  const loadRuntimeRegistry = registryResources
+    ? registryResources.load.bind(registryResources)
+    : loadAgentRuntimePluginRegistryHandle;
   const runtimePluginRegistry =
     input.runtimePluginSelections || !baseRegistry
-      ? loadAgentRuntimePluginRegistryHandle(
+      ? loadRuntimeRegistry(
           {
             ...(input.loadRuntimePlugins
               ? { basePluginIds: [] }
@@ -198,12 +205,15 @@ export function prepareWorkspacePluginRegistries(
           },
         )
       : baseRegistry;
-  return {
-    runtimePluginRegistry,
+  const prepared = (registry: PluginRegistry | undefined): PreparedWorkspacePluginRegistries => ({
+    runtimePluginRegistry: registry,
     primaryRegistry:
-      runtimePluginRegistry === baseRegistry
-        ? (primaryRegistry ?? runtimePluginRegistry)
-        : (loadedPrimaryRegistry ?? runtimePluginRegistry),
+      registry === baseRegistry
+        ? (primaryRegistry ?? registry)
+        : (loadedPrimaryRegistry ?? registry),
     ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
-  };
+  });
+  return runtimePluginRegistry instanceof Promise
+    ? runtimePluginRegistry.then(prepared)
+    : prepared(runtimePluginRegistry);
 }

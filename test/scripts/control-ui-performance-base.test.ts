@@ -52,6 +52,8 @@ it("compares real UI builds with canonical compression and keeps artifacts after
       "check-control-ui-performance-base.mts",
       "check-control-ui-performance.mts",
       "check-control-ui-precompressed-assets.mts",
+      "lib/control-ui-i18n-config.json",
+      "lib/control-ui-i18n-config.ts",
       "lib/repo-root.mjs",
       "lib/output-root-guard.mjs",
     ]) {

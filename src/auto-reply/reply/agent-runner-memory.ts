@@ -47,12 +47,15 @@ import {
 } from "../../config/sessions.js";
 import {
   persistCompactionBoundaryWithSessionEntrySync,
-  readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
   updateSessionEntry,
+  withRecentSessionTranscriptActiveEvents,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
+import {
+  isSessionTranscriptLeafControl,
+  selectSessionTranscriptLeafControlledPath,
+} from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
@@ -384,73 +387,85 @@ function deriveTranscriptUsageSnapshot(
   };
 }
 
-function readLatestNonzeroUsageSnapshotFromTranscriptEvents(events: readonly unknown[]):
-  | {
-      usage: NonNullable<ReturnType<typeof normalizeUsage>>;
-      trailingMessages: AgentMessage[];
-    }
-  | undefined {
-  const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
+function readTranscriptAccountingSnapshot(
+  visit: (visitor: (event: unknown) => void) => void,
+  options: { includeUsage: boolean; includeTurnTaint?: boolean },
+): {
+  boundaryFound: boolean;
+  eventCount: number;
+  hasLeafControl: boolean;
+  tainted: boolean;
+  usage?: SessionTranscriptUsageSnapshot;
+} {
+  let scanUsage = options.includeUsage;
+  let scanTaint = options.includeTurnTaint === true;
+  let latestUsage: ReturnType<typeof normalizeUsage>;
   const trailingMessages: AgentMessage[] = [];
-  for (const event of activeEvents.toReversed()) {
+  let boundaryFound = false;
+  let tainted = false;
+  let eventCount = 0;
+  let hasLeafControl = false;
+  visit((event) => {
+    eventCount += 1;
+    hasLeafControl ||= isSessionTranscriptLeafControl(event);
     if (!event || typeof event !== "object" || Array.isArray(event)) {
-      continue;
+      return;
     }
     const record = event as { message?: unknown; type?: unknown; usage?: UsageLike };
-    if (record.type === "compaction" || record.type === "reset") {
-      return undefined;
-    }
     const message =
       record.message && typeof record.message === "object" && !Array.isArray(record.message)
         ? (record.message as AgentMessage & { api?: unknown; usage?: UsageLike })
         : undefined;
-    const rawUsage = message?.usage ?? record.usage;
-    if (message?.api === "cli" && rawUsage && rawUsage.contextUsage === undefined) {
-      return undefined;
+    if (scanUsage) {
+      const rawUsage = message?.usage ?? record.usage;
+      if (
+        record.type === "compaction" ||
+        record.type === "reset" ||
+        (message?.api === "cli" && rawUsage && rawUsage.contextUsage === undefined)
+      ) {
+        scanUsage = false;
+        trailingMessages.length = 0;
+      } else {
+        const usage = normalizeUsage(rawUsage);
+        if (usage && isUnavailableContextBarrier(usage)) {
+          scanUsage = false;
+          trailingMessages.length = 0;
+        } else if (usage && hasNonzeroUsage(usage)) {
+          latestUsage = usage;
+          scanUsage = false;
+        } else if (message) {
+          trailingMessages.push(message);
+        }
+      }
     }
-    const usage = normalizeUsage(rawUsage);
-    if (usage && isUnavailableContextBarrier(usage)) {
-      // This turn supersedes older context facts without supplying a replacement.
-      // Stop the reverse scan so pre-fix cumulative records cannot become fresh again.
-      return undefined;
+    if (scanTaint && message) {
+      if (message.role === "user") {
+        boundaryFound = true;
+        scanTaint = false;
+      } else {
+        const metadata = (message as { __openclaw?: unknown })["__openclaw"];
+        if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+          const openClaw = metadata as { resultContentSource?: unknown; turnTainted?: unknown };
+          if (openClaw.turnTainted === true || openClaw.resultContentSource === "network") {
+            tainted = true;
+            scanTaint = false;
+          }
+        }
+      }
     }
-    if (usage && hasNonzeroUsage(usage)) {
-      return { usage, trailingMessages: trailingMessages.toReversed() };
-    }
-    if (message) {
-      trailingMessages.push(message);
-    }
-  }
-  return undefined;
-}
-
-function readActiveTurnTaintFromTranscriptEvents(events: readonly unknown[]): {
-  boundaryFound: boolean;
-  tainted: boolean;
-} {
-  const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
-  for (const event of activeEvents.toReversed()) {
-    if (!event || typeof event !== "object" || Array.isArray(event)) {
-      continue;
-    }
-    const message = (event as { message?: unknown }).message;
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      continue;
-    }
-    const record = message as Record<string, unknown>;
-    if (record.role === "user") {
-      return { boundaryFound: true, tainted: false };
-    }
-    const metadata = record["__openclaw"];
-    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-      continue;
-    }
-    const openClaw = metadata as { resultContentSource?: unknown; turnTainted?: unknown };
-    if (openClaw.turnTainted === true || openClaw.resultContentSource === "network") {
-      return { boundaryFound: false, tainted: true };
-    }
-  }
-  return { boundaryFound: false, tainted: false };
+  });
+  return {
+    boundaryFound,
+    eventCount,
+    hasLeafControl,
+    tainted,
+    usage: latestUsage
+      ? deriveTranscriptUsageSnapshot({
+          usage: latestUsage,
+          trailingMessages: trailingMessages.toReversed(),
+        })
+      : undefined,
+  };
 }
 
 function readSqliteSessionLogSnapshot(
@@ -470,19 +485,37 @@ function readSqliteSessionLogSnapshot(
       snapshot.eventCount = stats.eventCount;
     }
     if (options.includeUsage || options.includeTurnTaint) {
-      const events = readRecentSessionTranscriptActiveEvents(
+      const accounting = withRecentSessionTranscriptActiveEvents(
         scope,
         options.usageEventLimit ?? SQLITE_USAGE_TAIL_MAX_EVENTS,
+        (visit) => {
+          const result = readTranscriptAccountingSnapshot(visit, options);
+          if (!result.hasLeafControl) {
+            return result;
+          }
+          // First-row and legacy flat projections can still contain leaf controls.
+          // Preserve their serialized navigation contract in this same snapshot.
+          const events: unknown[] = [];
+          visit((event) => events.push(event));
+          events.reverse();
+          const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
+          return {
+            ...readTranscriptAccountingSnapshot((visitor) => {
+              for (let index = activeEvents.length - 1; index >= 0; index -= 1) {
+                visitor(activeEvents[index]);
+              }
+            }, options),
+            eventCount: result.eventCount,
+          };
+        },
       );
       if (options.includeUsage) {
-        snapshot.usage = deriveTranscriptUsageSnapshot(
-          readLatestNonzeroUsageSnapshotFromTranscriptEvents(events),
-        );
+        snapshot.usage = accounting.usage;
       }
       if (options.includeTurnTaint) {
-        const scan = readActiveTurnTaintFromTranscriptEvents(events);
         snapshot.turnTainted =
-          scan.tainted || (!scan.boundaryFound && events.length >= SQLITE_USAGE_TAIL_MAX_EVENTS);
+          accounting.tainted ||
+          (!accounting.boundaryFound && accounting.eventCount >= SQLITE_USAGE_TAIL_MAX_EVENTS);
       }
     }
   } catch {

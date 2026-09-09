@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 
 function isMetricsRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -27,6 +28,12 @@ const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = KIB;
 // a diagram is viewed. Keep its size visible without relaxing ordinary chunks.
 const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
 const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
+// Locale catalogs are named Vite chunks loaded only after a language selection.
+// Bound them separately so catalog growth cannot relax ordinary application chunks.
+const CONTROL_UI_LOCALE_ASSET_PREFIXES = CONTROL_UI_LOCALE_ENTRIES.map(
+  ({ locale }) => `assets/${locale}-`,
+);
+const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
@@ -113,6 +120,13 @@ function largestAsset(assets: Array<ReturnType<typeof readAssetMetrics>>) {
   )[0]!;
 }
 
+function isControlUiLocaleAsset(file: string): boolean {
+  return (
+    file.endsWith(".js") &&
+    CONTROL_UI_LOCALE_ASSET_PREFIXES.some((prefix) => file.startsWith(prefix))
+  );
+}
+
 export function collectControlUiPerformanceMetrics(distDir: string) {
   const assetsDir = path.join(distDir, "assets");
   const html = fs.readFileSync(path.join(distDir, "index.html"), "utf8");
@@ -130,7 +144,10 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
   });
   const jsAssets = assets.filter((asset) => asset.type === "js");
   const mermaidRenderer = jsAssets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file));
-  const ordinaryJsAssets = jsAssets.filter((asset) => !MERMAID_RENDERER_ASSET.test(asset.file));
+  const localeCatalogs = jsAssets.filter((asset) => isControlUiLocaleAsset(asset.file));
+  const ordinaryJsAssets = jsAssets.filter(
+    (asset) => !MERMAID_RENDERER_ASSET.test(asset.file) && !isControlUiLocaleAsset(asset.file),
+  );
   const cssAssets = assets.filter((asset) => asset.type === "css");
   if (ordinaryJsAssets.length === 0 || cssAssets.length === 0 || startup.length === 0) {
     throw new Error("Control UI performance check found an incomplete production bundle");
@@ -151,6 +168,7 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
       css: largestAsset(cssAssets),
     },
     mermaidRenderer,
+    localeCatalogs,
   };
 }
 
@@ -184,6 +202,24 @@ export function evaluateControlUiPerformanceBudgets(
     [
       "startup Mermaid JS assets",
       metrics.startup.assets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file)).length,
+      0,
+      "count",
+    ],
+    [
+      "locale catalog JS assets",
+      metrics.localeCatalogs.length,
+      CONTROL_UI_LOCALE_ENTRIES.length,
+      "count",
+    ],
+    [
+      "largest locale catalog JS gzip",
+      Math.max(0, ...metrics.localeCatalogs.map((asset) => asset.gzipBytes)),
+      CONTROL_UI_LOCALE_GZIP_BYTES,
+      "bytes",
+    ],
+    [
+      "startup locale catalog JS assets",
+      metrics.startup.assets.filter((asset) => isControlUiLocaleAsset(asset.file)).length,
       0,
       "count",
     ],
@@ -338,6 +374,12 @@ export function formatControlUiPerformanceReport(
   if (metrics.mermaidRenderer.length > 0) {
     lines.push(
       `  isolated Mermaid JS: ${formatAssetSummary(summarizeAssets(metrics.mermaidRenderer))} (limits: 1 deferred asset, ${formatControlUiPerformanceBytes(MERMAID_RENDERER_GZIP_BYTES)} gzip; forbidden at startup)`,
+    );
+  }
+  if (metrics.localeCatalogs.length > 0) {
+    const largestLocaleCatalog = largestAsset(metrics.localeCatalogs);
+    lines.push(
+      `  locale catalog JS: ${formatAssetSummary(summarizeAssets(metrics.localeCatalogs))} (largest: ${largestLocaleCatalog.file}, ${formatControlUiPerformanceBytes(largestLocaleCatalog.gzipBytes)} gzip; limits: ${CONTROL_UI_LOCALE_ENTRIES.length} deferred assets, ${formatControlUiPerformanceBytes(CONTROL_UI_LOCALE_GZIP_BYTES)} each; forbidden at startup)`,
     );
   }
   if (

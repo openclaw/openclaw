@@ -18,7 +18,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import {
@@ -36,7 +36,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 
 type ChatRefreshOptions = {
   deferBranches?: boolean;
-  historyLoad?: Promise<ChatHistoryResult | undefined>;
+  historyLoad?: Promise<ObservedChatHistoryResult | undefined>;
   scheduleScroll?: boolean;
   awaitHistory?: boolean;
   startup?: boolean;
@@ -280,9 +280,17 @@ async function refreshChat(
   },
 ) {
   const refreshedClient = host.client;
+  const refreshedSessions = host.sessions;
   const refreshedEpoch = host.connectionEpoch;
   const refreshedSessionKey = host.sessionKey;
   const refreshedAgentId = resolveAgentIdForSession(host);
+  const ownsRefresh = () =>
+    host.connected &&
+    host.sessions === refreshedSessions &&
+    host.client === refreshedClient &&
+    host.connectionEpoch === refreshedEpoch &&
+    host.sessionKey === refreshedSessionKey &&
+    resolveAgentIdForSession(host) === refreshedAgentId;
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
   const historyLoad =
@@ -298,26 +306,23 @@ async function refreshChat(
     requestUpdate();
   });
   const sessionsRefresh = historyLoad.then((history) => {
-    if (!history?.sessionInfo) {
+    if (
+      !history?.sessionInfo ||
+      !ownsRefresh() ||
+      history.observation.owner !== refreshedSessions
+    ) {
       return;
     }
-    const admitted = host.sessions.reconcile(history.sessionInfo, history.defaults, {
+    const admitted = history.observation.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessions.state.agentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
-      sourceCanonicalListRevision: history.sourceCanonicalListRevision,
       // The routed chat remains visible after archive even though the active
       // roster excludes it. Keep its descriptor in shared session state until
       // navigation changes; otherwise the pane briefly falls back to the raw
       // key while the sidebar lineage reload catches up.
       archivedFilter: history.sessionInfo.archived === true ? "all" : host.sessionsArchivedFilter,
     });
-    if (
-      !admitted ||
-      host.client !== refreshedClient ||
-      host.connectionEpoch !== refreshedEpoch ||
-      host.sessionKey !== refreshedSessionKey ||
-      resolveAgentIdForSession(host) !== refreshedAgentId
-    ) {
+    if (!admitted || !ownsRefresh()) {
       return;
     }
     // The shared roster may belong to another agent. Keep this pane's accepted

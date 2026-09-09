@@ -377,7 +377,7 @@ Set `OPENCLAW_STATE_DIR` to move the whole state root (default `~/.openclaw`) el
 
 The registry loads into memory on first use and persists every write back to SQLite, so records survive gateway restarts. WAL growth stays bounded through SQLite's default autocheckpoint threshold plus periodic `PASSIVE` checkpoints. After a checkpoint completes, the next commit resets the WAL and applies a 64 MiB `journal_size_limit` ceiling, so a reader cannot leave the file parked at a pathological high-water mark until restart. Shutdown and explicit maintenance checkpoints use `TRUNCATE` so normal closes reclaim WAL space without making the background sweeper wait on active readers.
 
-Legacy sidecar stores from older installs (`tasks/runs.sqlite`, `flows/registry.sqlite`) are imported into the shared database by `openclaw doctor`.
+If a `tasks/runs.sqlite` or `flows/registry.sqlite` sidecar store is present under the state root, `openclaw doctor` imports its rows into the shared database. New installs never create these files.
 
 ### Automatic maintenance
 

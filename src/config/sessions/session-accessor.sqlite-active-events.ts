@@ -1,7 +1,9 @@
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import {
   getActiveTranscriptKysely,
@@ -131,29 +133,63 @@ export function readRecentSessionTranscriptActiveEvents(
   scope: SessionTranscriptReadScope,
   maxEvents: number,
 ): TranscriptEvent[] {
+  return withRecentSessionTranscriptActiveEvents(scope, maxEvents, (visit) => {
+    const events: TranscriptEvent[] = [];
+    visit((event) => events.push(event));
+    return events.toReversed();
+  });
+}
+
+/** Runs repeatable newest-first visits synchronously inside one context-tail snapshot. */
+export function withRecentSessionTranscriptActiveEvents<T>(
+  scope: SessionTranscriptReadScope,
+  maxEvents: number,
+  read: (visit: (visitor: (event: TranscriptEvent) => void) => void) => T,
+): T {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const limit = Math.max(0, Math.floor(Number.isFinite(maxEvents) ? maxEvents : 0));
-    if (limit === 0) {
-      return [];
-    }
     const db = getActiveTranscriptKysely(projection.database);
-    return executeSqliteQuerySync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select("event.event_json")
-        .where("active.session_id", "=", projection.resolved.sessionId)
-        .where("active.context_eligible", "=", 1)
-        .orderBy("active.active_position", "desc")
-        .limit(limit),
-    )
-      .rows.toReversed()
-      .map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+    const query = db
+      .selectFrom("session_transcript_active_events as active")
+      .innerJoin("transcript_events as event", (join) =>
+        join
+          .onRef("event.session_id", "=", "active.session_id")
+          .onRef("event.seq", "=", "active.event_seq"),
+      )
+      .select("event.event_json")
+      .where("active.session_id", "=", projection.resolved.sessionId)
+      .where("active.context_eligible", "=", 1)
+      .orderBy("active.active_position", "desc")
+      .limit(limit);
+    let active = true;
+    try {
+      return read((visitor) => {
+        if (!active) {
+          throw new Error("Transcript visitor used outside its read snapshot");
+        }
+        if (limit === 0) {
+          return;
+        }
+        let parseError: Error | undefined;
+        // Finish stepping before reporting JSON errors: SQL failures take precedence,
+        // followed by the oldest malformed row in the selected tail.
+        for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
+          let event: TranscriptEvent;
+          try {
+            event = JSON.parse(row.event_json) as TranscriptEvent;
+          } catch (error) {
+            parseError = toErrorObject(error, "Transcript event JSON parsing failed");
+            continue;
+          }
+          visitor(event);
+        }
+        if (parseError !== undefined) {
+          throw parseError;
+        }
+      });
+    } finally {
+      active = false;
+    }
   });
 }
 

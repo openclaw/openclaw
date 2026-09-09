@@ -43,7 +43,7 @@ experience review outcomes. Current collection reviews use automation run histor
 Age-based skill lifecycle curation is retired.
 `skills.curator.pin`, `skills.curator.unpin`, and `skills.curator.restore` remain
 registered for existing clients, but always return an error explaining that the
-weekly collection review now manages the skill collection.
+weekly collection review manages the skill collection.
 
 `requestRevision` is Gateway-only (no CLI or agent-tool equivalent): it
 forwards free-text revision instructions to the owning agent's chat session

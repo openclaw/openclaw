@@ -3679,7 +3679,8 @@ refresh_gateway_service_if_loaded() {
     fi
 
     ui_info "Refreshing loaded gateway service"
-    if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+    if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/^Replacing unsupported Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/^Replacing missing Gateway service Node .*; refreshing the install\.$/node-runtime-replaced/p' -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+        refresh_output="$(printf '%s\n' "$refresh_output" | sed '/^node-runtime-replaced$/d')"
         if [[ -n "$refresh_output" ]]; then
             ui_warn "Code installed; gateway service definition left unchanged; ${refresh_output}"
             ui_info "Run openclaw gateway status --deep, verify the installation owner, and restart it manually if needed."
@@ -3689,6 +3690,9 @@ refresh_gateway_service_if_loaded() {
             return 0
         fi
     else
+        if [[ "$refresh_output" == *node-runtime-replaced* ]]; then
+            ui_success "Gateway service Node runtime replaced"
+        fi
         ui_success "Gateway service metadata refreshed"
     fi
 

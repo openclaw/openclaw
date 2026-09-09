@@ -115,7 +115,9 @@ type ImageGenerationOutputCapabilities = {
   qualities?: ImageGenerationQuality[];
   qualitiesByModel?: Record<string, ImageGenerationQuality[]>;
   formats?: ImageGenerationOutputFormat[];
+  formatsByModel?: Record<string, ImageGenerationOutputFormat[]>;
   backgrounds?: ImageGenerationBackground[];
+  backgroundsByModel?: Record<string, ImageGenerationBackground[]>;
 };
 
 export type ImageGenerationNormalization = {

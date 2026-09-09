@@ -15,7 +15,7 @@ Collect sanitized diagnostics and open a coding agent on this machine to diagnos
 openclaw triage
 ```
 
-In an interactive terminal, triage starts the first directly launchable agent on `PATH` in this detection order: Claude Code (`claude`), Codex (`codex`), OpenCode (`opencode`), then Pi (`pi`). It prints the selected agent and passes a bounded repair prompt directly, without a picker. The agent uses its existing authentication, sandbox, and approval settings.
+In an interactive terminal, triage starts the first directly launchable agent on `PATH` in this detection order: Claude Code (`claude`), Codex (`codex`), OpenCode (`opencode`), then Pi (`pi`). An explicit `openclaw triage` invocation prints the selected agent and passes a bounded repair prompt directly, without a picker or launch confirmation. The agent uses its existing authentication, sandbox, and approval settings.
 
 Choose a particular agent with `--agent`, or collect diagnostics without starting one with `--json` or `--non-interactive`:
 
@@ -41,6 +41,8 @@ in the update run report. The updater owns any service restart and decides
 success from validation; triage remains the handoff when recovery cannot finish.
 
 Interactive update recovery uses this same handoff after the updater releases its maintenance state. It starts from the captured update failure and defers fresh Doctor checks and archive collection to the repair agent, so checks against the broken installation do not delay the handoff. The agent starts in the operator's captured working directory, or their OS home if that directory was removed or became inaccessible. Absolute installation selectors still identify the state, config, and default workspace to repair, even when the state directory cannot be accessed or created.
+
+Before an automatic interactive launch, OpenClaw shows the selected binary or the embedded OpenClaw agent using your configured model, the saved prompt path when available, and a notice that it uses your own account/tokens, then asks for confirmation. Enter or `y` proceeds; `n` prints ready-to-run handoffs and the manual `openclaw triage` command while preserving diagnostics and the failed update's exit status; after 30 seconds without an answer, OpenClaw announces that it is continuing and proceeds as Yes.
 
 The prompt preserves the original error, before and after versions, and recorded recovery state ahead of current Doctor findings. It includes up to three failed or interrupted steps, excluding advisory Doctor results, with bounded excerpts from both stderr and stdout. It also retains bounded plugin failures and the terminal Doctor warning. The failure record is limited to 4 KiB and the whole prompt to 8 KiB. A healthy Doctor check does not erase the failed attempt, and an absent restart-safety verdict remains unknown.
 

@@ -373,33 +373,24 @@ function buildAuditIndex(
   };
 }
 
-let defaultAuditIndex: ReturnType<typeof buildAuditIndex> | undefined;
-
-function getDefaultAuditIndex() {
-  defaultAuditIndex ??= buildAuditIndex(DOCS_DIR);
-  return defaultAuditIndex;
-}
-
 export function resolveRoute(
   route: string,
-  options: { redirects?: Map<string, string>; routes?: Set<string> } = {},
+  { redirects, routes }: { redirects: Map<string, string>; routes: Set<string> },
 ) {
-  const redirectMap = options.redirects ?? getDefaultAuditIndex().redirects;
-  const publishedRoutes = options.routes ?? getDefaultAuditIndex().routes;
   let current = normalizeRoute(route);
   if (current === "/") {
     return { ok: true, terminal: "/" };
   }
 
   const seen = new Set([current]);
-  while (redirectMap.has(current)) {
-    current = normalizeRoute(redirectMap.get(current) ?? "");
+  while (redirects.has(current)) {
+    current = normalizeRoute(redirects.get(current) ?? "");
     if (seen.has(current)) {
       return { ok: false, terminal: current, loop: true };
     }
     seen.add(current);
   }
-  return { ok: publishedRoutes.has(current), terminal: current };
+  return { ok: routes.has(current), terminal: current };
 }
 
 /** Prepares a docs directory, mirroring ClawHub docs when available. */

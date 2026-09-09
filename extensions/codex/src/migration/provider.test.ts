@@ -2802,32 +2802,7 @@ describe("buildCodexMigrationProvider", () => {
       },
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginMetadata(method, [
-          pluginSummary("google-calendar", { installed: true, enabled: true }),
-        ]);
-      }
-      if (method === "plugin/read") {
-        return pluginRead("google-calendar");
-      }
-      if (method === "plugin/install") {
-        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-      }
-      if (method === "skills/list") {
-        return { data: [] } satisfies v2.SkillsListResponse;
-      }
-      if (method === "hooks/list") {
-        return { data: [] } satisfies v2.HooksListResponse;
-      }
-      if (method === "config/mcpServer/reload") {
-        return {};
-      }
-      if (method === "app/installed" || method === "app/read") {
-        return codexAppInventoryResponse(method, []);
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+    appServerRequest.mockImplementation(createCalendarPluginMigrationRequest());
     const provider = buildCodexMigrationProvider({
       runtime: createConfigRuntime(configState),
     });
@@ -2861,32 +2836,7 @@ describe("buildCodexMigrationProvider", () => {
       },
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginMetadata(method, [
-          pluginSummary("google-calendar", { installed: true, enabled: true }),
-        ]);
-      }
-      if (method === "plugin/read") {
-        return pluginRead("google-calendar");
-      }
-      if (method === "plugin/install") {
-        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-      }
-      if (method === "skills/list") {
-        return { data: [] } satisfies v2.SkillsListResponse;
-      }
-      if (method === "hooks/list") {
-        return { data: [] } satisfies v2.HooksListResponse;
-      }
-      if (method === "config/mcpServer/reload") {
-        return {};
-      }
-      if (method === "app/installed" || method === "app/read") {
-        return codexAppInventoryResponse(method, []);
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+    appServerRequest.mockImplementation(createCalendarPluginMigrationRequest());
     const mutateConfigFile = vi.fn(async () => {
       throw new Error("mutateConfigFile should not be called in return mode");
     });
@@ -2967,32 +2917,7 @@ describe("buildCodexMigrationProvider", () => {
       },
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginMetadata(method, [
-          pluginSummary("google-calendar", { installed: true, enabled: true }),
-        ]);
-      }
-      if (method === "plugin/read") {
-        return pluginRead("google-calendar");
-      }
-      if (method === "plugin/install") {
-        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-      }
-      if (method === "skills/list") {
-        return { data: [] } satisfies v2.SkillsListResponse;
-      }
-      if (method === "hooks/list") {
-        return { data: [] } satisfies v2.HooksListResponse;
-      }
-      if (method === "config/mcpServer/reload") {
-        return {};
-      }
-      if (method === "app/installed" || method === "app/read") {
-        return codexAppInventoryResponse(method, []);
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+    appServerRequest.mockImplementation(createCalendarPluginMigrationRequest());
     const provider = buildCodexMigrationProvider({
       runtime: createConfigRuntime(configState),
     });
@@ -3053,32 +2978,7 @@ describe("buildCodexMigrationProvider", () => {
       },
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginMetadata(method, [
-          pluginSummary("google-calendar", { installed: true, enabled: true }),
-        ]);
-      }
-      if (method === "plugin/read") {
-        return pluginRead("google-calendar");
-      }
-      if (method === "plugin/install") {
-        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-      }
-      if (method === "skills/list") {
-        return { data: [] } satisfies v2.SkillsListResponse;
-      }
-      if (method === "hooks/list") {
-        return { data: [] } satisfies v2.HooksListResponse;
-      }
-      if (method === "config/mcpServer/reload") {
-        return {};
-      }
-      if (method === "app/installed" || method === "app/read") {
-        return codexAppInventoryResponse(method, []);
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+    appServerRequest.mockImplementation(createCalendarPluginMigrationRequest());
     const provider = buildCodexMigrationProvider({
       runtime: createConfigRuntime(configState),
     });
@@ -3132,32 +3032,7 @@ describe("buildCodexMigrationProvider", () => {
       },
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginMetadata(method, [
-          pluginSummary("google-calendar", { installed: true, enabled: true }),
-        ]);
-      }
-      if (method === "plugin/read") {
-        return pluginRead("google-calendar");
-      }
-      if (method === "plugin/install") {
-        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-      }
-      if (method === "skills/list") {
-        return { data: [] } satisfies v2.SkillsListResponse;
-      }
-      if (method === "hooks/list") {
-        return { data: [] } satisfies v2.HooksListResponse;
-      }
-      if (method === "config/mcpServer/reload") {
-        return {};
-      }
-      if (method === "app/installed" || method === "app/read") {
-        return codexAppInventoryResponse(method, []);
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+    appServerRequest.mockImplementation(createCalendarPluginMigrationRequest());
     const provider = buildCodexMigrationProvider({
       runtime: createConfigRuntime(configState),
     });
@@ -3205,32 +3080,7 @@ describe("buildCodexMigrationProvider", () => {
       },
       agents: { defaults: { workspace: fixture.workspaceDir } },
     } as MigrationProviderContext["config"];
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginMetadata(method, [
-          pluginSummary("google-calendar", { installed: true, enabled: true }),
-        ]);
-      }
-      if (method === "plugin/read") {
-        return pluginRead("google-calendar");
-      }
-      if (method === "plugin/install") {
-        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-      }
-      if (method === "skills/list") {
-        return { data: [] } satisfies v2.SkillsListResponse;
-      }
-      if (method === "hooks/list") {
-        return { data: [] } satisfies v2.HooksListResponse;
-      }
-      if (method === "config/mcpServer/reload") {
-        return {};
-      }
-      if (method === "app/installed" || method === "app/read") {
-        return codexAppInventoryResponse(method, []);
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+    appServerRequest.mockImplementation(createCalendarPluginMigrationRequest());
     const provider = buildCodexMigrationProvider({
       runtime: createConfigRuntime(configState),
     });
@@ -3417,6 +3267,35 @@ describe("buildCodexMigrationProvider", () => {
     });
   });
 });
+
+function createCalendarPluginMigrationRequest() {
+  return async ({ method }: { method: string }) => {
+    if (method === "plugin/installed" || method === "plugin/list") {
+      return pluginMetadata(method, [
+        pluginSummary("google-calendar", { installed: true, enabled: true }),
+      ]);
+    }
+    if (method === "plugin/read") {
+      return pluginRead("google-calendar");
+    }
+    if (method === "plugin/install") {
+      return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+    }
+    if (method === "skills/list") {
+      return { data: [] } satisfies v2.SkillsListResponse;
+    }
+    if (method === "hooks/list") {
+      return { data: [] } satisfies v2.HooksListResponse;
+    }
+    if (method === "config/mcpServer/reload") {
+      return {};
+    }
+    if (method === "app/installed" || method === "app/read") {
+      return codexAppInventoryResponse(method, []);
+    }
+    throw new Error(`unexpected request ${method}`);
+  };
+}
 
 function createConfigRuntime(
   configState: MigrationProviderContext["config"],

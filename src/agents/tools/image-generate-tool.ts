@@ -72,7 +72,7 @@ import type { AnyAgentTool, ToolFsPolicy } from "./tool-runtime.helpers.js";
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
 const DEFAULT_MAX_INPUT_IMAGES = 10;
-const MAX_REFERENCE_IMAGE_INPUTS = 14;
+const MAX_REFERENCE_IMAGE_INPUTS = 16;
 const SUPPORTED_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
 const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const SUPPORTED_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;

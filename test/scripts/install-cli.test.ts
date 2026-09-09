@@ -679,38 +679,58 @@ describe("install-cli.sh", () => {
     expect(wrapperIndex).toBeGreaterThan(compatibilityIndex);
   });
 
-  it("does not restart a gateway again after force-install activates it", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-gateway-refresh-"));
-    const prefix = join(tmp, "prefix");
-    const bin = join(prefix, "bin");
-    const commandLog = join(tmp, "commands.log");
-    const openclaw = join(bin, "openclaw");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(openclaw, '#!/bin/bash\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n');
-    chmodSync(openclaw, 0o755);
-
-    try {
-      const result = runInstallCliShell(
+  it.each(["none", "unsupported", "missing"])(
+    "reports a successful runtime replacement (%s) without restarting again",
+    (replaced) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-gateway-refresh-"));
+      const prefix = join(tmp, "prefix");
+      const bin = join(prefix, "bin");
+      const commandLog = join(tmp, "commands.log");
+      const openclaw = join(bin, "openclaw");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(
+        openclaw,
         [
-          "set -euo pipefail",
-          `cd ${JSON.stringify(process.cwd())}`,
-          `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `PREFIX=${JSON.stringify(prefix)}`,
-          "is_gateway_daemon_loaded() { return 0; }",
-          "refresh_gateway_service_if_loaded",
+          "#!/bin/bash",
+          'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+          'if [[ "$*" == "gateway install --force" ]]; then',
+          '  printf "%s\\n" "incidental-output-canary"',
+          '  if [[ "$REPLACED" == unsupported ]]; then printf "%s\\n" "Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install."; fi',
+          '  if [[ "$REPLACED" == missing ]]; then printf "%s\\n" "Replacing missing Gateway service Node (/old/node) with /new/node; refreshing the install."; fi',
+          "fi",
         ].join("\n"),
-        { COMMAND_LOG: commandLog },
       );
+      chmodSync(openclaw, 0o755);
 
-      expect(result.status).toBe(0);
-      expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
-        "gateway install --force",
-        "gateway status --probe --json",
-      ]);
-    } finally {
-      rmSync(tmp, { force: true, recursive: true });
-    }
-  });
+      try {
+        const result = runInstallCliShell(
+          [
+            "set -euo pipefail",
+            `cd ${JSON.stringify(process.cwd())}`,
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `PREFIX=${JSON.stringify(prefix)}`,
+            "is_gateway_daemon_loaded() { return 0; }",
+            "refresh_gateway_service_if_loaded",
+          ].join("\n"),
+          { COMMAND_LOG: commandLog, REPLACED: replaced },
+        );
+
+        expect(result.status).toBe(0);
+        expect(result.stderr.includes("Gateway service Node runtime replaced.")).toBe(
+          replaced !== "none",
+        );
+        expect(result.stdout + result.stderr).not.toContain("incidental-output-canary");
+        expect(result.stdout + result.stderr).not.toContain("/old/node");
+        expect(result.stdout + result.stderr).not.toContain("/new/node");
+        expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
+          "gateway install --force",
+          "gateway status --probe --json",
+        ]);
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.each([
     { error: "SERVICE_DEFINITION_SEALED: protected", args: "", stream: "stderr" },
@@ -731,6 +751,7 @@ describe("install-cli.sh", () => {
         'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
         'if [[ "$1" == "--version" ]]; then printf "OpenClaw 2026.8.25\\n"; exit 0; fi',
         'if [[ "$*" == "gateway install --force" ]]; then',
+        '  printf "%s\\n" "Replacing unsupported Gateway service Node 22.23.1 (/old/node) with /new/node; refreshing the install."',
         '  if [[ "$SERVICE_STREAM" == stdout ]]; then printf "%s\\n" "$SERVICE_ERROR"; else printf "%s\\n" "$SERVICE_ERROR" >&2; fi',
         '  printf "%s\\n" "$SECRET_CANARY" >&2; exit 1',
         "fi",
@@ -760,6 +781,7 @@ describe("install-cli.sh", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("+ main");
     expect(result.stdout + result.stderr).not.toContain(secretCanary);
+    expect(result.stdout + result.stderr).not.toContain("Gateway service Node runtime replaced");
     if (denied) {
       expect(result.stderr).toContain("gateway service definition left unchanged");
       expect(result.stderr).toContain(
