@@ -4,6 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import * as sessionDirs from "../agents/session-dirs.js";
+import type { InternalSessionEntry } from "../config/sessions.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -52,25 +53,24 @@ test("sessions.list reads completed models from each physical agent store", asyn
     const sessionKey = `agent:${agentId}:main`;
     const storePath = storeTemplate.replace("{agentId}", agentId);
     const runId = `run-${agentId}`;
+    const entry: InternalSessionEntry = {
+      sessionId,
+      updatedAt: 10,
+      status: "done",
+      lastRunId: runId,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "openai/gpt-5.4",
+        activeModel: "anthropic/claude-sonnet-4-6",
+      },
+    };
     await writeSessionStore({
       agentId,
-      entries: {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 10,
-          status: "done",
-          lastRunId: runId,
-          providerOverride: "openai",
-          modelOverride: "gpt-5.4",
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "openai/gpt-5.4",
-            activeModel: "anthropic/claude-sonnet-4-6",
-          },
-        },
-      },
+      entries: { [sessionKey]: entry },
       storePath,
     });
     const scope = { agentId, sessionId, sessionKey, storePath };
