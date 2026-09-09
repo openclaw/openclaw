@@ -79,6 +79,7 @@ import {
   resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
+  withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
@@ -134,81 +135,86 @@ export async function applySessionStoreProjection<T>(params: {
   const preparedWrite = await runPreparedSqliteSessionWrite(
     resolved,
     async () => {
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-      const before = readSessionEntryStore(database);
-      const projected = structuredClone(before);
-      const operation = await params.update(projected);
-      if (!operation.persist) {
-        return {
-          deletedEntries: [],
-          commit: () => ({ maintenancePlans: [], result: operation.result }),
-        };
-      }
-      const lockedEntriesBefore = new Map(
-        Object.entries(before).filter(([, entry]) => entry.modelSelectionLocked === true),
-      );
-      const transitionError = resolveAgentHarnessSessionStoreTransitionError({
-        before: lockedEntriesBefore,
-        store: projected,
-      });
-      const storeError = resolveAgentHarnessSessionStoreError(projected);
-      if (transitionError || storeError) {
-        throw new Error(transitionError ?? storeError);
-      }
+      return withSqliteSessionDatabase(toDatabaseOptions(resolved), async (database) => {
+        const before = readSessionEntryStore(database);
+        const projected = structuredClone(before);
+        const operation = await params.update(projected);
+        if (!operation.persist) {
+          return {
+            deletedEntries: [],
+            commit: () => ({ maintenancePlans: [], result: operation.result }),
+          };
+        }
+        const lockedEntriesBefore = new Map(
+          Object.entries(before).filter(([, entry]) => entry.modelSelectionLocked === true),
+        );
+        const transitionError = resolveAgentHarnessSessionStoreTransitionError({
+          before: lockedEntriesBefore,
+          store: projected,
+        });
+        const storeError = resolveAgentHarnessSessionStoreError(projected);
+        if (transitionError || storeError) {
+          throw new Error(transitionError ?? storeError);
+        }
 
-      const changedKeys = uniqueStrings([...Object.keys(before), ...Object.keys(projected)]).filter(
-        (sessionKey) => !sqliteSessionEntriesEqual(before[sessionKey], projected[sessionKey]),
-      );
-      if (changedKeys.length === 0) {
-        return {
-          deletedEntries: [],
-          commit: () => ({ maintenancePlans: [], result: operation.result }),
-        };
-      }
+        const changedKeys = uniqueStrings([
+          ...Object.keys(before),
+          ...Object.keys(projected),
+        ]).filter(
+          (sessionKey) => !sqliteSessionEntriesEqual(before[sessionKey], projected[sessionKey]),
+        );
+        if (changedKeys.length === 0) {
+          return {
+            deletedEntries: [],
+            commit: () => ({ maintenancePlans: [], result: operation.result }),
+          };
+        }
 
-      const maintenancePlans: SessionEntryMaintenancePlan[] = [];
-      const deletedOwners = changedKeys.flatMap((sessionKey) => {
-        const entry = before[sessionKey];
-        return entry && !projected[sessionKey] ? [{ entry, sessionKey }] : [];
-      });
-      return {
-        deletedEntries: deletedOwners,
-        commit: () => {
-          runOpenClawAgentWriteTransaction(
-            (transactionDb) => {
-              for (const sessionKey of changedKeys) {
-                const current = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
-                if (!sqliteSessionEntriesEqual(current, before[sessionKey])) {
-                  throw new Error(
-                    `SQLite session entry changed before store projection for ${sessionKey}`,
+        const maintenancePlans: SessionEntryMaintenancePlan[] = [];
+        const deletedOwners = changedKeys.flatMap((sessionKey) => {
+          const entry = before[sessionKey];
+          return entry && !projected[sessionKey] ? [{ entry, sessionKey }] : [];
+        });
+        return {
+          deletedEntries: deletedOwners,
+          commit: () =>
+            withSqliteSessionDatabase(toDatabaseOptions(resolved), () => {
+              runOpenClawAgentWriteTransaction(
+                (transactionDb) => {
+                  for (const sessionKey of changedKeys) {
+                    const current = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
+                    if (!sqliteSessionEntriesEqual(current, before[sessionKey])) {
+                      throw new Error(
+                        `SQLite session entry changed before store projection for ${sessionKey}`,
+                      );
+                    }
+                  }
+                  for (const sessionKey of changedKeys) {
+                    const entry = projected[sessionKey];
+                    if (entry) {
+                      writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry), {
+                        previousEntry: before[sessionKey] ?? null,
+                      });
+                    } else {
+                      deleteSessionEntryRows(transactionDb, sessionKey);
+                    }
+                  }
+                  maintenancePlans.push(
+                    applySessionEntryMaintenance(transactionDb, {
+                      activeSessionKey: params.activeSessionKey ?? "",
+                      archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+                      skipMaintenance: params.skipMaintenance,
+                      storePath: params.storePath,
+                    }),
                   );
-                }
-              }
-              for (const sessionKey of changedKeys) {
-                const entry = projected[sessionKey];
-                if (entry) {
-                  writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry), {
-                    previousEntry: before[sessionKey] ?? null,
-                  });
-                } else {
-                  deleteSessionEntryRows(transactionDb, sessionKey);
-                }
-              }
-              maintenancePlans.push(
-                applySessionEntryMaintenance(transactionDb, {
-                  activeSessionKey: params.activeSessionKey ?? "",
-                  archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-                  skipMaintenance: params.skipMaintenance,
-                  storePath: params.storePath,
-                }),
+                },
+                toDatabaseOptions(resolved),
+                { operationLabel: "session.store-projection" },
               );
-            },
-            toDatabaseOptions(resolved),
-            { operationLabel: "session.store-projection" },
-          );
-          return { maintenancePlans, result: operation.result };
-        },
-      };
+              return { maintenancePlans, result: operation.result };
+            }),
+        };
+      });
     },
     "session.store-projection",
   );
@@ -319,9 +325,11 @@ export async function applySessionEntryLifecycleMutation(params: {
             }
           : {}),
         commit: () =>
-          commitProjectedLifecycleMutation(
-            materializedRemovalPlans,
-            removalArchiveMaterializationFailed,
+          withSqliteSessionDatabase(toDatabaseOptions(resolved), () =>
+            commitProjectedLifecycleMutation(
+              materializedRemovalPlans,
+              removalArchiveMaterializationFailed,
+            ),
           ),
       };
     },

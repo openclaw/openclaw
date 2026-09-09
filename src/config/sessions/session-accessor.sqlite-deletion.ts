@@ -30,6 +30,7 @@ import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
+  withSqliteSessionDatabase,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
@@ -92,8 +93,11 @@ export async function runPreparedSqliteSessionWrite<T>(
       return await runExclusiveSqliteSessionWrite(
         scope,
         async () => {
-          assertCurrent();
-          return await write.commit();
+          return await withSqliteSessionDatabase(
+            toDatabaseOptions(scope),
+            () => write.commit(),
+            assertCurrent,
+          );
         },
         operation,
       );
