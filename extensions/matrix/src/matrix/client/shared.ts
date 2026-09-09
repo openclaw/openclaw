@@ -365,6 +365,7 @@ function beginGenerationRetirement(params: {
   const result = createDeferred<void>();
   state.retirementPromise = result.promise;
   const owner = Promise.resolve().then(async () => {
+    let canReplacePoisonedGeneration = false;
     const startup = state.startPromise;
     if (startup) {
       try {
@@ -397,12 +398,14 @@ function beginGenerationRetirement(params: {
       await state.client.drainPendingDecryptions("matrix monitor sync quiesce");
     } catch (error) {
       state.poisonError = toRetirementError(error);
+      canReplacePoisonedGeneration = true;
     }
 
     try {
       await retireMonitorLeases(state, params.monitorLeases ?? []);
     } catch (error) {
       state.poisonError ??= toRetirementError(error);
+      canReplacePoisonedGeneration = false;
     }
 
     state.phase = "closing";
@@ -416,17 +419,21 @@ function beginGenerationRetirement(params: {
       );
     } catch (error) {
       state.poisonError ??= toRetirementError(error);
+      canReplacePoisonedGeneration = false;
       result.reject(state.poisonError);
       lateLeaseDrain = state.noLeases.promise;
     }
 
     if (state.poisonError) {
-      await state.client
+      const decryptionsDrained = await state.client
         .drainPendingDecryptions("matrix poisoned client shutdown")
-        .catch(() => undefined);
+        .then(
+          () => true,
+          () => false,
+        );
       state.client.stopWithoutPersist();
       await lateLeaseDrain;
-      if (lateLeaseDrain) {
+      if (lateLeaseDrain || (canReplacePoisonedGeneration && decryptionsDrained)) {
         deleteSharedClientState(state);
       }
       throw state.poisonError;

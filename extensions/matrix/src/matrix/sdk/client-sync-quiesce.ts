@@ -10,6 +10,14 @@ const MATRIX_JS_SDK_SYNC_VERSION = "41.9.0-rc.0";
 const matrixJsSdkPackage = createRequire(import.meta.url)("matrix-js-sdk/package.json") as {
   version?: unknown;
 };
+type MatrixClassicSyncInternals = {
+  connectionReturnedResolvers?: { reject: (reason?: unknown) => void };
+};
+
+function requireMatrixClassicSyncInternals(syncApi: unknown): MatrixClassicSyncInternals {
+  // SAFETY: the caller asserts the exact matrix-js-sdk version before using this private shape.
+  return syncApi as MatrixClassicSyncInternals;
+}
 
 function assertMatrixJsSdkSyncVersion(): void {
   const version = matrixJsSdkPackage.version;
@@ -50,10 +58,17 @@ export async function quiesceMatrixClientSync(params: {
         : "Matrix sync quiesce rejected a sliding or unknown matrix-js-sdk sync implementation",
     );
   }
-  if (syncApi.getSyncState() === SyncState.Stopped) {
+  const syncState = syncApi.getSyncState();
+  if (syncState === SyncState.Stopped) {
     params.markStopped();
     return;
   }
+  const disconnectedBeforeStop =
+    syncState === SyncState.Error || syncState === SyncState.Reconnecting;
+  const syncInternals = requireMatrixClassicSyncInternals(syncApi);
+  const keepaliveResolvers = disconnectedBeforeStop
+    ? syncInternals.connectionReturnedResolvers
+    : undefined;
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -85,6 +100,14 @@ export async function quiesceMatrixClientSync(params: {
     params.emitter.on("sync.state", onSyncState);
     try {
       syncApi.stop();
+      // 41.9.0-rc.0 leaves a parked keepalive awaiting this resolver after stop().
+      // Clear and reject only the resolver captured before stop so a replacement
+      // created concurrently by the SDK cannot be disturbed.
+      if (keepaliveResolvers && syncInternals.connectionReturnedResolvers === keepaliveResolvers) {
+        syncInternals.connectionReturnedResolvers = undefined;
+        keepaliveResolvers.reject("SyncApi.stop() was called");
+        settle();
+      }
     } catch (error) {
       params.syncStore?.discardPendingSyncCursorPersistence();
       settle(error instanceof Error ? error : new Error(String(error)));
