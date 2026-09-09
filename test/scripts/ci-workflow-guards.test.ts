@@ -3080,14 +3080,33 @@ NODE
     const controlUiPublishStep = controlUiFinalize.steps.find(
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
     );
+    const sharedCatalogInputs = [
+      "scripts/lib/control-ui-i18n-catalog.ts",
+      "scripts/lib/control-ui-i18n-catalog-values.ts",
+      "ui/src/i18n/lib/config-hint-translation.ts",
+      "ui/src/lib/fnv1a.ts",
+      "src/config/schema*.ts",
+      "src/config/zod-schema*.ts",
+      "src/config/media-audio-field-metadata.ts",
+      "src/config/talk-defaults.ts",
+      "src/config/channel-config-keys.ts",
+    ];
+    const sharedCatalogInputOwners = [
+      workflow.on.push.paths,
+      nativePublishStep.with["invalidation-paths"].trim().split("\n"),
+      controlUiWorkflow.on.push.paths,
+      controlUiPublishStep.with["invalidation-paths"].trim().split("\n"),
+    ];
+    for (const catalogInput of sharedCatalogInputs) {
+      for (const ownerPaths of sharedCatalogInputOwners) {
+        expect(ownerPaths).toContain(catalogInput);
+      }
+    }
     expect(controlUiPublishStep.with["generated-paths"].trim().split("\n")).toEqual([
       "ui/src/i18n/.i18n/*.tm.jsonl",
       "ui/src/i18n/.i18n/*.meta.json",
       "ui/src/i18n/.i18n/catalog-fallbacks.json",
     ]);
-    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
-      "scripts/lib/control-ui-i18n-catalog.ts",
-    );
     expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
       "scripts/lib/control-ui-i18n-sync-plan.ts",
     );
