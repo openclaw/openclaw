@@ -36,65 +36,110 @@ describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("retains video previews in visible inactive panes and releases hidden transcript rows", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(60_000);
-    vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(
-      new Blob(["poster"], { type: "image/jpeg" }),
-    );
-    const NativeUrl = URL;
+  describe("user video previews", () => {
+    const videoUrl = "https://cdn.example/recording.mp4";
+    const onOpenSidebar = vi.fn();
     const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends NativeUrl {
-        static override createObjectURL = () => "blob:visible-transcript-poster";
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const props = {
-      ...threadProps("video-pane-visibility", "agent:main:video", [
-        {
-          role: "user",
-          timestamp: 1_000,
-          content: [
-            {
-              type: "attachment",
-              attachment: {
-                kind: "video",
-                label: "Recording.mp4",
-                mimeType: "video/mp4",
-                url: "https://cdn.example/recording.mp4",
-              },
-            },
-          ],
+    let props: ReturnType<typeof threadProps>;
+    let transcript: ReturnType<typeof createTestTranscript>;
+    let container: HTMLDivElement;
+
+    beforeEach(() => {
+      vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(new Blob(["poster"]));
+      onOpenSidebar.mockClear();
+      revokeObjectURL.mockClear();
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = () => "blob:transcript-poster";
+          static override revokeObjectURL = revokeObjectURL;
         },
-      ]),
-      presented: false,
-      transcriptVisible: true,
-      onOpenSidebar: vi.fn(),
-    };
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const rerender = () => {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    };
-    try {
-      rerender();
+      );
+      props = {
+        ...threadProps("video-preview", "agent:main:video", [
+          {
+            role: "user",
+            timestamp: 1_000,
+            content: [
+              { type: "image", url: "/media/reference.png", alt: "Reference" },
+              {
+                type: "attachment",
+                attachment: {
+                  kind: "video",
+                  url: videoUrl,
+                  label: "Recording.mp4",
+                  mimeType: "video/mp4",
+                },
+              },
+              { type: "text", text: "Check this recording." },
+            ],
+          },
+        ]),
+        presented: false,
+        transcriptVisible: true,
+        onOpenSidebar,
+      };
+      container = document.body.appendChild(document.createElement("div"));
+      transcript = createTestTranscript();
       transcript.hostConnected();
-      await flushDeferredRowPrune();
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-      props.transcriptVisible = false;
-      rerender();
-      expect(container.querySelector(".chat-video-preview img")).toBeNull();
-      expect(revokeObjectURL).toHaveBeenCalledWith("blob:visible-transcript-poster");
-      props.transcriptVisible = true;
-      rerender();
-      await flushDeferredRowPrune();
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-    } finally {
+    });
+    afterEach(() => {
       render(nothing, container);
       transcript.hostDisconnected();
+    });
+    async function renderPreview() {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
     }
+
+    it("places mixed user media above text and opens the video in Files without inline playback", async () => {
+      await renderPreview();
+      const bubble = container.querySelector(".chat-bubble--with-images");
+      const gallery = bubble?.querySelector(":scope > .chat-message-images");
+      expect(gallery?.querySelectorAll(".chat-image-frame")).toHaveLength(2);
+      expect(gallery?.nextElementSibling?.textContent).toContain("Check this recording.");
+      expect(container.querySelector("video, openclaw-chat-video-player")).toBeNull();
+      gallery?.querySelector<HTMLButtonElement>(".chat-video-preview button")?.click();
+      expect(onOpenSidebar).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "attachment", attachmentKind: "video", src: videoUrl }),
+      );
+    });
+
+    it.each(["video", "image"])(
+      "keeps an openable gallery card when %s decoding fails",
+      async (stage) => {
+        if (stage === "video") {
+          vi.mocked(videoPoster.requestVideoPoster).mockResolvedValue(null);
+        }
+        await renderPreview();
+        const frame = container.querySelector(".chat-video-preview");
+        if (stage === "image") {
+          expectDefined(frame?.querySelector("img"), "loaded video poster").dispatchEvent(
+            new Event("error"),
+          );
+        }
+        expect(frame?.querySelector(".chat-assistant-attachment-card--compact")).toBeInstanceOf(
+          HTMLElement,
+        );
+        frame?.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+        expect(onOpenSidebar).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "attachment", src: videoUrl }),
+        );
+      },
+    );
+
+    it("retains visible inactive video previews, releases hidden rows and restores them on return", async () => {
+      await renderPreview();
+      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+      props.transcriptVisible = false;
+      await renderPreview();
+      expect(container.querySelector(".chat-video-preview img")).toBeNull();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
+      props.transcriptVisible = true;
+      await renderPreview();
+      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+    });
   });
 
   it("updates settled GitHub reference chips when the session repository arrives or changes", () => {

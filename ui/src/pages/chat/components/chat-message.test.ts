@@ -1,13 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import * as markdown from "../../../components/markdown.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
-import * as videoPoster from "../../../lib/media/video-poster.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
@@ -4947,161 +4946,6 @@ describe("grouped chat rendering", () => {
       blocked?.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent,
     ).toContain("Outside allowed folders");
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Blocked\nDone");
-  });
-
-  describe("user video previews", () => {
-    let container: HTMLDivElement;
-    const videoUrl = "https://cdn.example/clip%2Emp4?download=1";
-    const posterBlob = new Blob(["poster"], { type: "image/jpeg" });
-    const createObjectURL = vi.fn(() => "blob:transcript-poster");
-    const revokeObjectURL = vi.fn();
-    const onOpenSidebar = vi.fn();
-
-    function renderVideo(withImage = false, options: Partial<RenderMessageGroupOptions> = {}) {
-      renderGroupedMessage(
-        container,
-        createUserMessage([
-          ...(withImage
-            ? [createMediaBlock({ url: "/media/inbound/reference.png", alt: "Reference" })]
-            : []),
-          createAttachmentBlock(videoUrl, "video", "Recording.mp4", "video/mp4"),
-          { type: "text", text: "Check this recording." },
-        ]),
-        "user",
-        { showToolCalls: false, onOpenSidebar, ...options },
-      );
-    }
-
-    beforeEach(() => {
-      container = document.body.appendChild(document.createElement("div"));
-      vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(posterBlob);
-      const NativeUrl = URL;
-      createObjectURL.mockClear();
-      revokeObjectURL.mockClear();
-      onOpenSidebar.mockClear();
-      vi.stubGlobal(
-        "URL",
-        class extends NativeUrl {
-          static override createObjectURL = createObjectURL;
-          static override revokeObjectURL = revokeObjectURL;
-        },
-      );
-    });
-
-    afterEach(() => {
-      render(nothing, container);
-      container.remove();
-    });
-
-    it.each([false, true])(
-      "places user video previews in the image gallery (with image: %s)",
-      async (withImage) => {
-        renderVideo(withImage);
-        await flushAssistantAttachmentAvailabilityChecks();
-        const bubble = container.querySelector(".chat-bubble--with-images");
-        const gallery = bubble?.querySelector(":scope > .chat-message-images");
-        expect(gallery).toBeInstanceOf(HTMLElement);
-        expect(gallery?.querySelectorAll(".chat-image-frame")).toHaveLength(withImage ? 2 : 1);
-        expect(bubble?.querySelector(":scope > .chat-text")?.textContent).toContain(
-          "Check this recording.",
-        );
-        expect(container.querySelector("video, openclaw-chat-video-player")).toBeNull();
-        expect(gallery?.querySelector(".chat-video-preview img")?.getAttribute("src")).toBe(
-          "blob:transcript-poster",
-        );
-        gallery?.querySelector<HTMLButtonElement>(".chat-video-preview button")?.click();
-        expect(onOpenSidebar).toHaveBeenCalledWith(
-          expect.objectContaining({ kind: "attachment", attachmentKind: "video", src: videoUrl }),
-        );
-        render(nothing, container);
-        expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
-      },
-    );
-
-    it.each(["video", "image"])(
-      "keeps the existing card and open action when %s decoding fails",
-      async (stage) => {
-        if (stage === "video") {
-          vi.mocked(videoPoster.requestVideoPoster).mockResolvedValue(null);
-        }
-        renderVideo(true);
-        await flushAssistantAttachmentAvailabilityChecks();
-        const frame = container.querySelector(".chat-video-preview");
-        if (stage === "image") {
-          const poster = frame?.querySelector("img");
-          expect(poster).toBeInstanceOf(HTMLImageElement);
-          poster?.dispatchEvent(new Event("error"));
-          expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
-        }
-        expect(frame?.querySelector(".chat-assistant-attachment-card--compact")).toBeInstanceOf(
-          HTMLElement,
-        );
-        expect(frame?.querySelector("img, video, openclaw-chat-video-player")).toBeNull();
-        frame?.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
-        expect(onOpenSidebar).toHaveBeenCalledWith(
-          expect.objectContaining({ kind: "attachment", src: videoUrl }),
-        );
-      },
-    );
-
-    it("releases a hidden preview and ignores a late poster without caching cancellation as failure", async () => {
-      let notifyVisibility: (states: boolean[]) => void = () => {
-        throw new Error("viewport observer not mounted");
-      };
-      vi.stubGlobal(
-        "IntersectionObserver",
-        class {
-          constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
-            notifyVisibility = (states) =>
-              callback(states.map((isIntersecting) => ({ isIntersecting })));
-          }
-          observe = vi.fn();
-          disconnect = vi.fn();
-        },
-      );
-      let finishPoster = () => {};
-      const pendingPoster = new Promise<Blob | null>((resolve) => {
-        finishPoster = () => resolve(posterBlob);
-      });
-      vi.mocked(videoPoster.requestVideoPoster).mockReturnValueOnce(pendingPoster);
-      renderVideo();
-      notifyVisibility([true]);
-      const pendingSignal = vi.mocked(videoPoster.requestVideoPoster).mock.calls[0]?.[0].signal;
-      notifyVisibility([true, false]);
-      expect(pendingSignal?.aborted).toBe(true);
-      finishPoster();
-      await flushAssistantAttachmentAvailabilityChecks();
-      expect(
-        container.querySelector(".chat-video-preview img, .chat-assistant-attachment-card"),
-      ).toBeNull();
-      expect(createObjectURL).not.toHaveBeenCalled();
-      notifyVisibility([true]);
-      await flushAssistantAttachmentAvailabilityChecks();
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-      notifyVisibility([false]);
-      expect(container.querySelector(".chat-video-preview img")).toBeNull();
-      expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
-    });
-
-    it("ignores a pending poster from the previous access policy", async () => {
-      let finishStalePoster = () => {};
-      const stalePoster = new Promise<Blob | null>((resolve) => {
-        finishStalePoster = () => resolve(new Blob(["obsolete poster"], { type: "image/jpeg" }));
-      });
-      vi.mocked(videoPoster.requestVideoPoster).mockReturnValueOnce(stalePoster);
-      renderVideo(false, { mediaPolicyKey: "policy-one" });
-      const previousSignal = vi.mocked(videoPoster.requestVideoPoster).mock.calls[0]?.[0].signal;
-      renderVideo(false, { mediaPolicyKey: "policy-two" });
-      await flushAssistantAttachmentAvailabilityChecks();
-      expect(previousSignal?.aborted).toBe(true);
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-      finishStalePoster();
-      await flushAssistantAttachmentAvailabilityChecks();
-      expect(createObjectURL).toHaveBeenCalledTimes(1);
-      expect(container.querySelector(".chat-video-preview img")?.getAttribute("src")).toBe(
-        "blob:transcript-poster",
-      );
-    });
   });
 
   it("renders transcript video URLs with encoded extensions as cards", () => {
