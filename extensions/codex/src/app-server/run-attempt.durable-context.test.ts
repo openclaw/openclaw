@@ -2,11 +2,16 @@ import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
+  createCodexRuntimePlanFixture,
   createParams,
+  createRuntimeDynamicTool,
   createStartedThreadHarness,
   fastWait,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -152,3 +157,72 @@ it.each(["started", "resumed"] as const)(
     expect(JSON.stringify(nextRequest?.params)).not.toContain("Imported durable result");
   },
 );
+
+it("advances history coverage after successful local message-tool completion", async () => {
+  const sessionFile = path.join(tempDir, "local-source-reply-session.jsonl");
+  const workspaceDir = path.join(tempDir, "local-source-reply-workspace");
+  const cutoff = Date.now() - 1_000;
+  await writeCodexAppServerBinding(sessionFile, {
+    threadId: "thread-1",
+    cwd: workspaceDir,
+    model: "gpt-5.4-codex",
+    modelProvider: "openai",
+    dynamicToolsFingerprint: "[]",
+    historyCoveredThrough: new Date(cutoff).toISOString(),
+    webSearchThreadConfigFingerprint: JSON.stringify({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    }),
+  });
+
+  const messageTool = createRuntimeDynamicTool("message");
+  messageTool.parameters = {
+    type: "object",
+    properties: {
+      action: { type: "string" },
+      message: { type: "string" },
+    },
+    additionalProperties: true,
+  };
+  messageTool.execute = vi.fn(async () => ({
+    content: [{ type: "text" as const, text: "Sent." }],
+    details: { messageId: "telegram-123" },
+  }));
+  dynamicToolBuildState.openClawCodingToolsFactory = () => [messageTool];
+
+  const params = createParams(sessionFile, workspaceDir);
+  params.runtimePlan = createCodexRuntimePlanFixture();
+  params.sourceReplyDeliveryMode = "message_tool_only";
+  setCodexTestModelSupportsTools(params, true);
+  const harness = createStartedThreadHarness();
+  const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+  const run = runCodexAppServerAttempt(params);
+  try {
+    await harness.waitForMethod("turn/start");
+    const response = await harness.handleServerRequest({
+      id: "local-source-reply",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "local-source-reply",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", message: "visible reply" },
+      },
+    });
+    expect(response).toMatchObject({
+      success: true,
+      contentItems: [{ type: "inputText", text: "Sent." }],
+    });
+    expect(messageTool.execute).toHaveBeenCalledOnce();
+    await run;
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const coveredThrough = Date.parse(binding?.historyCoveredThrough ?? "");
+    expect(Number.isFinite(coveredThrough)).toBe(true);
+    expect(coveredThrough).toBeGreaterThan(cutoff);
+  } finally {
+    closeHostCapabilities();
+    harness.close();
+  }
+});
