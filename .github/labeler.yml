@@ -226,6 +226,7 @@
       - any-glob-to-any-file:
           - "extensions/telegram/**"
           - "docs/channels/telegram.md"
+          - "docs/channels/telegram/**"
 "channel: tlon":
   - changed-files:
       - any-glob-to-any-file:
