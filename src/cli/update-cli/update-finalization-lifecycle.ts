@@ -18,18 +18,19 @@ import { getPendingCliDisposers } from "../runtime-cleanup.js";
 import { UpdateFinalizationOutput } from "./update-finalization-output.js";
 import { inspectUpdateFinalizationChildren } from "./update-finalization-processes.js";
 
-// Local metadata/backup/completion work gets 30s; Doctor gets 2m for migrations,
-// registry installs get 10m, and convergence gets 3m for Doctor + validation.
+// Repair Doctor has no automatic deadline, including its enclosing convergence
+// phase. Other phases remain bounded; an explicit timeout applies to every phase.
 const PHASE_BUDGET_MS = {
   preflight: 30_000,
   targetConfigValidation: 30_000,
   configSnapshot: 30_000,
-  doctor: 120_000,
+  doctor: undefined,
   plugins: 600_000,
-  targetConfigConvergence: 180_000,
+  targetConfigConvergence: undefined,
   completionCache: 30_000,
 };
 type Phase = keyof typeof PHASE_BUDGET_MS;
+type DoctorPhase = "doctor" | "targetConfigConvergence";
 type Outcome = "completed" | "failed" | "warning" | "skipped" | "deferred";
 
 export class UpdateFinalizationLifecycle {
@@ -98,8 +99,12 @@ export class UpdateFinalizationLifecycle {
     }
   }
 
-  budget(phase: Phase): number {
-    return Math.min(this.timeoutMs ?? PHASE_BUDGET_MS[phase], 2_147_483_647);
+  budget(phase: DoctorPhase): number | undefined;
+  budget(phase: Exclude<Phase, DoctorPhase>): number;
+  budget(phase: Phase): number | undefined;
+  budget(phase: Phase): number | undefined {
+    const budgetMs = this.timeoutMs ?? PHASE_BUDGET_MS[phase];
+    return budgetMs === undefined ? undefined : Math.min(budgetMs, 2_147_483_647);
   }
 
   async run<T>(phase: Phase, run: () => Promise<T>, outcome?: (result: T) => Outcome): Promise<T> {
@@ -135,7 +140,7 @@ export class UpdateFinalizationLifecycle {
       this.record(active, result === "failed" ? "failed" : "completed", Date.now(), detail);
     };
     // Borrowed invocations keep awaiting the phase without taking over their host's lifetime.
-    if (hasCliProcessScope()) {
+    if (budgetMs !== undefined && hasCliProcessScope()) {
       this.timer = setTimeout(() => {
         // Do not race and unwind a still-mutating phase. Kill owned subprocesses and
         // exit without yielding, so late awaits cannot write into an OCM rollback.

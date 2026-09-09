@@ -65,38 +65,15 @@ import {
   createPreparedSimpleCompletionResolverContext,
   type PreparedSimpleCompletionResolverContext,
 } from "./simple-completion-scope.js";
+import type {
+  AgentSimpleCompletionSelection,
+  PreparedSimpleCompletionModel,
+  PreparedSimpleCompletionModelForAgent,
+  PrepareSimpleCompletionModelForAgentParams,
+} from "./simple-completion.types.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
-
-export type PreparedSimpleCompletionModel =
-  | {
-      model: Model;
-      auth: ResolvedProviderAuth;
-      /** Non-reversible owner proof captured from the same auth snapshot. */
-      sourceAuthFingerprint?: string;
-    }
-  | {
-      error: string;
-      auth?: ResolvedProviderAuth;
-    };
-
-type AgentSimpleCompletionSelection = {
-  provider: string;
-  modelId: string;
-  /** Shipped SDK return field; new selections carry canonical identity in provider. */
-  runtimeProvider?: string;
-  profileId?: string;
-  agentDir: string;
-};
-
-type PreparedSimpleCompletionModelForAgent =
-  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & {
-      selection: AgentSimpleCompletionSelection;
-    })
-  | (Extract<PreparedSimpleCompletionModel, { error: string }> & {
-      selection?: AgentSimpleCompletionSelection;
-    });
 
 type SimpleCompletionSelectionParams = {
   cfg: OpenClawConfig;
@@ -533,37 +510,13 @@ async function withPreparedSimpleCompletionRuntime<T>(
   }
 }
 
-export async function prepareSimpleCompletionModelForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  agentDir?: string;
-  modelRef?: string;
-  useUtilityModel?: boolean;
-  preferredProfile?: string;
-  allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
-  allowBundledStaticCatalogFallback?: boolean;
-  /** @deprecated no-op; kept for plugin-SDK source compatibility, remove at next SDK-breaking window. */
-  useAsyncModelResolution?: boolean;
-  skipAgentDiscovery?: boolean;
-  bindAuthOwner?: boolean;
-  modelResolver?: typeof resolveModelAsync;
-}): Promise<PreparedSimpleCompletionModelForAgent> {
-  const acquired = await acquireSimpleCompletionModelForAgent(params);
-  if ("error" in acquired) {
-    return acquired;
-  }
-  const { release, ...prepared } = acquired;
-  release();
-  return prepared;
-}
-
 type AcquiredSimpleCompletionModelForAgent =
   | (Extract<PreparedSimpleCompletionModelForAgent, { model: Model }> & { release: () => void })
   | Extract<PreparedSimpleCompletionModelForAgent, { error: string }>;
 
 /** Keeps prepared facts in use until the internal completion owner releases its lease. */
 export async function acquireSimpleCompletionModelForAgent(
-  params: Parameters<typeof prepareSimpleCompletionModelForAgent>[0],
+  params: PrepareSimpleCompletionModelForAgentParams,
 ): Promise<AcquiredSimpleCompletionModelForAgent> {
   const selectionParams = {
     cfg: params.cfg,

@@ -1105,10 +1105,15 @@ describe("capability cli", () => {
       },
     });
 
-    await expect(runCapability("audio", "providers", "--json")).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("inference provider inspection has no explicit owner");
-    expectRuntimeErrorContains("Pass --agent <id> or set agents.defaults.systemAgent.agentId");
+    // Agent selection is an expected CLI condition rendered by the root failure
+    // owner; the command rethrows instead of printing its own copy.
+    await expect(runCapability("audio", "providers", "--json")).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringMatching(
+        /inference provider inspection has no explicit owner[\s\S]*Pass --agent <id> or set agents\.defaults\.systemAgent\.agentId/,
+      ),
+    });
+    expect(runtimeErrorMessages()).toEqual([]);
     expect(mocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
@@ -1265,11 +1270,13 @@ describe("capability cli", () => {
 
     await expect(
       runCapability("model", "run", "--local", "--prompt", "hi", "--json"),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("infer model run");
-    expectRuntimeErrorContains("--agent");
-    expectRuntimeErrorContains("agents.defaults.systemAgent.agentId");
+    ).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringMatching(
+        /infer model run[\s\S]*--agent[\s\S]*agents\.defaults\.systemAgent\.agentId/,
+      ),
+    });
+    expect(runtimeErrorMessages()).toEqual([]);
   });
 
   it("lets explicit model run agents override the system agent", async () => {
@@ -2155,9 +2162,11 @@ describe("capability cli", () => {
 
     await expect(
       runCapability("image", "generate", "--prompt", "friendly lobster", "--json"),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("Multiple agents are configured");
+    ).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringContaining("Multiple agents are configured"),
+    });
+    expect(runtimeErrorMessages()).toEqual([]);
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 

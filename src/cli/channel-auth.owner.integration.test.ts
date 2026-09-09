@@ -143,12 +143,15 @@ describe.each(["login", "logout"])("channels %s owner", (mode) => {
   });
 
   it("keeps an ownerless fleet from reaching either auth action", async () => {
-    await runAuth(mode);
+    // Agent selection is an expected CLI condition rendered by the root failure
+    // owner; the command rethrows instead of printing its own copy.
+    await expect(runAuth(mode)).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      message: expect.stringContaining("no explicit owner"),
+    });
 
-    expect(fixture.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("no explicit owner"),
-    );
-    expect(fixture.runtime.exit).toHaveBeenCalledWith(1);
+    expect(fixture.runtime.error).not.toHaveBeenCalled();
+    expect(fixture.runtime.exit).not.toHaveBeenCalled();
     expect(fixture.catalog).not.toHaveBeenCalled();
     expect(fixture.login).not.toHaveBeenCalled();
     expect(fixture.logout).not.toHaveBeenCalled();

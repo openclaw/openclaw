@@ -26,11 +26,8 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
-import {
-  resolveSandboxSkillRuntimeInputs,
-  mapSandboxSkillUsagePaths,
-  remapSkillReferencePaths,
-} from "../sandbox-skills.js";
+import { remapSkillReferencePaths } from "../sandbox-skills.js";
+import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
@@ -351,22 +348,26 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     skillFile: path.join(mount.hostPath, "SKILL.md"),
     readPath: path.posix.join(mount.containerPath, "SKILL.md"),
   }));
-  if (
-    pluginSandbox?.enabled &&
-    !pluginSandbox.readOnlyResourceMounts?.length &&
-    skillsSnapshot?.librarySelections?.length
-  ) {
-    const prepared = resolveSandboxSkillRuntimeInputs({
+  if (pluginSandbox?.enabled && !pluginSandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
+    const prepared = prepareEmbeddedSkills({
+      applySkillEnvironment: false,
+      includeCodeModeSkills: false,
+      attempt: {
+        bootstrapWorkspaceDir,
+        config: params.config,
+        contextTokenBudget: runtime.contextTokenBudget,
+        skillsSnapshot,
+        toolExecutionAllow: params.toolExecutionAllow,
+      },
+      effectiveWorkspace: workspaceDir,
       sandbox: pluginSandbox,
-      skillsAnchorWorkspace: bootstrapWorkspaceDir ?? workspaceDir,
-      skillsSnapshot,
+      sessionAgentId: workspaceResolution.agentId,
     });
-    skillsSnapshot = prepared.skillsSnapshot;
-    skillReferencePaths = mapSandboxSkillUsagePaths({
-      paths: pluginSandbox.skillUsagePaths,
-      skillsWorkspaceDir: prepared.skillsWorkspaceDir,
-      skillsPromptWorkspaceDir: prepared.skillsPromptWorkspaceDir,
-    });
+    skillsSnapshot = {
+      ...(prepared.skillsSnapshotForRun ?? skillsSnapshot),
+      prompt: prepared.skillsPrompt,
+    };
+    skillReferencePaths = prepared.skillUsagePaths;
   }
   const attemptControls = createAttemptControls({
     admittedRunContext,

@@ -6198,10 +6198,15 @@ setImmediate(() => {
         "test-third-party",
         "test-wear",
       ]) {
-        expect(
-          evaluateTimeout("android", { ...context, matrix: { task } }),
-          `${label}: ${task}`,
-        ).toBe(task === "build-play" && runner === "ubuntu-24.04" ? 35 : 20);
+        for (const lint of [undefined, false, true]) {
+          const extendedBudget =
+            (task === "test-third-party" && lint === true) ||
+            (task === "build-play" && runner === "ubuntu-24.04");
+          expect(
+            evaluateTimeout("android", { ...context, matrix: { task, lint } }),
+            `${label}: ${task}, lint=${lint}`,
+          ).toBe(extendedBudget ? 35 : 20);
+        }
       }
     }
   });

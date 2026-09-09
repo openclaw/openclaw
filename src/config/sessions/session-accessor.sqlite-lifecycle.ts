@@ -11,12 +11,9 @@ import { deletePersonalGitHubSessionReceipts } from "../../state/github-personal
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   deferOpenClawAgentPostCommitPublication,
-  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { resolveStateDir } from "../paths.js";
 import type { ResetSessionEntryLifecycleMutation } from "./session-accessor.lifecycle-types.js";
@@ -72,6 +69,7 @@ import {
   resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
+  withSqliteSessionDatabase,
   type ResolvedSqliteReadScope,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
@@ -91,19 +89,6 @@ function captureLifecycleDatabaseScope<T extends ResolvedSqliteReadScope>(scope:
     env,
     path: resolveOpenClawAgentSqlitePath(toDatabaseOptions({ ...scope, env })),
   };
-}
-
-function withLifecycleDatabase<T>(
-  options: OpenClawAgentDatabaseOptions,
-  operation: (database: OpenClawAgentDatabase) => T,
-  assertCurrent?: () => void,
-): T | Promise<T> {
-  assertCurrent?.();
-  if (getOpenClawAgentDatabaseIfOpen(options)) {
-    return operation(openOpenClawAgentDatabase(options));
-  }
-  // The caller keeps its FIFO section while the existing owner joins the integrity child.
-  return withOpenClawAgentDatabaseAsync(options, operation, assertCurrent);
 }
 
 async function withCommittedHistoryMaintenance<T>(
@@ -157,7 +142,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
     return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
   }
   const cleanupPlan = await runExclusiveSqliteSessionWrite(resolved, async () =>
-    withLifecycleDatabase(databaseOptions, (database) =>
+    withSqliteSessionDatabase(databaseOptions, (database) =>
       planSessionLifecycleArtifactCleanup(database, {
         ...(params.agentId !== undefined ? { agentId: resolved.agentId } : {}),
         archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts !== false,
@@ -339,7 +324,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
 ): Promise<DeleteSessionEntryLifecycleResult> {
   const databaseOptions = toDatabaseOptions(resolved);
   const prepared = await runExclusiveSqliteSessionWrite(resolved, async () =>
-    withLifecycleDatabase(
+    withSqliteSessionDatabase(
       databaseOptions,
       (database) => {
         const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
@@ -440,7 +425,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       const historicalArchivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
       for (const sessionId of prepared.historicalGenerationIds) {
         const plan = await runExclusiveSqliteSessionWrite(resolved, async () =>
-          withLifecycleDatabase(
+          withSqliteSessionDatabase(
             databaseOptions,
             (database) => {
               const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
@@ -490,7 +475,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
           const reclamationPlan = await runExclusiveSqliteSessionWrite(
             resolved,
             async () =>
-              withLifecycleDatabase(
+              withSqliteSessionDatabase(
                 databaseOptions,
                 (database) => {
                   const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);

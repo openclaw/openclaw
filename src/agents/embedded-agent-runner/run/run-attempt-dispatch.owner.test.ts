@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { buildSkillSnapshot } from "../../../skills/loading/workspace-skill-prompt.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   createOperationalRunInstanceRef,
@@ -39,23 +42,50 @@ vi.mock("../../runtime-plan/build.js", () => ({
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 it.each([
-  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: false, oneShotCliRun: undefined },
-  { agentId: "work", sandboxSessionKey: "global", remoteSkills: false, oneShotCliRun: true },
+  {
+    agentId: "main",
+    sandboxSessionKey: undefined,
+    remoteSkills: false,
+    skillCatalog: "host" as const,
+    oneShotCliRun: undefined,
+  },
+  {
+    agentId: "work",
+    sandboxSessionKey: "global",
+    remoteSkills: false,
+    skillCatalog: "sandbox" as const,
+    oneShotCliRun: true,
+  },
   {
     agentId: "work",
     sandboxSessionKey: "agent:main:policy",
     remoteSkills: false,
+    skillCatalog: "none" as const,
     oneShotCliRun: false,
   },
-  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: true, oneShotCliRun: true },
+  {
+    agentId: "main",
+    sandboxSessionKey: undefined,
+    remoteSkills: true,
+    skillCatalog: "none" as const,
+    oneShotCliRun: true,
+  },
 ])(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, remote skills $remoteSkills, and one-shot $oneShotCliRun",
-  async ({ agentId, sandboxSessionKey, remoteSkills, oneShotCliRun }) => {
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, and one-shot $oneShotCliRun",
+  async ({ agentId, sandboxSessionKey, remoteSkills, skillCatalog, oneShotCliRun }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
       "Co-authored-by: ada <20+ada@users.noreply.github.com>";
     vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue(gitCoauthorPrompt);
     await withOpenClawTestState({ label: "harness-owner" }, async (state) => {
+      const skillDir = path.join(state.workspaceDir, "skills", "demo");
+      if (skillCatalog !== "none") {
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.writeFile(
+          path.join(skillDir, "SKILL.md"),
+          "---\nname: demo\ndescription: Demo skill\n---\n\n# Demo\n",
+        );
+      }
       const config = {
         agents: {
           ownership: "explicit" as const,
@@ -66,6 +96,7 @@ it.each([
               mode: "off" as const,
               backend: "owner-fixture",
               scope: "agent" as const,
+              workspaceAccess: skillCatalog === "sandbox" ? ("rw" as const) : ("none" as const),
               workspaceRoot: state.path("sandbox"),
               prune: { idleHours: 0, maxAgeDays: 0 },
             },
@@ -124,6 +155,14 @@ it.each([
         runAttempt,
       });
       const runtimePluginToolGrant = { pluginId: "owner-tools", toolNames: ["owner_only"] };
+      const skillsSnapshot =
+        skillCatalog === "none"
+          ? undefined
+          : buildSkillSnapshot(state.workspaceDir, {
+              agentId,
+              bundledSkillsDir: state.path("missing-bundled-skills"),
+              managedSkillsDir: state.path("missing-managed-skills"),
+            });
       const params = {
         admittedRunContext,
         agentId,
@@ -135,6 +174,7 @@ it.each([
         workspaceDir: state.workspaceDir,
         sessionFile: "global",
         prompt: remoteSkills ? "Use the skill at /host/skills/demo/SKILL.md." : "hello",
+        ...(skillsSnapshot ? { skillsSnapshot } : {}),
         ...(remoteSkills
           ? {
               explicitSkillSelections: [
@@ -282,6 +322,18 @@ it.each([
           ]);
           expect(params.explicitSkillSelections?.[0]?.path).toBe("/host/skills/demo/SKILL.md");
           expect(sandbox).toEqual(remoteSandbox);
+        } else if (skillCatalog === "sandbox") {
+          const dispatched = runAttempt.mock.calls[0]?.[0];
+          const sandboxSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
+          expect(dispatched?.skillsSnapshot?.prompt).toContain(
+            `<location>${sandboxSkillPath}</location>`,
+          );
+          expect(dispatched?.skillsSnapshot?.prompt).not.toContain(path.join(skillDir, "SKILL.md"));
+          expect(params.skillsSnapshot?.prompt).toBe(skillsSnapshot?.prompt);
+          expect(sandbox?.workspaceAccess).toBe("rw");
+        } else if (skillCatalog === "host") {
+          expect(runAttempt.mock.calls[0]?.[0].skillsSnapshot?.prompt).toBe(skillsSnapshot?.prompt);
+          expect(sandbox).toBeNull();
         } else if (agentId === "work" && sandboxSessionKey === "global") {
           expect(provisioned).toHaveLength(1);
           expect(provisioned[0]).toMatch(/^agent:work:workspace:/);

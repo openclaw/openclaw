@@ -24,6 +24,38 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+const PACKAGE_BUILDER_NODE_SCRIPT = `node() {
+  local script="$1"
+  shift
+  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
+    command node "$script" "$@"
+    return
+  fi
+
+  local output_dir=""
+  local output_name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output-dir)
+        output_dir="$2"
+        shift 2
+        ;;
+      --output-name)
+        output_name="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  mkdir -p "$output_dir"
+  printf fixture >"$output_dir/$output_name"
+  printf "%s\\n" "$output_dir/$output_name"
+}
+export -f node`;
+
 const PASSTHROUGH_TIMEOUT_SCRIPT = `#!/usr/bin/env bash
 case "$1" in
   --kill-after=1s)
@@ -1596,37 +1628,7 @@ stderr="$(<"$TMPDIR/stderr")"
       tempPrefix: "openclaw-docker-build-cleanup-",
       scriptSource: (workDir: string) => repoShell(workDir)`
 
-node() {
-  local script="$1"
-  shift
-  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
-    command node "$script" "$@"
-    return
-  fi
-
-  local output_dir=""
-  local output_name=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --output-dir)
-        output_dir="$2"
-        shift 2
-        ;;
-      --output-name)
-        output_name="$2"
-        shift 2
-        ;;
-      *)
-        shift
-        ;;
-    esac
-  done
-
-  mkdir -p "$output_dir"
-  printf fixture >"$output_dir/$output_name"
-  printf "%s\\n" "$output_dir/$output_name"
-}
-export -f node
+${PACKAGE_BUILDER_NODE_SCRIPT}
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
@@ -1739,37 +1741,7 @@ SH
 chmod +x "$TMPDIR/bin/timeout"
 export PATH="$TMPDIR/bin:$PATH"
 
-node() {
-  local script="$1"
-  shift
-  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
-    command node "$script" "$@"
-    return
-  fi
-
-  local output_dir=""
-  local output_name=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --output-dir)
-        output_dir="$2"
-        shift 2
-        ;;
-      --output-name)
-        output_name="$2"
-        shift 2
-        ;;
-      *)
-        shift
-        ;;
-    esac
-  done
-
-  mkdir -p "$output_dir"
-  printf fixture >"$output_dir/$output_name"
-  printf "%s\\n" "$output_dir/$output_name"
-}
-export -f node
+${PACKAGE_BUILDER_NODE_SCRIPT}
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 

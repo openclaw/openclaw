@@ -375,7 +375,7 @@ The default existing-session path is host-only Chrome MCP auto-connect. If the b
 Current existing-session limits:
 
 - Snapshot-driven actions use refs, not CSS selectors.
-- Supported `act` requests use a built-in 60000 ms default when callers omit `timeoutMs`; per-call `timeoutMs` still wins.
+- Supported `act` requests use a built-in 60000 ms default when callers omit `timeoutMs`; accepted per-call overrides set that action budget.
 - `click` is left-click only.
 - `type` does not support `slowly=true`.
 - `press` does not support `delayMs`.
@@ -386,6 +386,10 @@ Current existing-session limits:
 - Dialog hooks do not support `--timeout`.
 - Screenshots support page captures and `--ref`, but not CSS `--element`.
 - `responsebody`, download interception, PDF export, and batch actions still require a managed browser or raw CDP profile.
+
+Existing-session action steps share one execution budget: filling and submitting with `type` do not each receive a fresh timeout. A conditional `wait` allows its explicit `timeMs` delay plus the action budget (with a 250 ms minimum) to satisfy the condition. A pure timer wait reserves the larger of `timeMs` and the action budget.
+
+Navigation verification has a separate shared allowance of the action budget plus 1250 ms for scheduled delays; `resize` and `close` skip verification. Browser and tab preparation, execution, and final URL lookup share the overall request deadline. Internal calls and navigation probes do not renew it.
 
 ## Remote browser control (node host proxy)
 

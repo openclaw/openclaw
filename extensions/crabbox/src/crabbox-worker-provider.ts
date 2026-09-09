@@ -640,9 +640,10 @@ export function createCrabboxWorkerProvider(
       }
       await stopLease(context);
       if (captureError) {
-        throw captureError instanceof Error
-          ? captureError
-          : new Error(coerceErrorMessage(captureError));
+        // Capture recovery remains recorded separately from confirmed source cleanup.
+        warn(
+          `Crabbox warm image capture failed during teardown: ${coerceErrorMessage(captureError)}`,
+        );
       }
     },
   };

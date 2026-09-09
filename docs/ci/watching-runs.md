@@ -64,6 +64,14 @@ rollup observation before deciding. Each poll reads at most 32 missing run recor
 excess references stay pending and resume from the cache on the next poll. Known
 missing or foreign associations remain blocking, as do independent failed checks.
 
+`STATUS` lines report progress. In rollup mode, `rollup` is the effective check
+verdict and `github_rollup` is GitHub's raw aggregate. Superseded checks can leave
+`github_rollup=FAILURE` while `rollup=pending` or `rollup=green`. A green rollup
+still waits for the attached CI run to succeed. Terminal `GREEN` exits 0,
+`FAILING` exits 15, and `TIMEOUT` exits 16. Rollup timeouts include the last raw
+aggregate and pending count; `ci-run` timeouts identify that completion mode
+because it does not inspect the rollup.
+
 GitHub can retain queued rerun placeholders while omitting the successful
 same-name job from the rollup. The watcher reconciles a placeholder only after
 verifying the successful exact-head attempt, its complete same-name job group,

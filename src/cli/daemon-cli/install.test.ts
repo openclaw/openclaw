@@ -756,20 +756,6 @@ describe("runDaemonInstall", () => {
     expectLastEmittedResult("already-installed");
   });
 
-  it.each(["3.53.4", "3.51.0"])(
-    "preserves a supported Node version with SQLite %s without force",
-    async (sqliteVersion) => {
-      service.isLoaded.mockResolvedValue(true);
-      service.readCommand.mockResolvedValue({
-        programArguments: ["/opt/supported/bin/node", "/opt/openclaw/dist/index.js", "gateway"],
-      });
-      runExecMock.mockResolvedValue(nodeProbeOutput("26.8.1", sqliteVersion));
-      await runDaemonInstall({ json: true });
-      expectLastEmittedResult("already-installed");
-      expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
     { failure: "probe", message: "openclaw gateway install --force" },
     { failure: "no-replacement", message: "No supported Node runtime is available" },

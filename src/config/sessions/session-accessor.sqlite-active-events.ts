@@ -86,6 +86,39 @@ export function readSessionTranscriptMessageEvents(
   });
 }
 
+/** Reads the last active-path message without hydrating its historical ancestors. */
+export function readLatestSessionTranscriptMessageEvent(
+  scope: SessionTranscriptReadScope,
+): SessionTranscriptMessageEvent | undefined {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const fence = resolveSqliteSessionTranscriptReadFence({
+      database: projection.database,
+      ...projection.resolved,
+    });
+    const row = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      getActiveTranscriptKysely(projection.database)
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select(["active.event_seq", "active.message_position", "event.event_json"])
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.message_position", "is not", null)
+        .where(
+          "active.message_position",
+          "<",
+          fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
+        )
+        .orderBy("active.message_position", "desc")
+        .limit(1),
+    );
+    return row ? parseActiveTranscriptMessageRow(row) : undefined;
+  });
+}
+
 /** Visits messages synchronously inside one active-path read snapshot. */
 export function visitSessionTranscriptMessageEvents(
   scope: SessionTranscriptReadScope,

@@ -9,7 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.Locale
 
-private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom")
+private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom", "toolresult")
 internal const val CHAT_IMAGE_MAX_BASE64_CHARS = 300 * 1024
 
 /** Keeps transcript rows limited to roles Android renders as user-visible chat. */
@@ -28,6 +28,8 @@ data class ChatMessage(
   val content: List<ChatMessageContent>,
   val timestampMs: Long?,
   val idempotencyKey: String? = null,
+  val runId: String? = null,
+  val steerTargetRunId: String? = null,
   /** Canonical transcript-tree identity supplied by chat.history. */
   val entryId: String? = null,
   val truncated: Boolean = false,
@@ -40,6 +42,8 @@ data class ChatMessage(
   val deliveryMirror: ChatDeliveryMirror? = null,
   val usage: ChatMessageUsage? = null,
   val cost: ChatMessageCost? = null,
+  /** Starts a turn whose input was intentionally omitted from display history. */
+  val turnBoundary: Boolean = false,
 ) {
   // Synthetic mirrors and commentary borrow a transcript ID, not its canonical text.
   // Keep the ID for timeline actions, but never use it to recover or retain full text.
@@ -169,6 +173,18 @@ data class ChatMessageContent(
   val durationMs: Long? = null,
   val playback: String? = null,
   val widget: ChatWidgetPreview? = null,
+  val toolActivity: ChatToolActivity? = null,
+)
+
+/** Bounded, display-safe projection of a transcript tool block. */
+@Serializable
+data class ChatToolActivity(
+  val toolCallId: String?,
+  val name: String,
+  val detail: String?,
+  val result: String?,
+  val isError: Boolean,
+  val arguments: kotlinx.serialization.json.JsonObject? = null,
 )
 
 data class ChatWidgetPreview(
@@ -433,6 +449,10 @@ data class ChatSessionEntry(
   val displayName: String? = null,
   val derivedTitle: String? = null,
   val label: String? = null,
+  /** Automatic device label; explicit labels and generated display names take precedence. */
+  val autoLabel: String? = null,
+  /** In-memory presentation fallback; never server metadata or cached session state. */
+  val localFallbackTitle: String? = null,
   val category: String? = null,
   val color: String? = null,
   val hasColorMetadata: Boolean = color != null,
@@ -513,7 +533,7 @@ data class ChatSessionAgentStatus(
   val attention: String? = null,
 )
 
-/** Local fallback for server-side `sessions.list` search over cached entries. */
+/** Local fallback for server-side `sessions.list` search over presented entries. */
 fun filterSessionEntries(
   sessions: List<ChatSessionEntry>,
   search: String,
@@ -521,7 +541,7 @@ fun filterSessionEntries(
   val query = search.trim().lowercase()
   if (query.isEmpty()) return sessions
   return sessions.filter { session ->
-    listOfNotNull(session.displayName, session.label, session.category, session.key)
+    listOfNotNull(session.displayName, session.label, session.autoLabel, session.localFallbackTitle, session.category, session.key)
       .any { it.lowercase().contains(query) }
   }
 }

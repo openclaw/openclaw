@@ -79,6 +79,8 @@ Crabbox lease teardown reserves time for the CLI's full bounded release attempts
 
 If provider teardown fails or times out during stop or move, the request reports the bounded, redacted provider cause even if recovery subsequently finishes cleanup. Retrying Stop on a failed placement reports that cleanup attempt's cause, which can differ from the original session failure. Follow the reported recovery guidance and check the current placement before retrying. A dedicated cloud worker can remain recorded as attached while destruction is uncertain, but its closed authority cannot resume remote workspace processes.
 
+While cleanup remains pending, the placement keeps the original failure and the latest cleanup cause. Repeated recovery checks do not append another copy of the same error, and long diagnostics retain the final provider cause.
+
 An ended or unusable provider lease is not proof that its machine was deleted. OpenClaw fences that worker, stops renewing the lease, and requests explicit provider teardown. Failed teardown stays retryable; a missing local claim or an earlier “not found” warning does not turn a failed stop into success.
 
 For automation, read the active placement's `generation`, `environmentId`, and `activeOwnerEpoch` from `sessions.describe`, then supply those exact source facts to `sessions.move`:

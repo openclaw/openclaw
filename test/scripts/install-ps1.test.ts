@@ -20,13 +20,29 @@ function extractEntrypointLines(source: string): string[] {
 }
 
 function extractFunctionBody(source: string, name: string): string {
-  const match = source.match(
-    new RegExp(`^function ${name} \\{\\r?\\n([\\s\\S]*?)^\\}\\r?\\n`, "m"),
-  );
-  if (match?.[1] === undefined) {
+  const lines = source.split(/\r?\n/u);
+  const start = lines.indexOf(`function ${name} {`);
+  if (start < 0) {
     throw new Error(`Missing PowerShell function body ${name}`);
   }
-  return match[1];
+  const body: string[] = [];
+  let hereStringEnd: string | undefined;
+  for (const line of lines.slice(start + 1)) {
+    if (hereStringEnd) {
+      if (line.startsWith(hereStringEnd)) {
+        hereStringEnd = undefined;
+      }
+    } else if (line === "}") {
+      return `${body.join("\n")}\n`;
+    } else {
+      const hereStringStart = /(?:^|[\s=])@(['"])\s*$/u.exec(line);
+      if (hereStringStart) {
+        hereStringEnd = `${hereStringStart[1]}@`;
+      }
+    }
+    body.push(line);
+  }
+  throw new Error(`Missing PowerShell function body ${name}`);
 }
 
 function findPowerShell(candidates = ["pwsh", "powershell"]): string | undefined {
@@ -489,6 +505,32 @@ try {
         ].join("\n"),
       },
       {
+        name: "node-capabilities",
+        source: [
+          scriptWithoutEntryPoint,
+          "function Get-Command { [pscustomobject]@{ Source = 'Invoke-FixtureNode' } }",
+          "function Invoke-FixtureNode {",
+          "  $global:LASTEXITCODE = 0",
+          "  if ($args[0] -eq '-v') { return $script:FixtureVersion }",
+          "  $input | Out-Null",
+          "  return $script:FixtureSqlite",
+          "}",
+          "foreach ($case in @(",
+          "  @{ version = 'v24.19.0'; text = $true; expected = $true },",
+          "  @{ version = 'v24.19.0'; text = $false; expected = $false },",
+          "  @{ version = 'v24.15.0+vendor.1'; text = $true; expected = $false },",
+          "  @{ version = 'v26.0.0+vendor.1'; text = $true; expected = $false },",
+          "  @{ version = 'v24.15.0'; text = $false; expected = $false },",
+          "  @{ version = 'v22.23.2'; text = $true; expected = $false }",
+          ")) {",
+          "  $script:FixtureVersion = $case.version",
+          "  $script:FixtureSqlite = @{ available = $true; version = '3.51.3'; text = $case.text; blob = $true; json = $true } | ConvertTo-Json -Compress",
+          "  $actual = Check-Node",
+          '  if ($actual -ne $case.expected) { throw "Version=$($case.version) Text=$($case.text) Actual=$actual" }',
+          "}",
+        ].join("\n"),
+      },
+      {
         name: "same-prefix-shim-transaction",
         source: [
           scriptWithoutEntryPoint,
@@ -611,7 +653,8 @@ try {
           "function private-node-fixture {",
           "  $global:LASTEXITCODE = 0",
           "  if ($args[0] -eq '-v') { return 'v26.1.0' }",
-          "  return $script:FixtureSqliteVersion",
+          "  $input | Out-Null",
+          "  return (@{ available = $true; version = $script:FixtureSqliteVersion; text = $true; blob = $true; json = $true } | ConvertTo-Json -Compress)",
           "}",
           "function Get-Command { throw 'unexpected ambient runtime lookup' }",
           "$cases = @{",
@@ -1480,6 +1523,10 @@ try {
   runIfPowerShell("accepts only supported Node versions", () => {
     expectBatchedPowerShellCase("node-versions");
     expectBatchedPowerShellCase("sqlite-versions");
+  });
+
+  runIfPowerShell("requires the numeric floor and SQLite round trips before reusing Node", () => {
+    expectBatchedPowerShellCase("node-capabilities");
   });
 
   runIfPowerShell("normalizes and exports one installer temp root", () => {

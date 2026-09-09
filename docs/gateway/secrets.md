@@ -406,7 +406,7 @@ Current limits:
 
 - The traffic allowlist constrains only cooperating clients that honor the proxy environment (`HTTPS_PROXY` and the CA variables). A subprocess can ignore those variables and open raw sockets, so the allowlist is defense in depth; destination-bound sentinels remain the primary defense because they survive proxy bypass.
 - HTTP/2 upstream connections are not supported; the proxy uses HTTP/1.1 upstream.
-- WebSocket rewriting is not supported.
+- WebSocket upgrades support secret substitution in the handshake URL and headers. Message frames pass through unchanged; sentinels inside WebSocket messages are not substituted.
 - Non-443 HTTPS substitution is not a supported compatibility target.
 - Identity-scoped secrets are not supported; only the team store participates.
 - Allowed-host policy is exact-hostname authorization only. It does not validate the resolved IP or prevent an allowed origin from reflecting credentials.

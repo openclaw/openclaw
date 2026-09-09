@@ -4,9 +4,11 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { createConfigIO } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -14,7 +16,6 @@ import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervi
 import { tryReadJson } from "../../infra/json-files.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
 
 export type ManagedServiceRootRedirect = {
@@ -134,7 +135,9 @@ export async function resolvePackageRuntimePreflight(params: {
     nodeRunner,
     timeoutMs: params.timeoutMs,
   });
-  const satisfies = nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
+  const satisfies = runtime.failure
+    ? false
+    : nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
   const targetVersion = target.version;
   const unchangedRuntime = { ...unchanged(), targetVersion };
   if (satisfies === true) {
@@ -146,10 +149,9 @@ export async function resolvePackageRuntimePreflight(params: {
       nodeRunner: fallbackNodeRunner,
       timeoutMs: params.timeoutMs,
     });
-    const fallbackSatisfies = nodeVersionSatisfiesEngine(
-      fallbackRuntime.version,
-      target.nodeEngine,
-    );
+    const fallbackSatisfies = fallbackRuntime.failure
+      ? false
+      : nodeVersionSatisfiesEngine(fallbackRuntime.version, target.nodeEngine);
     if (fallbackSatisfies === true) {
       return ok({
         nodeRunner: fallbackNodeRunner,
@@ -167,6 +169,7 @@ export async function resolvePackageRuntimePreflight(params: {
   return resultError(
     [
       `${runtimeLabel} is incompatible with openclaw@${targetVersion}.`,
+      ...(runtime.failure ? [runtime.failure] : []),
       `The requested package requires ${target.nodeEngine}.`,
       runtime.nodeRunner
         ? "Use a compatible version of the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
@@ -180,16 +183,21 @@ export async function resolvePackageRuntimePreflight(params: {
 async function resolvePackageRuntimeForPreflight(params: {
   nodeRunner?: string;
   timeoutMs?: number;
-}): Promise<{ version: string | null; nodeRunner?: string }> {
+}): Promise<{ version: string | null; nodeRunner?: string; failure: string | null }> {
   const nodeRunner = normalizeOptionalString(params.nodeRunner);
   if (!nodeRunner) {
-    return { version: process.versions.node ?? null };
+    const version = process.versions.node ?? null;
+    return { version, failure: nodeRuntimeFailure(version, detectCurrentSqliteCapabilities()) };
   }
-  const res = await runCommandWithTimeout([nodeRunner, "--version"], {
-    timeoutMs: Math.min(params.timeoutMs ?? 10_000, 10_000),
-  }).catch(() => null);
+  const runtime = await resolveNodeRuntimeInfo(
+    nodeRunner,
+    process.env,
+    Math.min(params.timeoutMs ?? 10_000, 10_000),
+  );
   return {
-    version: res?.code === 0 ? res.stdout.trim().replace(/^v/u, "") || null : null,
+    version: runtime.status === "probe-failed" ? null : runtime.version,
+    failure:
+      runtime.status === "probe-failed" ? runtime.error.message : (runtime.capabilityError ?? null),
     nodeRunner,
   };
 }

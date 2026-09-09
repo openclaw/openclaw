@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -17,27 +17,38 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SpeechTelephonySynthesisRequest } from "./provider-types.js";
+import { synthesizeSpeech, synthesizeTalkSpeech } from "./tts-synthesis.js";
 import { textToSpeechTelephony } from "./tts-telephony.js";
 
 const pcm = Buffer.from([0, 0, 32, 0, 224, 255, 0, 0]);
 
-function createNativeTelephonyFixture(id = "native-telephony", reject = false, order = 10) {
+function createNativeSpeechFixture(
+  synthesize: typeof textToSpeechTelephony | typeof synthesizeSpeech,
+  id = "native-speech",
+  reject = false,
+  order = 10,
+) {
   const dir = makePluginLoaderTempDir();
-  const key = `__openclaw_telephony_resources_${path.basename(dir)}`;
+  const key = `__openclaw_speech_resources_${path.basename(dir)}`;
   const configStarted = createDeferredCore();
   const prepareStarted = createDeferredCore();
   const prepareResume = createDeferredCore();
   const synthesizeStarted = createDeferredCore();
   const synthesizeResume = createDeferredCore();
+  const tailStarted = createDeferredCore();
+  const tailResume = createDeferredCore();
   const connections: Array<{
+    databasePath: string;
     database: DatabaseSync;
     disposals: number;
     requests: SpeechTelephonySynthesisRequest[];
   }> = [];
-  const callbacks: { onResolveConfig?: () => void } = {};
+  const callbacks: { onResolveConfig?: () => void; trackTail?: boolean } = {};
+  const tails: Promise<void>[] = [];
   const state = {
     connections,
     configStarted,
@@ -47,6 +58,11 @@ function createNativeTelephonyFixture(id = "native-telephony", reject = false, o
     synthesizeResume,
     pcm,
     callbacks,
+    dir,
+    tailStarted,
+    tailResume,
+    trackAsyncWork,
+    tails,
   };
   Object.defineProperty(globalThis, key, { configurable: true, value: state });
   const plugin = writePlugin({
@@ -56,16 +72,18 @@ function createNativeTelephonyFixture(id = "native-telephony", reject = false, o
 module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const state = globalThis[${JSON.stringify(key)}];
   const registrationVoice = api.pluginConfig?.voiceId;
-  const database = new DatabaseSync(":memory:");
-  const connection = { database, disposals: 0, requests: [] };
+  const databasePath = require("node:path").join(state.dir, "speech-" + state.connections.length + ".sqlite");
+  const database = new DatabaseSync(databasePath);
+  database.exec("CREATE TABLE fixture (value INTEGER); INSERT INTO fixture VALUES (42)");
+  const connection = { databasePath, database, disposals: 0, requests: [] };
   state.connections.push(connection);
-  const read = () => database.prepare("SELECT 42 AS value").get().value;
-  api.lifecycle.registerRuntimeLifecycle({ id: "telephony-resource", dispose() {
+  const read = () => database.prepare("SELECT value FROM fixture").get().value;
+  api.lifecycle.registerRuntimeLifecycle({ id: "speech-resource", dispose() {
     read(); connection.disposals++; database.close();
   } });
   api.registerSpeechProvider({
     id: ${JSON.stringify(id)}, aliases: [${JSON.stringify(`${id}-alias`)}],
-    label: "Native telephony fixture", autoSelectOrder: ${order},
+    label: "Native speech fixture", autoSelectOrder: ${order},
     defaultModel: "native-model", models: ["native-model"],
     resolveConfig({ rawConfig }) {
       state.configStarted.resolve();
@@ -79,11 +97,24 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       await state.prepareResume.promise; read();
       return undefined;
     },
-    async synthesize() { throw new Error("Unexpected buffered synthesis"); },
+    async synthesize(request) {
+      const result = await this.synthesizeTelephony(request);
+      return {
+        audioBuffer: result.audioBuffer,
+        get outputFormat() { read(); return "pcm"; },
+        get fileExtension() { read(); return ".pcm"; },
+        get voiceCompatible() { read(); return false; },
+      };
+    },
     async synthesizeTelephony(request) {
       connection.requests.push(request); read(); state.synthesizeStarted.resolve();
       await state.synthesizeResume.promise; read();
-      if (${reject}) throw new Error("native telephony failure");
+      if (state.callbacks.trackTail) {
+        state.tails.push(state.trackAsyncWork(async () => {
+          state.tailStarted.resolve(); await state.tailResume.promise; read();
+        }));
+      }
+      if (${reject}) throw new Error("native speech failure");
       return { audioBuffer: state.pcm, outputFormat: "pcm", get sampleRate() { read(); return 8000; } };
     },
   });
@@ -113,8 +144,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     cfg,
     prefsPath,
     state,
-    run: () =>
-      textToSpeechTelephony({ text: "native telephony", cfg, prefsPath, timeoutMs: 12345 }),
+    run: () => synthesize({ text: "native speech", cfg, prefsPath, timeoutMs: 12345 }),
     withEnvironment: (run: () => Promise<void>) =>
       withEnvAsync(
         {
@@ -127,10 +157,12 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     resume() {
       prepareResume.resolve();
       synthesizeResume.resolve();
+      tailResume.resolve();
     },
     cleanup() {
       prepareResume.resolve();
       synthesizeResume.resolve();
+      tailResume.resolve();
       for (const { database } of connections) {
         if (database.isOpen) {
           database.close();
@@ -151,17 +183,15 @@ function settle<T>(operation: Promise<T>) {
 async function waitForHook(hook: Promise<void>, operation: Promise<unknown>) {
   await Promise.race([
     hook,
-    operation.then((outcome) => {
-      throw new Error(
-        `Telephony settled before the expected provider hook: ${JSON.stringify(outcome)}`,
-      );
+    operation.then(() => {
+      throw new Error("Speech settled before the expected provider hook");
     }),
   ]);
 }
 
 function combineConfig(
-  primary: ReturnType<typeof createNativeTelephonyFixture>,
-  others: ReturnType<typeof createNativeTelephonyFixture>[],
+  primary: ReturnType<typeof createNativeSpeechFixture>,
+  others: ReturnType<typeof createNativeSpeechFixture>[],
 ): OpenClawConfig {
   return {
     ...primary.cfg,
@@ -179,11 +209,17 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-describe("telephony provider registration resources", () => {
+describe.each([
+  ["telephony", textToSpeechTelephony],
+  ["buffered speech", synthesizeSpeech],
+  ["Talk speech", synthesizeTalkSpeech],
+] as const)("%s provider registration resources", (surface, synthesize) => {
+  const createFixture = (id = "native-speech", reject = false, order = 10) =>
+    createNativeSpeechFixture(synthesize, id, reject, order);
   it.each([false, true])(
-    "disposes cold telephony resources after settlement (reject=%s)",
+    "disposes cold speech resources after settlement (reject=%s)",
     async (reject) => {
-      const fixture = createNativeTelephonyFixture("native-telephony", reject);
+      const fixture = createFixture("native-telephony", reject);
       try {
         await fixture.withEnvironment(async () => {
           useNoBundledPlugins();
@@ -199,14 +235,17 @@ describe("telephony provider registration resources", () => {
             expect(outcome.error).toBeUndefined();
             expect(outcome.value?.success).toBe(!reject);
             if (reject) {
-              expect(outcome.value?.error).toContain("native telephony failure");
+              expect(outcome.value?.error).toContain("native speech failure");
             } else {
               expect(outcome.value?.audioBuffer).toEqual(pcm);
-              expect(outcome.value?.sampleRate).toBe(8000);
+              expect(outcome.value).toHaveProperty(
+                surface === "telephony" ? "sampleRate" : "fileExtension",
+                surface === "telephony" ? 8000 : ".pcm",
+              );
               expect(outcome.value?.providerVoice).toBe("native-voice");
             }
             const requests = fixture.state.connections.flatMap((entry) => entry.requests);
-            expect(requests).toHaveLength(1);
+            expect(requests.length).toBe(1);
             expect(requests[0]?.timeoutMs).toBe(12345);
             for (const entry of fixture.state.connections) {
               expect(entry.database.isOpen).toBe(false);
@@ -226,7 +265,7 @@ describe("telephony provider registration resources", () => {
   it.each(["managed", "managed-config", "raw"] as const)(
     "retains the %s host through setup and synthesis",
     async (owner) => {
-      const fixture = createNativeTelephonyFixture();
+      const fixture = createFixture();
       try {
         await fixture.withEnvironment(async () => {
           useNoBundledPlugins();
@@ -276,9 +315,9 @@ describe("telephony provider registration resources", () => {
   );
 
   it("keeps preference-only direct providers out of the override fallback catalog", async () => {
-    const catalog = createNativeTelephonyFixture("catalog-voice", false, 20);
-    const override = createNativeTelephonyFixture("override-voice", true, 10);
-    const preferred = createNativeTelephonyFixture("preference-voice", false, 0);
+    const catalog = createFixture("catalog-voice", false, 20);
+    const override = createFixture("override-voice", true, 10);
+    const preferred = createFixture("preference-voice", false, 0);
     const fixtures = [catalog, override, preferred];
     fixtures.forEach((fixture) => fixture.resume());
     fs.writeFileSync(
@@ -288,7 +327,7 @@ describe("telephony provider registration resources", () => {
     try {
       await catalog.withEnvironment(async () => {
         useNoBundledPlugins();
-        const result = await textToSpeechTelephony({
+        const result = await synthesize({
           text: "override with configured fallback",
           cfg: combineConfig(catalog, [override, preferred]),
           prefsPath: catalog.prefsPath,
@@ -297,7 +336,7 @@ describe("telephony provider registration resources", () => {
         expect(result.success).toBe(true);
         expect(result.provider).toBe("catalog-voice");
         expect(result.attemptedProviders).toEqual(["override-voice", "catalog-voice"]);
-        expect(preferred.state.connections.flatMap((entry) => entry.requests)).toEqual([]);
+        expect(preferred.state.connections.flatMap((entry) => entry.requests).length).toBe(0);
         for (const entry of fixtures.flatMap((fixture) => fixture.state.connections)) {
           expect(entry.database.isOpen).toBe(false);
           expect(entry.disposals).toBe(1);
@@ -309,15 +348,15 @@ describe("telephony provider registration resources", () => {
   });
 
   it("does not turn a prior override-only provider into an automatic fallback", async () => {
-    const catalog = createNativeTelephonyFixture("catalog-voice", true);
-    const override = createNativeTelephonyFixture("override-voice", false);
+    const catalog = createFixture("catalog-voice", true);
+    const override = createFixture("override-voice", false);
     catalog.resume();
     override.resume();
     try {
       await catalog.withEnvironment(async () => {
         useNoBundledPlugins();
         const cfg = combineConfig(catalog, [override]);
-        const first = await textToSpeechTelephony({
+        const first = await synthesize({
           text: "explicit override",
           cfg,
           prefsPath: catalog.prefsPath,
@@ -325,14 +364,14 @@ describe("telephony provider registration resources", () => {
         });
         expect(first.success).toBe(true);
         expect(first.provider).toBe("override-voice");
-        const second = await textToSpeechTelephony({
+        const second = await synthesize({
           text: "configured provider only",
           cfg,
           prefsPath: catalog.prefsPath,
         });
         expect(second.success).toBe(false);
         expect(second.attemptedProviders).toEqual(["catalog-voice"]);
-        expect(override.state.connections.flatMap((entry) => entry.requests)).toHaveLength(1);
+        expect(override.state.connections.flatMap((entry) => entry.requests).length).toBe(1);
         for (const entry of [...catalog.state.connections, ...override.state.connections]) {
           expect(entry.database.isOpen).toBe(false);
           expect(entry.disposals).toBe(1);
@@ -344,8 +383,8 @@ describe("telephony provider registration resources", () => {
     }
   });
   it("resolves fallback config from the refreshed runtime snapshot without a source snapshot", async () => {
-    const primary = createNativeTelephonyFixture("refresh-primary", true);
-    const fallback = createNativeTelephonyFixture("refresh-fallback");
+    const primary = createFixture("refresh-primary", true);
+    const fallback = createFixture("refresh-fallback");
     primary.state.prepareResume.resolve();
     fallback.resume();
     try {
@@ -362,7 +401,7 @@ describe("telephony provider registration resources", () => {
         };
         setRuntimeConfigSnapshot(cfg);
         const pending = settle(
-          textToSpeechTelephony({
+          synthesize({
             text: "refresh during fallback",
             cfg,
             prefsPath: primary.prefsPath,
@@ -397,6 +436,50 @@ describe("telephony provider registration resources", () => {
     } finally {
       primary.cleanup();
       fallback.cleanup();
+    }
+  });
+  it("joins provider work that outlives its buffered result before closing SQLite", async () => {
+    const fixture = createFixture();
+    fixture.state.callbacks.trackTail = true;
+    fixture.state.prepareResume.resolve();
+    fixture.state.synthesizeResume.resolve();
+    try {
+      await fixture.withEnvironment(async () => {
+        useNoBundledPlugins();
+        let settled = false;
+        const pending = settle(fixture.run()).then((result) => {
+          settled = true;
+          return result;
+        });
+        try {
+          await waitForHook(fixture.state.tailStarted.promise, pending);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(settled).toBe(false);
+          expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
+          fixture.state.tailResume.resolve();
+          const result = await pending;
+          expect(result.error).toBeUndefined();
+          expect(result.value?.success).toBe(true);
+          for (const entry of fixture.state.connections) {
+            expect(entry.database.isOpen).toBe(false);
+            expect(entry.disposals).toBe(1);
+            const reopened = new DatabaseSync(entry.databasePath, { readOnly: true });
+            try {
+              expect(reopened.prepare("SELECT value FROM fixture").get()?.value).toBe(42);
+            } finally {
+              reopened.close();
+            }
+          }
+        } finally {
+          fixture.resume();
+          await pending;
+          await Promise.all(fixture.state.tails);
+        }
+      });
+    } finally {
+      fixture.cleanup();
     }
   });
 });

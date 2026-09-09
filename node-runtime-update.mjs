@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { isSupportedOpenClawNodeVersion } from "./node-version.mjs";
+import { nodeRuntimeFailure, SQLITE_CAPABILITY_PROBE } from "./node-sqlite.mjs";
 
 function isUsableNode(nodePath) {
   if (!existsSync(nodePath)) {
@@ -13,13 +13,17 @@ function isUsableNode(nodePath) {
   const result = spawnSync(
     nodePath,
     [
-      "--input-type=module",
       "-e",
-      'import "node:sqlite"; process.stdout.write(process.versions.node);',
+      `const probe = ${SQLITE_CAPABILITY_PROBE}; process.stdout.write(JSON.stringify({ version: process.versions.node, probe }));`,
     ],
     { encoding: "utf8", timeout: 10_000, windowsHide: true },
   );
-  return result.status === 0 && isSupportedOpenClawNodeVersion(result.stdout?.trim());
+  try {
+    const details = JSON.parse(result.stdout);
+    return result.status === 0 && !nodeRuntimeFailure(details.version, details.probe);
+  } catch {
+    return false;
+  }
 }
 
 function canInstallPrivateNode() {

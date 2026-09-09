@@ -29,6 +29,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "node-sqlite.mjs",
     "node-version.mjs",
     "node-runtime-update.mjs",
     "openclaw.mjs",
