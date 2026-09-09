@@ -3256,64 +3256,32 @@
     "target": "配置 — 聊天命令"
   },
   {
-    "source": "Run the Gateway",
-    "target": "运行 Gateway 网关"
+    "source": "The trust boundary",
+    "target": "信任边界"
   },
   {
-    "source": "Restart and supervision",
-    "target": "重启与进程监管"
+    "source": "Policy as code",
+    "target": "策略即代码"
   },
   {
-    "source": "Query a running Gateway",
-    "target": "查询运行中的 Gateway 网关"
+    "source": "Identity and roles",
+    "target": "身份与角色"
   },
   {
-    "source": "Manage the Gateway service",
-    "target": "管理 Gateway 网关服务"
+    "source": "Secrets",
+    "target": "密钥"
   },
   {
-    "source": "Discover gateways (Bonjour)",
-    "target": "发现 Gateway 网关（Bonjour）"
+    "source": "Versioned state, guarded upgrades",
+    "target": "版本化状态与受保护的升级"
   },
   {
-    "source": "Microsoft Teams setup",
-    "target": "Microsoft Teams 设置"
+    "source": "Provenance",
+    "target": "溯源"
   },
   {
-    "source": "Microsoft Teams access control",
-    "target": "Microsoft Teams 访问控制"
-  },
-  {
-    "source": "Microsoft Teams authentication",
-    "target": "Microsoft Teams 身份验证"
-  },
-  {
-    "source": "Microsoft Teams manifest and permissions",
-    "target": "Microsoft Teams 清单与权限"
-  },
-  {
-    "source": "Microsoft Teams configuration",
-    "target": "Microsoft Teams 配置"
-  },
-  {
-    "source": "Microsoft Teams message behavior",
-    "target": "Microsoft Teams 消息行为"
-  },
-  {
-    "source": "Microsoft Teams cards and actions",
-    "target": "Microsoft Teams 卡片与操作"
-  },
-  {
-    "source": "Microsoft Teams troubleshooting",
-    "target": "Microsoft Teams 故障排查"
-  },
-  {
-    "source": "Groups",
-    "target": "群组"
-  },
-  {
-    "source": "Security",
-    "target": "安全"
+    "source": "OpenClaw and Hermes Agent",
+    "target": "OpenClaw 与 Hermes Agent"
   },
   {
     "source": "ACP agents quickstart",
@@ -3506,5 +3474,65 @@
   {
     "source": "Swarm collectors",
     "target": "Swarm 收集器"
+  },
+  {
+    "source": "Run the Gateway",
+    "target": "运行 Gateway 网关"
+  },
+  {
+    "source": "Restart and supervision",
+    "target": "重启与进程监管"
+  },
+  {
+    "source": "Query a running Gateway",
+    "target": "查询运行中的 Gateway 网关"
+  },
+  {
+    "source": "Manage the Gateway service",
+    "target": "管理 Gateway 网关服务"
+  },
+  {
+    "source": "Discover gateways (Bonjour)",
+    "target": "发现 Gateway 网关（Bonjour）"
+  },
+  {
+    "source": "Microsoft Teams setup",
+    "target": "Microsoft Teams 设置"
+  },
+  {
+    "source": "Microsoft Teams access control",
+    "target": "Microsoft Teams 访问控制"
+  },
+  {
+    "source": "Microsoft Teams authentication",
+    "target": "Microsoft Teams 身份验证"
+  },
+  {
+    "source": "Microsoft Teams manifest and permissions",
+    "target": "Microsoft Teams 清单与权限"
+  },
+  {
+    "source": "Microsoft Teams configuration",
+    "target": "Microsoft Teams 配置"
+  },
+  {
+    "source": "Microsoft Teams message behavior",
+    "target": "Microsoft Teams 消息行为"
+  },
+  {
+    "source": "Microsoft Teams cards and actions",
+    "target": "Microsoft Teams 卡片与操作"
+  },
+  {
+    "source": "Microsoft Teams troubleshooting",
+    "target": "Microsoft Teams 故障排查"
+  },
+  {
+    "source": "Groups",
+    "target": "群组"
+  },
+  {
+    "source": "Security",
+    "target": "安全"
   }
 ]

@@ -1347,6 +1347,13 @@
                   "index",
                   "start/showcase",
                   "start/why-openclaw",
+                  "start/why-openclaw/the-trust-boundary",
+                  "start/why-openclaw/policy-as-code",
+                  "start/why-openclaw/identity-and-roles",
+                  "start/why-openclaw/secrets",
+                  "start/why-openclaw/versioned-state-guarded-upgrades",
+                  "start/why-openclaw/provenance",
+                  "start/why-openclaw/openclaw-and-hermes-agent",
                   "concepts/features"
                 ]
               },
