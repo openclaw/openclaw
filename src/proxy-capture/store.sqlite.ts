@@ -24,6 +24,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { finalizeCaptureStore } from "./store-lifecycle.js";
 import {
   findDebugProxyCaptureBlobReference,
   listDebugProxyCaptureSessions,
@@ -225,6 +226,7 @@ class DebugProxyCaptureStoreImpl {
   readonly blobDir: string;
   private readonly pathBased?: PathBasedDebugProxyCaptureStore;
   private closed = false;
+  private closing = false;
 
   constructor(
     optionsOrDbPath: DebugProxyCaptureStoreOptions | string = {},
@@ -250,14 +252,31 @@ class DebugProxyCaptureStoreImpl {
   }
 
   close(): void {
-    if (this.closed) {
+    if (this.closed || this.closing) {
       return;
     }
-    if (this.pathBased) {
-      this.pathBased.walMaintenance.close();
-      this.db.close();
+    this.closing = true;
+    const errors: unknown[] = [];
+    for (const close of [
+      () => finalizeCaptureStore(this),
+      () => this.pathBased?.walMaintenance.close(),
+      () => {
+        if (this.pathBased && this.db.isOpen) {
+          this.db.close();
+        }
+      },
+    ]) {
+      try {
+        close();
+      } catch (error) {
+        errors.push(error);
+      }
     }
     this.closed = true;
+    this.closing = false;
+    if (errors.length) {
+      throw new AggregateError(errors, "Capture store close failed.");
+    }
   }
 
   get isClosed(): boolean {
@@ -738,10 +757,19 @@ export function getDebugProxyCaptureStore(
 export function closeDebugProxyCaptureStore(): void {
   unregisterExitClose?.();
   unregisterExitClose = null;
-  for (const cached of cachedStores.values()) {
-    cached.store.close();
-  }
+  const stores = [...cachedStores.values()];
   cachedStores.clear();
+  const errors: unknown[] = [];
+  for (const cached of stores) {
+    try {
+      cached.store.close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length) {
+    throw new AggregateError(errors, "Capture stores failed to close.");
+  }
 }
 
 // Lease API keeps one cached capture-store wrapper alive across related
@@ -785,8 +813,8 @@ export function acquireDebugProxyCaptureStore(
       }
       current.leases = Math.max(0, current.leases - 1);
       if (current.leases === 0) {
-        current.store.close();
         cachedStores.delete(key);
+        current.store.close();
       }
     },
   };
