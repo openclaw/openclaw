@@ -1,16 +1,16 @@
 import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 import type { PreparedModelRuntimeCatalogFacts } from "./prepared-model-runtime.catalog-contract.js";
-import {
-  toStaticCatalogEntry,
-  type PreparedConfiguredRuntimeModel,
-} from "./prepared-model-runtime.configured.js";
+import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type ConfiguredCatalogAgentFacts = {
+  input: { config: OpenClawConfig };
   configuredModelRefs: readonly ModelCatalogRef[];
 };
 
@@ -36,17 +36,23 @@ function createConfiguredModelCatalogSnapshot(params: {
     addEntry(entry);
   }
   for (const configured of params.configuredRuntimeModels) {
-    addEntry(toStaticCatalogEntry(configured.model));
+    addEntry(modelCatalogRowToEntry(configured.model));
   }
   for (const { provider, modelId } of params.agentFacts.configuredModelRefs) {
     const model = params.templateModelRegistry.find(provider, modelId);
     if (model) {
-      addEntry(toStaticCatalogEntry(model));
+      addEntry(modelCatalogRowToEntry(model));
+    }
+  }
+  // Configured fields remain authoritative; merge mode also exposes already captured rows.
+  if (params.agentFacts.input.config.models?.mode !== "replace") {
+    for (const model of params.templateModelRegistry.getAll()) {
+      addEntry(modelCatalogRowToEntry(model));
     }
   }
   const configuredEntries = [...entries.values()];
   const staticEntries = params.configuredRuntimeModels.map(({ model }) =>
-    toStaticCatalogEntry(model),
+    modelCatalogRowToEntry(model),
   );
   return {
     entries: configuredEntries,

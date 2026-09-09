@@ -6,6 +6,7 @@ import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { discoverModels } from "./agent-model-discovery.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
@@ -25,10 +26,9 @@ import type {
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
-import {
-  toStaticCatalogEntry,
-  type PreparedConfiguredRuntimeModel,
-  type PreparedRuntimeCapabilityModel,
+import type {
+  PreparedConfiguredRuntimeModel,
+  PreparedRuntimeCapabilityModel,
 } from "./prepared-model-runtime.configured.js";
 import { buildPreparedPluginModelCatalog } from "./prepared-model-runtime.plugin-generation.js";
 import type {
@@ -90,7 +90,7 @@ export async function prepareFullCatalogFacts(
   const completeModelCatalog = {
     ...modelCatalog,
     staticEntries: dedupeByKey(providerStaticModels, resolveModelCatalogIdentityKey).map(
-      toStaticCatalogEntry,
+      modelCatalogRowToEntry,
     ),
     ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
   };
@@ -234,7 +234,7 @@ export function materializePreparedModelCatalog(
   const runtimeByKey = new Map(
     runtimeCapabilityModels.map(({ provider, modelId, model }) => [
       resolveModelCatalogIdentityKey({ provider, id: modelId }),
-      toStaticCatalogEntry(model),
+      modelCatalogRowToEntry(model),
     ]),
   );
   const project = (entries: ModelCatalogSnapshot["entries"]) =>
@@ -265,7 +265,7 @@ export function materializePreparedModelCatalog(
     materialized.staticEntries = project(
       dedupeByKey(
         [
-          ...configuredRuntimeModels.map(({ model }) => toStaticCatalogEntry(model)),
+          ...configuredRuntimeModels.map(({ model }) => modelCatalogRowToEntry(model)),
           ...(snapshot.staticEntries ?? []),
         ],
         resolveModelCatalogIdentityKey,
