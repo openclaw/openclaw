@@ -519,8 +519,13 @@ export async function cleanupFailedCreateContainer(
     return false;
   }
   checkpoint();
-  await containers.remove(record.runtime, record.containerName, true);
-  return (await containers.inspect(record.runtime, record.containerName)).kind === "missing";
+  // Pin the generation the attempt label just proved; the name may already
+  // point at the next attempt or at a foreign container.
+  await containers.remove(record.runtime, inspection.containerId, true);
+  // Confirm the same identity is gone rather than that the name is free: a
+  // foreign container taking the name must not make a completed cleanup look
+  // uncertain, which would strand a reservation no fleet command can recover.
+  return (await containers.inspect(record.runtime, inspection.containerId)).kind === "missing";
 }
 
 export async function cleanupFailedCreateNetwork(
@@ -622,7 +627,7 @@ export async function restorePreviousCell(params: {
         params.checkpoint();
         await params.containers[current.running ? "stop" : "start"](
           params.record.runtime,
-          params.record.containerName,
+          current.containerId,
         );
       }
       return;
@@ -631,7 +636,9 @@ export async function restorePreviousCell(params: {
       throw new Error("container generation changed during upgrade recovery");
     }
     params.checkpoint();
-    await params.containers.remove(params.record.runtime, params.record.containerName, true);
+    // Recovery removes the replacement generation the attempt label identified,
+    // never whatever currently answers to the cell name.
+    await params.containers.remove(params.record.runtime, current.containerId, true);
   }
   params.checkpoint();
   await params.containers.run(params.oldProfile, params.wasRunning);

@@ -548,7 +548,7 @@ describe("fleet service", () => {
 
     await expect(service.lifecycle("acme", action)).resolves.toEqual({ tenant: "acme", action });
 
-    expect(containers[action]).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
+    expect(containers[action]).toHaveBeenCalledWith("docker", "container-id");
   });
 
   it("pins logs to the inspected container generation after proving ownership", async () => {
@@ -658,8 +658,8 @@ describe("fleet service", () => {
       image: "ghcr.io/openclaw/openclaw:v2",
     });
     expect(containers.pull).toHaveBeenCalledWith("docker", "ghcr.io/openclaw/openclaw:v2");
-    expect(containers.stop).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
-    expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", false);
+    expect(containers.stop).toHaveBeenCalledWith("docker", "container-id");
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", false);
     expect(containers.inspectNetwork).toHaveBeenCalledWith("docker", "openclaw-cell-acme-net");
     const [profile, start] = containers.run.mock.calls[0] ?? [];
     expect(start).toBe(true);
@@ -735,8 +735,8 @@ describe("fleet service", () => {
 
     await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
 
-    expect(containers.stop).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
-    expect(containers.start).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
+    expect(containers.stop).toHaveBeenCalledWith("docker", "container-id");
+    expect(containers.start).toHaveBeenCalledWith("docker", "container-id");
     expect(containers.run).not.toHaveBeenCalled();
   });
 
@@ -755,16 +755,22 @@ describe("fleet service", () => {
     await service.create({ tenant: "acme", gatewayToken: "old-token" });
     containers.run.mockClear();
     containers.remove.mockClear();
+    // The replacement carries its own container id, so the recovery removal is
+    // only correct if it targets the generation the attempt label identified.
+    const replacement = runningInspection({
+      containerId: "replacement-container-id",
+      labels: fleetLabels("acme", NEXT_ATTEMPT_ID),
+    });
     containers.inspect
       .mockResolvedValueOnce(runningInspection())
-      .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }))
-      .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
+      .mockResolvedValueOnce(replacement)
+      .mockResolvedValueOnce(replacement);
 
     await expect(service.upgrade("acme")).rejects.toThrow(/previous container was restored/iu);
 
     expect(containers.run).toHaveBeenCalledTimes(2);
     expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
-    expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
+    expect(containers.remove).toHaveBeenCalledWith("docker", "replacement-container-id", true);
     expect(containers.removeNetwork).not.toHaveBeenCalled();
     expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
@@ -941,7 +947,34 @@ describe("fleet service", () => {
       /already allocated/iu,
     );
 
-    expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
+    expect(getFleetCell(env, "acme")).toBeUndefined();
+  });
+
+  it("releases a failed-create reservation when a foreign container takes the freed name", async () => {
+    const containers = createContainerMock(runningInspection());
+    containers.run.mockRejectedValue(new Error("host port is already allocated"));
+    const service = createFleetService({
+      env,
+      containers: containers.runtime,
+      now: () => 1000,
+      generateAttemptId: () => TEST_ATTEMPT_ID,
+    });
+    // The partial container is removed by id; an unrelated container then claims
+    // the freed cell name. Cleanup is complete, so the reservation must go.
+    containers.remove.mockImplementation(async () => {
+      containers.inspect.mockImplementation(async (_runtime, reference) =>
+        reference === "container-id"
+          ? { kind: "missing", state: "missing" }
+          : runningInspection({ containerId: "foreign-id", labels: {} }),
+      );
+    });
+
+    await expect(service.create({ tenant: "acme", gatewayToken: "token" })).rejects.toThrow(
+      /already allocated/iu,
+    );
+
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
     expect(getFleetCell(env, "acme")).toBeUndefined();
   });
 
@@ -1040,7 +1073,7 @@ describe("fleet service", () => {
       /reservation changed/iu,
     );
 
-    expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
     expect(containers.start).not.toHaveBeenCalled();
     expect(getFleetCell(env, "acme")).toBeUndefined();
   });
