@@ -1,6 +1,11 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import {
+  resolveBundledStaticCatalogContext,
+  resolveContextTokensForModel,
+} from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
@@ -11,6 +16,27 @@ import {
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+
+export async function resolveMemoryFlushContextWindowTokens(params: {
+  modelId?: string;
+  cfg?: OpenClawConfig;
+  provider?: string;
+}): Promise<number> {
+  const staticCatalogContext = await resolveBundledStaticCatalogContext({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.modelId,
+  });
+  return (
+    resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.modelId,
+      ...staticCatalogContext,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS
+  );
+}
 
 export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
   const parsed = parseNonNegativeByteSize(
