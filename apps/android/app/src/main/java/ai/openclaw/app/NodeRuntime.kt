@@ -1545,6 +1545,7 @@ class NodeRuntime private constructor(
   private val healthLogsSummary = GatewaySummaryOwner<GatewayHealthLogsSummary>()
   val healthLogsState: StateFlow<GatewaySummaryState<GatewayHealthLogsSummary>> = healthLogsSummary.state
 
+  @Volatile private var chatScreenActive = false
   private val _isForeground = MutableStateFlow(initialForeground)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
@@ -2146,11 +2147,7 @@ class NodeRuntime private constructor(
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
           onOfflineDefaultAgentRestored = ::syncMainSessionKey,
-          onAssistantReplyFinalized = { owner, runId, text ->
-            if (!_isForeground.value) {
-              ConversationReplyNotifier(appContext).show(owner, runId, text)
-            }
-          },
+          onAssistantReplyFinalized = ::onConversationReplyFinalized,
         )
       }
 
@@ -3798,6 +3795,27 @@ class NodeRuntime private constructor(
     val normalized = value?.trim()?.takeIf(String::isNotEmpty)
     if (prefs.notificationForwardingSessionKey.value == normalized) return
     notificationOutbox.updatePolicy { prefs.setNotificationForwardingSessionKey(normalized) }
+  }
+
+  fun setChatScreenActive(active: Boolean) {
+    chatScreenActive = active
+  }
+
+  private fun onConversationReplyFinalized(
+    owner: ChatComposerOwner,
+    runId: String,
+    text: String,
+  ) {
+    val isReplyVisible = _isForeground.value && chatScreenActive && chat.isCurrentComposerOwner(owner)
+    if (!shouldPostConversationReplyNotification(owner, runId, isReplyVisible)) return
+    val agent = gatewayAgents.value.firstOrNull { it.id == owner.agentId }
+    val session = chatSessions.value.firstOrNull { it.key == owner.sessionKey }
+    val sessionTitle =
+      session?.let {
+        ai.openclaw.app.ui
+          .sessionPresentationTitle(it) { nativeString("Chat") }
+      }
+    ConversationReplyNotifier(appContext).show(owner, runId, text, agent?.name, sessionTitle)
   }
 
   fun setVoiceScreenActive(active: Boolean) {

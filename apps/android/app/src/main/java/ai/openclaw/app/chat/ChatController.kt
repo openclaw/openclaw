@@ -6989,6 +6989,8 @@ class ChatController internal constructor(
     owner: ChatComposerOwner?,
   ) {
     if (payload["state"].asStringOrNull() != "final") return
+    // This recipient hint silences notifications, not terminal processing or history synchronization.
+    if (payload["suppressNotification"].asBooleanOrNull() == true) return
     val normalizedRunId = runId?.trim()?.takeIf(String::isNotEmpty) ?: return
     val verifiedOwner = owner?.takeIf { it.routingVerified } ?: return
     val text = parseAssistantDeltaText(payload)?.trim()?.takeIf(String::isNotEmpty) ?: return

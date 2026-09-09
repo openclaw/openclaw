@@ -1,4 +1,6 @@
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listSystemPresence } from "../infra/system-presence.js";
@@ -8,6 +10,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -201,6 +204,145 @@ describe("presence projection store admission", () => {
       } finally {
         prepare.mockRestore();
       }
+    });
+  });
+});
+
+const sessionKey = "agent:main:dashboard:test";
+function makeClient(
+  connId: string,
+  id: "openclaw-android" | "openclaw-control-ui",
+  profileId = "alice",
+) {
+  const send = vi.fn();
+  const client: GatewayWsClient = {
+    connId,
+    usesSharedGatewayAuth: false,
+    // SAFETY: this broadcaster fixture exercises only readyState, bufferedAmount, and send.
+    socket: { readyState: 1, bufferedAmount: 0, send } as unknown as GatewayWsClient["socket"],
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      role: "operator",
+      scopes: ["operator.read"],
+      client: { id, version: "test", platform: "test", mode: "webchat" },
+    },
+    authenticatedUserProfile: {
+      profileId,
+      displayName: null,
+      avatarRevision: "",
+      hasAvatar: false,
+      updatedAt: 0,
+    },
+  };
+  return { client, send };
+}
+function fixture() {
+  const phone = makeClient("phone", "openclaw-android");
+  const otherPhone = makeClient("other-phone", "openclaw-android", "bob");
+  const viewer = makeClient("viewer", "openclaw-control-ui");
+  const clients = new GatewayClientRegistry([phone.client, otherPhone.client, viewer.client]);
+  const broadcaster = createGatewayBroadcaster({ clients });
+  const declarations = createSessionViewerPresenceDeclarations({
+    clients,
+    broadcast: vi.fn(),
+    incrementPresenceVersion: () => 1,
+    getHealthVersion: () => 1,
+  });
+  declarations.replace("viewer", [sessionKey]);
+  const payload = {
+    runId: "run",
+    seq: 1,
+    sessionKey,
+    state: "final",
+    message: { role: "assistant", content: "done" },
+  };
+  return { phone, otherPhone, viewer, clients, broadcaster, declarations, payload };
+}
+function sentFrame(send: ReturnType<typeof makeClient>["send"], index = 0) {
+  const call = send.mock.calls[index];
+  if (!call) throw new Error(`Expected notification frame ${index}`);
+  return JSON.parse(call[0]);
+}
+
+afterEach(() => vi.useRealTimers());
+
+describe("recipient-specific chat notification suppression", () => {
+  it("suppresses only the matching human's phone while preserving content and sequence on fanout and targeted sends", () => {
+    const { phone, otherPhone, viewer, broadcaster, payload } = fixture();
+    broadcaster.broadcast("chat", payload);
+    broadcaster.broadcastToConnIds("chat", payload, new Set(["phone", "other-phone"]));
+    for (const [index, call] of phone.send.mock.calls.entries()) {
+      const frame = JSON.parse(call[0]);
+      expect(frame).toEqual({
+        type: "event",
+        event: "chat",
+        seq: index + 1,
+        payload: { ...payload, suppressNotification: true },
+      });
+      expect(Value.Check(ChatEventSchema, frame.payload)).toBe(true);
+    }
+    expect(phone.send).toHaveBeenCalledTimes(2);
+    expect(otherPhone.send.mock.calls.map(([frame]) => JSON.parse(frame).payload)).toEqual([
+      payload,
+      payload,
+    ]);
+    expect(sentFrame(viewer.send).payload).toEqual(payload);
+    expect(payload).not.toHaveProperty("suppressNotification");
+  });
+
+  it.each([
+    "other-session",
+    "missing-identity",
+    "expired",
+    "hidden",
+    "disconnected",
+    "invalidated",
+    "node-viewer",
+    "alias",
+    "stop",
+  ])("notifies for %s and discards a producer-supplied suppression hint", (reason) => {
+    const f = fixture();
+    if (reason === "other-session")
+      f.declarations.replace("viewer", ["agent:main:dashboard:other"]);
+    if (reason === "missing-identity") f.phone.client.authenticatedUserProfile = undefined;
+    if (reason === "expired") f.viewer.client.sessionViewerLease!.expiresAt = Date.now();
+    if (reason === "hidden") f.declarations.replace("viewer", []);
+    if (reason === "disconnected") f.clients.delete(f.viewer.client);
+    if (reason === "invalidated") f.viewer.client.invalidated = true;
+    if (reason === "node-viewer") f.viewer.client.connect.role = "node";
+    if (reason === "alias") f.payload.sessionKey = "main";
+    if (reason === "stop") f.declarations.stop();
+    f.broadcaster.broadcast("chat", { ...f.payload, suppressNotification: true });
+    expect(sentFrame(f.phone.send).payload).toEqual(f.payload);
+  });
+
+  it("renews unchanged declarations, expires them, and clears disconnected leases", () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    vi.advanceTimersByTime(20_000);
+    f.declarations.replace("viewer", [sessionKey]);
+    vi.advanceTimersByTime(20_000);
+    f.broadcaster.broadcast("chat", f.payload);
+    expect(sentFrame(f.phone.send).payload.suppressNotification).toBe(true);
+    vi.advanceTimersByTime(10_000);
+    f.broadcaster.broadcast("chat", f.payload);
+    expect(sentFrame(f.phone.send, 1).payload.suppressNotification).toBeUndefined();
+    f.declarations.unsubscribe("viewer");
+    expect(f.viewer.client.sessionViewerLease).toBeUndefined();
+  });
+
+  it("keeps ACL rejection and non-final delivery behavior unchanged", () => {
+    const f = fixture();
+    createGatewayBroadcaster({ clients: f.clients, canReceiveSessionEvent: () => false }).broadcast(
+      "chat",
+      f.payload,
+    );
+    expect(f.phone.send).not.toHaveBeenCalled();
+    f.broadcaster.broadcast("chat", { ...f.payload, state: "delta" });
+    expect(sentFrame(f.phone.send).payload).toEqual({
+      ...f.payload,
+      state: "delta",
     });
   });
 });

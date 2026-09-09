@@ -350,6 +350,8 @@ export const ChatDeltaEventSchema = closedObject({
 
 /** Successful terminal event for a completed chat run. */
 export const ChatFinalEventSchema = closedObject({
+  /** Recipient-specific hint; chat content still synchronizes normally. */
+  suppressNotification: Type.Optional(Type.Boolean()),
   ...ChatEventBaseSchema,
   state: Type.Literal("final"),
   message: Type.Optional(Type.Unknown()),

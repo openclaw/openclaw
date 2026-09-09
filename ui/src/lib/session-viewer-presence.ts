@@ -5,6 +5,8 @@ import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
 import { resolveSessionKey } from "./sessions/index.ts";
 
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
+const RENEW_MS = 10_000;
+const HUMAN_IDLE_MS = 120_000;
 
 type SessionViewerPresenceStore = {
   watch: (owner: object, sessionKeys: readonly string[]) => void;
@@ -21,6 +23,65 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
   let acknowledgedSignature: string | null = null;
   let acknowledgedGeneration = 0;
   let requestGeneration = 0;
+
+  let focused = false;
+  let lastActivityAt = 0;
+  let renewAt = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight: object | null = null;
+  let syncQueued = false;
+
+  const isViewing = () =>
+    isActive() &&
+    focused &&
+    typeof document !== "undefined" &&
+    document.visibilityState !== "hidden" &&
+    Date.now() - lastActivityAt < HUMAN_IDLE_MS;
+
+  function stopTimer() {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  }
+
+  function armTimer(available: boolean) {
+    stopTimer();
+    if (!available || !isViewing()) return;
+    timer = setTimeout(
+      () => {
+        timer = null;
+        lifecycle.sync();
+      },
+      Math.max(
+        1,
+        Math.min(
+          renewAt > Date.now() ? renewAt : Date.now() + RENEW_MS,
+          lastActivityAt + HUMAN_IDLE_MS,
+        ) - Date.now(),
+      ),
+    );
+  }
+
+  function onActivity() {
+    if (!focused || document.visibilityState === "hidden") return;
+    lastActivityAt = Date.now();
+    lifecycle.schedule();
+  }
+  function onFocus() {
+    focused = true;
+    onActivity();
+  }
+  function onBlur() {
+    focused = false;
+    lifecycle.sync();
+  }
+  function onVisibility() {
+    if (document.visibilityState !== "hidden" && document.hasFocus()) {
+      focused = true;
+      onActivity();
+    } else {
+      lifecycle.sync();
+    }
+  }
 
   const isActive = () => watchedByOwner.size > 0;
 
@@ -41,6 +102,20 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
   const lifecycle = createGatewaySetSyncLifecycle(gateway, {
     sync,
     onAttach: () => {
+      focused = typeof document !== "undefined" && document.hasFocus();
+      lastActivityAt = Date.now();
+      renewAt = 0;
+      if (typeof window !== "undefined") {
+        window.addEventListener("focus", onFocus);
+        window.addEventListener("blur", onBlur);
+      }
+      if (typeof document !== "undefined") {
+        document.addEventListener("pointerdown", onActivity, true);
+        document.addEventListener("pointermove", onActivity, true);
+        document.addEventListener("keydown", onActivity, true);
+        document.addEventListener("scroll", onActivity, true);
+        document.addEventListener("visibilitychange", onVisibility);
+      }
       knownClient = gateway.snapshot.client;
       lastHello = null;
       lastSignature = null;
@@ -48,6 +123,20 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       acknowledgedGeneration = 0;
     },
     onDetach: () => {
+      stopTimer();
+      inFlight = null;
+      syncQueued = false;
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", onFocus);
+        window.removeEventListener("blur", onBlur);
+      }
+      if (typeof document !== "undefined") {
+        document.removeEventListener("pointerdown", onActivity, true);
+        document.removeEventListener("pointermove", onActivity, true);
+        document.removeEventListener("keydown", onActivity, true);
+        document.removeEventListener("scroll", onActivity, true);
+        document.removeEventListener("visibilitychange", onVisibility);
+      }
       requestGeneration += 1;
       lastHello = null;
       lastSignature = null;
@@ -62,6 +151,9 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     const client = snapshot.client;
     if (client !== knownClient) {
       retry.reset();
+      inFlight = null;
+      syncQueued = false;
+      requestGeneration += 1;
       knownClient = client;
       lastHello = null;
       lastSignature = null;
@@ -74,6 +166,10 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       snapshot.hello !== null &&
       isGatewayMethodAdvertised(snapshot, SESSION_VIEWERS_SET_METHOD) === true;
     if (!available) {
+      stopTimer();
+      inFlight = null;
+      syncQueued = false;
+      requestGeneration += 1;
       lastHello = null;
       lastSignature = null;
       acknowledgedSignature = null;
@@ -83,15 +179,21 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       }
       return;
     }
-    const sessionKeys =
-      typeof document !== "undefined" && document.visibilityState === "hidden"
-        ? []
-        : visibleSessionKeys();
+    const sessionKeys = isViewing() ? visibleSessionKeys() : [];
     const agentId = sessionKeys.some((key) => !key.startsWith("agent:"))
       ? snapshot.assistantAgentId
       : undefined;
     const signature = JSON.stringify({ agentId, sessionKeys });
-    if (snapshot.hello === lastHello && signature === lastSignature) {
+    armTimer(available);
+    if (inFlight !== null) {
+      syncQueued = true;
+      return;
+    }
+    if (
+      snapshot.hello === lastHello &&
+      signature === lastSignature &&
+      (sessionKeys.length === 0 || Date.now() < renewAt)
+    ) {
       if (
         !isActive() &&
         acknowledgedSignature === signature &&
@@ -103,9 +205,17 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     }
     lastHello = snapshot.hello;
     lastSignature = signature;
+    renewAt = Date.now() + RENEW_MS;
+    armTimer(available);
+    const flight = {};
+    inFlight = flight;
+    syncQueued = false;
     const currentGeneration = ++requestGeneration;
     const isCurrentRequest = () =>
       lifecycle.attached &&
+      gateway.snapshot.client === client &&
+      gateway.snapshot.hello === snapshot.hello &&
+      gateway.snapshot.phase === "connected" &&
       currentGeneration === requestGeneration &&
       snapshot.hello === lastHello &&
       signature === lastSignature;
@@ -120,7 +230,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
           acknowledgedSignature = signature;
           acknowledgedGeneration = currentGeneration;
           retry.reset();
-          if (!isActive()) {
+          if (!isActive() && sessionKeys.length === 0) {
             lifecycle.detach();
           }
         }
@@ -131,6 +241,14 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
         }
         lastSignature = null;
         retry.schedule(lifecycle.schedule);
+      })
+      .finally(() => {
+        if (inFlight !== flight) return;
+        inFlight = null;
+        if (syncQueued) {
+          syncQueued = false;
+          lifecycle.schedule();
+        }
       });
   }
 
