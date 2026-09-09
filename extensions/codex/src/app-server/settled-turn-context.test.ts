@@ -254,13 +254,16 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
   });
 
   it.each([
-    { budget: "items", overflow: 0 },
-    { budget: "items", overflow: 1 },
-    { budget: "bytes", overflow: 0 },
-    { budget: "bytes", overflow: 1 },
+    { budget: "items", overflow: -1, notice: true },
+    { budget: "items", overflow: 0, notice: false },
+    { budget: "items", overflow: 1, notice: false },
+    { budget: "bytes", overflow: -285, notice: true },
+    { budget: "bytes", overflow: -284, notice: false },
+    { budget: "bytes", overflow: 0, notice: false },
+    { budget: "bytes", overflow: 1, notice: false },
   ])(
     "preserves current evidence at the $budget limit (overflow=$overflow)",
-    async ({ budget, overflow }) => {
+    async ({ budget, overflow, notice }) => {
       const settledMessages = settledTurn();
       const expected = [
         { type: "message", role: "user", content: [{ type: "input_text", text: "Send it." }] },
@@ -297,7 +300,10 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         };
       }
       const historyMessages = [
-        message({ role: "user", content: "Older context." }, "older:prompt"),
+        message(
+          { role: "user", content: overflow < 0 ? "x".repeat(65537) : "Older context." },
+          "older:prompt",
+        ),
         ...settledMessages,
       ];
       const before = structuredClone(historyMessages);
@@ -306,11 +312,16 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         mirroredMessages: settledMessages,
         settledMessages,
       });
-      if (overflow) {
+      if (overflow > 0) {
         expect(context).toBeUndefined();
       } else {
         expect(context).toBeDefined();
-        expect(context?.data).toEqual(expected);
+        expect(context?.data.slice(notice ? 1 : 0)).toEqual(expected);
+        if (notice) {
+          expect(context?.data[0]).toMatchObject({
+            content: [{ text: expect.stringContaining("Do not infer missing earlier facts") }],
+          });
+        }
       }
       expect(historyMessages).toEqual(before);
     },

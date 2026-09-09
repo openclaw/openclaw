@@ -961,6 +961,21 @@ describe.skipIf(process.platform === "win32")(
           expect(
             fixture.requests.map(({ body, account }) => ({ model: body.model, account })),
           ).toEqual([{ model: NATIVE_MODEL, account: `Bearer ${HOST_KEY}` }]);
+          expect(fixture.requests[0]?.body.input).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                role: "developer",
+                content: expect.arrayContaining([
+                  expect.objectContaining({
+                    type: "input_text",
+                    text: expect.stringContaining(
+                      "Earlier conversation may be omitted; do not infer missing earlier facts.",
+                    ),
+                  }),
+                ]),
+              }),
+            ]),
+          );
           expect(
             summaryRequests?.mock.calls
               .filter(([method]) => method === "account/login/start")

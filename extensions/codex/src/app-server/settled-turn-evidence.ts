@@ -20,8 +20,13 @@ export function projectVerifiedSettledCodexMessages(
   history: Iterable<AgentMessage>,
   params: SettledTurnMessages,
 ): JsonValue[] {
-  const prior = new SettledTurnPriorContext();
-  const current = projectSettledCodexMessages(verifiedSettledMessages(history, params, prior));
+  // Omitted history still participates in call-ID uniqueness for the complete prefix.
+  const seenCallIds = new Set<string>();
+  const prior = new SettledTurnPriorContext(seenCallIds);
+  const current = projectSettledCodexMessages(
+    verifiedSettledMessages(history, params, prior),
+    seenCallIds,
+  );
   return prior.prependTo(current);
 }
 
