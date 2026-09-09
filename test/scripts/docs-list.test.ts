@@ -103,6 +103,13 @@ summary: "Page"
 ### Hidden nested fenced heading
 \`\`\`
 \`\`\`\`
+
+~~~md
+### Hidden fenced heading with a suffixed closer
+~~~json
+### Still hidden after the invalid closer
+~~~
+# Visible after the fenced block
 `,
       "utf8",
     );
@@ -120,6 +127,8 @@ summary: "Page"
     expect(output).not.toContain("metadata comment must not become a heading");
     expect(output).not.toContain("Hidden fenced heading");
     expect(output).not.toContain("Hidden nested fenced heading");
+    expect(output).not.toContain("Still hidden after the invalid closer");
+    expect(output).toContain("  - H1: Visible after the fenced block");
     expect(output).not.toContain("AGENTS.md");
     expect(existsSync(path.join(tempRepoRoot, "docs", "docs_map.md"))).toBe(false);
   });
