@@ -541,6 +541,47 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
   });
 
+  it("shares installed policy across external owners and refreshes it on the next selection", () => {
+    const ids = Array.from({ length: 8 }, (_, index) => `external-${index}`);
+    const registry = createEmptyPluginRegistry();
+    for (const id of ids) {
+      registry.plugins.push(createPluginRecord({ id, origin: "global" }));
+      addCapabilityProvider(registry, "imageGenerationProviders", { id });
+    }
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: ids.map((id) => ({
+        id,
+        origin: "global",
+        contracts: { imageGenerationProviders: [id] },
+      })),
+    });
+    const firstEntry = { enabled: false };
+    let enumerations = 0;
+    const entries = new Proxy(
+      Object.fromEntries(
+        ids.map((id, index) => [id, index === 0 ? firstEntry : { enabled: true }]),
+      ),
+      {
+        ownKeys(target) {
+          enumerations += 1;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    const cfg: OpenClawConfig = { plugins: { entries } };
+    for (const enabled of [false, true]) {
+      firstEntry.enabled = enabled;
+      enumerations = 0;
+      const prepared = prepareMediaCapabilityProviders({ cfg, pluginMetadataSnapshot, registry });
+
+      expect(prepared.imageGenerationProviders?.map((provider) => provider.id)).toEqual(
+        enabled ? ids : ids.slice(1),
+      );
+      // Manifest, installed, and loaded-provider filters each prepare policy at most once.
+      expect(enumerations).toBeLessThanOrEqual(3);
+    }
+  });
+
   it.each([
     {
       name: "explicitly disabled",
