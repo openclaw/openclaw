@@ -108,6 +108,7 @@ export const HelloOkSchema = closedObject({
         icon: Type.Optional(Type.String()),
         path: Type.Optional(Type.String()),
         placement: Type.Optional(Type.String()),
+        slug: Type.Optional(Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 64 })),
         requiresGatewayAuth: Type.Optional(Type.Boolean()),
         group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
         order: Type.Optional(Type.Number()),

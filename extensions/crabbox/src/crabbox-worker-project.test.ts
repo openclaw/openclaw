@@ -143,12 +143,13 @@ describe("Crabbox project snapshot provisioning", () => {
   );
 
   it.each(["aws", "azure", "gcp"])(
-    "settles a retained %s checkpoint before enrollment without repeating capture",
+    "waits beyond the submission deadline for a retained %s checkpoint before enrollment",
     async (backend) => {
       const events: string[] = [];
       const { options, observe } = projectOptions(events);
       const entered = createDeferred<void>();
       const available = createDeferred<void>();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const { provider, calls } = createWarmProvider(async (call) => {
         observe(call);
         if (call.argv[2] !== "create") {
@@ -159,19 +160,49 @@ describe("Crabbox project snapshot provisioning", () => {
         if (call.argv.includes("--wait=false")) {
           return commandResult({ code: 1, stderr: "http 503: checkpoint_pending" });
         }
-        await available.promise;
-        return checkpointResult(CHECKPOINT_ID, operationLeaseId("retained-capture"), "available");
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            available.promise.then(() =>
+              checkpointResult(CHECKPOINT_ID, operationLeaseId("retained-capture"), "available"),
+            ),
+            new Promise<ReturnType<typeof commandResult>>((resolve) => {
+              timer = setTimeout(
+                () => resolve(commandResult({ code: null, killed: true, termination: "timeout" })),
+                call.options.timeoutMs,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
       });
-      const provision = expect(
-        provider.provision({ ...PROFILE, provider: backend }, "retained-capture", options),
-      ).resolves.toMatchObject({ node: { deviceId: "project-node" } });
-      await entered.promise;
+      const profile = { ...PROFILE, provider: backend };
+      const provision = provider.provision(profile, "retained-capture", options).then(
+        (lease) => ({ lease }),
+        (error: unknown) => ({ error }),
+      );
       try {
+        await entered.promise;
+        // A provider can still be preparing its snapshot after the old 3m submission cap.
+        await vi.advanceTimersByTimeAsync(4 * 60_000);
         expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+        available.resolve();
+        await expect(provision).resolves.toMatchObject({
+          lease: { node: { deviceId: "project-node" } },
+        });
+        const capture = calls.find(({ argv }) => argv[2] === "create")!;
+        expect(capture.argv).toEqual(
+          expect.arrayContaining(["--wait", "--wait-timeout", "2700000ms"]),
+        );
+        expect(provider.resolveProvisionTimeoutMs?.(profile)).toBeGreaterThan(
+          calls.reduce((total, call) => total + call.options.timeoutMs, 0),
+        );
       } finally {
         available.resolve();
+        await provision;
+        vi.useRealTimers();
       }
-      await provision;
       expect(listCrabboxWarmImages()[0]).toMatchObject({
         checkpointId: CHECKPOINT_ID,
         state: "available",

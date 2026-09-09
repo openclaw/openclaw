@@ -3003,10 +3003,7 @@ docker_e2e_docker_run_cmd run demo
     const runner = readFileSync("scripts/e2e/release-typed-onboarding-docker.sh", "utf8");
 
     expect(runner).toContain(
-      'scripts/e2e/lib/release-scenarios/assertions.mjs \\\n  "$ROOT_DIR/scripts/e2e/lib/release-scenarios/assertions.mjs"',
-    );
-    expect(runner).toContain(
-      'scripts/e2e/lib/fixtures/mock-openai-config.mjs \\\n  "$ROOT_DIR/scripts/e2e/lib/fixtures/mock-openai-config.mjs"',
+      'openclaw_resolve_frozen_typed_onboarding_contract "$TARGET_ROOT_DIR" "$ROOT_DIR"',
     );
     expect(runner).toContain(
       '-v "$ONBOARD_ASSERTIONS:/app/scripts/e2e/lib/release-scenarios/assertions.mjs:ro"',
@@ -3049,8 +3046,7 @@ outer
     const runner = readFileSync(RELEASE_TYPED_ONBOARDING_DOCKER_E2E_PATH, "utf8");
 
     expectTextToIncludeAll(runner, [
-      'openclaw_resolve_frozen_core_harness_capabilities "$TARGET_ROOT_DIR"',
-      'openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR"',
+      'openclaw_resolve_frozen_typed_onboarding_contract "$TARGET_ROOT_DIR" "$ROOT_DIR"',
       "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
       '-v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro"',
     ]);

@@ -458,72 +458,44 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it.each(["full", "minimal"] as const)(
-    "protects reusable secrets while allowing authorized sign-in in %s prompts",
-    (promptMode) => {
+  it.each(
+    [
+      { toolNames: [], terminalSetup: true },
+      { toolNames: ["openclaw"], terminalSetup: false },
+      { toolNames: ["gateway"], terminalSetup: false },
+      { toolNames: ["openclaw", "gateway"], terminalSetup: false },
+      {
+        toolNames: ["exec"],
+        capabilityToolNames: ["openclaw"],
+        codeModeActive: true,
+        terminalSetup: false,
+      },
+      {
+        toolNames: ["exec"],
+        capabilityToolNames: ["gateway"],
+        codeModeActive: true,
+        terminalSetup: false,
+      },
+    ].flatMap((surface) =>
+      (["full", "minimal"] as const).map((promptMode) => ({ surface, promptMode })),
+    ),
+  )(
+    "routes credential setup in $promptMode prompts according to available tools: $surface.toolNames / $surface.capabilityToolNames",
+    ({ promptMode, surface: { terminalSetup, ...toolSurface } }) => {
       const prompt = buildAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",
         promptMode,
+        ...toolSurface,
       });
-      expect(prompt).toContain("using existing access or the service's supported credential flow");
-      expect(prompt).toContain("their request already authorizes the handoff");
+
+      expect(prompt.includes("openclaw channels add <channel>")).toBe(terminalSetup);
+      expect(prompt.includes("openclaw configure")).toBe(terminalSetup);
       expect(prompt).toContain(
-        "first select a private conversation with the requesting user from trusted conversation context",
+        "deliver short-lived codes and verification URLs only to the requesting user in private",
       );
-      expect(prompt).toContain("recovery/backup codes, and hidden device tokens");
-      expect(prompt).toContain(
-        "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
-      );
-      expect(prompt).toContain("host-owned masked credential entry");
-      expect(prompt).toContain(
-        "trusted flow's short-lived user-facing code and verification URL only there",
-      );
-      expect(prompt).toContain("user-provided short-lived one-time codes or OAuth callbacks");
-      expect(prompt).toContain("same pending flow");
-      expect(prompt).toContain(
-        "Keep messages intact unless the user requests deletion. Confirm completion from the login result.",
-      );
+      expect(prompt).toContain("then acknowledge in the group without them");
     },
   );
-
-  it.each([
-    { name: "direct", toolNames: ["secrets"], capabilityToolNames: [], codeModeActive: false },
-    {
-      name: "deferred Code Mode",
-      toolNames: ["exec"],
-      capabilityToolNames: ["secrets"],
-      codeModeActive: true,
-    },
-  ])("teaches protected credential requests for $name tools", (surface) => {
-    const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", ...surface });
-    expect(prompt).toContain("`secrets`: list metadata first");
-    expect(prompt).toContain("request only missing task-needed credentials: name + reason");
-    expect(prompt).toContain("exact allowedHosts for egress");
-    expect(prompt).toContain("Human masked entry -> protected shared store");
-    expect(prompt).toContain("metadata/ref only");
-    expect(prompt).toContain("returned store SecretRef on supported config fields");
-    expect(prompt).toContain("Gateway egress needs enabled proxy + allowed hosts");
-    expect(prompt).toContain("no plaintext fallback");
-    expect(prompt).toContain("auto-injected opaque env sentinel under stored name");
-    expect(prompt).toContain("No secret templates; never override/print that variable");
-    expect(prompt).toContain("Native shell/sandbox/node: no protected injection");
-    expect(prompt).toContain("late saves need next turn");
-    expect(prompt).toContain(
-      "no_answer: continue independent work; if the credential blocks progress, explain the missing setup",
-    );
-  });
-
-  it("omits the named credential route when policy leaves only Code Mode", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["exec"],
-      capabilityToolNames: [],
-      codeModeActive: true,
-    });
-    expect(prompt).not.toContain("`secrets`");
-    expect(prompt).toContain("host-owned masked credential entry");
-    expect(prompt).toContain("safe external setup");
-  });
 
   it("includes voice hint when provided", () => {
     const prompt = buildAgentSystemPrompt({

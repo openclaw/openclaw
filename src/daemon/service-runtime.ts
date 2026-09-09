@@ -33,6 +33,8 @@ export type GatewayServiceRuntime = {
   inspectionFailure?: {
     code: "service-runtime-inspection-failed";
     detail: string;
+    /** Present only when the native inspection timed out, with its enforced budget. */
+    timeoutMs?: number;
   };
   cachedLabel?: boolean;
   missingUnit?: boolean;
@@ -50,7 +52,10 @@ const SERVICE_RUNTIME_INSPECTION_ERROR_MAX_CHARS = 500;
 const SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL = "service runtime inspection failed";
 
 /** Keeps native probe failures bounded and diagnostic-only for status presentation owners. */
-export function createServiceRuntimeInspectionFailure(error: unknown): GatewayServiceRuntime {
+export function createServiceRuntimeInspectionFailure(
+  error: unknown,
+  timeoutMs?: number,
+): GatewayServiceRuntime {
   const rawDetail = error instanceof Error ? error.message : String(error);
   return {
     status: "unknown",
@@ -60,6 +65,7 @@ export function createServiceRuntimeInspectionFailure(error: unknown): GatewaySe
       detail:
         truncateUtf16Safe(sanitizeForLog(rawDetail), SERVICE_RUNTIME_INSPECTION_ERROR_MAX_CHARS) ||
         "unknown error",
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     },
   };
 }

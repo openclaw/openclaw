@@ -130,6 +130,24 @@ plugins or from bundled plugins whose ID does not own that route. The sidebar op
 the native route while the descriptor is present instead of mounting the generic
 plugin-tab page.
 
+An optional `slug` gives a tab a Control UI address such as `/reports`, prefixed
+by `gateway.controlUi.basePath`. It must be one segment of at most 64 characters
+matching `^[a-z0-9]+(?:-[a-z0-9]+)*$`. Only `surface: "tab"` accepts it, and it
+cannot be combined with `placement: "route:<pluginId>"`. Registration rejects
+duplicate slugs from another active plugin (the first registration wins) and
+Gateway-owned names: `api`, `plugins`, `plugin`, `focus`, `approve`, `ask`, `share`,
+`j`, `v1`, `ui`, `mcp-app-sandbox`, `__openclaw__`, `__openclaw`, `sessions`,
+`agent`, `agents`, and probe names `health`, `healthz`, `ready`, `readyz`, `startup`,
+and `startupz`.
+
+The Control UI ignores slugs matching the first segment of any native route or
+alias. If any plugin's exact or prefix HTTP route would match the mounted slug
+path, the Gateway omits that slug from the hello and logs a diagnostic. In either
+case the tab uses `/plugin?plugin=<pluginId>&id=<tabId>` instead. Generic links to
+a tab with an available slug are replaced once in browser history with its slug
+path, preserving `p.*` parameters and the fragment. A slug changes only the
+Control UI address; it never changes HTTP routing or authentication.
+
 For a gateway-protected external tab, register the descriptor `path` under a
 same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a
 short-lived, HttpOnly grant scoped to that plugin and route root so the
