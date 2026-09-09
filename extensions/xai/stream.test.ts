@@ -11,6 +11,7 @@ import {
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
+import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import {
@@ -122,6 +123,25 @@ function runXaiToolPayloadWrapper(params: {
     {},
   );
 }
+
+it.each([
+  { modelId: "grok-3", target: "grok-3-fast", supported: true },
+  { modelId: "grok-4-0709", target: "grok-4-fast", supported: true },
+  { modelId: "grok-4.3", target: "grok-4.3", supported: false },
+  { modelId: "grok-3-fast", target: "grok-3-fast", supported: false },
+])("publishes the actual Fast mapping for $modelId", ({ modelId, target, supported }) => {
+  expect(
+    resolveFastModeSupport({
+      modelId,
+      provider: "xai",
+      api: "openai-responses",
+      runtimeId: "openclaw",
+      requestCapabilities: { endpointClass: "xai-native", allowsAnthropicServiceTier: false },
+    }),
+  ).toBe(supported);
+  expect(captureWrappedModelId({ modelId, fastMode: true })).toBe(target);
+  expect(captureWrappedModelId({ modelId, fastMode: false })).toBe(modelId);
+});
 
 async function captureXaiResponsesPayloadWithThinking(
   reasoning: ModelThinkingLevel = "low",

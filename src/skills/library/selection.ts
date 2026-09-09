@@ -13,7 +13,7 @@ import {
   resolveSkillInvocationPolicy,
   resolveSkillManifestMetadata,
 } from "../loading/frontmatter.js";
-import { createSyntheticSourceInfo, resolveSkillDisplayName } from "../loading/skill-contract.js";
+import { materializeSkill } from "../loading/skill-materializer.js";
 import type { SkillEntry } from "../types.js";
 import { readSkillLibraryManifestTree, skillLibraryRevisionDir } from "./bundle.js";
 import { SkillLibraryError } from "./errors.js";
@@ -227,19 +227,16 @@ export function loadSkillLibrarySelection(
         const invocation = resolveSkillInvocationPolicy(frontmatter);
         const name = selection.name;
         return {
-          skill: {
+          skill: materializeSkill({
+            content,
+            frontmatter,
             name,
-            displayName: resolveSkillDisplayName(content, frontmatter.name ?? name),
             description: revision.description,
             baseDir,
             filePath,
             source: "openclaw-library",
-            sourceInfo: createSyntheticSourceInfo(filePath, {
-              source: "openclaw-library",
-              baseDir,
-            }),
-            disableModelInvocation: invocation.disableModelInvocation,
-          },
+            sourceOptions: { source: "openclaw-library" },
+          }),
           frontmatter,
           invocation,
           // Untrusted frontmatter can constrain executable eligibility, but cannot claim global credentials/config.

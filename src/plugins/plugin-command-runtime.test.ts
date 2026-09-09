@@ -440,26 +440,32 @@ describe("plugin command runtime", () => {
     expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce();
   });
 
-  it("lets repeated command-triggered clears return without deadlocking their drain", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push({ status: "loaded" } as never);
-    registerCommand(registry, {
-      pluginId: "clear",
-      name: "clear",
-      handler: async () => {
-        await clearActivePluginRegistry();
-        await clearActivePluginRegistry();
-        return { text: "cleared" };
-      },
-    });
-    setActivePluginRegistry(registry);
-    const dispatch = requirePluginDispatch(
-      createPluginCommandRuntime().listNativeCandidates("telegram")[0]!,
-    );
-    await expect(dispatch.execute(executionContext)).resolves.toEqual({ text: "cleared" });
-    await clearActivePluginRegistry();
-    expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "lets command-triggered clears finish (replaced: %s)",
+    async (replaced) => {
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push({ status: "loaded" } as never);
+      registerCommand(registry, {
+        pluginId: "clear",
+        name: "clear",
+        handler: async () => {
+          if (replaced) {
+            setActivePluginRegistry(createEmptyPluginRegistry());
+          }
+          await clearActivePluginRegistry();
+          await clearActivePluginRegistry();
+          return { text: "cleared" };
+        },
+      });
+      setActivePluginRegistry(registry);
+      const dispatch = requirePluginDispatch(
+        createPluginCommandRuntime().listNativeCandidates("telegram")[0]!,
+      );
+      await expect(dispatch.execute(executionContext)).resolves.toEqual({ text: "cleared" });
+      await clearActivePluginRegistry();
+      expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce();
+    },
+  );
 
   it("awaits cleanup from detached handler context after execution settles", async () => {
     const registry = createEmptyPluginRegistry();

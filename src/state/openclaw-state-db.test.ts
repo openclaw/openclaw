@@ -4783,6 +4783,33 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
+  it("validates each healthy doctor repair once and detects corruption after a clean repair", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        prepare.mockClear();
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
+        const statements = prepare.mock.calls.map(([sql]) => sql);
+        expect(statements.filter((sql) => /^PRAGMA integrity_check/iu.test(sql))).toEqual([
+          "PRAGMA integrity_check;",
+        ]);
+        expect(statements.filter((sql) => /^PRAGMA foreign_key_check/iu.test(sql))).toHaveLength(1);
+      }
+    } finally {
+      prepare.mockRestore();
+    }
+
+    createUnsafeIndexDrift(databasePath);
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringMatching(/integrity_check failed.*unsafe_index_records_value/iu)],
+    });
+  });
+
   it("repairs every canonical shared-state named index", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -5107,24 +5134,50 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it("repairs physical ordinary-index drift before cold-open reads", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-    createTaskRunStatusIndexPhysicalDrift(databasePath);
+  it.each(["runtime", "doctor"])(
+    "repairs physical ordinary-index drift through %s",
+    (repairPath) => {
+      const stateDir = createTempStateDir();
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      createTaskRunStatusIndexPhysicalDrift(databasePath);
 
-    const reopened = openOpenClawStateDatabase({ env });
-    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
-      integrity_check: "ok",
-    });
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
-        )
-        .all(),
-    ).toEqual([{ task_id: "task-index-repair" }]);
-  });
+      if (repairPath === "doctor") {
+        const { DatabaseSync } = requireNodeSqlite();
+        const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+        try {
+          expect(repairOpenClawStateDatabaseSchema({ env })).toEqual({
+            changes: [
+              expect.stringMatching(
+                /^Rebuilt canonical shared-state SQLite indexes \([1-9]\d*\)$/u,
+              ),
+            ],
+            warnings: [],
+          });
+          const statements = prepare.mock.calls.map(([sql]) => sql);
+          expect(statements.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
+          expect(statements.some((sql) => /^PRAGMA integrity_check\(/iu.test(sql))).toBe(true);
+          expect(statements.filter((sql) => /^PRAGMA foreign_key_check/iu.test(sql))).toHaveLength(
+            1,
+          );
+        } finally {
+          prepare.mockRestore();
+        }
+      }
+
+      const reopened = openOpenClawStateDatabase({ env });
+      expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(
+        reopened.db
+          .prepare(
+            "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
+          )
+          .all(),
+      ).toEqual([{ task_id: "task-index-repair" }]);
+    },
+  );
 
   it("rejects a missing current-schema table instead of recreating it empty", () => {
     const stateDir = createTempStateDir();

@@ -1,0 +1,255 @@
+name: Android Emulator Diagnostic
+
+run-name: Android emulator diagnostic (${{ inputs.target_sha }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact lowercase 40-character commit SHA to diagnose
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Validate target SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::target_sha must be an exact lowercase 40-character commit SHA"
+            exit 2
+          fi
+
+      - name: Checkout trusted Android tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: .github/actions/setup-android-toolchain
+          path: .mobile-release-tooling
+
+      - name: Checkout exact target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: candidate
+
+      - name: Verify exact target checkout
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$TARGET_SHA"
+          git -C candidate status --short --branch
+
+      - name: Verify Android toolchain action parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_path=".github/actions/setup-android-toolchain/action.yml"
+          read -r trusted_mode trusted_type trusted_oid trusted_path < <(
+            git -C .mobile-release-tooling ls-tree HEAD -- "$action_path"
+          )
+          read -r candidate_mode candidate_type candidate_oid candidate_path < <(
+            git -C candidate ls-tree HEAD -- "$action_path"
+          )
+          if [[ "$trusted_mode" != "100644" || "$trusted_type" != "blob" || "$trusted_path" != "$action_path" ]]; then
+            echo "::error::Trusted Android toolchain action is not a regular committed file"
+            exit 1
+          fi
+          if [[ "$candidate_mode" != "100644" || "$candidate_type" != "blob" || "$candidate_path" != "$action_path" ]]; then
+            echo "::error::Candidate Android toolchain action is not a regular committed file"
+            exit 1
+          fi
+          trusted_blob="$RUNNER_TEMP/trusted-setup-android-toolchain.yml"
+          candidate_blob="$RUNNER_TEMP/candidate-setup-android-toolchain.yml"
+          git -C .mobile-release-tooling cat-file blob "$trusted_oid" >"$trusted_blob"
+          git -C candidate cat-file blob "$candidate_oid" >"$candidate_blob"
+          if ! cmp -s "$trusted_blob" "$candidate_blob"; then
+            echo "::error::Candidate Android toolchain action differs from trusted workflow tooling"
+            exit 1
+          fi
+
+  diagnose:
+    needs: validate-target
+    runs-on: macos-26-intel
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS: "180"
+      AVD_NAME: OpenClaw_Screenshots_API36
+      DEVICE_PROFILE: pixel_2
+      SYSTEM_IMAGE: system-images;android-36;google_apis;x86_64
+    steps:
+      - name: Initialize Android emulator diagnostic
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          DIAGNOSTIC_DIR="$RUNNER_TEMP/android-emulator-diagnostic"
+          echo "DIAGNOSTIC_DIR=$DIAGNOSTIC_DIR" >>"$GITHUB_ENV"
+          mkdir -p "$DIAGNOSTIC_DIR"
+          {
+            printf 'target_sha=%s\n' "$TARGET_SHA"
+            printf 'tooling_sha=%s\n' "$GITHUB_WORKFLOW_SHA"
+            printf 'runner_os=%s\n' "$RUNNER_OS"
+            printf 'runner_arch=%s\n' "$RUNNER_ARCH"
+            printf 'runner_image=%s\n' "${ImageOS:-unknown}"
+            printf 'runner_image_version=%s\n' "${ImageVersion:-unknown}"
+            uname -a
+            sw_vers
+          } >"$DIAGNOSTIC_DIR/runner.txt"
+
+      - name: Checkout trusted Android tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: .github/actions/setup-android-toolchain
+          path: .mobile-release-tooling
+
+      - name: Setup Android toolchain
+        uses: ./.mobile-release-tooling/.github/actions/setup-android-toolchain
+        with:
+          cache-mode: "off"
+          install-screenshot-emulators: "true"
+
+      - name: Run phone emulator diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          emulator_pid=""
+          adb_started=0
+
+          cleanup() {
+            status=$?
+            set +e
+            {
+              printf 'exit_status=%s\n' "$status"
+              printf 'finished_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              if [[ -n "$emulator_pid" ]]; then
+                ps -p "$emulator_pid" -o pid=,ppid=,stat=,etime=,command=
+              fi
+              adb devices -l
+            } >>"$DIAGNOSTIC_DIR/process-status.log" 2>&1
+            if [[ -n "$emulator_pid" ]] && kill -0 "$emulator_pid" 2>/dev/null; then
+              kill "$emulator_pid"
+              for _ in {1..15}; do
+                kill -0 "$emulator_pid" 2>/dev/null || break
+                sleep 1
+              done
+              if kill -0 "$emulator_pid" 2>/dev/null; then
+                kill -9 "$emulator_pid"
+              fi
+              wait "$emulator_pid" 2>/dev/null
+            fi
+            if [[ "$adb_started" == "1" ]]; then
+              adb kill-server
+            fi
+            avdmanager delete avd --name "$AVD_NAME" \
+              >>"$DIAGNOSTIC_DIR/cleanup.log" 2>&1
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          emulator -version >"$DIAGNOSTIC_DIR/emulator-version.txt" 2>&1
+          sdkmanager --list_installed >"$DIAGNOSTIC_DIR/sdk-packages.txt" 2>&1
+          avdmanager list device >"$DIAGNOSTIC_DIR/avd-devices.txt" 2>&1
+          adb start-server
+          adb_started=1
+          adb devices -l >"$DIAGNOSTIC_DIR/adb-before.txt"
+          if adb devices | awk 'NR > 1 && $2 != "" { found = 1 } END { exit !found }'; then
+            echo "::error::Expected no connected Android devices before diagnostic startup"
+            exit 1
+          fi
+
+          printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "$DEVICE_PROFILE"
+          cp "$HOME/.android/avd/${AVD_NAME}.avd/config.ini" "$DIAGNOSTIC_DIR/avd-config.ini"
+
+          emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim)
+          printf '%q ' "${emulator_args[@]}" >"$DIAGNOSTIC_DIR/emulator-args.txt"
+          printf '\n' >>"$DIAGNOSTIC_DIR/emulator-args.txt"
+          emulator "${emulator_args[@]}" >"$DIAGNOSTIC_DIR/emulator.log" 2>&1 &
+          emulator_pid=$!
+          printf 'emulator_pid=%s\n' "$emulator_pid" >"$DIAGNOSTIC_DIR/process-status.log"
+
+          device_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))
+          serial=""
+          while (( SECONDS < device_deadline )); do
+            {
+              printf '\n[%s] waiting for one device\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              adb devices -l
+            } >>"$DIAGNOSTIC_DIR/adb-observations.log" 2>&1
+            serials="$(adb devices | awk 'NR > 1 && $2 == "device" { print $1 }')"
+            count="$(printf '%s\n' "$serials" | sed '/^$/d' | wc -l | tr -d ' ')"
+            if [[ "$count" == "1" ]]; then
+              serial="$serials"
+              break
+            fi
+            if [[ "$count" -gt 1 ]]; then
+              echo "::error::Multiple Android devices appeared during diagnostic startup"
+              exit 1
+            fi
+            ps -p "$emulator_pid" -o pid=,ppid=,stat=,etime=,command= \
+              >>"$DIAGNOSTIC_DIR/process-status.log" 2>&1
+            kill -0 "$emulator_pid"
+            sleep 2
+          done
+          if [[ -z "$serial" ]]; then
+            echo "::error::Timed out waiting for exactly one Android emulator device"
+            exit 1
+          fi
+
+          adb -s "$serial" wait-for-device
+          boot_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))
+          while (( SECONDS < boot_deadline )); do
+            boot_completed="$(adb -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            {
+              printf '\n[%s] serial=%s boot_completed=%s\n' \
+                "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$serial" "${boot_completed:-unset}"
+              adb devices -l
+            } >>"$DIAGNOSTIC_DIR/adb-observations.log" 2>&1
+            ps -p "$emulator_pid" -o pid=,ppid=,stat=,etime=,command= \
+              >>"$DIAGNOSTIC_DIR/process-status.log" 2>&1
+            kill -0 "$emulator_pid"
+            if [[ "$boot_completed" == "1" ]]; then
+              {
+                printf 'serial=%s\n' "$serial"
+                printf 'avd=%s\n' "$(adb -s "$serial" emu avd name 2>/dev/null | tr -d '\r' | sed -n '1p')"
+                printf 'boot_completed=1\n'
+              } >"$DIAGNOSTIC_DIR/result.txt"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::Timed out waiting for Android emulator boot completion"
+          exit 1
+
+      - name: Upload Android emulator diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-emulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-emulator-diagnostic
+          retention-days: 7

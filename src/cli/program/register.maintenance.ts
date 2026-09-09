@@ -318,7 +318,7 @@ export function registerMaintenanceCommands(program: Command) {
 
   program
     .command("uninstall")
-    .description("Uninstall the gateway service + local data (CLI remains)")
+    .description("Uninstall the gateway service + local data")
     .addHelpText(
       "after",
       () =>

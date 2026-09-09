@@ -1848,7 +1848,6 @@ src/agents/memory-write-provenance.ts	1
 src/agents/minimax-vlm.ts	1
 src/agents/model-auth-label.ts	1
 src/agents/model-auth-model.ts	2
-src/agents/model-catalog.ts	1
 src/agents/model-fallback-attempt.ts	1
 src/agents/model-fallback-runner.ts	2
 src/agents/model-provider-auth.ts	1
@@ -1869,7 +1868,7 @@ src/agents/plugin-model-catalog.ts	3
 src/agents/plugin-text-transforms.ts	5
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
-src/agents/prepared-model-runtime.configured.ts	2
+src/agents/prepared-model-runtime.configured.ts	1
 src/agents/prepared-model-runtime.facts.ts	1
 src/agents/prepared-model-runtime.ts	1
 src/agents/provider-attribution.ts	14
@@ -3784,7 +3783,7 @@ ui/src/components/theme-mode-toggle.ts	1
 ui/src/components/web-awesome.ts	2
 ui/src/components/wizard-step-controls.ts	4
 ui/src/i18n/lib/registry.ts	2
-ui/src/i18n/lib/translate.ts	3
+ui/src/i18n/lib/translate.ts	1
 ui/src/lib/agents/display.ts	6
 ui/src/lib/board/gateway-provider.ts	2
 ui/src/lib/board/widget-bridge.ts	3

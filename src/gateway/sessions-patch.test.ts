@@ -1237,6 +1237,20 @@ describe("gateway sessions patch", () => {
     },
   );
 
+  test("pins a concrete model selection that equals the configured default", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: { agents: { defaults: { model: { primary: OPENAI_GPT_MODEL } } } },
+        patch: { key: MAIN_SESSION_KEY, model: OPENAI_GPT_MODEL },
+        loadGatewayModelCatalog: loadCatalog(OPENAI_GPT_MODEL),
+      }),
+    );
+
+    expectModelSelection(entry, "openai", OPENAI_GPT_ID);
+    expect(entry.modelOverrideSource).toBe("user");
+    expect(entry.modelOverrideRouteResolution).toBe("resolved");
+  });
+
   test("clears pending live model switches for model reset patches", async () => {
     const store = mainStoreEntry({
       sessionId: "sess-live-reset",
@@ -1258,7 +1272,7 @@ describe("gateway sessions patch", () => {
     );
 
     expectModelSelection(entry, undefined, undefined);
-    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.modelOverrideSource).toBe("default");
     expect(entry.liveModelSwitchPending).toBeUndefined();
     expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
@@ -2050,9 +2064,8 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    // Selected model matches the target agent default, so no override is stored.
-    expect(entry.providerOverride).toBeUndefined();
-    expect(entry.modelOverride).toBeUndefined();
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.7-Code");
+    expect(entry.modelOverrideSource).toBe("user");
   });
 
   test("allows target agent subagents.model for subagent session even when missing from global allowlist", async () => {

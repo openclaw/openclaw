@@ -40,6 +40,27 @@ import {
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 
+function createReleaseNotesFixtureLines(): string[] {
+  return [
+    "# Changelog",
+    "",
+    "## 2026.7.1",
+    "",
+    "### Highlights",
+    "",
+    "- One.",
+    "- Two.",
+    "- Three.",
+    "- Four.",
+    "- Five.",
+    "",
+    "### Changes",
+    "",
+    "### Fixes",
+    "",
+  ];
+}
+
 const verifier = resolve(
   ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs",
 );
@@ -973,24 +994,7 @@ describe("release-note verification", () => {
       const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-ancestry-"));
       try {
         git(cwd, ["init", "-q", "-b", "main"]);
-        const changelog = [
-          "# Changelog",
-          "",
-          "## 2026.7.1",
-          "",
-          "### Highlights",
-          "",
-          "- One.",
-          "- Two.",
-          "- Three.",
-          "- Four.",
-          "- Five.",
-          "",
-          "### Changes",
-          "",
-          "### Fixes",
-          "",
-        ].join("\n");
+        const changelog = createReleaseNotesFixtureLines().join("\n");
         writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
         const commit = (subject: string, file: string) => {
           writeFileSync(join(cwd, file), subject);
@@ -1283,24 +1287,7 @@ console.log(JSON.stringify({ data }));
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-multi-revert-"));
     try {
       git(cwd, ["init", "-q", "-b", "main"]);
-      const prose = [
-        "# Changelog",
-        "",
-        "## 2026.7.1",
-        "",
-        "### Highlights",
-        "",
-        "- One.",
-        "- Two.",
-        "- Three.",
-        "- Four.",
-        "- Five.",
-        "",
-        "### Changes",
-        "",
-        "### Fixes",
-        "",
-      ].join("\n");
+      const prose = createReleaseNotesFixtureLines().join("\n");
       writeFileSync(join(cwd, "CHANGELOG.md"), prose);
       writeFileSync(join(cwd, "alpha.txt"), "original\n");
       writeFileSync(join(cwd, "beta.bin"), Buffer.from([0, 255, 1]));
@@ -1491,24 +1478,7 @@ console.log(JSON.stringify({ data }));
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-membership-"));
     try {
       git(cwd, ["init", "-q", "-b", "release"]);
-      const prose = [
-        "# Changelog",
-        "",
-        "## 2026.7.1",
-        "",
-        "### Highlights",
-        "",
-        "- One.",
-        "- Two.",
-        "- Three.",
-        "- Four.",
-        "- Five.",
-        "",
-        "### Changes",
-        "",
-        "### Fixes",
-        "",
-      ].join("\n");
+      const prose = createReleaseNotesFixtureLines().join("\n");
       writeFileSync(join(cwd, "CHANGELOG.md"), prose);
       const commitAt = (message: string, day: number) => {
         git(cwd, ["add", "."]);
@@ -1668,24 +1638,7 @@ console.log(JSON.stringify({ data }));
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-transport-"));
     try {
       git(cwd, ["init", "-q", "-b", "main"]);
-      const changelog = [
-        "# Changelog",
-        "",
-        "## 2026.7.1",
-        "",
-        "### Highlights",
-        "",
-        "- One.",
-        "- Two.",
-        "- Three.",
-        "- Four.",
-        "- Five.",
-        "",
-        "### Changes",
-        "",
-        "### Fixes",
-        "",
-      ].join("\n");
+      const changelog = createReleaseNotesFixtureLines().join("\n");
       writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
       git(cwd, ["add", "CHANGELOG.md"]);
       git(cwd, ["commit", "-qm", "chore: baseline"]);

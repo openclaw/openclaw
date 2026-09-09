@@ -106,6 +106,7 @@ function resolveSessionListSearchModelFields(params: {
   cfg: OpenClawConfig;
   key: string;
   entry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
   rowContext?: SessionListRowContext;
   selectedModel?: ReturnType<typeof resolveSessionSelectedModelRef>;
 }): Array<string | undefined> {
@@ -120,6 +121,7 @@ function resolveSessionListSearchModelFields(params: {
       sessionKey: params.key,
       entry: params.entry,
       agentId,
+      sessionStore: params.sessionStore,
       rowContext: params.rowContext,
       allowPluginNormalization: false,
     });
@@ -150,6 +152,7 @@ function resolveSessionListSearchModelFields(params: {
 export function createSessionListSearchMatcher(params: {
   cfg: OpenClawConfig;
   search: string;
+  store: Record<string, SessionEntry>;
   targetsBySessionKey: GatewayStoredSessionTargets;
   now: number;
   visibleEntries: readonly SessionEntryPair[];
@@ -218,6 +221,7 @@ export function createSessionListSearchMatcher(params: {
       sessionKey: storeKey,
       entry,
       agentId,
+      sessionStore: params.store,
       rowContext: context(),
       allowPluginNormalization: false,
     });
@@ -229,6 +233,7 @@ export function createSessionListSearchMatcher(params: {
           key: storeKey,
           entry,
           agentId,
+          sessionStore: params.store,
           rowContext: context(),
           selectedModel: selected,
         }),

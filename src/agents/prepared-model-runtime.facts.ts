@@ -31,6 +31,7 @@ import {
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import {
   buildConfiguredModelCatalog,
   parseConfiguredModelVisibilityEntries,
@@ -48,7 +49,7 @@ import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogFacts,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
+import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
@@ -56,7 +57,6 @@ import {
   collectPreparedModelRuntimeProviderIds,
   prepareConfiguredRuntimeModels,
   prepareRuntimeCapabilityModels,
-  toStaticCatalogEntry,
 } from "./prepared-model-runtime.configured.js";
 import {
   prepareWorkspacePluginRegistries,
@@ -407,7 +407,7 @@ export async function prepareWorkspaceBuildGroup(
         candidates: [
           ...configuredCatalogEntries,
           ...configuredRuntimeModels.map(({ model, modelId, provider }) => ({
-            ...toStaticCatalogEntry(model),
+            ...modelCatalogRowToEntry(model),
             id: modelId,
             provider,
           })),
@@ -609,7 +609,7 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
       );
       catalogs.set(
         facts.input,
-        prepareConfiguredRuntimeFacts({
+        prepareCapturedRuntimeFacts({
           agentFacts: facts,
           workspaceFacts: params.pluginGeneration,
           templateModelRegistry,

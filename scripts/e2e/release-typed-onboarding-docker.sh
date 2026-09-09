@@ -71,7 +71,7 @@ if ! docker_e2e_run_with_harness \
   -v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro" \
   -v "$ONBOARD_ASSERTIONS:/app/scripts/e2e/lib/release-scenarios/assertions.mjs:ro" \
   -v "$ONBOARD_MOCK_OPENAI_CONFIG:/app/scripts/e2e/lib/fixtures/mock-openai-config.mjs:ro" \
-  -i "$IMAGE_NAME" bash scripts/e2e/lib/release-typed-onboarding/scenario.sh >"$run_log" 2>&1; then
+  -i "$IMAGE_NAME" bash -E scripts/e2e/lib/release-typed-onboarding/scenario.sh >"$run_log" 2>&1; then
   docker_e2e_print_log "$run_log"
   exit 1
 fi

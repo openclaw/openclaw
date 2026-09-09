@@ -27,6 +27,8 @@ export type RunExecOptions = {
   input?: string | Uint8Array;
   stdinFileDescriptor?: number;
   signal?: AbortSignal;
+  /** Observe received bytes without changing buffering, completion or cancellation. */
+  onOutputChunk?: (chunk: Buffer, stream: CommandOutputStream) => void;
 };
 
 function decodeExecOutput(buffer: Uint8Array, windowsEncoding: string | null): string {
@@ -76,7 +78,26 @@ export async function runExec(
       timeout,
     });
     const releaseOutput = releaseChildProcessOutputAfterExit(subprocess.nodeChildProcess);
-    const { stdout, stderr } = await subprocess.finally(releaseOutput);
+    let observer = resolvedOptions?.onOutputChunk;
+    const observe = (chunk: Buffer, stream: CommandOutputStream) => {
+      try {
+        observer?.(chunk, stream);
+      } catch {
+        // Diagnostic observers cannot replace the command's outcome.
+        observer = undefined;
+      }
+    };
+    const onStdout = (chunk: Buffer) => observe(chunk, "stdout");
+    const onStderr = (chunk: Buffer) => observe(chunk, "stderr");
+    if (observer) {
+      subprocess.nodeChildProcess.stdout?.on("data", onStdout);
+      subprocess.nodeChildProcess.stderr?.on("data", onStderr);
+    }
+    const { stdout, stderr } = await subprocess.finally(() => {
+      releaseOutput();
+      subprocess.nodeChildProcess.stdout?.off("data", onStdout);
+      subprocess.nodeChildProcess.stderr?.off("data", onStderr);
+    });
     const windowsEncoding = resolveWindowsConsoleEncoding();
     const decodedStdout = decodeExecOutput(stdout, windowsEncoding);
     const decodedStderr = decodeExecOutput(stderr, windowsEncoding);

@@ -8,6 +8,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
@@ -254,11 +255,11 @@ function selectPluginStateEntry(
   return query(params).rows[0];
 }
 
-function selectPluginStateEntries(
+function iteratePluginStateEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; now: number },
-): PluginStateRow[] {
-  return executeSqliteQuerySync(
+): IterableIterator<PluginStateRow> {
+  return iterateSqliteQuerySync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
@@ -268,7 +269,7 @@ function selectPluginStateEntries(
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
       .orderBy("created_at", "asc")
       .orderBy("entry_key", "asc"),
-  ).rows;
+  );
 }
 
 function selectPluginStateEntriesInKeyRange(
@@ -1406,12 +1407,28 @@ export function pluginStateEntries(params: {
       withPluginStateDatabaseReadOnly(
         "entries",
         ({ db, path: databasePath }) => {
-          const rows = selectPluginStateEntries(db, {
+          const rows = iteratePluginStateEntries(db, {
             pluginId: params.pluginId,
             namespace: params.namespace,
             now: Date.now(),
           });
-          return rows.map((row) => rowToEntry(row, "entries", databasePath));
+          const entries: PluginStateEntry<unknown>[] = [];
+          let decodeFailure: { error: unknown } | undefined;
+          for (const row of rows) {
+            if (decodeFailure) {
+              continue;
+            }
+            try {
+              entries.push(rowToEntry(row, "entries", databasePath));
+            } catch (error) {
+              // Finish the SQL read so a later step failure still precedes JSON errors.
+              decodeFailure = { error };
+            }
+          }
+          if (decodeFailure) {
+            throw decodeFailure.error;
+          }
+          return entries;
         },
         envOptions(params.env),
       ) ?? []

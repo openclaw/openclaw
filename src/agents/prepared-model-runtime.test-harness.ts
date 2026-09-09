@@ -47,7 +47,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   },
   modelRegistry: {
     fork: vi.fn((authStorage: unknown) => ({ authStorage })),
-    getAll: vi.fn(() => []),
+    getAll: vi.fn<() => ModelCatalogSnapshot["entries"]>(() => []),
     find: vi.fn(() => null),
   },
   buildPreparedModelCatalogSnapshot: vi.fn<BuildPreparedModelCatalogSnapshot>(async () => ({

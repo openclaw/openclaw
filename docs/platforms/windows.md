@@ -72,7 +72,7 @@ the tray to confirm connection, pairing, node status, and channel health.
 Windows Hub can register as an OpenClaw node so the agent can use declared
 Windows-native capabilities through the Gateway. Node commands must be
 declared by the node and allowed by Gateway policy before they run; see
-[Nodes](/nodes#command-policy) for the full allow/deny model.
+[Nodes](/nodes/command-policy#command-policy) for the full allow/deny model.
 
 Common commands:
 

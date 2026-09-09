@@ -14,6 +14,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.time.Instant
+import java.util.concurrent.atomic.AtomicReference
 
 internal object AndroidScreenshotFixture {
   @Volatile private var scene: AndroidScreenshotScene = AndroidScreenshotScene.Home
@@ -22,14 +24,18 @@ internal object AndroidScreenshotFixture {
     this.scene = scene
   }
 
+  val branchesEnabled: Boolean get() = scene == AndroidScreenshotScene.Branches
+
   const val gatewayId = "android-screenshot-gateway"
   const val controlUiBaseUrl = "http://127.0.0.1:18789"
   const val mainSessionKey = "agent:main:node-screenshot"
   const val primarySessionTitle = "Android release planning"
   const val cronJobId = "android-release-digest"
   const val cronJobName = "Android release digest"
+  private val branchLeaves = (1..12).map { "android-screenshot-branch-${it.toString().padStart(2, '0')}" }
 
-  fun createRequester(): (String, String?) -> String {
+  fun createRequester(branchesEnabled: Boolean = this.branchesEnabled): (String, String?) -> String {
+    val activeLeaf = AtomicReference(branchLeaves.first())
     // A runtime gets a fresh lifetime; list refreshes and scene re-entry keep its exact record.
     val pendingQuestion =
       System.currentTimeMillis().let { nowMs ->
@@ -53,21 +59,168 @@ internal object AndroidScreenshotFixture {
       }
     return { method, paramsJson ->
       when (method) {
-        "health" -> buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
-        "chat.history" -> chatHistory()
-        "sessions.list" -> sessionList(paramsJson)
-        "chat.metadata" -> chatMetadata()
-        "tasks.list" -> backgroundTasks(paramsJson)
-        "tasks.get" -> backgroundTask(paramsJson)
-        "question.list" -> Json.encodeToString(QuestionListResult(listOf(pendingQuestion)))
-        "cron.list" -> cronList()
-        "cron.get" -> cronJob().toString()
-        "cron.runs" -> cronRuns()
-        "openclaw.chat" -> systemAgentChat(paramsJson)
-        else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
+        "health" -> {
+          buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
+        }
+
+        "chat.history" -> {
+          if (branchesEnabled) {
+            branchRequestParams(paramsJson)
+            branchHistory(activeLeaf.get())
+          } else {
+            chatHistory()
+          }
+        }
+
+        "sessions.list" -> {
+          if (branchesEnabled) branchSessionList(paramsJson, activeLeaf.get()) else sessionList(paramsJson)
+        }
+
+        "sessions.branches.list" -> {
+          check(branchesEnabled) { "Screenshot scene does not support sessions.branches.list" }
+          branchRequestParams(paramsJson)
+          branchList(activeLeaf.get())
+        }
+
+        "sessions.branches.switch" -> {
+          check(branchesEnabled) { "Screenshot scene does not support sessions.branches.switch" }
+          val params = branchRequestParams(paramsJson, switching = true)
+          val leaf = params.getValue("leafEntryId").jsonPrimitive.content
+          require(leaf in branchLeaves) { "Unknown screenshot branch leaf" }
+          activeLeaf.set(leaf)
+          "{}"
+        }
+
+        "chat.metadata" -> {
+          chatMetadata()
+        }
+
+        "tasks.list" -> {
+          backgroundTasks(paramsJson)
+        }
+
+        "tasks.get" -> {
+          backgroundTask(paramsJson)
+        }
+
+        "question.list" -> {
+          Json.encodeToString(QuestionListResult(listOf(pendingQuestion)))
+        }
+
+        "cron.list" -> {
+          cronList()
+        }
+
+        "cron.get" -> {
+          cronJob().toString()
+        }
+
+        "cron.runs" -> {
+          cronRuns()
+        }
+
+        "openclaw.chat" -> {
+          systemAgentChat(paramsJson)
+        }
+
+        else -> {
+          error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
+        }
       }
     }
   }
+
+  private fun branchRequestParams(
+    paramsJson: String?,
+    switching: Boolean = false,
+  ): JsonObject {
+    val params = requireNotNull(Json.parseToJsonElement(requireNotNull(paramsJson)) as? JsonObject) { "Expected screenshot branch request object" }
+    val fields = if (switching) setOf("sessionKey", "agentId", "leafEntryId") else setOf("sessionKey", "agentId")
+    require(params.keys == fields) { "Invalid screenshot branch request fields" }
+    require(params["sessionKey"] == JsonPrimitive(mainSessionKey) && params["agentId"] == JsonPrimitive("main")) {
+      "Screenshot branch request targets another session or agent"
+    }
+    if (switching) require((params["leafEntryId"] as? JsonPrimitive)?.isString == true) { "Expected screenshot branch leaf ID" }
+    return params
+  }
+
+  private fun branchTitle(leaf: String): String = "Release plan ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}"
+
+  private fun branchTimestamp(leaf: String): Long = 1_783_555_320_000L + branchLeaves.indexOf(leaf) * 1_000L
+
+  private fun branchList(activeLeaf: String): String =
+    buildJsonObject {
+      put(
+        "branches",
+        buildJsonArray {
+          branchLeaves.forEach { leaf ->
+            add(
+              buildJsonObject {
+                put("leafEntryId", JsonPrimitive(leaf))
+                put("headline", JsonPrimitive(branchTitle(leaf)))
+                put("messageCount", JsonPrimitive(2))
+                put("updatedAt", JsonPrimitive(Instant.ofEpochMilli(branchTimestamp(leaf)).toString()))
+                put("active", JsonPrimitive(leaf == activeLeaf))
+              },
+            )
+          }
+        },
+      )
+    }.toString()
+
+  private fun branchSession(activeLeaf: String): JsonObject =
+    buildJsonObject {
+      session(mainSessionKey, "Branch selection proof", branchTimestamp(activeLeaf)).forEach { (key, value) -> put(key, value) }
+      put("agentId", JsonPrimitive("main"))
+      put("sessionId", JsonPrimitive("screenshot-branches"))
+      put("messageCount", JsonPrimitive(2))
+    }
+
+  private fun branchSessionList(
+    paramsJson: String?,
+    activeLeaf: String,
+  ): String {
+    val params = Json.parseToJsonElement(requireNotNull(paramsJson)).jsonObject
+    require(params["agentId"] == JsonPrimitive("main") && "sessionKey" !in params) { "Invalid screenshot sessions.list owner" }
+    val matchesSearch =
+      params["search"]?.jsonPrimitive?.contentOrNull?.let { "Branch selection proof".contains(it, ignoreCase = true) } ?: true
+    val sessions =
+      if (params["archived"] == JsonPrimitive(true) || !matchesSearch) emptyList() else listOf(branchSession(activeLeaf))
+    return buildJsonObject {
+      put("sessions", JsonArray(sessions))
+      put("count", JsonPrimitive(sessions.size))
+      put("totalCount", JsonPrimitive(sessions.size))
+      put("hasMore", JsonPrimitive(false))
+    }.toString()
+  }
+
+  private fun branchHistory(activeLeaf: String): String =
+    buildJsonObject {
+      put("sessionId", JsonPrimitive("screenshot-branches"))
+      put("thinkingLevel", JsonPrimitive("low"))
+      put("sessionInfo", branchSession(activeLeaf))
+      put(
+        "messages",
+        buildJsonArray {
+          add(
+            chatMessage(
+              "user",
+              "Which release plan should we use?",
+              1_783_555_260_000,
+              marker = buildJsonObject { put("id", JsonPrimitive("android-screenshot-branch-prompt")) },
+            ),
+          )
+          add(
+            chatMessage(
+              "assistant",
+              "${branchTitle(activeLeaf)}: review this alternative before preparing the release.",
+              branchTimestamp(activeLeaf),
+              marker = buildJsonObject { put("id", JsonPrimitive(activeLeaf)) },
+            ),
+          )
+        },
+      )
+    }.toString()
 
   private fun taskRecords(): List<JsonObject> =
     (1..16).map { index ->

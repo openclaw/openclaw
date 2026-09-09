@@ -383,7 +383,7 @@ identify the cause by itself; check the selected account, model, and voice.
 These rows describe implemented transport paths, not account entitlement or a
 successful live call on every device. iOS implements frameless transcripts and
 the Gateway offer exchange; Android retains an explicit GPT-Live model gate.
-For model capability limits, see [Discord voice policies](/channels/discord#voice-channels)
+For model capability limits, see [Discord voice policies](/channels/discord/voice-channels#voice-channels)
 and [Voice Call tools](/plugins/voice-call#realtime-voice-conversations).
 
 The Gateway-owned WebRTC route keeps OAuth and Platform credentials away from

@@ -383,7 +383,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   ];
   const loadModelCatalog = vi.fn(async () => entries);
   return {
-    loadPreparedModelCatalog: loadModelCatalog,
+    readPreparedModelCatalog: loadModelCatalog,
     loadProviderScopedThinkingCatalog: loadModelCatalog,
     getPublishedPreparedModelCatalogOwnerSnapshot: (params: { config: OpenClawConfig }) => ({
       config: params.config,

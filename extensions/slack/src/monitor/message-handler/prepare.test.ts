@@ -1796,85 +1796,58 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(await prepared.ackReactionPromise).toBe(true);
   });
 
-  it("keeps the configured ack reaction when status reactions are disabled", async () => {
-    const addReaction = vi.fn().mockResolvedValue({ ok: true });
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        messages: {
-          ackReaction: "eyes",
-          groupChat: { visibleReplies: "message_tool" },
-          statusReactions: { enabled: false },
-        },
-        channels: {
-          slack: {
-            enabled: true,
-            groupPolicy: "open",
-            replyToMode: "all",
+  it.each([
+    { label: "automatic/default status", visibleReplies: "automatic", statusEnabled: undefined },
+    { label: "automatic/disabled status", visibleReplies: "automatic", statusEnabled: false },
+    {
+      label: "message-tool/default status",
+      visibleReplies: "message_tool",
+      statusEnabled: undefined,
+    },
+    { label: "message-tool/disabled status", visibleReplies: "message_tool", statusEnabled: false },
+  ] as const)(
+    "keeps the configured static ack with $label",
+    async ({ visibleReplies, statusEnabled }) => {
+      const addReaction = vi.fn().mockResolvedValue({ ok: true });
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          messages: {
+            ackReaction: "eyes",
+            groupChat: { visibleReplies },
+            statusReactions: statusEnabled === undefined ? undefined : { enabled: statusEnabled },
           },
-        },
-      } as OpenClawConfig,
-      appClient: { reactions: { add: addReaction } } as unknown as App["client"],
-      replyToMode: "all",
-    });
-
-    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
-      channel: "C123",
-      channel_type: "channel",
-      user: "U1",
-      text: "<@B1> hi",
-      ts: "1.000",
-    } as SlackMessageEvent);
-
-    assertPrepared(prepared);
-    expect(prepared.ackReactionMessageTs).toBe("1.000");
-    expect(prepared.ackReactionValue).toBe("eyes");
-    expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
-    expect(await prepared.ackReactionPromise).toBe(true);
-    expect(addReaction).toHaveBeenCalledWith({
-      channel: "C123",
-      name: "eyes",
-      timestamp: "1.000",
-    });
-  });
-
-  it("defaults Slack to a static ack reaction while native thread status handles progress", async () => {
-    const addReaction = vi.fn().mockResolvedValue({ ok: true });
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        messages: {
-          ackReaction: "eyes",
-        },
-        channels: {
-          slack: {
-            enabled: true,
-            groupPolicy: "open",
+          channels: {
+            slack: {
+              enabled: true,
+              groupPolicy: "open",
+            },
           },
-        },
-      } as OpenClawConfig,
-      appClient: {
-        reactions: { add: addReaction },
-      } as unknown as App["client"],
-    });
-    slackCtx.resolveUserName = async () => ({ name: "Alice" });
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+        } as OpenClawConfig,
+        appClient: {
+          reactions: { add: addReaction },
+        } as unknown as App["client"],
+      });
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+      slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
-    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
-      channel: "C123",
-      channel_type: "channel",
-      user: "U1",
-      text: "<@B1> hi",
-      ts: "1.000",
-    } as SlackMessageEvent);
+      const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "<@B1> hi",
+        ts: "1.000",
+      } as SlackMessageEvent);
 
-    assertPrepared(prepared);
-    expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
-    expect(await prepared.ackReactionPromise).toBe(true);
-    expect(addReaction).toHaveBeenCalledWith({
-      channel: "C123",
-      timestamp: "1.000",
-      name: "eyes",
-    });
-  });
+      assertPrepared(prepared);
+      expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
+      expect(await prepared.ackReactionPromise).toBe(true);
+      expect(addReaction).toHaveBeenCalledWith({
+        channel: "C123",
+        timestamp: "1.000",
+        name: "eyes",
+      });
+    },
+  );
 
   it("keeps unmentioned room events quiet when ack scope does not force all messages", async () => {
     const slackCtx = createInboundSlackCtx({

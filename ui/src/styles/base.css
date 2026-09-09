@@ -850,8 +850,30 @@ input:is(
 
 a {
   color: var(--accent);
-  text-decoration: underline;
+  text-decoration: none;
   text-underline-offset: 2px;
+}
+
+/* Content links opt in; navigation and button anchors stay undecorated. */
+a:where(
+    :not([class]),
+    [class=""],
+    .activity-entry__run-link,
+    .settings-row__value,
+    .memory-page__link,
+    .portals-preview__notice-url,
+    .settings-account,
+    .transcripts-back,
+    .chat-text a,
+    .chat-thinking a,
+    .sidebar-markdown a,
+    .markdown a,
+    .markdown-body a,
+    .chat-session-rail__answer a,
+    .chat-position-rail__preview-copy a,
+    .dreams-diary__para a
+  ):not(:where(.btn, [role="button"])) {
+  text-decoration: underline;
 }
 
 /* Real links keep the hand even when styled as controls. */
@@ -867,11 +889,6 @@ a[href] {
 
 a:hover {
   text-decoration-thickness: 2px;
-}
-
-.learn-more-link,
-.learn-more-link:hover {
-  text-decoration: none;
 }
 
 /* Web Awesome defaults checked switches to brand blue. Keep every switch on

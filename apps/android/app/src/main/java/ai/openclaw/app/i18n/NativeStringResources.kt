@@ -1121,6 +1121,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Reject proposal?" to R.string.native_489e7c07ff52ec4d,
     "Reject the pairing request from this device?" to R.string.native_16a5b7ad567a8093,
     "Rejected" to R.string.native_aea4a04a80426ed8,
+    "Release plan \${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}" to R.string.native_6f08129a433d0fbf,
     "Reload" to R.string.native_bdc090ec61e3fcfc,
     "Remote IP" to R.string.native_672f3453e1dd571b,
     "Remove" to R.string.native_c3812fc4acb861d5,

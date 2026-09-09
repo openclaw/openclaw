@@ -418,7 +418,7 @@ while continuation uses `operator.write`. Paired-node command advertisement and
 Gateway node policy remain additional requirements for node-backed rows.
 </Note>
 
-See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)
+See [Nodes: Claude sessions and transcripts](/nodes/session-catalogs#claude-sessions-and-transcripts)
 for the node command and security boundary.
 
 ## Live model discovery

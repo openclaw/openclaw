@@ -7,7 +7,7 @@ import {
 import {
   loadManifestModelCatalog,
   loadProviderScopedThinkingCatalog,
-  loadPreparedModelCatalog as loadModelCatalogLocal,
+  readPreparedModelCatalog as loadModelCatalogLocal,
 } from "../../agents/model-catalog.runtime.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -62,7 +62,7 @@ vi.mock("../../agents/cli-backends.js", () => ({
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: catalogRuntimeMocks.loadModelCatalog,
+  readPreparedModelCatalog: catalogRuntimeMocks.loadModelCatalog,
   loadPreparedModelCatalogSnapshot: catalogRuntimeMocks.loadModelCatalogSnapshot,
 }));
 

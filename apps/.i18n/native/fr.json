@@ -343,6 +343,7 @@
     "native.android.37c430fb826c446f": "audio",
     "native.android.37ca0160a9368a86": "Horodatage de compilation d’OpenClaw",
     "native.android.3833561b14a68b4b": "Détails lisibles du journal du Gateway.",
+    "native.android.38661fce5fca374f": "Plan de publication ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}",
     "native.android.387fc9194ff7aa9b": "Charger plus",
     "native.android.3881e845a4e699c7": "Le téléphone peut accéder au Gateway",
     "native.android.38b7fdfac0cbc42d": "Connectez-vous à votre Gateway pour afficher l’écran d’une machine.",

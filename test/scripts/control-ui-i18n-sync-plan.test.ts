@@ -3,7 +3,7 @@ import {
   hashControlUiTranslationText,
   materializeControlUiLocaleCatalog,
   mergeControlUiTranslationMaps,
-} from "../../scripts/lib/control-ui-i18n-catalog.ts";
+} from "../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import {
   createControlUiLocaleSyncPlan,
   flattenTranslations,

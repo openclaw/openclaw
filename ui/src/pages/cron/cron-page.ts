@@ -34,7 +34,7 @@ import {
   type CronState,
 } from "../../lib/cron/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import {
   resolveSessionNavigationAgentId,
   sessionNavigationTarget,
@@ -287,18 +287,10 @@ class CronPage extends OpenClawLightDomElement {
       this.modelSuggestionsRequest === request &&
       this.context.agentSelection.state.selectedId === agentId;
     try {
-      const result = await loadModelCatalog(client, {
-        agentId,
-        view: "configured",
-        preparedOnly: true,
-      });
+      const result = await loadModelCatalog(client, { agentId });
       if (isCurrent()) {
         this.cronModelSuggestions = result.models.map((entry) => entry.id);
-        this.modelSuggestionsError = result.providerOutcomes?.some(
-          (outcome) => outcome.status !== "ready",
-        )
-          ? t("chat.modelControls.modelsRefreshFailed")
-          : null;
+        this.modelSuggestionsError = modelCatalogRefreshError(result);
       }
     } catch (error) {
       if (isCurrent()) {

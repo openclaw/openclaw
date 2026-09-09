@@ -3080,14 +3080,33 @@ NODE
     const controlUiPublishStep = controlUiFinalize.steps.find(
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
     );
+    const sharedCatalogInputs = [
+      "scripts/lib/control-ui-i18n-catalog.ts",
+      "scripts/lib/control-ui-i18n-catalog-values.ts",
+      "ui/src/i18n/lib/config-hint-translation.ts",
+      "ui/src/lib/fnv1a.ts",
+      "src/config/schema*.ts",
+      "src/config/zod-schema*.ts",
+      "src/config/media-audio-field-metadata.ts",
+      "src/config/talk-defaults.ts",
+      "src/config/channel-config-keys.ts",
+    ];
+    const sharedCatalogInputOwners = [
+      workflow.on.push.paths,
+      nativePublishStep.with["invalidation-paths"].trim().split("\n"),
+      controlUiWorkflow.on.push.paths,
+      controlUiPublishStep.with["invalidation-paths"].trim().split("\n"),
+    ];
+    for (const catalogInput of sharedCatalogInputs) {
+      for (const ownerPaths of sharedCatalogInputOwners) {
+        expect(ownerPaths).toContain(catalogInput);
+      }
+    }
     expect(controlUiPublishStep.with["generated-paths"].trim().split("\n")).toEqual([
       "ui/src/i18n/.i18n/*.tm.jsonl",
       "ui/src/i18n/.i18n/*.meta.json",
       "ui/src/i18n/.i18n/catalog-fallbacks.json",
     ]);
-    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
-      "scripts/lib/control-ui-i18n-catalog.ts",
-    );
     expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
       "scripts/lib/control-ui-i18n-sync-plan.ts",
     );
@@ -4590,7 +4609,122 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       "CodeQL macOS Xcode selection",
     );
 
-    expect(codeqlJob["runs-on"]).toBe("macos-26");
+    const codeqlInitializeIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Initialize CodeQL",
+    );
+    const codeqlBuildIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Build macOS for CodeQL",
+    );
+    const codeqlAnalyzeIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Analyze",
+    );
+    const codeqlBuild = expectDefined(codeqlJob.steps[codeqlBuildIndex], "CodeQL macOS build");
+    const codeqlPrepare = codeql.jobs["prepare-mermaid"];
+    const codeqlPrepareSteps = codeqlPrepare.steps as WorkflowStep[];
+    const codeqlPrepareCheckout = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Checkout"),
+      "CodeQL Mermaid checkout",
+    );
+    const codeqlPrepareSetup = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Setup Node environment"),
+      "CodeQL Mermaid Node setup",
+    );
+    const codeqlPrepareInstall = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Install Mermaid renderer dependencies"),
+      "CodeQL Mermaid dependency install",
+    );
+    const codeqlPrepareAssets = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Prepare Apple Mermaid assets"),
+      "CodeQL Mermaid asset preparation",
+    );
+    const codeqlUpload = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Upload Mermaid assets"),
+      "CodeQL Mermaid artifact upload",
+    );
+    const codeqlDownloadIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Download Mermaid assets",
+    );
+    const codeqlDownload = expectDefined(
+      codeqlJob.steps[codeqlDownloadIndex],
+      "CodeQL Mermaid artifact download",
+    );
+
+    expect(codeqlPrepare["runs-on"]).toBe("ubuntu-24.04");
+    expect(codeqlPrepare["timeout-minutes"]).toBe(10);
+    expect(codeqlPrepare.permissions).toEqual({ contents: "read" });
+    expect(codeqlPrepare.outputs["artifact-id"]).toBe("${{ steps.upload.outputs.artifact-id }}");
+    expect(codeqlPrepareCheckout.with).toMatchObject({
+      "fetch-depth": 1,
+      "persist-credentials": false,
+      ref: "${{ github.sha }}",
+      submodules: false,
+    });
+    expect(codeqlPrepareSetup.with).toMatchObject({
+      "cache-mode": "restore",
+      "install-bun": "false",
+      "install-deps": "false",
+    });
+    expect(codeqlPrepareInstall.env).toEqual({ CI: "true" });
+    expect(codeqlPrepareInstall.run).toContain(
+      "pnpm install --frozen-lockfile --prefer-offline --optional",
+    );
+    expect(codeqlPrepareInstall.run).toContain("--filter '@openclaw/mermaid-renderer...'");
+    expect(codeqlPrepareInstall.run).toContain("--config.ignore-scripts=false");
+    expect(codeqlPrepareInstall.run).toContain("--config.engine-strict=false");
+    expect(codeqlPrepareInstall.run).toContain("--config.enable-pre-post-scripts=true");
+    expect(codeqlPrepareInstall.run).toContain("--config.side-effects-cache=true");
+    expect(codeqlPrepareAssets.run).toBe("node scripts/prepare-apple-mermaid.mjs");
+    expect(codeqlUpload).toMatchObject({
+      id: "upload",
+      uses: UPLOAD_ARTIFACT_V7,
+      with: {
+        name: "codeql-macos-mermaid-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid",
+        "if-no-files-found": "error",
+        "retention-days": 1,
+      },
+    });
+    expect(codeqlPrepareSteps.indexOf(codeqlPrepareInstall)).toBeLessThan(
+      codeqlPrepareSteps.indexOf(codeqlPrepareAssets),
+    );
+    expect(codeqlPrepareSteps.indexOf(codeqlPrepareAssets)).toBeLessThan(
+      codeqlPrepareSteps.indexOf(codeqlUpload),
+    );
+    expect(codeqlJob.needs).toBe("prepare-mermaid");
+    expect(codeqlJob["runs-on"]).toBe("macos-26-intel");
+    expect(codeqlJob["timeout-minutes"]).toBe(90);
+    const codeqlCheckout = expectDefined(
+      codeqlJob.steps.find((step: WorkflowStep) => step.name === "Checkout"),
+      "CodeQL macOS checkout",
+    );
+    expect(codeqlCheckout.with).toMatchObject({
+      "fetch-depth": 1,
+      "persist-credentials": false,
+      ref: "${{ github.sha }}",
+      submodules: false,
+    });
+    expect(
+      codeqlJob.steps.some(
+        (step: WorkflowStep) => step.uses === "./.github/actions/setup-node-env",
+      ),
+    ).toBe(false);
+    expect(
+      codeqlJob.steps.some((step: WorkflowStep) => step.run?.includes("prepare-apple-mermaid.mjs")),
+    ).toBe(false);
+    expect(codeqlDownload).toMatchObject({
+      uses: DOWNLOAD_ARTIFACT_V8,
+      with: {
+        "artifact-ids": "${{ needs.prepare-mermaid.outputs.artifact-id }}",
+        path: "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid",
+      },
+    });
+    expect(codeqlDownloadIndex).toBeLessThan(codeqlInitializeIndex);
+    expect(codeqlInitializeIndex).toBeGreaterThanOrEqual(0);
+    expect(codeqlInitializeIndex).toBeLessThan(codeqlBuildIndex);
+    expect(codeqlBuildIndex).toBeLessThan(codeqlAnalyzeIndex);
+    expect(codeqlBuild.run).toBe(
+      "swift build --package-path apps/macos --product OpenClaw --arch arm64 --disable-index-store -debug-info-format none",
+    );
     expect(codeqlSelect.run).toContain("/Applications/Xcode_26.6.app/Contents/Developer");
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 
@@ -10020,7 +10154,6 @@ server.listen(0, "127.0.0.1", () => {
   it("prepares offline Apple assets before CI opens a macOS SwiftPM graph", () => {
     for (const [workflowPath, jobName] of [
       [".github/workflows/ci.yml", "macos-swift"],
-      [".github/workflows/codeql-macos-critical-security.yml", "macos"],
       [".github/workflows/macos-periphery.yml", "scan"],
       [".github/workflows/shared-openclawkit-periphery.yml", "scan-macos"],
     ] as const) {
@@ -13126,7 +13259,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
           // A Gateway created by the suite's server factory supplies its own UI;
           // a separate backend in a test can still use the shared UI bundle.
-          if (inSuiteServer && node.expression.text === "createOpenClawTestInstance") {
+          if (
+            inSuiteServer &&
+            (node.expression.text === "createOpenClawTestInstance" ||
+              node.expression.text === "startProductionControlUiE2eServer")
+          ) {
             ownsPrivateServer = true;
             return;
           }
@@ -13182,13 +13319,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
       "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
       "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+      "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
       "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
       "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
+      "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
       "ui/src/e2e/session-management.delete.e2e.test.ts",
       "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
     ]);

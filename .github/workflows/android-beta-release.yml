@@ -96,7 +96,7 @@ jobs:
       actions: read
       attestations: read
       contents: read
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 120
     environment: android-beta-release
     concurrency:
@@ -146,6 +146,9 @@ jobs:
         with:
           cache-mode: off
           install-screenshot-emulators: "true"
+
+      - name: Verify Android emulator acceleration
+        run: emulator -accel-check
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1

@@ -1079,6 +1079,9 @@ export function runAgentAttempt(params: {
             model: params.modelOverride,
             modelRoutingProvenance: params.modelRoutingProvenance,
             thinkLevel: params.resolvedThinkLevel,
+            fastMode: params.fastMode,
+            fastModeStartedAtMs: params.fastModeStartedAtMs,
+            fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
             timeoutMs: params.timeoutMs,
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
@@ -1296,6 +1299,7 @@ export function runAgentAttempt(params: {
         return result;
       },
       {
+        preparedRunAdmission: params.preparedRunAdmission,
         lifecycleGeneration: params.lifecycleGeneration,
         abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
         trigger: "user",

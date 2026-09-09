@@ -32,20 +32,21 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
 }
 
 function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
-  // Callers pass hydrated rows first and the current lifecycle-decorated page
-  // second, so equal persisted timestamps intentionally prefer the latter.
+  // Equal persisted timestamps intentionally prefer the later row source,
+  // while Map replacement preserves each key's first insertion position.
   return (candidate.updatedAt ?? 0) >= (current.updatedAt ?? 0);
 }
 
 export function mergeSwarmSessionRows(
-  childRows: readonly GatewaySessionRow[],
-  currentRows: readonly GatewaySessionRow[],
+  ...rowSources: readonly (readonly GatewaySessionRow[])[]
 ): GatewaySessionRow[] {
   const merged = new Map<string, GatewaySessionRow>();
-  for (const row of [...childRows, ...currentRows]) {
-    const current = merged.get(row.key);
-    if (!current || isNewerSessionRow(row, current)) {
-      merged.set(row.key, row);
+  for (const rows of rowSources) {
+    for (const row of rows) {
+      const current = merged.get(row.key);
+      if (!current || isNewerSessionRow(row, current)) {
+        merged.set(row.key, row);
+      }
     }
   }
   return [...merged.values()];
@@ -176,9 +177,7 @@ export class SwarmRosterHydrator {
                 !areUiSessionKeysEquivalent(row.key, params.parentKey) &&
                 currentRowsAtStartByKey.get(row.key) !== JSON.stringify(row),
             );
-          this.rows = rows
-            ? mergeSwarmSessionRows(mergeSwarmSessionRows(rows, [parent]), changedCurrentRows)
-            : [parent];
+          this.rows = rows ? mergeSwarmSessionRows(rows, [parent], changedCurrentRows) : [parent];
           params.onRows(this.rows);
           if (!rows) {
             scheduleRetry();

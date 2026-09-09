@@ -343,6 +343,7 @@
     "native.android.37c430fb826c446f": "аудио",
     "native.android.37ca0160a9368a86": "Дата и время сборки OpenClaw",
     "native.android.3833561b14a68b4b": "Подробности журнала Gateway в удобном для чтения виде.",
+    "native.android.38661fce5fca374f": "План выпуска ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}",
     "native.android.387fc9194ff7aa9b": "Загрузить ещё",
     "native.android.3881e845a4e699c7": "Телефон может подключиться к Gateway",
     "native.android.38b7fdfac0cbc42d": "Подключитесь к своему Gateway, чтобы просмотреть экран компьютера.",

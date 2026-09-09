@@ -16,6 +16,83 @@ it("keeps the frozen legacy dev status on its shipped package contract", () => {
   expect(script).toContain("assert-status-kind package");
 });
 
+it("projects only stored-dev frozen previews onto package reporting", () => {
+  const run = (selection: "stored" | "explicit", updateInstallKind: "git" | "package") =>
+    spawnSync(
+      process.execPath,
+      [
+        "scripts/e2e/lib/update-channel-switch/assertions.mjs",
+        "assert-dry-run",
+        "git",
+        "dev",
+        selection,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT: "1",
+          UPDATE_JSON: JSON.stringify({
+            dryRun: true,
+            installKind: "package",
+            storedChannel: "dev",
+            effectiveChannel: "dev",
+            updateInstallKind,
+            mode: updateInstallKind === "git" ? "git" : "npm",
+            switchToGit: updateInstallKind === "git",
+            switchToPackage: false,
+          }),
+        },
+      },
+    );
+
+  expect(run("stored", "package").status).toBe(0);
+  expect(run("explicit", "git").status).toBe(0);
+  expect(run("stored", "git").status).toBe(1);
+  expect(run("explicit", "package").status).toBe(1);
+});
+
+it("keeps explicit dev selection for frozen stored-dev package reporters", () => {
+  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
+  expect(script).toContain(
+    'if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then\n    dev_channel_args=()',
+  );
+});
+
+it("preserves a source-derived dry-run mode supplied by the workflow", () => {
+  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
+  expect(script).toContain(
+    'OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"',
+  );
+  expect(script).toContain("-e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \\");
+});
+
+it("admits the frozen structured dirty block without weakening its payload assertion", () => {
+  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
+  const assertExit = (status: number, legacyCompat: boolean, frozenCompat: boolean) =>
+    spawnSync(
+      process.execPath,
+      [
+        "scripts/e2e/lib/update-channel-switch/assertions.mjs",
+        "assert-dirty-exit",
+        String(status),
+        legacyCompat ? "1" : "0",
+        frozenCompat ? "1" : "0",
+      ],
+      { encoding: "utf8" },
+    );
+
+  expect(assertExit(1, false, false).status).toBe(0);
+  expect(assertExit(0, true, false).status).toBe(0);
+  expect(assertExit(0, false, true).status).toBe(0);
+  expect(assertExit(0, false, false).status).toBe(1);
+  expect(assertExit(124, false, true).status).toBe(1);
+  expect(assertExit(2, true, false).status).toBe(1);
+  expect(script).toContain("-e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \\");
+  expect(script).toContain("assert-dirty-exit \\");
+  expect(script).toContain('assert-dirty-update "$git_root" "$fixture_sha"');
+});
+
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
   const packageCommit = "a".repeat(40);

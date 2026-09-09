@@ -5,6 +5,8 @@ import { directive } from "lit/directive.js";
 import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { normalizeMessage, resolveMessageRole } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -379,9 +381,7 @@ class ChatPositionRailDirective extends AsyncDirective {
           resolveMessageDisplayMarkdown(
             previewMarker.message,
             normalizeMessage(previewMarker.message),
-          )
-            .replace(/\s+/g, " ")
-            .trim(),
+          ).trim(),
           PREVIEW_LENGTH,
         )
       : "";
@@ -493,9 +493,10 @@ class ChatPositionRailDirective extends AsyncDirective {
                     aria-hidden="true"
                   >
                     <span class="chat-position-rail__preview-label">${previewMarker.label}</span>
-                    <span class="chat-position-rail__preview-copy"
-                      >${previewText || t("chat.attachments.previewUnavailable")}</span
-                    >
+                    <!-- Preview links remain non-interactive; the marker owns keyboard navigation. -->
+                    <div class="chat-position-rail__preview-copy" inert>
+                      ${previewText ? unsafeHTML(toSanitizedMarkdownHtml(previewText, { codeBlockChrome: "none" })) : t("chat.attachments.previewUnavailable")}
+                    </div>
                   </div>
                 `
               : nothing

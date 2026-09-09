@@ -490,7 +490,13 @@ describe("getMessageFeishu", () => {
               content: JSON.stringify({
                 zh_cn: {
                   title: "Summary",
-                  content: [[{ tag: "text", text: "post body" }]],
+                  content: [
+                    [
+                      { tag: "text", text: "post body", style: ["bold"] },
+                      { tag: "text", text: " " },
+                      { tag: "a", text: "Docs", href: "https://example.com", style: ["italic"] },
+                    ],
+                  ],
                 },
               }),
             },
@@ -507,7 +513,7 @@ describe("getMessageFeishu", () => {
     expectParsedMessage(result, {
       messageId: "om_post",
       chatId: "oc_post",
-      content: "Summary\n\npost body",
+      content: "Summary\n\n**post body** *[Docs](https://example.com)*",
       contentType: "post",
     });
   });

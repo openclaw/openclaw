@@ -30,7 +30,7 @@
 
 .chat-inline-disclosure:focus-visible {
   color: var(--text);
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -733,7 +733,6 @@
 .chat-tool-card__detail-link:hover,
 .chat-tool-card__detail-link:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .chat-tool-card__block {
@@ -949,8 +948,8 @@
 }
 
 .chat-tool-card__preview-image-button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 3px;
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
 }
 
 .chat-tool-card__preview-frame {
@@ -1174,7 +1173,6 @@
   color: var(--muted);
   font: inherit;
   cursor: var(--cursor-action);
-  text-decoration: none;
 }
 
 .chat-tasks-status__link:hover,

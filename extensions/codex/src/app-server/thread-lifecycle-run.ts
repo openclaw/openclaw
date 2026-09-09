@@ -4,6 +4,10 @@ import { isIncognitoSessionKey } from "../incognito-session.js";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { normalizeCodexAppServerBindingModelProvider } from "./auth-profile.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
+import {
+  prepareCodexInferenceThreadConfig,
+  bindCodexInferenceThread,
+} from "./inference-routing.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -58,7 +62,7 @@ export async function startOrResumeThread(
   const incognito = isIncognitoSessionKey(input.params.sessionKey);
   const clientId = resolveCodexAppServerClientInstanceId(input.client);
   return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, assert) => {
-    const params = { ...input, assertCurrent: assert };
+    const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
     if (hasCodexNativeToolCatalog(binding)) {
@@ -81,6 +85,23 @@ export async function startOrResumeThread(
       }
     }
     const preflight = await prepareCodexThreadLifecyclePreflight(params);
+    const inference = await prepareCodexInferenceThreadConfig({
+      ...params,
+      binding: saved,
+      clientId,
+      effectiveConfig: preflight.effectiveConfig,
+      assertCurrent: assert,
+    });
+    if (inference) {
+      params.config = inference.config;
+      params.inferenceRoute = inference.route;
+    }
+    const publishInferenceBinding = (readyBinding: CodexAppServerThreadLifecycleBinding) => {
+      assert();
+      params.signal?.throwIfAborted();
+      bindCodexInferenceThread(params.client, readyBinding.threadId, inference?.route);
+      return readyBinding;
+    };
     const {
       contextEngineBinding,
       dynamicToolsContainDeferred,
@@ -266,7 +287,7 @@ export async function startOrResumeThread(
       params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction;
     const transientWebSearchRestriction = isTransientWebSearchRestriction(params);
     if (binding?.pendingResumeConfiguration) {
-      return await resumePendingCodexThread(params, {
+      const resumed = await resumePendingCodexThread(params, {
         ...resolveRequestContext(),
         binding,
         clearCurrentBinding,
@@ -277,6 +298,7 @@ export async function startOrResumeThread(
           transientNativeToolRestriction ||
           transientWebSearchRestriction,
       });
+      return publishInferenceBinding(resumed);
     }
 
     if (
@@ -651,7 +673,7 @@ export async function startOrResumeThread(
           buildLoadedPluginThreadConfig,
         });
         if (warmReuse.kind === "ready") {
-          return warmReuse.binding;
+          return publishInferenceBinding(warmReuse.binding);
         }
         if (incognito || warmReuse.kind === "rotate") {
           throwIfAborted();
@@ -679,7 +701,7 @@ export async function startOrResumeThread(
             },
           });
           if (resumed) {
-            return resumed;
+            return publishInferenceBinding(resumed);
           }
         }
       }
@@ -701,6 +723,6 @@ export async function startOrResumeThread(
       // Release only that prior subscription after the successor has committed.
       await releaseRetainedThread(replacementPredecessor.threadId, replacementPredecessor.clientId);
     }
-    return started;
+    return publishInferenceBinding(started);
   });
 }

@@ -2047,6 +2047,11 @@ class ChatController internal constructor(
         outboxItemMatches(item, snapshot) && item.status != ChatOutboxStatus.Failed
       }
 
+  internal fun canSwitchSessionBranch(sessionKey: String): Boolean {
+    val snapshot = currentSessionActionSnapshot(sessionKey) ?: return false
+    return canSwitchSessionBranch(snapshot)
+  }
+
   private fun canSwitchSessionBranch(snapshot: SessionActionSnapshot): Boolean =
     _pendingRunCount.value == 0 &&
       !_sessionBranchSwitching.value &&

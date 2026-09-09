@@ -1563,6 +1563,8 @@ export const en: TranslationMap & {
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
+      edit: "Edit",
+      editJob: "Edit {name}",
     },
     files: {
       emptyDraft: "Empty draft",
@@ -5324,6 +5326,7 @@ export const en: TranslationMap & {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
+      addToChat: "Add to chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
       dontAskAgain: "Don't ask again",

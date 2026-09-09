@@ -343,6 +343,7 @@
     "native.android.37c430fb826c446f": "ses",
     "native.android.37ca0160a9368a86": "OpenClaw derleme zaman damgası",
     "native.android.3833561b14a68b4b": "Okunabilir Gateway günlük kaydı ayrıntısı.",
+    "native.android.38661fce5fca374f": "Yayın planı ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}",
     "native.android.387fc9194ff7aa9b": "Daha fazla yükle",
     "native.android.3881e845a4e699c7": "Telefon Gateway'e erişebiliyor",
     "native.android.38b7fdfac0cbc42d": "Bir makinenin ekranını görüntülemek için Gateway'inize bağlanın.",

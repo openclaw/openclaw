@@ -186,6 +186,8 @@ type ResolveApiKeyForProfileParams = {
   agentDir?: string;
   forceRefresh?: boolean;
   allowProfileFallback?: boolean;
+  /** Reject an OAuth credential before the resolver persists, adopts, or returns it. */
+  validateOAuthCredential?: (credential: OAuthCredential) => void;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -302,6 +304,7 @@ async function tryResolveOAuthProfile(
     agentDir: params.agentDir,
     cfg,
     forceRefresh: params.forceRefresh,
+    validateCredential: params.validateOAuthCredential,
   });
   if (!resolved) {
     return null;
@@ -516,6 +519,7 @@ export async function resolveApiKeyForProfile(
       credential: cred,
       cfg,
       forceRefresh: params.forceRefresh,
+      validateCredential: params.validateOAuthCredential,
     });
     if (!resolved) {
       return null;
@@ -589,6 +593,7 @@ export async function resolveApiKeyForProfile(
           profileId: fallbackProfileId,
           agentDir: params.agentDir,
           forceRefresh: params.forceRefresh,
+          validateOAuthCredential: params.validateOAuthCredential,
         });
         if (fallbackResolved) {
           return fallbackResolved;

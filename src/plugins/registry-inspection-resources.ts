@@ -38,6 +38,10 @@ export class PluginRegistryInspectionResources {
     this.#source.register(pluginId, disposer);
   }
 
+  runRegistration(pluginId: string, run: () => void): void {
+    this.#source.runRegistration(pluginId, run);
+  }
+
   trackRegistration(pending: Promise<unknown>): void {
     this.#source.trackRegistration(pending);
   }

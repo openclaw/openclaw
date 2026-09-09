@@ -4764,8 +4764,12 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(hydrate.if).toBe(
       "${{ inputs.crabbox_job != 'hydrate-github' && inputs.crabbox_job != 'hydrate-windows-daemon' }}",
     );
-    expect(workflowStep(hydrate, "Setup Node.js").uses).toBe(SETUP_NODE_V6);
-    expect(workflowStep(hydrate, "Setup Node.js").with?.["node-version"]).toBe("24");
+    const hydrateNode = workflowStep(hydrate, "Setup Node.js");
+    expect(hydrateNode.shell).toBe("bash");
+    expect(hydrateNode.run).toContain(
+      "source .github/actions/setup-pnpm-store-cache/ensure-node.sh",
+    );
+    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.x"');
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
@@ -6148,6 +6152,7 @@ describe("package artifact reuse", () => {
         step.run?.includes("export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="),
       );
       expect(runStep).toBeDefined();
+      expect(runStep?.run).toContain("openclaw_resolve_frozen_update_channel_dry_run_mode");
       expect(`${runStep?.run}\n${JSON.stringify(runStep?.env)}`).toContain(
         "steps.plan.outputs.needs_package",
       );
@@ -12382,7 +12387,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     }
   });
 
-  it("pins every documented raw Full Release Validation caller to one exact SHA", () => {
+  it("documents checked extended-stable dispatch instead of a raw-SHA workflow ref", () => {
     const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
     // The CI page is an index over docs/ci/*. Read the whole set so this
@@ -12394,15 +12399,69 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         .toSorted()
         .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),
     ].join("\n");
-    const fullReleaseDocs = readFileSync("docs/reference/full-release-validation.md", "utf8");
+    // Full release validation is an index over docs/reference/full-release-validation/*.
+    // Read the whole set so this assertion follows the content instead of a single file path.
+    const fullReleaseDocs = [
+      readFileSync("docs/reference/full-release-validation.md", "utf8"),
+      ...readdirSync("docs/reference/full-release-validation")
+        .filter((name) => name.endsWith(".md"))
+        .toSorted()
+        .map((name) => readFileSync(`docs/reference/full-release-validation/${name}`, "utf8")),
+    ].join("\n");
     const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
 
     expect(nightly).toContain('-f expected_sha="$SHA"');
+    const canonicalExtendedStableDispatch = [
+      'VALIDATION_SHA="<exact-candidate-sha>"',
+      'TOOLING_SHA="<recorded-full-main-ancestor-sha>"',
+      'CONTEXT_REF="extended-stable/YYYY.M.33"',
+      "pnpm ci:full-release",
+      '--sha "$VALIDATION_SHA"',
+      '--target-ref "$CONTEXT_REF"',
+      '--workflow-sha "$TOOLING_SHA"',
+      "-f release_profile=stable",
+      "-f run_release_soak=true",
+      "-f fail_fast=false",
+      "-f rerun_group=all",
+      "-f reuse_evidence=false",
+      "-f dispatch_release_evidence=false",
+    ];
     for (const text of [releaseCi, fullReleaseDocs, releasingDocs]) {
+      expectTextToIncludeAll(text, canonicalExtendedStableDispatch);
+      expect(text).not.toContain('--ref "$VALIDATION_SHA"');
+      expect(text).not.toContain('-f ref="$CONTEXT_REF"');
+    }
+    expectTextToIncludeAll(releaseCi, [
+      "`--ref` accepts a branch or tag name, not a raw commit",
+      '{"fullRef":"refs/heads/main","ref":"main","sha":"<tooling-sha>"}',
+      "Outside this extended-stable procedure, a direct canonical-branch dispatch",
+      "Current extended-stable validation requires distinct",
+      "Direct canonical-branch and mutable-`main` dispatches are not valid",
+      "--ref main",
+      '-f tag="$VALIDATION_SHA"',
+      "-f preflight_only=true",
+      "-f npm_dist_tag=extended-stable",
+      '-f release_candidate_branch="$CONTEXT_REF"',
+    ]);
+    expectTextToIncludeAll(releasingDocs, [
+      "Extended-stable also requires a separate npm preflight from trusted `main`",
+      "supplemental validation-only preflight",
+      "Do not pass",
+      "publication `preflight_run_id`",
+      "Publication continues to use the integrated Full Release",
+      "Validation npm artifact and exact run attempt",
+      "--ref main",
+      '-f tag="$VALIDATION_SHA"',
+      "-f preflight_only=true",
+      "-f npm_dist_tag=extended-stable",
+      '-f release_candidate_branch="$CONTEXT_REF"',
+    ]);
+    for (const text of [releaseCi, releasingDocs]) {
       expectTextToIncludeAll(text, [
-        'RELEASE_SHA="$(git rev-parse HEAD)"',
-        "-f ref=extended-stable/YYYY.M.33",
-        '-f expected_sha="$RELEASE_SHA"',
+        "standalone run is a supplemental validation-only preflight",
+        "Do not pass",
+        "publication `preflight_run_id`",
+        "Publication continues to use",
       ]);
     }
     expectTextToIncludeAll(ciDocs, [

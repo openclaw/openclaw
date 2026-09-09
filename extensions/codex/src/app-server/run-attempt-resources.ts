@@ -60,12 +60,14 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     trajectory: params.hostCapabilities.trajectory,
     tools: toolBridge.availableSpecs,
   });
-  const executionState: {
+  const initialResourceState: {
     sandboxExecEnvironment: CodexSandboxExecEnvironment | undefined;
     executionDisconnectError: Error | undefined;
+    releaseInferenceContext: (() => void) | undefined;
   } = {
     sandboxExecEnvironment: undefined,
     executionDisconnectError: undefined,
+    releaseInferenceContext: undefined,
   };
   const state = {
     client: undefined as unknown as CodexAppServerClient,
@@ -88,7 +90,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSharedClientLease: undefined as (() => void) | undefined,
     startupClientUnsafe: false,
     sharedCodexClientRetiredForOneShotCleanup: false,
-    ...executionState,
+    ...initialResourceState,
     codexEnvironmentSelection: undefined as CodexTurnEnvironmentParams[] | undefined,
     codexExecutionCwd: effectiveCwd,
     codexSandboxPolicy: undefined as CodexSandboxPolicy | undefined,
@@ -230,6 +232,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     });
   };
   const releaseCurrentRoute = () => {
+    state.releaseInferenceContext?.();
+    state.releaseInferenceContext = undefined;
     state.detachRouteAbort();
     state.detachRouteAbort = () => undefined;
     state.turnRoute?.release();

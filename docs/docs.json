@@ -1481,6 +1481,16 @@
                     "group": "Discord",
                     "pages": [
                       "channels/discord",
+                      "channels/discord/setup",
+                      "channels/discord/access-control",
+                      "channels/discord/messaging",
+                      "channels/discord/threads-and-sessions",
+                      "channels/discord/rich-messages",
+                      "channels/discord/events",
+                      "channels/discord/voice-channels",
+                      "channels/discord/voice-transcripts",
+                      "channels/discord/voice-follow",
+                      "channels/discord/troubleshooting",
                       "channels/discord-activities"
                     ]
                   },
@@ -1699,6 +1709,16 @@
                     "pages": [
                       "plugins/meeting-plugins",
                       "plugins/google-meet",
+                      {
+                        "group": "Google Meet",
+                        "pages": [
+                          "plugins/google-meet/transports",
+                          "plugins/google-meet/oauth-and-artifacts",
+                          "plugins/google-meet/config",
+                          "plugins/google-meet/tool-and-modes",
+                          "plugins/google-meet/troubleshooting"
+                        ]
+                      },
                       "plugins/teams-meetings",
                       "plugins/voice-call",
                       "plugins/zoom-meetings"
@@ -1741,6 +1761,18 @@
                   "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
+                  {
+                    "group": "Channel plugins",
+                    "pages": [
+                      "plugins/sdk-channel-plugins/message-adapter",
+                      "plugins/sdk-channel-plugins/durable-ingress",
+                      "plugins/sdk-channel-plugins/status-and-media",
+                      "plugins/sdk-channel-plugins/sessions-and-bindings",
+                      "plugins/sdk-channel-plugins/approvals",
+                      "plugins/sdk-channel-plugins/setup-and-config",
+                      "plugins/sdk-channel-plugins/mention-policy"
+                    ]
+                  },
                   "plugins/sdk-provider-plugins",
                   {
                     "group": "Provider plugins",
@@ -1754,6 +1786,16 @@
                   },
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
+                  {
+                    "group": "Plugin hooks",
+                    "pages": [
+                      "plugins/hooks/reference",
+                      "plugins/hooks/tool-policy",
+                      "plugins/hooks/prompt-and-session",
+                      "plugins/hooks/messages",
+                      "plugins/hooks/lifecycle"
+                    ]
+                  },
                   "plugins/plugin-permission-requests",
                   "plugins/adding-capabilities"
                 ]
@@ -2310,6 +2352,15 @@
                 "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
+                  "nodes/pairing-and-status",
+                  "nodes/node-host",
+                  "nodes/node-exec",
+                  "nodes/mcp-and-skills",
+                  "nodes/session-hosting",
+                  "nodes/session-catalogs",
+                  "nodes/file-transfers",
+                  "nodes/command-policy",
+                  "nodes/device-commands",
                   "nodes/presence",
                   "nodes/troubleshooting",
                   {
@@ -2522,6 +2573,19 @@
                 "group": "Plugin SDK reference",
                 "pages": [
                   "plugins/sdk-overview",
+                  {
+                    "group": "Plugin SDK overview",
+                    "pages": [
+                      "plugins/sdk-overview/imports",
+                      "plugins/sdk-overview/capabilities",
+                      "plugins/sdk-overview/tools-and-commands",
+                      "plugins/sdk-overview/infrastructure",
+                      "plugins/sdk-overview/host-hooks",
+                      "plugins/sdk-overview/cli-and-discovery",
+                      "plugins/sdk-overview/memory-and-context",
+                      "plugins/sdk-overview/events-and-hooks"
+                    ]
+                  },
                   "plugins/manifest",
                   {
                     "group": "Plugin manifest",
@@ -2561,7 +2625,31 @@
                 "pages": [
                   "plugins/architecture",
                   "plugins/architecture-internals",
+                  {
+                    "group": "Plugin architecture internals",
+                    "pages": [
+                      "plugins/architecture-internals/load-pipeline",
+                      "plugins/architecture-internals/provider-hooks",
+                      "plugins/architecture-internals/runtime-helpers",
+                      "plugins/architecture-internals/gateway-routes",
+                      "plugins/architecture-internals/channel-surfaces",
+                      "plugins/architecture-internals/packaging",
+                      "plugins/architecture-internals/context-engines",
+                      "plugins/architecture-internals/new-capability"
+                    ]
+                  },
                   "plugins/sdk-migration",
+                  {
+                    "group": "Plugin SDK migration",
+                    "pages": [
+                      "plugins/sdk-migration/how-to-migrate",
+                      "plugins/sdk-migration/import-paths",
+                      "plugins/sdk-migration/removed-surfaces",
+                      "plugins/sdk-migration/talk",
+                      "plugins/sdk-migration/compatibility-policy",
+                      "plugins/sdk-migration/removal-timeline"
+                    ]
+                  },
                   "plugins/compatibility",
                   "plugins/sdk-channel-outbound",
                   "plugins/sdk-channel-inbound",
@@ -2660,6 +2748,18 @@
                 "pages": [
                   "reference/RELEASING",
                   "reference/full-release-validation",
+                  {
+                    "group": "Full release validation",
+                    "pages": [
+                      "reference/full-release-validation/dispatch",
+                      "reference/full-release-validation/continuation",
+                      "reference/full-release-validation/extended-stable",
+                      "reference/full-release-validation/stages",
+                      "reference/full-release-validation/release-checks",
+                      "reference/full-release-validation/profiles",
+                      "reference/full-release-validation/evidence"
+                    ]
+                  },
                   "reference/release-performance-sweep"
                 ]
               },

@@ -85,7 +85,7 @@ export async function executeCliProcess(params: {
   executionCommand: string;
   executionArgv0?: string;
   executionLeadingArgv: readonly string[];
-  executionArgs: string[];
+  resolveExecutionArgs: () => string[];
   env: Record<string, string>;
   prompt: string;
   promptContext?: PreparedCliRunContext["promptContext"];
@@ -217,7 +217,7 @@ export async function executeCliProcess(params: {
       const nodeRun = await executeNodeClaudeRun({
         context,
         nodePlacement: params.nodePlacement,
-        executionArgs: params.executionArgs,
+        executionArgs: params.resolveExecutionArgs(),
         stdinPayload: params.stdin ?? "",
         ...(params.nodeSystemPrompt !== undefined
           ? { nodeSystemPrompt: params.nodeSystemPrompt }
@@ -238,7 +238,7 @@ export async function executeCliProcess(params: {
         execute: context.executionTarget.execute,
         executionCommand: params.executionCommand,
         executionArgv0: params.executionArgv0,
-        executionArgs: [...params.executionLeadingArgv, ...params.executionArgs],
+        executionArgs: [...params.executionLeadingArgv, ...params.resolveExecutionArgs()],
         env: params.env,
         prompt: params.prompt,
         ...(params.promptContext ? { promptContext: params.promptContext } : {}),
@@ -308,7 +308,8 @@ export async function executeCliProcess(params: {
           scopeKey,
           replaceExistingScope: Boolean(params.useResume && scopeKey),
           mode: "child",
-          argv: [params.executionCommand, ...params.executionLeadingArgv, ...params.executionArgs],
+          argv: [params.executionCommand, ...params.executionLeadingArgv],
+          resolveArgs: params.resolveExecutionArgs,
           argv0: params.executionArgv0,
           timeoutMs: runParams.timeoutMs,
           noOutputTimeoutMs: params.noOutputTimeoutMs,
