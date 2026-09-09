@@ -331,6 +331,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
   agentId?: string;
   event: LifecycleEventLike;
+  timeoutPartialText?: string;
   assertCommitAllowed?: () => void;
 }): Promise<void> {
   const phase = resolveLifecyclePhase(params.event);
@@ -352,7 +353,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
-  let failedRun: { runId: string; error: unknown } | undefined;
+  let failedRun: { runId: string; error: unknown; status: "failed" | "timeout" } | undefined;
   const persisted = await patchSessionEntryCore(
     {
       storePath: sessionEntry.storePath,
@@ -410,6 +411,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           error:
             resolveTerminalOutcome(params.event).error ??
             (patch.status === "timeout" ? "Run timed out" : undefined),
+          status: patch.status,
         };
       }
       const recoveryTerminalIsCurrent =
@@ -441,7 +443,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   }
   lifecyclePersistenceVersion += 1;
   if (persisted && failedRun) {
-    const { runId, error } = failedRun;
+    const { runId, error, status } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     await recordGatewaySessionRunFailure({
@@ -454,6 +456,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       },
       runId,
       error,
+      status,
+      timeoutPartialText: params.timeoutPartialText,
       assertCommitAllowed: params.assertCommitAllowed,
     });
   }

@@ -9,6 +9,7 @@ import {
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
@@ -68,6 +69,21 @@ async function createSession(messages: string[] = [], agentId = "main") {
   }
   return { target, manager: SessionManager.open(target, dir), params: { sessionTarget: target } };
 }
+
+it("includes the persisted timeout in the next CLI turn without raw transcript reseeding", async () => {
+  const { target, params } = await createSession(["Do the work."]);
+  await recordGatewaySessionRunFailure({
+    target,
+    runId: "timeout-run",
+    error: "timeout",
+    status: "timeout",
+  });
+  const context = await loadCliSessionPromptContext(params);
+  expect(context.reseedMessages).toEqual([]);
+  expect(context.durableContext).toContain(
+    "This turn timed out and may have performed work before it stopped.",
+  );
+});
 
 it("recovers SQLite-only compacted history across every CLI reader", async () => {
   const stateDir = tempDirs.make("openclaw-cli-sqlite-");

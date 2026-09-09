@@ -21,14 +21,25 @@ export async function recordGatewaySessionRunFailure(params: {
   target: SessionTranscriptWriteScope & { sessionId: string };
   runId: string;
   error: unknown;
+  status?: "failed" | "timeout";
+  timeoutPartialText?: string;
   assertCommitAllowed?: () => void;
 }): Promise<void> {
   const { runId } = params;
   const error = sanitizeSessionRunError(params.error, 512) || "unknown error";
+  // One existing custom report keeps the partial and its outcome inseparable.
+  // Older readers already replay this format; partial text remains quoted data,
+  // rather than an injected assistant message that they would filter out.
+  const timeoutContent =
+    "This turn timed out and may have performed work before it stopped." +
+    (params.timeoutPartialText?.trim()
+      ? `\n\nUnfinished assistant output (recorded text, not a completion claim):\n${JSON.stringify(params.timeoutPartialText)}`
+      : "");
   const result = await appendSessionTranscriptReport(params.target, {
     kind: "custom",
     customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-    suppressWhenAssistantRun: runId,
+    // Partial output does not establish a completed turn. Keep its timeout outcome visible.
+    suppressWhenAssistantRun: params.status === "timeout" ? undefined : runId,
     selectReport: (latest) => {
       params.assertCommitAllowed?.();
       if (isRecord(latest?.details) && latest.details.runId === runId) {
@@ -36,7 +47,8 @@ export async function recordGatewaySessionRunFailure(params: {
       }
       return {
         customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
-        content: `This turn ended before a reply: ${error}`,
+        content:
+          params.status === "timeout" ? timeoutContent : `This turn ended before a reply: ${error}`,
         display: true,
         details: { runId, error },
       };

@@ -11,6 +11,7 @@ import {
   interruptReplyRunTarget,
   isReplyRunAbortableForSignal,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  type ReplyMessageInjectionTarget,
   replyRunRegistry,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
@@ -53,6 +54,7 @@ import {
   respondChatSendAdmissionError,
   respondChatSendRetry,
   respondChatSessionRoutingChanged,
+  waitForChatSessionTimeoutPersistence,
 } from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
@@ -186,9 +188,7 @@ export async function admitChatSend(params: {
   let initialSessionEntry: SessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
   let assertInitialSkillSelection: (() => void) | undefined;
-  let messageInjectionTarget: ReturnType<
-    typeof replyRunRegistry.resolveCurrentMessageInjectionTarget
-  >;
+  let messageInjectionTarget: ReplyMessageInjectionTarget | undefined;
   let runInterruptTarget: ReturnType<typeof replyRunRegistry.resolveCurrentInterruptTarget>;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
@@ -394,6 +394,7 @@ export async function admitChatSend(params: {
   };
 
   try {
+    await waitForChatSessionTimeoutPersistence({ context, session });
     gatewayWorkAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [sessionKey, backingSessionId],
@@ -421,7 +422,12 @@ export async function admitChatSend(params: {
         }
       },
     });
+    // A preceding run can time out while admission waits for the session writer.
+    // Wait outside that writer so its terminal transcript write can complete.
+    await waitForChatSessionTimeoutPersistence({ context, session });
   } catch (err) {
+    admittedRunAbort?.cleanup();
+    gatewayWorkAdmission?.release();
     clearPendingChatSendReservation();
     const requestConflict = resolveChatSendRequestConflict(params);
     if (requestConflict) {
