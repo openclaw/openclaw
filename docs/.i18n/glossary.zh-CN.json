@@ -296,6 +296,42 @@
     "target": "Codex harness runtime"
   },
   {
+    "source": "Codex process recovery",
+    "target": "Codex 进程恢复"
+  },
+  {
+    "source": "Codex thread bindings and supervision",
+    "target": "Codex 线程绑定与监督"
+  },
+  {
+    "source": "Codex replies and final answers",
+    "target": "Codex 回复与最终答案"
+  },
+  {
+    "source": "Codex hook boundaries",
+    "target": "Codex 钩子边界"
+  },
+  {
+    "source": "Codex sandbox process streaming",
+    "target": "Codex 沙箱进程流式输出"
+  },
+  {
+    "source": "Codex runtime v1 support contract",
+    "target": "Codex 运行时 v1 支持契约"
+  },
+  {
+    "source": "Codex native permissions and elicitations",
+    "target": "Codex 原生权限与征询"
+  },
+  {
+    "source": "Codex queue steering and feedback upload",
+    "target": "Codex 队列引导与反馈上传"
+  },
+  {
+    "source": "Codex compaction and transcript mirror",
+    "target": "Codex 压缩与转录镜像"
+  },
+  {
     "source": "Native Codex plugins",
     "target": "Native Codex plugins"
   },
