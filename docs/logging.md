@@ -324,6 +324,28 @@ quiet while this whole-operation warning exposes slow preparation between them.
 The record inherits an existing parent trace when available; it contains no
 database path, session identifier, plan content, or raw error.
 
+### SQLite session writes
+
+The `session-sqlite` subsystem emits `slow SQLite session write` when total
+elapsed time reaches 1000 ms, and `SQLite session write failed` when a write
+fails. Both warnings include `operation`, a label from a fixed set of semantic
+operation names identifying the callback that owns the SQLite writer lane.
+
+The timing fields separate the elapsed interval into:
+
+- `queueWaitMs`: time waiting to enter the writer lane.
+- `writerExecutionMs`: the owning callback's duration, including asynchronous waits.
+- `completionDelayMs`: time between callback completion and the caller resuming.
+
+These fields are available when the queued callback started and finished;
+`elapsedMs` records the total duration. Inspect the original `raw` record in
+`openclaw logs --json` to see the structured fields.
+
+Use `operation` to locate the owning code path. It does not identify a specific
+SQL statement, measure CPU time or lock contention, or establish that a nearby
+RPC caused the delay. Older records may lack `operation`; do not infer it from
+adjacent log messages.
+
 ### Slow reply preparation
 
 When a reply spends a long time preparing, inspect the normal Gateway logs:

@@ -432,7 +432,11 @@ describe("accepted input custody", () => {
     const second = await stage("writer-second");
     const gate = createDeferred();
     const held = first.run(() =>
-      runExclusiveSqliteSessionWrite(resolveSqliteScope(scope()), async () => gate.promise),
+      runExclusiveSqliteSessionWrite(
+        resolveSqliteScope(scope()),
+        async () => gate.promise,
+        "session.pending-input.stage",
+      ),
     );
     const queued = promote(second);
     gate.resolve();

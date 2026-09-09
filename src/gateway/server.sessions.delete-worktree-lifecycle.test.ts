@@ -118,10 +118,14 @@ test.each(["none", "restore-failed", "placement-changed"] as const)(
           .spyOn(worktreeLifecycle, "synchronizeSessionWorktreeArchive")
           .mockImplementationOnce(async (params) => {
             const assertCurrent = await synchronize(params);
-            heldWriter = runExclusiveSqliteSessionWrite(sqliteScope, async () => {
-              writerStarted.resolve();
-              await releaseWriter.promise;
-            });
+            heldWriter = runExclusiveSqliteSessionWrite(
+              sqliteScope,
+              async () => {
+                writerStarted.resolve();
+                await releaseWriter.promise;
+              },
+              "session.transcript.batch",
+            );
             await writerStarted.promise;
             return assertCurrent;
           })

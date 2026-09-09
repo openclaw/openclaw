@@ -1189,10 +1189,14 @@ test("sessions.create revalidates parent participation before committing a fork 
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
   const resolvedStore = resolveSqliteStoreScope(storePath, { agentId: "main" });
-  const heldWriter = runExclusiveSqliteSessionWrite(resolvedStore, async () => {
-    writerEntered.resolve();
-    await releaseWriter.promise;
-  });
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolvedStore,
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
   await writerEntered.promise;
   const database = openOpenClawAgentDatabase({
     agentId: "main",
@@ -3563,6 +3567,7 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
       writerEntered.resolve();
       await releaseWriter.promise;
     },
+    "session.transcript.batch",
   );
   await writerEntered.promise;
   const persisted = persistReplySessionEntry({
@@ -4626,10 +4631,14 @@ test("sessions.create commits no child after its bound Gateway is replaced", asy
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
   const resolvedStore = resolveSqliteStoreScope(storePath, { agentId: "main" });
-  const heldWriter = runExclusiveSqliteSessionWrite(resolvedStore, async () => {
-    writerEntered.resolve();
-    await releaseWriter.promise;
-  });
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolvedStore,
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
   await writerEntered.promise;
   const creating = directSessionReq(
     "sessions.create",
@@ -4706,6 +4715,7 @@ test("sessions.create commits no child after its worker turn closes", async () =
       writerEntered.resolve();
       await releaseWriter.promise;
     },
+    "session.transcript.batch",
   );
   await writerEntered.promise;
   const creating = directSessionReq(

@@ -31,6 +31,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
   listSessionsNeedingTranscriptIndexReconcile,
@@ -148,22 +149,26 @@ function observeWorkerLeaseRelease(worker: Worker) {
 
 async function runProjectionWrite<T>(
   databaseOptions: ReconcileDatabaseOptions,
-  operationLabel: string,
+  operationLabel: Extract<SqliteSessionWriteOperation, `sessions.transcript-index.${string}`>,
   operation: (database: OpenClawAgentDatabase) => T,
   memorySource?: MemoryTranscriptProjectionSource,
 ): Promise<T> {
-  return await runExclusiveSqliteSessionWrite(databaseOptions, async () => {
-    const write = () => {
-      // Disposal revokes a memory source. Check inside the queue before the opener
-      // can materialize a successor database for a late worker result.
-      memorySource?.assertCurrentOwner();
-      return runOpenClawAgentWriteTransaction(operation, databaseOptions, { operationLabel });
-    };
-    return !isIncognitoOpenClawAgentSqlitePath(databaseOptions.path, databaseOptions) &&
-      !getOpenClawAgentDatabaseIfOpen(databaseOptions)
-      ? withOpenClawAgentDatabaseAsync(databaseOptions, write)
-      : write();
-  });
+  return await runExclusiveSqliteSessionWrite(
+    databaseOptions,
+    async () => {
+      const write = () => {
+        // Disposal revokes a memory source. Check inside the queue before the opener
+        // can materialize a successor database for a late worker result.
+        memorySource?.assertCurrentOwner();
+        return runOpenClawAgentWriteTransaction(operation, databaseOptions, { operationLabel });
+      };
+      return !isIncognitoOpenClawAgentSqlitePath(databaseOptions.path, databaseOptions) &&
+        !getOpenClawAgentDatabaseIfOpen(databaseOptions)
+        ? withOpenClawAgentDatabaseAsync(databaseOptions, write)
+        : write();
+    },
+    operationLabel,
+  );
 }
 
 async function claimPreparedSessionTranscriptProjection(
