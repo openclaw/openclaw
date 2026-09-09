@@ -2503,6 +2503,21 @@
                       "gateway/restart-recovery",
                       "gateway/cloud-sessions",
                       "gateway/cloud-workers",
+                      {
+                        "group": "Cloud Workers",
+                        "pages": [
+                          "gateway/cloud-workers/warm-images",
+                          "gateway/cloud-workers/per-project-default-profiles",
+                          "gateway/cloud-workers/setup-and-bundle-installation",
+                          "gateway/cloud-workers/verify-the-profile",
+                          "gateway/cloud-workers/dispatching-a-session",
+                          "gateway/cloud-workers/placement-and-machine-selection",
+                          "gateway/cloud-workers/session-lifecycle",
+                          "gateway/cloud-workers/desktop",
+                          "gateway/cloud-workers/security-model",
+                          "gateway/cloud-workers/troubleshooting"
+                        ]
+                      },
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"
                     ]

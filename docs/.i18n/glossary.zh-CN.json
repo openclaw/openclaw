@@ -2072,6 +2072,102 @@
     "target": "云端工作节点计划"
   },
   {
+    "source": "Cloud worker warm images",
+    "target": "云工作机预热镜像"
+  },
+  {
+    "source": "Per-project default profiles",
+    "target": "按项目的默认配置档"
+  },
+  {
+    "source": "Worker setup and bundle installation",
+    "target": "工作机初始化与套件安装"
+  },
+  {
+    "source": "Verify a cloud worker profile",
+    "target": "验证云工作机配置档"
+  },
+  {
+    "source": "Dispatching a cloud session",
+    "target": "派发云会话"
+  },
+  {
+    "source": "Placement and machine selection",
+    "target": "放置位置与机器选择"
+  },
+  {
+    "source": "Cloud session lifecycle and durability",
+    "target": "云会话生命周期与持久性"
+  },
+  {
+    "source": "Cloud Worker Desktop",
+    "target": "云工作机桌面"
+  },
+  {
+    "source": "Cloud worker security model",
+    "target": "云工作机安全模型"
+  },
+  {
+    "source": "Cloud worker troubleshooting",
+    "target": "云工作机故障排查"
+  },
+  {
+    "source": "Warm images",
+    "target": "预热镜像"
+  },
+  {
+    "source": "Recover a paused capture",
+    "target": "恢复暂停的捕获"
+  },
+  {
+    "source": "Upgrade warm-image state",
+    "target": "升级预热镜像状态"
+  },
+  {
+    "source": "The setup command",
+    "target": "初始化命令"
+  },
+  {
+    "source": "Bundle installation",
+    "target": "套件安装"
+  },
+  {
+    "source": "Build a complete custom node package",
+    "target": "构建完整的自定义节点包"
+  },
+  {
+    "source": "Verify the profile",
+    "target": "验证配置档"
+  },
+  {
+    "source": "Dispatching a session",
+    "target": "派发会话"
+  },
+  {
+    "source": "Cloud child sessions",
+    "target": "云子会话"
+  },
+  {
+    "source": "Runtime support",
+    "target": "运行时支持"
+  },
+  {
+    "source": "Codex on a paired device",
+    "target": "在已配对设备上运行 Codex"
+  },
+  {
+    "source": "Choose a machine class per session",
+    "target": "为每个会话选择机器规格"
+  },
+  {
+    "source": "What survives a dead machine",
+    "target": "机器失效后仍然保留的内容"
+  },
+  {
+    "source": "Desktop (interactive)",
+    "target": "桌面（交互式）"
+  },
+  {
     "source": "Crabbox plugin",
     "target": "Crabbox 插件"
   },
