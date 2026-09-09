@@ -343,6 +343,7 @@
     "native.android.37c430fb826c446f": "âm thanh",
     "native.android.37ca0160a9368a86": "Dấu thời gian bản dựng OpenClaw",
     "native.android.3833561b14a68b4b": "Chi tiết nhật ký Gateway dễ đọc.",
+    "native.android.38661fce5fca374f": "Kế hoạch phát hành ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}",
     "native.android.387fc9194ff7aa9b": "Tải thêm",
     "native.android.3881e845a4e699c7": "Điện thoại có thể kết nối với Gateway",
     "native.android.38b7fdfac0cbc42d": "Kết nối với Gateway của bạn để xem màn hình máy tính.",
