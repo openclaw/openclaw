@@ -8,6 +8,7 @@ import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/c
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
 import {
   getLoadedRuntimePluginRegistry,
   createRuntimePluginManifestLookup,
@@ -115,12 +116,16 @@ function wrapPluginToolCallbacks(
     signal?: AbortSignal,
     onUpdate?: unknown,
   ) =>
-    runScoped(
-      () =>
-        Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
-          AnyAgentTool["execute"]
-        >,
-    );
+    runScoped(() => {
+      const execute = (executionSignal?: AbortSignal) =>
+        Reflect.apply(tool.execute, tool, [
+          toolCallId,
+          params,
+          executionSignal,
+          onUpdate,
+        ]) as ReturnType<AnyAgentTool["execute"]>;
+      return signal ? runWithTrackedCancellation(signal, execute) : execute();
+    });
   const wrapped = new Proxy<AnyAgentTool>(tool, {
     get(target, prop) {
       if (prop === "prepareArguments" && scopedPrepareArguments) {
