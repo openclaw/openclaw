@@ -215,6 +215,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         gatewaySnapshot,
         setObserverVisibility: this.setSessionObserverVisibility,
         updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+        agentId: currentAgentId,
       });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,

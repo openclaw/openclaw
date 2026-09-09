@@ -351,6 +351,34 @@ describe("terminal gateway policy", () => {
     );
   });
 
+  it("uses sessionKey as the terminal owner when agentId is omitted", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      gateway: { terminal: { enabled: true } },
+      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+    };
+    const policy = createTerminalLaunchPolicy(runtimeConfig);
+    const { opts, sessions, respond, resolveTerminalLaunchPolicy } = makeOpts(
+      { cols: 80, rows: 24, sessionKey: "agent:research:chat" },
+      { enabled: true },
+    );
+    opts.context.getRuntimeConfig = () => runtimeConfig;
+    resolveTerminalLaunchPolicy.mockImplementation((agentId?: string) => policy.resolve(agentId));
+
+    sessions.open.mockImplementation(async (request: { agentId: string }) => ({
+      ok: true as const,
+      sessionId: "terminal-1",
+      agentId: request.agentId,
+      shell: "/bin/zsh",
+      cwd: "/work",
+    }));
+
+    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+
+    expect(resolveTerminalLaunchPolicy).toHaveBeenCalledWith("research");
+    expect(sessions.open).toHaveBeenCalledWith(expect.objectContaining({ agentId: "research" }));
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ agentId: "research" }));
+  });
+
   it("opens a provider-built local resume plan and returns its title", async () => {
     const openTerminal = vi.fn(async () => ({
       kind: "local" as const,

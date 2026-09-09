@@ -5,6 +5,7 @@ import type {
 } from "@openclaw/libterminal/browser";
 import type { ReactiveControllerHost } from "lit";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
@@ -41,6 +42,19 @@ export function resolveTerminalPanelOwnerSessionKey(
 ): string | undefined {
   const key = sessionKey?.trim();
   return !catalog && key && !parseCatalogSessionKey(key) ? key : undefined;
+}
+
+/** Prefer an explicit agent; otherwise take the owner encoded in the conversation key. */
+export function resolveTerminalPanelOpenAgentId(
+  agentId: string | null | undefined,
+  sessionKey: string | null | undefined,
+): string | undefined {
+  const explicit = agentId?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const parsed = parseAgentSessionKey(sessionKey)?.agentId?.trim();
+  return parsed || undefined;
 }
 
 /** Explicit terminal work retained until it either runs or reports a visible failure. */

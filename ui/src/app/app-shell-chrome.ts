@@ -410,6 +410,8 @@ export class ShellChromeOwner {
       )
     ) {
       event.preventDefault();
+      // Do not send agentId here. The shell panel already binds the
+      // route-validated owner; a selection-only payload would overwrite it.
       window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT));
       return;
     }

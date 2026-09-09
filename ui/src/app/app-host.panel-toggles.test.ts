@@ -116,6 +116,38 @@ describe("OpenClaw shell panel toggles", () => {
     },
   );
 
+  it("does not let the terminal shortcut override a route-selected agent", () => {
+    const element = createLazyElementSpec("keyboard terminal");
+    const shell = configurePanelShell(element);
+    shell.routeState = { routeId: "new-session" };
+    const context = shell.runtime.context as ApplicationContext & {
+      agentSelection: { state: { selectedId: string } };
+      gateway: { snapshot: { assistantAgentId?: string } };
+    };
+    context.agentSelection = { state: { selectedId: "research" } };
+    context.gateway.snapshot.assistantAgentId = "research";
+    const owner = chromeOwner(shell);
+    const toggle = vi.fn();
+    document.addEventListener("keydown", owner.handleDocumentKeydown, true);
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, toggle);
+    try {
+      const event = new KeyboardEvent("keydown", {
+        key: "`",
+        code: "Backquote",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.body.dispatchEvent(event);
+      expect(toggle).toHaveBeenCalledOnce();
+      const dispatched = toggle.mock.calls[0]?.[0] as CustomEvent;
+      expect(dispatched.detail?.agentId).toBeUndefined();
+    } finally {
+      document.removeEventListener("keydown", owner.handleDocumentKeydown, true);
+      window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, toggle);
+    }
+  });
+
   it("opens the Home dock from its keyboard chord only when the gateway allows it", () => {
     const shell = configurePanelShell(createLazyElementSpec("assistant panel"));
     const gateway = (

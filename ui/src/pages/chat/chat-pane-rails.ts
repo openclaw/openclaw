@@ -1,4 +1,5 @@
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { terminalIntentQueue } from "../../components/terminal/terminal-pending-actions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { openTaskDetailId } from "./components/chat-detail-slot.ts";
@@ -25,6 +26,7 @@ export function createChatPaneRails(params: {
   gatewaySnapshot: ChatPaneGatewaySnapshot;
   setObserverVisibility: (visible: boolean) => void;
   updateSidebarLayout: ChatPageHost["updateSidebarLayout"];
+  agentId?: string | null;
 }) {
   const { state, sidebarLayout } = params;
   const isPanelVisible = (slot: SidebarSlotId) => isSidebarSlotVisible(sidebarLayout, slot);
@@ -54,7 +56,16 @@ export function createChatPaneRails(params: {
     collapsed: !isPanelVisible("workspace"),
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("workspace"),
-    onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
+    onToggleTerminal: state.terminalAvailable
+      ? () => {
+          const opening = !isPanelVisible("terminal");
+          togglePanelSlot("terminal");
+          const agentId = params.agentId?.trim();
+          if (opening && agentId) {
+            void terminalIntentQueue.queue({ kind: "restore", agentId });
+          }
+        }
+      : undefined,
     onToggleBrowser: state.browserPanelAvailable ? () => togglePanelSlot("browser") : undefined,
     onToggleDesktop: isDesktopPanelAvailable(params.gatewaySnapshot)
       ? () => togglePanelSlot("desktop")
