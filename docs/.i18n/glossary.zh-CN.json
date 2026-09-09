@@ -3256,6 +3256,30 @@
     "target": "配置 — 聊天命令"
   },
   {
+    "source": "Configuration — tool policy",
+    "target": "配置 — 工具策略"
+  },
+  {
+    "source": "Configuration — GitHub identity for agent tools",
+    "target": "配置 — 智能体工具的 GitHub 身份"
+  },
+  {
+    "source": "Configuration — built-in tool settings",
+    "target": "配置 — 内置工具设置"
+  },
+  {
+    "source": "Configuration — cross-agent, session, and subagent tools",
+    "target": "配置 — 跨智能体、会话和子智能体工具"
+  },
+  {
+    "source": "Configuration — custom providers and base URLs",
+    "target": "配置 — 自定义提供商和基础 URL"
+  },
+  {
+    "source": "Configuration — provider examples",
+    "target": "配置 — 提供商示例"
+  },
+  {
     "source": "Set up OpenTelemetry export",
     "target": "设置 OpenTelemetry 导出"
   },

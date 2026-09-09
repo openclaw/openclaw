@@ -2222,6 +2222,17 @@
                       "gateway/config-runtime",
                       "gateway/config-secrets-env",
                       "gateway/config-tools",
+                      {
+                        "group": "Tools",
+                        "pages": [
+                          "gateway/config-tools/tool-policy",
+                          "gateway/config-tools/github-identity",
+                          "gateway/config-tools/built-in-tools",
+                          "gateway/config-tools/sessions-and-subagents",
+                          "gateway/config-tools/custom-providers",
+                          "gateway/config-tools/provider-examples"
+                        ]
+                      },
                       "gateway/configuration-examples"
                     ]
                   },
