@@ -140,6 +140,22 @@
     "target": "Talk 模式"
   },
   {
+    "source": "Talk realtime sessions and delegation",
+    "target": "Talk 实时会话与委派"
+  },
+  {
+    "source": "Talk session ownership",
+    "target": "Talk 会话归属"
+  },
+  {
+    "source": "Talk on macOS and the Gateway relay",
+    "target": "macOS 上的 Talk 与 Gateway 中继"
+  },
+  {
+    "source": "Talk client UI",
+    "target": "Talk 客户端界面"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },
