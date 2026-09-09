@@ -1252,6 +1252,38 @@
     "target": "插件入口点"
   },
   {
+    "source": "Plugin SDK tool policy and sandbox helpers",
+    "target": "插件 SDK 工具策略与沙箱辅助方法"
+  },
+  {
+    "source": "Plugin SDK package entries",
+    "target": "插件 SDK 包入口"
+  },
+  {
+    "source": "Plugin SDK defineToolPlugin helper",
+    "target": "插件 SDK defineToolPlugin 辅助方法"
+  },
+  {
+    "source": "Plugin SDK definePluginEntry helper",
+    "target": "插件 SDK definePluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK native provider factories",
+    "target": "插件 SDK 原生提供方工厂"
+  },
+  {
+    "source": "Plugin SDK defineChannelPluginEntry helper",
+    "target": "插件 SDK defineChannelPluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK defineSetupPluginEntry helper",
+    "target": "插件 SDK defineSetupPluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK registration mode",
+    "target": "插件 SDK 注册模式"
+  },
+  {
     "source": "Plugin hooks",
     "target": "插件钩子"
   },
