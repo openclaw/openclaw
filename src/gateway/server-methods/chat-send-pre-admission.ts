@@ -12,6 +12,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
+import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -95,6 +96,23 @@ type ChatSendPreAdmissionParams = {
   client: GatewayRequestHandlerOptions["client"];
   assertCurrent?: () => void;
 };
+
+/** Let an observed deadline commit its partial and outcome before history is read. */
+export async function waitForChatSessionTimeoutPersistence({
+  context,
+  session,
+}: Pick<ChatSendPreAdmissionParams, "context" | "session">): Promise<void> {
+  // Call outside the session writer so terminal persistence can acquire it.
+  for (const active of context.chatAbortControllers.values()) {
+    if (
+      active.sessionKey === session.sessionKey &&
+      active.abortStopReason === "timeout" &&
+      chatRunBelongsToSelectedAgent({ ...active, selectedAgentId: session.selectedAgent.agentId })
+    ) {
+      await active.projectSessionTerminalPersistence;
+    }
+  }
+}
 
 type ChatSendRetryParams = {
   request: Pick<

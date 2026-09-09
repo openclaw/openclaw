@@ -396,6 +396,9 @@ export function startGatewayEventSubscriptions(params: {
           event: evt,
           ...(terminalAuthority ? { authority: terminalAuthority } : {}),
           ...(writeContext ? { writeContext } : {}),
+          ...(trackedEntry?.timeoutPartialText
+            ? { timeoutPartialText: trackedEntry.timeoutPartialText }
+            : {}),
           ...(clientRunId !== evt.runId ? { clientRunId } : {}),
         });
         if (terminalAuthority) {

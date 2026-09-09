@@ -78,6 +78,8 @@ export type ChatAbortControllerEntry = {
   projectSessionTerminalPending?: boolean;
   /** Store timestamp expected from the observed terminal lifecycle event. */
   projectSessionTerminalObservedAt?: number;
+  /** Captured before deadline cancellation; settled by the terminal persistence owner. */
+  timeoutPartialText?: string;
   /** In-flight terminal session-store update used by restart shutdown. */
   projectSessionTerminalPersistence?: Promise<void>;
   /** Caller completion requested cleanup before terminal lifecycle persistence settled. */

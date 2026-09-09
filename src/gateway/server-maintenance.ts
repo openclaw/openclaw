@@ -387,6 +387,12 @@ export function startGatewayMaintenanceTimers(params: {
         removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
         continue;
       }
+      const partialText = params.chatRunState.resolveBuffer(runId, { final: true }).text;
+      if (entry.controlUiVisible !== false && partialText?.trim()) {
+        // Abort clears the buffer. Keep the text on its run owner so the
+        // terminal writer can commit it together with the timeout outcome.
+        entry.timeoutPartialText = partialText;
+      }
       const aborted = abortChatRunById(params, {
         runId,
         sessionKey: entry.sessionKey,
