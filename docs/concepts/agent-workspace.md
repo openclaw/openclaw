@@ -101,7 +101,7 @@ Standard files OpenClaw expects inside the workspace:
 </AccordionGroup>
 
 <Note>
-If a required bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Optional `USER.md` and `MEMORY.md` files are omitted when absent. Large bootstrap files are truncated when injected; adjust general limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). `USER.md` keeps its separate 4,000-character cap. `openclaw setup` can recreate missing defaults without overwriting existing files.
+If a required bootstrap file is missing, OpenClaw injects a "missing file" marker into the session and continues. Optional `USER.md` and `MEMORY.md` files are omitted when absent. Large bootstrap files are truncated when injected; adjust general limits with `agents.defaults.bootstrapMaxChars` (default: `20000`) and `agents.defaults.bootstrapTotalMaxChars` (default: `60000`). Per-agent `agents.entries.<id>.bootstrapMaxChars` and `bootstrapTotalMaxChars` override the corresponding defaults. `USER.md` uses the smaller of its configured per-file limit and 4,000 characters; raising the general limit cannot exceed that cap. `openclaw setup` can recreate missing defaults without overwriting existing files.
 </Note>
 
 ## What is NOT in the workspace

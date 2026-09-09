@@ -113,40 +113,90 @@ describe("core/doctor/bootstrap-size", () => {
     );
   });
 
-  it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-"));
-    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(15_000), "utf-8");
+  it.each([
+    {
+      scenario: "a lower per-agent limit",
+      name: "AGENTS.md",
+      rawChars: 15_000,
+      maxChars: 10_000,
+      severity: "warning",
+      message: "AGENTS.md exceeds bootstrap limits and will be truncated.",
+    },
+    {
+      scenario: "fixed USER cap truncation",
+      name: "USER.md",
+      rawChars: 5_000,
+      maxChars: 20_000,
+      severity: "warning",
+      message: "USER.md exceeds bootstrap limits and will be truncated.",
+    },
+    {
+      scenario: "near the fixed USER cap",
+      name: "USER.md",
+      rawChars: 3_500,
+      maxChars: 20_000,
+      severity: "info",
+      message: "USER.md is near its 4000-character bootstrap file limit.",
+    },
+    {
+      scenario: "near a lower USER limit",
+      name: "USER.md",
+      rawChars: 1_800,
+      maxChars: 2_000,
+      severity: "info",
+      message: "USER.md is near its 2000-character bootstrap file limit.",
+    },
+    {
+      scenario: "near an ordinary configured limit",
+      name: "SOUL.md",
+      rawChars: 18_000,
+      maxChars: 20_000,
+      severity: "info",
+      message: "SOUL.md is near its 20000-character bootstrap file limit.",
+    },
+  ])("reports $scenario with effective limits and actionable advice", async (testCase) => {
+    const { name, rawChars, maxChars, severity, message } = testCase;
+    tmp = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-")));
+    await fs.writeFile(join(tmp, name), "a".repeat(rawChars), "utf-8");
 
-    const check = getBootstrapSizeCheck();
-    const findings = await check.detect({
+    const findings = await getBootstrapSizeCheck().detect({
       mode: "lint",
       runtime,
       cfg: {
         agents: {
           defaults: { workspace: tmp, bootstrapMaxChars: 20_000 },
-          list: [{ id: "custom-agent", default: true, bootstrapMaxChars: 10_000 }],
+          list: [{ id: "custom-agent", default: true, bootstrapMaxChars: maxChars }],
         },
+        plugins: { enabled: false },
       },
       cwd: tmp,
     });
 
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/bootstrap-size",
-        severity: "warning",
-        message: expect.stringContaining("AGENTS.md"),
-        fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
-      }),
-    );
+    expect(findings).toContainEqual({
+      checkId: "core/doctor/bootstrap-size",
+      severity,
+      message,
+      path: join(tmp, name),
+      fixHint:
+        "Shorten bootstrap files; see https://docs.openclaw.ai/concepts/agent-workspace for per-file caps and configurable budgets.",
+    });
+  });
+
+  it("does not inspect workspaces without a working directory", async () => {
     await expect(
-      check.detect({
+      getBootstrapSizeCheck().detect({
         mode: "lint",
         runtime,
         cfg: {
           agents: {
             defaults: { bootstrapMaxChars: 20_000 },
             list: [
-              { id: "alpha", default: true, workspace: tmp, bootstrapMaxChars: 10_000 },
+              {
+                id: "alpha",
+                default: true,
+                workspace: "/unused-workspace",
+                bootstrapMaxChars: 10_000,
+              },
               { id: "beta" },
             ],
           },

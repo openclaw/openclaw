@@ -607,13 +607,13 @@ const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
 const bootstrapSizeCheck: HealthCheck = {
   id: "core/doctor/bootstrap-size",
   kind: "core",
-  description: "Workspace bootstrap files fit within configured injection limits.",
+  description: "Workspace bootstrap files fit within injection limits.",
   source: "doctor",
   async detect(ctx) {
     if (!ctx.cwd) {
       return [];
     }
-    const { buildBootstrapInjectionStats, analyzeBootstrapBudget } =
+    const { buildBootstrapInjectionStats, analyzeBootstrapBudget, BOOTSTRAP_BUDGET_HINT } =
       await import("../agents/bootstrap-budget.js");
     const { resolveBootstrapContextForDiagnostics } =
       await import("../agents/bootstrap-files-diagnostics.js");
@@ -641,8 +641,7 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: "warning",
         message: `${file.name} exceeds bootstrap limits and will be truncated.`,
         path: file.path,
-        fixHint:
-          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars` for this agent, or the corresponding `agents.defaults.*` fallback.",
+        fixHint: BOOTSTRAP_BUDGET_HINT,
       });
     }
     for (const file of analysis.nearLimitFiles) {
@@ -652,10 +651,9 @@ const bootstrapSizeCheck: HealthCheck = {
       findings.push({
         checkId: "core/doctor/bootstrap-size",
         severity: "info",
-        message: `${file.name} is near the configured bootstrap file limit.`,
+        message: `${file.name} is near its ${file.effectiveFileLimit}-character bootstrap file limit.`,
         path: file.path,
-        fixHint:
-          "Reduce the file size or tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+        fixHint: BOOTSTRAP_BUDGET_HINT,
       });
     }
     if (analysis.totalNearLimit) {
@@ -664,8 +662,7 @@ const bootstrapSizeCheck: HealthCheck = {
         severity: analysis.hasTruncation ? "warning" : "info",
         message: "Total bootstrap context is near the configured total limit.",
         path: workspaceDir,
-        fixHint:
-          "Reduce bootstrap file sizes or tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback.",
+        fixHint: BOOTSTRAP_BUDGET_HINT,
       });
     }
     return findings;

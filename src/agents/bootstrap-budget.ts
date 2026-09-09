@@ -26,6 +26,9 @@ import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
 
+export const BOOTSTRAP_BUDGET_HINT =
+  "Shorten bootstrap files; see https://docs.openclaw.ai/concepts/agent-workspace for per-file caps and configurable budgets.";
+
 type BootstrapTruncationReportMeta = {
   warningMode: BootstrapPromptWarningMode;
   warningShown: boolean;

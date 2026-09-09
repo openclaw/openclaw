@@ -44,17 +44,70 @@ describe("noteBootstrapFileSize", () => {
     listAgentIds.mockReturnValue(["main"]);
   });
 
-  it("emits a warning when bootstrap files are truncated", async () => {
+  it.each([
+    {
+      scenario: "ordinary file truncation",
+      name: "AGENTS.md",
+      rawChars: 25_000,
+      injectedChars: 20_000,
+      maxChars: 20_000,
+      heading: "Workspace bootstrap files exceed limits and will be truncated:",
+      fileLine: "- AGENTS.md: 25,000 raw / 20,000 injected (20% truncated; max/file)",
+      totalLine: "Total bootstrap injected chars: 20,000 (13% of max/total 150,000).",
+    },
+    {
+      scenario: "fixed USER cap truncation",
+      name: "USER.md",
+      rawChars: 5_000,
+      injectedChars: 3_999,
+      maxChars: 20_000,
+      heading: "Workspace bootstrap files exceed limits and will be truncated:",
+      fileLine: "- USER.md: 5,000 raw / 3,999 injected (20% truncated; max/file)",
+      totalLine: "Total bootstrap injected chars: 3,999 (3% of max/total 150,000).",
+    },
+    {
+      scenario: "near the fixed USER cap",
+      name: "USER.md",
+      rawChars: 3_500,
+      injectedChars: 3_500,
+      maxChars: 20_000,
+      heading: "Workspace bootstrap files are near injection limits:",
+      fileLine: "- USER.md: 3,500 chars (88% of max/file 4,000)",
+      totalLine: "Total bootstrap injected chars: 3,500 (2% of max/total 150,000).",
+    },
+    {
+      scenario: "near a lower USER limit",
+      name: "USER.md",
+      rawChars: 1_800,
+      injectedChars: 1_800,
+      maxChars: 2_000,
+      heading: "Workspace bootstrap files are near injection limits:",
+      fileLine: "- USER.md: 1,800 chars (90% of max/file 2,000)",
+      totalLine: "Total bootstrap injected chars: 1,800 (1% of max/total 150,000).",
+    },
+    {
+      scenario: "near an ordinary configured limit",
+      name: "SOUL.md",
+      rawChars: 18_000,
+      injectedChars: 18_000,
+      maxChars: 20_000,
+      heading: "Workspace bootstrap files are near injection limits:",
+      fileLine: "- SOUL.md: 18,000 chars (90% of max/file 20,000)",
+      totalLine: "Total bootstrap injected chars: 18,000 (12% of max/total 150,000).",
+    },
+  ])("reports $scenario with effective limits and actionable advice", async (testCase) => {
+    const { name, rawChars, injectedChars, maxChars, heading, fileLine, totalLine } = testCase;
+    resolveBootstrapMaxChars.mockReturnValueOnce(maxChars);
     resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [
         {
-          name: "AGENTS.md",
-          path: "/tmp/workspace/AGENTS.md",
-          content: "a".repeat(25_000),
+          name,
+          path: `/tmp/workspace/${name}`,
+          content: "a".repeat(rawChars),
           missing: false,
         },
       ],
-      contextFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(20_000) }],
+      contextFiles: [{ path: `/tmp/workspace/${name}`, content: "a".repeat(injectedChars) }],
     });
     await noteBootstrapFileSize({} as OpenClawConfig);
     expect(note).toHaveBeenCalledTimes(1);
@@ -62,12 +115,12 @@ describe("noteBootstrapFileSize", () => {
     expect(title).toBe("Bootstrap file size");
     expect(message).toBe(
       [
-        "Workspace bootstrap files exceed limits and will be truncated:",
-        "- AGENTS.md: 25,000 raw / 20,000 injected (20% truncated; max/file)",
-        "Total bootstrap injected chars: 20,000 (13% of max/total 150,000).",
-        "Total bootstrap raw chars (before truncation): 25,000.",
+        heading,
+        fileLine,
+        totalLine,
+        `Total bootstrap raw chars (before truncation): ${rawChars.toLocaleString("en-US")}.`,
         "",
-        "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+        "- Tip: Shorten bootstrap files; see https://docs.openclaw.ai/concepts/agent-workspace for per-file caps and configurable budgets.",
       ].join("\n"),
     );
   });
@@ -100,7 +153,7 @@ describe("noteBootstrapFileSize", () => {
         "Total bootstrap injected chars: 1,000 (100% of max/total 1,000).",
         "Total bootstrap raw chars (before truncation): 1,500.",
         "",
-        "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
+        "- Tip: Shorten bootstrap files; see https://docs.openclaw.ai/concepts/agent-workspace for per-file caps and configurable budgets.",
       ].join("\n"),
     );
   });
@@ -118,27 +171,6 @@ describe("noteBootstrapFileSize", () => {
     expect(resolveBootstrapContextForDiagnostics).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "custom-agent" }),
     );
-  });
-
-  it("does not recommend bootstrapMaxChars when USER.md hits its fixed cap", async () => {
-    resolveBootstrapMaxChars.mockReturnValueOnce(20_000);
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [
-        {
-          name: "USER.md",
-          path: "/tmp/workspace/USER.md",
-          content: "u".repeat(5_000),
-          missing: false,
-        },
-      ],
-      contextFiles: [{ path: "/tmp/workspace/USER.md", content: "u".repeat(4_000) }],
-    });
-    await noteBootstrapFileSize({} as OpenClawConfig);
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = String(note.mock.calls[0]?.[0]);
-    expect(message).toContain("USER.md: 5,000 raw / 4,000 injected");
-    expect(message).toContain("USER.md has a fixed 4000-character bootstrap cap; keep it compact.");
-    expect(message).not.toContain("bootstrapMaxChars");
   });
 
   it("stays silent when files are comfortably within limits", async () => {

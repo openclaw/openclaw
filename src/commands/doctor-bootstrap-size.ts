@@ -8,13 +8,13 @@ import {
 import {
   buildBootstrapInjectionStats,
   analyzeBootstrapBudget,
+  BOOTSTRAP_BUDGET_HINT,
 } from "../agents/bootstrap-budget.js";
 import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files-diagnostics.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../agents/embedded-agent-helpers.js";
-import { USER_BOOTSTRAP_MAX_CHARS } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Every warning uses the same locale; silent checks never need a formatter.
@@ -92,14 +92,14 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
         );
       }
     } else {
-      lines.push("Workspace bootstrap files are near configured limits:");
+      lines.push("Workspace bootstrap files are near injection limits:");
     }
 
     const nonTruncatedNearLimit = analysis.nearLimitFiles.filter((file) => !file.truncated);
     if (nonTruncatedNearLimit.length > 0) {
       for (const file of nonTruncatedNearLimit) {
         lines.push(
-          `- ${file.name}: ${formatInt(file.rawChars)} chars (${formatPercent(file.rawChars, bootstrapMaxChars)} of max/file ${formatInt(bootstrapMaxChars)})`,
+          `- ${file.name}: ${formatInt(file.rawChars)} chars (${formatPercent(file.rawChars, file.effectiveFileLimit)} of max/file ${formatInt(file.effectiveFileLimit)})`,
         );
       }
     }
@@ -111,39 +111,7 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       `Total bootstrap raw chars (before truncation): ${formatInt(analysis.totals.rawChars)}.`,
     );
 
-    const isFixedUserCap = (file: (typeof analysis.truncatedFiles)[number]) =>
-      file.name?.toLowerCase() === "user.md" &&
-      file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS &&
-      file.causes.includes("per-file-limit");
-    const fixedUserCapApplied = analysis.truncatedFiles.some(isFixedUserCap);
-    const needsPerFileTip =
-      analysis.truncatedFiles.some(
-        (file) =>
-          file.causes.includes("per-file-limit") &&
-          (file.name?.toLowerCase() !== "user.md" ||
-            file.effectiveFileLimit < USER_BOOTSTRAP_MAX_CHARS),
-      ) || analysis.nearLimitFiles.some((file) => file.name?.toLowerCase() !== "user.md");
-    const needsTotalTip =
-      analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
-      analysis.totalNearLimit;
-    if (fixedUserCapApplied || needsPerFileTip || needsTotalTip) {
-      lines.push("");
-    }
-    if (fixedUserCapApplied) {
-      lines.push(
-        `- Tip: USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS}-character bootstrap cap; keep it compact.`,
-      );
-    }
-    if (needsPerFileTip) {
-      lines.push(
-        "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
-      );
-    }
-    if (needsTotalTip) {
-      lines.push(
-        "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
-      );
-    }
+    lines.push("", `- Tip: ${BOOTSTRAP_BUDGET_HINT}`);
 
     note(lines.join("\n"), "Bootstrap file size");
   }
