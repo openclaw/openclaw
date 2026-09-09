@@ -265,6 +265,14 @@ export function resolveBunRuntimeInfo(
   return resolveRuntimeInfo(bunPath, "bun", execFileImpl, env);
 }
 
+/** Probes a recorded Node executable without inheriting service preloads or secrets. */
+export function resolveNodeRuntimeInfo(
+  nodePath: string,
+  env: Record<string, string | undefined> = process.env,
+) {
+  return resolveRuntimeInfo(nodePath, "node", execFileAsync, env);
+}
+
 async function isVersionManagedRealNodePath(
   nodePath: string,
   platform: NodeJS.Platform,
@@ -383,7 +391,7 @@ type RuntimePathOptions = {
 
 /** Resolves the Node binary the daemon should use for a node runtime. */
 export async function resolvePreferredNodePath(
-  params: RuntimePathOptions,
+  params: RuntimePathOptions & { preferCurrentExecPath?: boolean },
 ): Promise<string | undefined> {
   if (params.runtime !== "node") {
     return undefined;
@@ -396,7 +404,10 @@ export async function resolvePreferredNodePath(
   const currentNode = isNodeExecPath(currentExecPath, platform)
     ? await resolveRuntimeInfo(currentExecPath, "node", execFileImpl, env)
     : null;
-  if (currentNode?.status === "supported" && !isVersionManagedNodePath(currentExecPath, platform)) {
+  if (
+    currentNode?.status === "supported" &&
+    (params.preferCurrentExecPath || !isVersionManagedNodePath(currentExecPath, platform))
+  ) {
     return resolveStableNodePath(currentExecPath);
   }
 

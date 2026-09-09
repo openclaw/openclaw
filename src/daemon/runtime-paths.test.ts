@@ -191,6 +191,21 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(2);
   });
 
+  it("prefers the supported CLI runtime when repairing an unsupported service runtime", async () => {
+    mockNodePathPresent(darwinNode);
+    const execFile = vi.fn().mockResolvedValue(nodeRuntime("26.8.1"));
+    expect(
+      await resolvePreferredNodePath({
+        env: {},
+        runtime: "node",
+        platform: "darwin",
+        execFile,
+        execPath: fnmNode,
+        preferCurrentExecPath: true,
+      }),
+    ).toBe(fnmNode);
+  });
+
   it.each([
     [nvmNode, true],
     ["/home/test/.local/share/fnm/aliases/default/bin/node", true],

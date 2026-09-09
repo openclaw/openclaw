@@ -1,7 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 
 describe("package runtime compatibility guidance", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each(["22.23.2", "24.15.0", "25.9.0", "26.0.0"])(
+    "renders the target engine range for unsupported Node %s",
+    async (node) => {
+      vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
+      const engine = ">=24.16.0 <25 || >=26.1.0";
+      const result = await resolvePackageRuntimePreflight({
+        target: { version: "2026.9.3", nodeEngine: engine },
+      });
+      expect(result).toEqual({
+        ok: false,
+        error: [
+          `Node ${node} is incompatible with openclaw@2026.9.3.`,
+          `The requested package requires ${engine}.`,
+          "Use a Node runtime that satisfies the engine range above, then rerun `openclaw update`.",
+          "Bare `npm i -g openclaw` can silently install an older compatible release.",
+          "After switching Node versions, use `npm i -g openclaw@latest`.",
+        ].join("\n"),
+      });
+    },
+  );
+
   for (const { name, engine } of [
     {
       name: "reports the full target range when Node is below its minimum",
