@@ -1,7 +1,6 @@
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements shared gateway request helpers.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { GatewayRequestHandler } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import {
@@ -20,9 +19,7 @@ export type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
 >[0];
 type GatewayRespond = GatewayMethodContext["respond"];
-type WorkboardGatewayResultHandler =
-  | GatewayRequestHandler
-  | ((context: GatewayMethodContext) => Promise<unknown>);
+type WorkboardGatewayResultHandler = (context: GatewayMethodContext) => Promise<unknown> | void;
 type WorkboardGatewayScope = NonNullable<
   NonNullable<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2]>["scope"]
 >;
