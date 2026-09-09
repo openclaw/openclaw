@@ -137,7 +137,7 @@ SoX is licensed `LGPL-2.0-only AND GPL-2.0-only`; BlackHole is GPL-3.0. If you b
 
 ### Chrome
 
-Opens the Meet URL through OpenClaw browser control and joins as the signed-in OpenClaw browser profile. Before launch, the plugin checks or provisions the host's native virtual-audio backend and then runs any configured audio bridge health/startup command. For local Chrome, pick the profile with `browser.defaultProfile`; `chrome.browserProfile` is passed to `chrome-node` hosts instead.
+Opens the Meet URL through OpenClaw browser control and joins as the signed-in OpenClaw browser profile. For talk-back modes, the plugin checks or provisions the host's native virtual-audio backend before browser work. Local Chrome also runs any configured audio bridge health command at this point; `chrome-node` runs that check on the node when starting its bridge. The talk-back bridge starts only after browser health confirms virtual input/output audio routing. For local Chrome, pick the profile with `browser.defaultProfile`; `chrome.browserProfile` is passed to `chrome-node` hosts instead.
 
 ```bash
 openclaw googlemeet join https://meet.google.com/abc-defg-hij --transport chrome
@@ -145,6 +145,8 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij --transport chrome
 ```
 
 Chrome mic/speaker audio routes through the local OpenClaw audio bridge. If the native backend is unavailable, the join fails with a setup error instead of joining without an audio path.
+
+If startup fails after OpenClaw acquires a command-pair audio bridge, it attempts to stop that bridge before rolling back a tab opened by the failed join. This startup cleanup leaves reused or adopted tabs, including `chrome.launch: false` sessions, untouched. Node cleanup targets the returned bridge ID; if node startup fails before returning an ID, the Gateway cannot guarantee remote bridge cleanup. External bridge commands manage their own process lifecycle.
 
 ### Twilio
 
