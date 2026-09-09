@@ -289,7 +289,15 @@ describe("current plugin metadata snapshot", () => {
                     context: { provider: "outer", errorMessage: "fixture failure" },
                   }),
                 ).toBeUndefined();
-                expect(getGlobalHookRunnerRegistry()?.trustedToolPolicies).toEqual([]);
+                // Provider/metadata isolation stays exclusive, but the default EMPTY
+                // generation registry selects no plugin content, so hook dispatch
+                // falls back to the process-root view (issue #142783). Fail-closed
+                // tool policy registered at the root therefore remains visible here.
+                expect(
+                  getGlobalHookRunnerRegistry()?.trustedToolPolicies?.map(
+                    (entry) => entry.policy.id,
+                  ),
+                ).toEqual(["outer-policy"]);
                 throw new Error("inner generation failed");
               },
             ),

@@ -120,9 +120,23 @@ function overlayHookRegistries(
   };
 }
 
+// A generation registry only replaces the process-root hook view when it actually
+// selects plugin content. Prepared generations that carry no plugin/hook
+// contribution -- notably the default empty registry generation-scope.ts injects
+// when a run has no pluginRegistry of its own -- must not silence hooks and
+// policies registered on the process root. Otherwise globally registered typed
+// hooks (before_prompt_build / agent_end / session_start) silently stop
+// dispatching the moment any registry-less generation scope is active, while
+// non-hook surfaces that read the active registry keep working. Genuine
+// isolation probes that materialize plugin records (loaded, disabled, or failed
+// owners) still select exclusively, so fail-closed policy stays intact.
+function hasHookDispatchContent(registry: PluginRegistry): boolean {
+  return registry.plugins.length > 0 || registry.hooks.length > 0 || registry.typedHooks.length > 0;
+}
+
 function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
   const generationRegistry = getPluginRuntimeGenerationRegistry();
-  if (generationRegistry) {
+  if (generationRegistry && hasHookDispatchContent(generationRegistry)) {
     return generationRegistry;
   }
   return overlayHookRegistries(
