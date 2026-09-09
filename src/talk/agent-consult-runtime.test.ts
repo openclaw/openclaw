@@ -395,6 +395,51 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("forwards only visible partial replies before the final consult result", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const started = createDeferred();
+    const release = createDeferred();
+    runEmbeddedAgent.mockImplementation(async (runParams?: RunEmbeddedAgentParams) => {
+      started.resolve();
+      await runParams?.onPartialReply?.({ text: "First segment.", delta: "First segment." });
+      await release.promise;
+      return { payloads: [{ text: "First segment. Second segment." }], meta: {} };
+    });
+    const visiblePartials: unknown[] = [];
+    const consult = consultRealtimeVoiceAgent({
+      cfg: {},
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      sessionKey: "agent:main:voice",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-visible-partials",
+      args: { question: "Check the queue" },
+      transcript: [],
+      surface: "a live phone call",
+      userLabel: "Caller",
+      onVisiblePartial: async (partial) => {
+        visiblePartials.push(partial);
+      },
+    });
+
+    await started.promise;
+    try {
+      await vi.waitFor(() => {
+        expect(visiblePartials).toHaveLength(1);
+      });
+      const runParams = requireEmbeddedAgentCall(runEmbeddedAgent);
+      expect(runParams.onReasoningStream).toBeUndefined();
+      expect(runParams.onToolResult).toBeUndefined();
+      expect(visiblePartials).toEqual([
+        expect.objectContaining({ text: "First segment.", delta: "First segment." }),
+      ]);
+    } finally {
+      release.resolve();
+      await consult;
+    }
+  });
+
   it("carries current voice session permissions without enabling owner trace", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     sessionStore["agent:main:voice"] = {

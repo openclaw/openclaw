@@ -42,6 +42,14 @@ export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
  */
 export type RealtimeVoiceAgentConsultResult = { text: string; yielded?: true };
 
+/** Sanitized user-visible assistant text emitted while a realtime consult is still running. */
+export type RealtimeVoiceAgentConsultVisiblePartial = {
+  runId: string;
+  text: string;
+  delta?: string;
+  replace?: true;
+};
+
 const REALTIME_VOICE_YIELD_ACK_MAX_CHARS = 500;
 const REALTIME_VOICE_YIELD_ACK_FALLBACK =
   "I started that work and will share the result when it is ready.";
@@ -387,6 +395,8 @@ export async function consultRealtimeVoiceAgent(params: {
   extraSystemPrompt?: string;
   fallbackText?: string;
   abortSignal?: AbortSignal;
+  /** Receives only the sanitized assistant-answer lane, never reasoning or tool payloads. */
+  onVisiblePartial?: (partial: RealtimeVoiceAgentConsultVisiblePartial) => Promise<void> | void;
   onRunStarted?: (params: {
     runId: string;
     sessionId: string;
@@ -487,6 +497,7 @@ export async function consultRealtimeVoiceAgent(params: {
       const abortSignal = runRegistration?.abortSignal
         ? AbortSignal.any([lifecycleAbortController.signal, runRegistration.abortSignal])
         : lifecycleAbortController.signal;
+      let visibleDeliveryFailed = false;
 
       // Voice consults suppress verbose/reasoning output because the bridge needs a short,
       // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
@@ -536,6 +547,34 @@ export async function consultRealtimeVoiceAgent(params: {
           "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
         agentDir,
         abortSignal,
+        onPartialReply: params.onVisiblePartial
+          ? async (payload) => {
+              if (visibleDeliveryFailed || abortSignal.aborted) {
+                return false;
+              }
+              const text = typeof payload.text === "string" ? payload.text : "";
+              if (!text.trim()) {
+                return false;
+              }
+              try {
+                await params.onVisiblePartial?.({
+                  runId,
+                  text,
+                  ...(typeof payload.delta === "string" ? { delta: payload.delta } : {}),
+                  ...(payload.replace ? { replace: true } : {}),
+                });
+                assertRealtimeVoiceConsultNotInterrupted(abortSignal);
+                return true;
+              } catch (error) {
+                assertRealtimeVoiceConsultNotInterrupted(abortSignal);
+                visibleDeliveryFailed = true;
+                params.logger.warn(
+                  `[talk] realtime agent consult streaming disabled after delivery failure: ${error instanceof Error ? error.message : String(error)}`,
+                );
+                return false;
+              }
+            }
+          : undefined,
       });
       const result = await runPromise
         .catch((error: unknown) => {

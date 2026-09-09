@@ -25,6 +25,12 @@ import {
   type RealtimeTurnDetectionConfig,
 } from "./realtime-voice-session-policy.js";
 
+type StandaloneSpeechRequest = {
+  text: string;
+  resolve?: () => void;
+  reject?: (error: Error) => void;
+};
+
 export abstract class OpenAIRealtimeProtocol {
   static readonly MAX_TOOL_ARGUMENT_BYTES = 256_000;
 
@@ -35,6 +41,8 @@ export abstract class OpenAIRealtimeProtocol {
   readonly supportsToolResultContinuation = true;
 
   readonly supportsToolResultSuppression = true;
+
+  readonly supportsOutOfBandSpeech = true;
 
   protected nextMarkSequence = 1;
 
@@ -74,11 +82,13 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected completedToolCallIds = new Set<string>();
 
-  protected standaloneSpeechQueue: string[] = [];
+  protected standaloneSpeechQueue: StandaloneSpeechRequest[] = [];
 
   protected standaloneSpeechActive = false;
 
   protected standaloneSpeechEventId: string | null = null;
+
+  protected standaloneSpeechRequest: StandaloneSpeechRequest | null = null;
 
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
@@ -256,6 +266,7 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
+    this.clearPendingSpeech();
     // Wire observers can synchronously reenter while the sink still owns its snapshot.
     if (this.interruptingPlayback) {
       return;
@@ -267,6 +278,38 @@ export abstract class OpenAIRealtimeProtocol {
       this.interruptingPlayback = false;
     }
     this.drainResponseQueue();
+  }
+
+  speakOutOfBand(text: string): Promise<void> {
+    if (this.pendingToolCallIds.size === 0) {
+      return Promise.reject(
+        new Error("OpenAI realtime out-of-band speech requires a pending tool call"),
+      );
+    }
+    return new Promise<void>((resolve, reject) => {
+      this.standaloneSpeechQueue.push({ text, resolve, reject });
+      this.flushStandaloneSpeech();
+    });
+  }
+
+  clearPendingSpeech(): void {
+    const error = new Error("OpenAI realtime out-of-band speech cancelled");
+    for (const request of this.standaloneSpeechQueue) {
+      request.reject?.(error);
+    }
+    this.standaloneSpeechQueue = [];
+    this.standaloneSpeechRequest?.reject?.(error);
+    this.standaloneSpeechRequest = null;
+  }
+
+  protected settleStandaloneSpeech(error?: Error): void {
+    const request = this.standaloneSpeechRequest;
+    this.standaloneSpeechRequest = null;
+    if (error) {
+      request?.reject?.(error);
+    } else {
+      request?.resolve?.();
+    }
   }
 
   private interruptPlayback(options?: RealtimeVoiceBargeInOptions): void {
@@ -386,13 +429,14 @@ export abstract class OpenAIRealtimeProtocol {
     ) {
       return;
     }
-    const text = this.standaloneSpeechQueue.shift();
-    if (!text) {
+    const request = this.standaloneSpeechQueue.shift();
+    if (!request) {
       return;
     }
     const eventId = `openclaw-standalone-speech-${randomUUID()}`;
     this.standaloneSpeechActive = true;
     this.standaloneSpeechEventId = eventId;
+    this.standaloneSpeechRequest = request;
     this.responseCreateState = "in-flight";
     this.sendEvent({
       type: "response.create",
@@ -404,7 +448,7 @@ export abstract class OpenAIRealtimeProtocol {
           {
             type: "message",
             role: "user",
-            content: [{ type: "input_text", text }],
+            content: [{ type: "input_text", text: request.text }],
           },
         ],
       },
@@ -438,6 +482,7 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   protected resetRealtimeSessionState(): void {
+    this.clearPendingSpeech();
     this.outputAudioGeneration += 1;
     this.clearOutstandingMarks();
     this.assistantAudioItem = null;
@@ -454,6 +499,7 @@ export abstract class OpenAIRealtimeProtocol {
     this.standaloneSpeechQueue = [];
     this.standaloneSpeechActive = false;
     this.standaloneSpeechEventId = null;
+    this.standaloneSpeechRequest = null;
   }
 
   protected createPlaybackMark(): string {

@@ -445,6 +445,29 @@ describe("OpenAI realtime voice response control", () => {
     }
   });
 
+  it("backpressures awaited out-of-band speech until each response completes", async () => {
+    const bridge = createNativeBridge({ onToolCall: vi.fn() });
+    const socket = await connectReadyBridge(bridge);
+    emitCompletedToolCalls(socket);
+
+    const first = bridge.speakOutOfBand?.("first");
+    const second = bridge.speakOutOfBand?.("second");
+    expect(first).toBeInstanceOf(Promise);
+    expect(second).toBeInstanceOf(Promise);
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+
+    emitServerEvent(socket, {
+      type: "response.done",
+      response: { id: "resp_first", status: "completed", output: [] },
+    });
+    await expect(first).resolves.toBeUndefined();
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(2);
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true });
+    await expect(second).rejects.toThrow("cancelled");
+    expect(parseSent(socket).filter((event) => event.type === "response.cancel")).toHaveLength(1);
+  });
+
   it("drains deferred response.create after response.cancelled", async () => {
     const bridge = createNativeBridge();
     const socket = await connectReadyBridge(bridge);

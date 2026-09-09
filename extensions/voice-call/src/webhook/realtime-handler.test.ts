@@ -1697,6 +1697,311 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("speaks visible consult segments before completion and suppresses duplicate final speech", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const releaseFinal = createDeferred<void>();
+    const spoken: string[] = [];
+    let startedAt: number;
+    let firstSpokenAt = 0;
+    let finalResponseAt = 0;
+    const submitToolResult = vi.fn((_callId: string, result: unknown) => {
+      if (result && typeof result === "object" && "text" in result) {
+        finalResponseAt = performance.now();
+      }
+    });
+    const speakOutOfBand = vi.fn(async (text: string) => {
+      firstSpokenAt ||= performance.now();
+      spoken.push(text);
+    });
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({
+        supportsOutOfBandSpeech: true,
+        supportsToolResultContinuation: true,
+        supportsToolResultSuppression: true,
+        speakOutOfBand,
+        submitToolResult,
+      });
+    });
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-streamed-consult")),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const consult = vi.fn(async (_args: unknown, _callId: string, context: ToolHandlerContext) => {
+      await context.onVisiblePartial?.({
+        runId: "run-streamed",
+        text: "First segment.",
+        delta: "First segment.",
+      });
+      await releaseFinal.promise;
+      await context.onVisiblePartial?.({
+        runId: "run-streamed",
+        text: "First segment. Second segment.",
+        delta: " Second segment.",
+      });
+      return {
+        text: "First segment. Second segment.",
+        hiddenMetadata: "x".repeat(10_000),
+      };
+    });
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-streamed-consult", callSid: "CA-streamed-consult" },
+          }),
+        );
+        await waitForRealtimeTest(() => expect(callbacks).toBeDefined());
+
+        startedAt = performance.now();
+        callbacks?.onToolCall?.({
+          itemId: "item-streamed",
+          callId: "call-streamed",
+          name: "openclaw_agent_consult",
+          args: { question: "Check the queue." },
+        });
+        await waitForRealtimeTest(() => expect(spoken).toHaveLength(1));
+        expect(spoken[0]).toContain('Answer: "First segment."');
+        expect(
+          submitToolResult.mock.calls.filter(
+            ([, result]) => result && typeof result === "object" && "text" in result,
+          ),
+        ).toHaveLength(0);
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 100);
+        });
+        releaseFinal.resolve();
+        await waitForRealtimeTest(() => {
+          expect(spoken).toHaveLength(2);
+          expect(submitToolResult).toHaveBeenLastCalledWith(
+            "call-streamed",
+            { text: "First segment. Second segment." },
+            { suppressResponse: true },
+          );
+        });
+        expect(spoken[1]).toContain('Answer: "Second segment."');
+        expect(firstSpokenAt - startedAt).toBeLessThan(finalResponseAt - startedAt);
+        expect(finalResponseAt - firstSpokenAt).toBeGreaterThanOrEqual(90);
+        expect(
+          submitToolResult.mock.calls.filter(
+            ([, result]) => result && typeof result === "object" && "text" in result,
+          ),
+        ).toHaveLength(1);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      releaseFinal.resolve();
+      await server.close();
+    }
+  });
+
+  it("falls back to only the unspoken suffix when later speech disconnects", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const clearPendingSpeech = vi.fn();
+    const submitToolResult = vi.fn();
+    const speakOutOfBand = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error("provider disconnected"));
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({
+        supportsOutOfBandSpeech: true,
+        supportsToolResultContinuation: true,
+        supportsToolResultSuppression: true,
+        clearPendingSpeech,
+        speakOutOfBand,
+        submitToolResult,
+      });
+    });
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-stream-fallback")),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {
+      await context.onVisiblePartial?.({ runId: "run-fallback", text: "First result." });
+      await context
+        .onVisiblePartial?.({
+          runId: "run-fallback",
+          text: "First result. Second result.",
+        })
+        .catch(() => {});
+      return { text: "First result. Second result." };
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-stream-fallback", callSid: "CA-stream-fallback" },
+          }),
+        );
+        await waitForRealtimeTest(() => expect(callbacks).toBeDefined());
+        callbacks?.onToolCall?.({
+          itemId: "item-fallback",
+          callId: "call-fallback",
+          name: "openclaw_agent_consult",
+          args: { question: "Check the queue." },
+        });
+
+        await waitForRealtimeTest(() => {
+          expect(submitToolResult).toHaveBeenLastCalledWith(
+            "call-fallback",
+            { text: "Second result." },
+            undefined,
+          );
+        });
+        expect(speakOutOfBand).toHaveBeenCalledTimes(2);
+        expect(clearPendingSpeech).toHaveBeenCalledOnce();
+        expect(
+          submitToolResult.mock.calls.filter(
+            ([, result]) => result && typeof result === "object" && "text" in result,
+          ),
+        ).toHaveLength(1);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("submits one clear supervisor error after retiring streamed speech", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const handleBargeIn = vi.fn();
+    const submitToolResult = vi.fn();
+    const speakOutOfBand = vi.fn(async () => {});
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({
+        supportsOutOfBandSpeech: true,
+        supportsToolResultContinuation: true,
+        supportsToolResultSuppression: true,
+        handleBargeIn,
+        speakOutOfBand,
+        submitToolResult,
+      });
+    });
+    const handler = makeHandler(undefined, {
+      manager: { getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-stream-error")) },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {
+      await context.onVisiblePartial?.({ runId: "run-error", text: "Partial result." });
+      throw new Error("supervisor failed");
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-stream-error", callSid: "CA-stream-error" },
+          }),
+        );
+        await waitForRealtimeTest(() => expect(callbacks).toBeDefined());
+        callbacks?.onToolCall?.({
+          itemId: "item-error",
+          callId: "call-error",
+          name: "openclaw_agent_consult",
+          args: { question: "Check the queue." },
+        });
+
+        await waitForRealtimeTest(() => {
+          expect(submitToolResult).toHaveBeenLastCalledWith(
+            "call-error",
+            { error: "supervisor failed" },
+            undefined,
+          );
+        });
+        expect(speakOutOfBand).toHaveBeenCalledOnce();
+        expect(handleBargeIn).toHaveBeenCalledOnce();
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps the non-streaming final append bounded and minimal", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const submitToolResult = vi.fn();
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({ supportsToolResultContinuation: true, submitToolResult });
+    });
+    const handler = makeHandler(undefined, {
+      manager: { getCallByProviderCallId: vi.fn(() => makeCallRecord("CA-bounded-final")) },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.registerToolHandler("openclaw_agent_consult", async () => ({
+      text: "x".repeat(10_000),
+      hiddenMetadata: "y".repeat(10_000),
+    }));
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-bounded-final", callSid: "CA-bounded-final" },
+          }),
+        );
+        await waitForRealtimeTest(() => expect(callbacks).toBeDefined());
+        callbacks?.onToolCall?.({
+          itemId: "item-bounded",
+          callId: "call-bounded",
+          name: "openclaw_agent_consult",
+          args: { question: "Return a long answer." },
+        });
+
+        await waitForRealtimeTest(() => {
+          const finalCall = submitToolResult.mock.calls.find(
+            ([, result]) => result && typeof result === "object" && "text" in result,
+          );
+          expect(finalCall).toBeDefined();
+          const result = finalCall?.[1] as Record<string, unknown>;
+          expect(Object.keys(result)).toEqual(["text"]);
+          expect(result.text).toEqual(expect.any(String));
+          expect((result.text as string).length).toBeLessThanOrEqual(1_800);
+          expect(result.text).toMatch(/\[truncated\]$/);
+          expect(finalCall?.[2]).toBeUndefined();
+        });
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   describe.each(["forced", "native", "general"] as const)("%s host tool outcomes", (path) => {
     const cancelled = { status: "cancelled", message: "Cancelled the active OpenClaw run." };
     const outcomes = [
@@ -2674,13 +2979,23 @@ describe("RealtimeCallHandler path routing", () => {
     const callbacks: RealtimeBridgeRequest[] = [];
     const oldSubmitToolResult = vi.fn();
     const replacementSubmitToolResult = vi.fn();
+    const oldSpeakOutOfBand = vi.fn(async () => {});
+    const replacementSpeakOutOfBand = vi.fn(async () => {});
+    const oldHandleBargeIn = vi.fn();
     const bridges = [
       makeBridge({
+        supportsOutOfBandSpeech: true,
         supportsToolResultContinuation: true,
+        supportsToolResultSuppression: true,
+        handleBargeIn: oldHandleBargeIn,
+        speakOutOfBand: oldSpeakOutOfBand,
         submitToolResult: oldSubmitToolResult,
       }),
       makeBridge({
+        supportsOutOfBandSpeech: true,
         supportsToolResultContinuation: true,
+        supportsToolResultSuppression: true,
+        speakOutOfBand: replacementSpeakOutOfBand,
         submitToolResult: replacementSubmitToolResult,
       }),
     ];
@@ -2700,10 +3015,18 @@ describe("RealtimeCallHandler path routing", () => {
     });
     const oldResult = createDeferred<{ text: string }>();
     const replacementResult = createDeferred<{ text: string }>();
+    let oldContext: ToolHandlerContext | undefined;
+    let replacementContext: ToolHandlerContext | undefined;
     const consult = vi
       .fn()
-      .mockImplementationOnce(() => oldResult.promise)
-      .mockImplementationOnce(() => replacementResult.promise);
+      .mockImplementationOnce((_args, _callId, context: ToolHandlerContext) => {
+        oldContext = context;
+        return oldResult.promise;
+      })
+      .mockImplementationOnce((_args, _callId, context: ToolHandlerContext) => {
+        replacementContext = context;
+        return replacementResult.promise;
+      });
     handler.registerToolHandler("openclaw_agent_consult", consult);
     const oldServer = await startRealtimeServer(handler);
     let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
@@ -2730,6 +3053,8 @@ describe("RealtimeCallHandler path routing", () => {
         expect(consult).toHaveBeenCalledTimes(1);
         expect(oldSubmitToolResult).toHaveBeenCalledTimes(1);
       });
+      await oldContext?.onVisiblePartial?.({ runId: "run-old", text: "Old partial." });
+      expect(oldSpeakOutOfBand).toHaveBeenCalledOnce();
 
       replacementServer = await startRealtimeServer(handler);
       const replacementWs = await connectWs(replacementServer.url);
@@ -2752,6 +3077,18 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           expect(consult).toHaveBeenCalledTimes(2);
         });
+        expect(oldHandleBargeIn).toHaveBeenCalledOnce();
+
+        await oldContext?.onVisiblePartial?.({
+          runId: "run-old",
+          text: "Old partial. Stale after reconnect.",
+        });
+        await replacementContext?.onVisiblePartial?.({
+          runId: "run-replacement",
+          text: "The new deployment is healthy.",
+        });
+        expect(oldSpeakOutOfBand).toHaveBeenCalledOnce();
+        expect(replacementSpeakOutOfBand).toHaveBeenCalledOnce();
 
         oldResult.resolve({ text: "The old deployment is healthy." });
         await new Promise<void>((resolve) => {
@@ -2764,7 +3101,7 @@ describe("RealtimeCallHandler path routing", () => {
           expect(replacementSubmitToolResult).toHaveBeenLastCalledWith(
             "native-replacement",
             { text: "The new deployment is healthy." },
-            undefined,
+            { suppressResponse: true },
           );
         });
       } finally {

@@ -149,6 +149,7 @@ export {
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
   type RealtimeVoiceAgentConsultResult,
   type RealtimeVoiceAgentConsultRuntime,
+  type RealtimeVoiceAgentConsultVisiblePartial,
 } from "../talk/agent-consult-runtime.js";
 export {
   createRealtimeVoiceAgentTalkbackQueue,

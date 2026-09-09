@@ -128,7 +128,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     if (this.pendingToolCallIds.size > 0) {
       // Control/status speech must not wait behind the long-running consult whose
       // function output owns the default conversation response.
-      this.standaloneSpeechQueue.push(text);
+      this.standaloneSpeechQueue.push({ text });
       this.flushStandaloneSpeech();
       return;
     }

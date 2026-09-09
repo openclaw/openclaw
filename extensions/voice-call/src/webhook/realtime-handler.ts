@@ -11,6 +11,7 @@ import {
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
   buildRealtimeVoiceAgentErrorProviderResult,
+  buildRealtimeVoiceSpeakExactMessage,
   calculateMulawRms,
   createRealtimeVoiceSessionHarness,
   createSpeechThresholdGate,
@@ -20,10 +21,12 @@ import {
   readSpeakableRealtimeVoiceToolResult,
   type RealtimeVoiceForcedConsultHandle,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceAgentConsultVisiblePartial,
   type RealtimeVoiceCloseReason,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
   type RealtimeVoiceSessionHarness,
+  type RealtimeVoiceToolResultOptions,
   type TalkEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -32,6 +35,10 @@ import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
+import {
+  createRealtimeConsultSpeechStream,
+  type RealtimeConsultSpeechStream,
+} from "../realtime-consult-speech-stream.js";
 import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { WebSocket, WebSocketServer } from "../websocket.js";
@@ -46,6 +53,7 @@ import {
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
   abortSignal?: AbortSignal;
+  onVisiblePartial?: (partial: RealtimeVoiceAgentConsultVisiblePartial) => Promise<void>;
 };
 type ToolHandlerFn = (
   args: unknown,
@@ -224,12 +232,15 @@ function withFallbackConsultQuestion(args: unknown, fallback: string | undefined
     : { question };
 }
 
-function buildForcedConsultSpeechPrompt(result: string): string {
+function truncateRealtimeConsultResult(result: string): string {
   const trimmed = result.trim();
-  const bounded =
-    trimmed.length <= FORCED_CONSULT_RESULT_MAX_CHARS
-      ? trimmed
-      : `${truncateUtf16Safe(trimmed, FORCED_CONSULT_RESULT_MAX_CHARS - 16).trimEnd()} [truncated]`;
+  return trimmed.length <= FORCED_CONSULT_RESULT_MAX_CHARS
+    ? trimmed
+    : `${truncateUtf16Safe(trimmed, FORCED_CONSULT_RESULT_MAX_CHARS - 16).trimEnd()} [truncated]`;
+}
+
+function buildForcedConsultSpeechPrompt(result: string): string {
+  const bounded = truncateRealtimeConsultResult(result);
   return [
     "Internal OpenClaw consult result is ready.",
     "Do not call tools for this internal result.",
@@ -298,6 +309,7 @@ type NativeConsultState = {
   cancelled: boolean;
   cancel: () => void;
   partialUserTranscript?: string;
+  speechStream?: RealtimeConsultSpeechStream;
 };
 
 type NativeConsultOutcome = { kind: "completed"; result: unknown } | { kind: "cancelled" };
@@ -1431,6 +1443,7 @@ export class RealtimeCallHandler {
     }
     state.cancelled = true;
     this.nativeConsultsInFlightByCallId.delete(callId);
+    state.speechStream?.cancel();
     state.cancel();
   }
 
@@ -1856,9 +1869,13 @@ export class RealtimeCallHandler {
         final: true,
       });
     };
-    const submitFinalToolResult = async (result: unknown): Promise<void> => {
-      await bridge.submitToolResult(bridgeCallId, result);
-      emitFinalToolEvent(result);
+    const submitFinalToolResult = async (
+      result: unknown,
+      options?: RealtimeVoiceToolResultOptions,
+      eventResult: unknown = result,
+    ): Promise<void> => {
+      await bridge.submitToolResult(bridgeCallId, result, options);
+      emitFinalToolEvent(eventResult);
     };
     const submitWorkingResponse = async (): Promise<void> => {
       if (
@@ -1953,12 +1970,43 @@ export class RealtimeCallHandler {
       const consult = new Promise<unknown>((resolve) => {
         completeConsult = resolve;
       });
+      const speechBridge = bridge.bridge;
+      const speechStream =
+        speechBridge.supportsOutOfBandSpeech === true &&
+        speechBridge.supportsToolResultSuppression !== false &&
+        speechBridge.speakOutOfBand
+          ? createRealtimeConsultSpeechStream({
+              deliver: async (text) => {
+                if (
+                  this.activeBridgesByCallId.get(callId) !== bridge ||
+                  !speechBridge.isConnected()
+                ) {
+                  throw new DOMException("Realtime consult speech owner retired", "AbortError");
+                }
+                await speechBridge.speakOutOfBand?.(
+                  buildRealtimeVoiceSpeakExactMessage({
+                    text,
+                    surfaceLabel: "the caller",
+                  }),
+                );
+              },
+              maxChars: FORCED_CONSULT_RESULT_MAX_CHARS,
+              onCancel: () => {
+                if (speechBridge.handleBargeIn) {
+                  speechBridge.handleBargeIn({ audioPlaybackActive: true, force: true });
+                } else {
+                  speechBridge.clearPendingSpeech?.();
+                }
+              },
+            })
+          : undefined;
       const state: NativeConsultState = {
         owner: bridge,
         startedAt,
         promise: consult,
         cancellation,
         cancelled: false,
+        speechStream,
         // Provider continuity owns the consult lifetime, not only its eventual result.
         cancel: () => {
           abortController.abort(new Error("Realtime native consult owner was cancelled."));
@@ -1982,6 +2030,14 @@ export class RealtimeCallHandler {
           const context = {
             partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
             abortSignal: abortController.signal,
+            ...(speechStream
+              ? {
+                  onVisiblePartial: async (partial: RealtimeVoiceAgentConsultVisiblePartial) => {
+                    speechStream.start(partial.runId);
+                    await speechStream.push(partial);
+                  },
+                }
+              : {}),
           };
           state.partialUserTranscript = context.partialUserTranscript;
           const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
@@ -2006,7 +2062,48 @@ export class RealtimeCallHandler {
         console.log(
           `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${failed ? "error" : "ok"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
         );
-        await submitFinalToolResult(result);
+        if (failed) {
+          speechStream?.cancel();
+        }
+        const finalText = failed
+          ? undefined
+          : readSpeakableRealtimeVoiceToolResult(result, {
+              keys: ["text", "output"],
+              maxChars: FORCED_CONSULT_RESULT_MAX_CHARS,
+            });
+        const yielded =
+          result !== null &&
+          typeof result === "object" &&
+          !Array.isArray(result) &&
+          "yielded" in result &&
+          result.yielded === true;
+        const timedOut =
+          result !== null &&
+          typeof result === "object" &&
+          !Array.isArray(result) &&
+          "timedOut" in result &&
+          result.timedOut === true;
+        const boundedResult = finalText
+          ? {
+              text: finalText,
+              ...(yielded ? { yielded: true } : {}),
+              ...(timedOut ? { timedOut: true } : {}),
+            }
+          : failed
+            ? { error: truncateRealtimeConsultResult(error ?? "unknown") }
+            : result;
+        const speechFinish =
+          finalText && speechStream
+            ? await speechStream.finish(finalText)
+            : { suppressResponse: false };
+        const providerResult = speechFinish.fallbackText
+          ? { text: speechFinish.fallbackText }
+          : boundedResult;
+        await submitFinalToolResult(
+          providerResult,
+          speechFinish.suppressResponse ? { suppressResponse: true } : undefined,
+          boundedResult,
+        );
         if (!failed) {
           this.consumePartialUserTranscript(
             callId,

@@ -456,6 +456,7 @@ export async function createVoiceCallRuntime(params: {
             ),
             extraSystemPrompt: REALTIME_VOICE_CONSULT_SYSTEM_PROMPT,
             abortSignal: handlerContext.abortSignal,
+            onVisiblePartial: handlerContext.onVisiblePartial,
           });
         },
       );

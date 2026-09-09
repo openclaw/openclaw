@@ -4,6 +4,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
+import type { ToolHandlerContext } from "./webhook/realtime-handler.js";
 
 const mocks = vi.hoisted(() => ({
   resolveVoiceCallConfig: vi.fn(),
@@ -157,7 +158,7 @@ function createExternalProviderConfig(params: {
 type RealtimeConsultToolHandler = (
   args: unknown,
   callId: string,
-  context: { partialUserTranscript?: string; abortSignal?: AbortSignal },
+  context: ToolHandlerContext,
 ) => Promise<unknown>;
 
 function firstMockCall(calls: readonly unknown[][], label: string): unknown[] {
@@ -620,10 +621,20 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     ];
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedAgent = vi.fn(async () => ({
-      payloads: [{ text: "Use the shipment status." }],
-      meta: {},
-    }));
+    const runEmbeddedAgent = vi.fn(
+      async (params?: {
+        onPartialReply?: (payload: { text: string; delta: string }) => Promise<void> | void;
+      }) => {
+        await params?.onPartialReply?.({
+          text: "Checking shipment status.",
+          delta: "Checking shipment status.",
+        });
+        return {
+          payloads: [{ text: "Use the shipment status." }],
+          meta: {},
+        };
+      },
+    );
     const agentRuntime = {
       defaults: { provider: "openai", model: "gpt-5.4" },
       resolveAgentDir: vi.fn(() => "/tmp/agent"),
@@ -665,9 +676,11 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "custom_tool",
     ]);
     const handler = requireRealtimeConsultToolHandler();
+    const onVisiblePartial = vi.fn(async () => {});
     await expect(
       handler({ question: "What should I say?" }, "call-1", {
         partialUserTranscript: "Also check the ETA.",
+        onVisiblePartial,
       }),
     ).resolves.toEqual({
       text: "Use the shipment status.",
@@ -695,6 +708,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.extraSystemPrompt).toContain("one or two bounded read-only queries");
     expect(consultParams.prompt).toContain("Caller: Can you check shipment status?");
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
+    expect(onVisiblePartial).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Checking shipment status.",
+        delta: "Checking shipment status.",
+      }),
+    );
   });
 
   it("always exposes the built-in end-call tool without allowing configured replacement", async () => {

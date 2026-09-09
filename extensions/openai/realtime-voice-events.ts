@@ -53,6 +53,7 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       try {
         emitServerEvent();
       } finally {
+        this.settleStandaloneSpeech(new Error("OpenAI realtime out-of-band speech cancelled"));
         this.releaseResponseState();
       }
       return;
@@ -338,6 +339,17 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       }
     };
     try {
+      if (this.standaloneSpeechActive) {
+        this.settleStandaloneSpeech(
+          outcome.status === "completed"
+            ? undefined
+            : new Error(
+                outcome.status === "cancelled"
+                  ? "OpenAI realtime out-of-band speech cancelled"
+                  : outcome.message,
+              ),
+        );
+      }
       // Terminal output still belongs to this response until observers retire its owner.
       invoke(() => {
         providerTerminated = this.handleCompletedResponse(event, connection);
