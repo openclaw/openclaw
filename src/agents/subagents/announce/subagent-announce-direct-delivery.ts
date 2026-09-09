@@ -646,18 +646,10 @@ export async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
-    const requesterVisibleFinalDelivered =
+    const hasRequesterVisibleFinalDelivery =
       hasFinalMessagingToolDelivery || (shouldDeliverAgentFinal && automaticFinalDelivered);
-    const finalAssistantVisibleText =
-      requesterVisibleFinalDelivered &&
-      typeof directAnnounceResult?.meta?.finalAssistantVisibleText === "string"
-        ? truncateUtf16Safe(
-            directAnnounceResult.meta.finalAssistantVisibleText.trim(),
-            REQUESTER_FINAL_VISIBLE_TEXT_MAX_CHARS,
-          )
-        : "";
     const hasVisibleCompletionReply =
-      requesterVisibleFinalDelivered ||
+      hasRequesterVisibleFinalDelivery ||
       (!shouldDeliverAgentFinal && !params.requireVisibleReply && hasMessagingToolDelivery) ||
       // Nested requesters and internal sessions observe the final in their transcript.
       // Unresolved external origins still require delivery evidence.
@@ -688,20 +680,28 @@ export async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not produce a visible reply",
       };
     }
+    const requesterVisibleFinalCommitted =
+      !params.requesterIsSubagent &&
+      (hasRequesterVisibleFinalDelivery ||
+        (!params.expectsCompletionMessage &&
+          asOptionalRecord(directAnnounceResponse)?.status === "ok" &&
+          hasVisibleNonSilentGatewayPayload &&
+          hasVisibleCompletionReply));
+    const finalAssistantVisibleText =
+      requesterVisibleFinalCommitted &&
+      typeof directAnnounceResult?.meta?.finalAssistantVisibleText === "string"
+        ? truncateUtf16Safe(
+            directAnnounceResult.meta.finalAssistantVisibleText.trim(),
+            REQUESTER_FINAL_VISIBLE_TEXT_MAX_CHARS,
+          )
+        : "";
 
     return {
       delivered: true,
       path: "direct",
       // Synthetic wakes can commit their final to the requester transcript.
       // A canceled partial payload or accepted handoff is not that receipt.
-      ...(!params.requesterIsSubagent &&
-      (requesterVisibleFinalDelivered ||
-        (!params.expectsCompletionMessage &&
-          asOptionalRecord(directAnnounceResponse)?.status === "ok" &&
-          hasVisibleNonSilentGatewayPayload &&
-          hasVisibleCompletionReply))
-        ? { requesterVisibleFinalDelivered: true }
-        : {}),
+      ...(requesterVisibleFinalCommitted ? { requesterVisibleFinalDelivered: true } : {}),
       ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
     };
   } catch (err) {

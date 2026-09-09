@@ -440,6 +440,20 @@ export function createTalkClientGatewayControlOwner(params: {
       // Spoken controls see both kinds of consult. Transport detachment still
       // leaves accepted provider work under its own cancellation owner.
       consultControllers.set(consultId, { controller, closeDisposition: "detach" });
+      // A retained final outlives this consult promise, so every append must
+      // revalidate the exact Gateway owner immediately before provider I/O.
+      const ownerBoundRequesterFinal = requesterFinal
+        ? {
+            append: (text: string) => {
+              try {
+                assertActive();
+              } catch {
+                return false;
+              }
+              return requesterFinal.append(text);
+            },
+          }
+        : undefined;
       try {
         if (completionClaimsAdopted) {
           return await params.runAgentConsult(
@@ -447,7 +461,7 @@ export function createTalkClientGatewayControlOwner(params: {
             delegatedSignal,
             () => awaitProviderConsultReadiness(delegatedSignal),
             assertActive,
-            requesterFinal,
+            ownerBoundRequesterFinal,
           );
         }
         await awaitProviderConsultReadiness(delegatedSignal);
@@ -662,7 +676,6 @@ export function createTalkClientGatewayControlOwner(params: {
           owners.delete(params.voiceSessionId);
         }
         if (!options?.preserveRuns) {
-          params.runAgentConsult.revokeRequesterFinal?.();
           for (const { controller, closeDisposition } of consultControllers.values()) {
             if (closeDisposition === "abort") {
               controller.abort(new Error("Realtime voice session closed"));
@@ -686,6 +699,8 @@ export function createTalkClientGatewayControlOwner(params: {
           throw providerResult.reason;
         }
       });
+      // preserveRuns keeps accepted work alive, not a retired transport's presentation authority.
+      params.runAgentConsult.revokeRequesterFinal?.();
       lifetime.abort(new Error("Realtime voice session closed"));
       return closing;
     },

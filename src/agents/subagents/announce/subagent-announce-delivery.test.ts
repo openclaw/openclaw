@@ -5014,9 +5014,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "records a non-yielded visible final without requiring a reply",
       routes: requesterSettleRoutes.slice(1),
-      response: { result: { payloads: [{ text: "The consolidated answer." }] } },
+      response: {
+        result: {
+          payloads: [{ text: "The consolidated answer." }],
+          meta: { finalAssistantVisibleText: "The consolidated answer." },
+        },
+      },
       requireVisibleReply: false,
       recordsVisibleFinal: true,
+      expectedFinalText: "The consolidated answer.",
       expected: deliveredRequesterFinal,
     },
     {
@@ -5435,6 +5441,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         testCase.recordsVisibleFinal &&
         !("requesterIsSubagent" in route && route.requesterIsSubagent)
         ? true
+        : undefined,
+    );
+    expect(result.finalAssistantVisibleText).toBe(
+      "expectedFinalText" in testCase &&
+        !("requesterIsSubagent" in route && route.requesterIsSubagent)
+        ? testCase.expectedFinalText
         : undefined,
     );
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();

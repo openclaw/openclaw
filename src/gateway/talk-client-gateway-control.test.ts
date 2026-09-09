@@ -566,23 +566,26 @@ describe("Talk client Gateway control owner", () => {
     },
   );
 
-  it("rejects a replaced outer owner and forwards exact late-final revocation", async () => {
+  it("revokes a replaced owner's retained final before deferred teardown", async () => {
     const claimAppend = vi.fn(() => true);
     const revokeRequesterFinal = vi.fn();
     const append = vi.fn(() => true);
     const requesterFinal: { append: (text: string) => boolean } = { append };
+    let acceptedSignal: AbortSignal | undefined;
+    let retainedRequesterFinal: typeof requesterFinal | undefined;
     const runAgentConsult = Object.assign(
       vi.fn(
         async (
           _args: unknown,
-          _signal: AbortSignal,
+          signal: AbortSignal,
           ready?: () => Promise<void>,
           _assertCurrent?: () => void,
           receivedRequesterFinal?: typeof requesterFinal,
         ) => {
           await ready?.();
-          expect(receivedRequesterFinal).toBe(requesterFinal);
-          return { text: "done" };
+          acceptedSignal = signal;
+          retainedRequesterFinal = receivedRequesterFinal;
+          return { text: "delegated", yielded: true as const };
         },
       ),
       {
@@ -607,21 +610,26 @@ describe("Talk client Gateway control owner", () => {
     await owner.adoptProvider(vi.fn(async () => undefined));
     owner.activate();
     owner.runAgentConsult.adoptCompletionClaims?.();
-    await expect(
-      owner.runAgentConsult({ prompt: "work", requesterFinal } as never),
-    ).resolves.toEqual({ text: "done" });
+    await expect(owner.runAgentConsult({ prompt: "work", requesterFinal })).resolves.toEqual({
+      text: "delegated",
+      yielded: true,
+    });
     await replacement.adoptProvider(vi.fn(async () => undefined));
     replacement.activate();
 
     try {
-      expect(owner.runAgentConsult.claimAppend?.()).toBe(false);
-      owner.runAgentConsult.revokeRequesterFinal?.();
-      expect(claimAppend).toHaveBeenCalledOnce();
       expect(revokeRequesterFinal).toHaveBeenCalledOnce();
+      expect(acceptedSignal?.aborted).toBe(false);
+      expect(retainedRequesterFinal?.append("late final")).toBe(false);
+      expect(append).not.toHaveBeenCalled();
+      expect(owner.runAgentConsult.claimAppend?.()).toBe(false);
+      expect(claimAppend).toHaveBeenCalledOnce();
     } finally {
       await owner.close();
+      expect(revokeRequesterFinal).toHaveBeenCalledOnce();
       await replacement.close();
     }
+    expect(acceptedSignal?.aborted).toBe(false);
   });
 
   it("keeps delegation steering pending until transcript admission publishes the backend", async () => {
