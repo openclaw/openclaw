@@ -93,6 +93,12 @@ export type MemorySearchConfig = {
   query?: {
     maxResults?: number;
     minScore?: number;
+    /**
+     * Seconds a memory_search or memory_get call may take before it is cut off.
+     * Unset keeps the shipped behavior: 15 s for memory_search and wiki/combined memory_get,
+     * no deadline for a primary-only memory_get.
+     */
+    timeoutSeconds?: number;
   };
   /** Index cache behavior. */
   cache?: {
