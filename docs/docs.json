@@ -1513,6 +1513,13 @@
                     "group": "Matrix",
                     "pages": [
                       "channels/matrix",
+                      "channels/matrix/setup",
+                      "channels/matrix/access-control",
+                      "channels/matrix/messaging",
+                      "channels/matrix/rich-messages",
+                      "channels/matrix/encryption",
+                      "channels/matrix/threads-and-sessions",
+                      "channels/matrix/accounts-and-homeservers",
                       "channels/matrix-migration",
                       "channels/matrix-presentation",
                       "channels/matrix-push-rules"

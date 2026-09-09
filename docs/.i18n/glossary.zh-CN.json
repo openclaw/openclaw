@@ -3626,5 +3626,33 @@
   {
     "source": "OpenClaw and Hermes Agent",
     "target": "OpenClaw 与 Hermes Agent"
+  },
+  {
+    "source": "Matrix setup",
+    "target": "Matrix 设置"
+  },
+  {
+    "source": "Matrix access control",
+    "target": "Matrix 访问控制"
+  },
+  {
+    "source": "Matrix message behavior",
+    "target": "Matrix 消息行为"
+  },
+  {
+    "source": "Matrix rich messages and approvals",
+    "target": "Matrix 富消息与审批"
+  },
+  {
+    "source": "Matrix encryption and verification",
+    "target": "Matrix 加密与验证"
+  },
+  {
+    "source": "Matrix threads and sessions",
+    "target": "Matrix 话题与会话"
+  },
+  {
+    "source": "Matrix accounts and homeservers",
+    "target": "Matrix 账户与家庭服务器"
   }
 ]
