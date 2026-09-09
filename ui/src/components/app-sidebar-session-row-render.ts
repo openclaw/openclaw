@@ -113,7 +113,11 @@ export interface SessionListHost {
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
-  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void;
+  toggleSessionMenu(
+    session: SidebarRecentSession,
+    trigger: HTMLElement,
+    catalogMenu?: CatalogSessionMenuRequest,
+  ): void;
   showMoreChildren(sessionKey: string): void;
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void;
   sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void;
@@ -237,7 +241,13 @@ export function renderRecentSession(params: {
     handleContextMenuEvent(
       event,
       (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
-      (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
+      (trigger, x, y) => {
+        if (display?.catalogMenu) {
+          host.openCatalogMenu(display.catalogMenu, x, y, trigger ?? undefined);
+          return;
+        }
+        host.sidebarMenus.openSessionMenu(session, x, y, trigger);
+      },
     );
   const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   const menuTooltip = t("chat.sidebar.openSessionMenu");
@@ -492,7 +502,7 @@ export function renderRecentSession(params: {
               @click=${(event: MouseEvent) => {
                 event.stopPropagation();
                 const trigger = event.currentTarget as HTMLElement;
-                host.toggleSessionMenu(session, trigger);
+                host.toggleSessionMenu(session, trigger, display?.catalogMenu);
               }}
             >
               ${icons.moreHorizontal}
