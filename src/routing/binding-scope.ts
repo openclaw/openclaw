@@ -49,7 +49,7 @@ export function normalizeRouteBindingChannelId(raw?: string | null): string | nu
 }
 
 // Convert a binding match into the same canonical ids used by session routing.
-// Wildcard/malformed account matches are ignored because they are not concrete.
+// Wildcards are not concrete; an omitted account is the canonical default account.
 export function resolveNormalizedRouteBindingMatch(
   binding: AgentRouteBinding,
 ): NormalizedRouteBindingMatch | null {
@@ -65,7 +65,7 @@ export function resolveNormalizedRouteBindingMatch(
     return null;
   }
   const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-  if (!accountId || accountId === "*") {
+  if (accountId === "*") {
     return null;
   }
   return {
