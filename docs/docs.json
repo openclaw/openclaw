@@ -1771,6 +1771,16 @@
                       },
                       "plugins/teams-meetings",
                       "plugins/voice-call",
+                      {
+                        "group": "Voice call",
+                        "pages": [
+                          "plugins/voice-call/configuration",
+                          "plugins/voice-call/realtime-and-streaming",
+                          "plugins/voice-call/tts-and-inbound-calls",
+                          "plugins/voice-call/security-and-interfaces",
+                          "plugins/voice-call/troubleshooting"
+                        ]
+                      },
                       "plugins/zoom-meetings"
                     ]
                   },

@@ -984,6 +984,26 @@
     "target": "语音通话插件"
   },
   {
+    "source": "Voice call configuration",
+    "target": "语音通话配置"
+  },
+  {
+    "source": "Voice call realtime and streaming",
+    "target": "语音通话实时语音与流式转写"
+  },
+  {
+    "source": "Voice call TTS and inbound calls",
+    "target": "语音通话 TTS 与来电"
+  },
+  {
+    "source": "Voice call security and interfaces",
+    "target": "语音通话安全与接口"
+  },
+  {
+    "source": "Voice call troubleshooting",
+    "target": "语音通话故障排查"
+  },
+  {
     "source": "Browser control",
     "target": "浏览器控制"
   },
