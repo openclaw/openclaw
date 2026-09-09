@@ -3243,6 +3243,123 @@ describe("google transport stream", () => {
     ]);
   });
 
+  // Gemini's function calling appears to render tool signatures internally
+  // as Python `def name(param, ...)` declarations. A JSON Schema property
+  // named after a Python hard keyword (e.g. "in", "from") produces an
+  // invalid signature and the model abandons structured function calling
+  // for the entire turn, emitting a malformed `print(default_api.tool(...))`
+  // text call instead of a real functionCall part — for every tool in the
+  // request, not only the offending one. Confirmed by bisecting a live
+  // Vertex AI request with 35 declared tools down to a single "in" property
+  // on one of them; renaming just that property fixed the turn.
+  it("renames Python-keyword tool parameter names before sending to Gemini", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      tools: [
+        {
+          name: "automations",
+          description: "Gateway scheduler",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string" },
+              in: { type: "string", description: "Relative duration" },
+            },
+            required: ["action", "in"],
+          },
+        },
+      ],
+    } as never);
+
+    expect(params.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "automations",
+            description: "Gateway scheduler",
+            parametersJsonSchema: {
+              type: "object",
+              properties: {
+                action: { type: "string" },
+                in__oc_kw: { type: "string", description: "Relative duration" },
+              },
+              required: ["action", "in__oc_kw"],
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("leaves non-keyword tool parameter names untouched", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      tools: [
+        {
+          name: "lookup",
+          description: "Look up a value",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+      ],
+    } as never);
+
+    expect(params.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parametersJsonSchema: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: ["query"],
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("restores the original property name when the model echoes back a renamed Python-keyword argument", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: {
+                      id: "call_1",
+                      name: "automations",
+                      args: { action: "next_check", in__oc_kw: "30m" },
+                    },
+                  },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+
+    const result = await runGeminiStreamResult();
+
+    expect(result.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: "automations",
+        arguments: { action: "next_check", in: "30m" },
+      },
+    ]);
+  });
+
   it("includes cachedContent in direct Gemini payloads when requested", () => {
     const params = buildGeminiUserParams(
       {},

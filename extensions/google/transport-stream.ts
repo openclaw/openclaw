@@ -754,6 +754,106 @@ function convertGoogleMessages(
   return contents;
 }
 
+// Gemini's function-calling implementation appears to render tool
+// signatures internally as Python `def name(param, ...)` declarations. A
+// JSON Schema property named after a Python hard keyword (e.g. "in",
+// "from") produces an invalid signature, which causes the model to abandon
+// structured function calling for the *entire* turn and emit a malformed
+// `print(default_api.tool(...))`-style text call instead — for every tool
+// in the request, not just the offending one. Confirmed by bisecting a live
+// Vertex AI request down to a single `"in"` property on one function
+// declaration among many; removing or renaming it alone fixed the turn.
+//
+// Reversibly rename any Python-keyword property name before it reaches the
+// model, and rename it back when the model's function-call arguments come
+// back, so the actual tool implementation never sees the rename.
+const PYTHON_HARD_KEYWORDS = new Set([
+  "False",
+  "None",
+  "True",
+  "and",
+  "as",
+  "assert",
+  "async",
+  "await",
+  "break",
+  "class",
+  "continue",
+  "def",
+  "del",
+  "elif",
+  "else",
+  "except",
+  "finally",
+  "for",
+  "from",
+  "global",
+  "if",
+  "import",
+  "in",
+  "is",
+  "lambda",
+  "nonlocal",
+  "not",
+  "or",
+  "pass",
+  "raise",
+  "return",
+  "try",
+  "while",
+  "with",
+  "yield",
+]);
+const PYTHON_KEYWORD_RENAME_SUFFIX = "__oc_kw";
+
+function sanitizeGooglePythonKeywordSchemaKeys(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map(sanitizeGooglePythonKeywordSchemaKeys);
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
+      const renamed: Record<string, unknown> = {};
+      for (const [propName, propSchema] of Object.entries(value as Record<string, unknown>)) {
+        const safeName = PYTHON_HARD_KEYWORDS.has(propName)
+          ? `${propName}${PYTHON_KEYWORD_RENAME_SUFFIX}`
+          : propName;
+        renamed[safeName] = sanitizeGooglePythonKeywordSchemaKeys(propSchema);
+      }
+      result[key] = renamed;
+    } else if (key === "required" && Array.isArray(value)) {
+      result[key] = value.map((name) =>
+        typeof name === "string" && PYTHON_HARD_KEYWORDS.has(name)
+          ? `${name}${PYTHON_KEYWORD_RENAME_SUFFIX}`
+          : name,
+      );
+    } else {
+      result[key] = sanitizeGooglePythonKeywordSchemaKeys(value);
+    }
+  }
+  return result;
+}
+
+function unsanitizeGooglePythonKeywordArgs(args: unknown): unknown {
+  if (Array.isArray(args)) {
+    return args.map(unsanitizeGooglePythonKeywordArgs);
+  }
+  if (!args || typeof args !== "object") {
+    return args;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+    const restoredKey = key.endsWith(PYTHON_KEYWORD_RENAME_SUFFIX)
+      ? key.slice(0, -PYTHON_KEYWORD_RENAME_SUFFIX.length)
+      : key;
+    result[restoredKey] = unsanitizeGooglePythonKeywordArgs(value);
+  }
+  return result;
+}
+
 function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
   if (tools.length === 0) {
     return undefined;
@@ -763,7 +863,7 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
       functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
-        parametersJsonSchema: tool.parameters,
+        parametersJsonSchema: sanitizeGooglePythonKeywordSchemaKeys(tool.parameters),
       })),
     },
   ];
@@ -1665,7 +1765,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   type: "toolCall",
                   id: toolCallId,
                   name: part.functionCall.name || "",
-                  arguments: part.functionCall.args ?? {},
+                  arguments: unsanitizeGooglePythonKeywordArgs(
+                    part.functionCall.args ?? {},
+                  ) as Record<string, unknown>,
                   ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
                 };
                 output.content.push(toolCall);
