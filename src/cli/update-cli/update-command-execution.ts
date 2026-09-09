@@ -78,6 +78,7 @@ import {
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
+import { preloadGatewayRestartModules } from "./update-restart-preload.js";
 
 type MutableUpdateExecutionResult = {
   mutationStarted: boolean;
@@ -440,6 +441,11 @@ export async function executeMutableUpdate(params: {
     return validation.steps;
   };
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
+    // Last point at which this process can still read its own install tree.
+    // Activation replaces it, and the restart/verification that follows runs
+    // from the build being replaced, so anything it imports lazily must be
+    // resolved now or it resolves to a chunk only the old tree contained.
+    await preloadGatewayRestartModules();
     const env = ownedManagedUpdateContext?.env ?? params.opts.run?.env ?? process.env;
     const snapshot = await withOwnedManagedUpdateEnv(env, () =>
       readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),

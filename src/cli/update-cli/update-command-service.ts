@@ -47,6 +47,7 @@ import {
   recoverLaunchAgentAndRecheckGatewayHealth,
 } from "./update-command-service-recovery.js";
 import { recordUpdateGatewayHealth, verifyUpdatedGateway } from "./update-command-verification.js";
+import { isReplacedInstallModuleError } from "./update-restart-module-error.js";
 
 export {
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
@@ -503,6 +504,23 @@ export async function maybeRestartService(params: {
         defaultRuntime.log("");
       }
     } catch (err) {
+      if (isReplacedInstallModuleError(err, activation.result.root)) {
+        // The swap replaced this process's own code, so restart verification
+        // could not load the modules it needed. That is an artifact of the
+        // updater, never a statement about the installed version -- every
+        // install step already succeeded. Reporting it as a failure sets
+        // recovery.serviceRestartSafe=false, and the managed handoff then parks
+        // a perfectly healthy gateway until someone restarts it by hand.
+        // Leaving the service down is the strictly worse error: the old process
+        // is gone either way, and a genuinely broken install still surfaces
+        // through the service's own supervision.
+        defaultRuntime.error(
+          `Gateway: restart verification could not run because this update replaced the running updater's own modules (${String(err)}). ` +
+            "The installed version is unaffected, so the service is being restarted normally. " +
+            "Run `openclaw gateway status --deep` if the gateway does not come back.",
+        );
+        return "ok";
+      }
       defaultRuntime.error(
         `Gateway: restart failed: ${String(err)}. Code update remains installed; a service stopped for update may still be stopped. ` +
           "Run `openclaw gateway status --deep` and ask its service owner to restart it manually.",

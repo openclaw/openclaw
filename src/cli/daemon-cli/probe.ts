@@ -13,6 +13,18 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { withProgress } from "../progress.js";
 
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../../gateway/probe.js"));
+const gatewayCallModuleLoader = createLazyImportLoader(() => import("../../gateway/call.js"));
+
+/**
+ * The probe's lazy modules, exposed so a package update can warm them before it
+ * swaps the install tree. Resolving them afterwards reads content-hashed chunks
+ * that only the replaced tree contained.
+ */
+export const gatewayProbeModuleLoaders = [
+  probeGatewayModuleLoader,
+  gatewayCallModuleLoader,
+] as const;
+
 const CONNECT_ERROR_DETAIL_CODE_VALUES: ReadonlySet<string> = new Set(
   Object.values(ConnectErrorDetailCodes),
 );
@@ -81,7 +93,7 @@ export async function probeGatewayStatus(opts: {
             );
           }
           const { resolveProbeAuthSummary } = await probeGatewayModuleLoader.load();
-          const { callGateway } = await import("../../gateway/call.js");
+          const { callGateway } = await gatewayCallModuleLoader.load();
           await callGateway({
             ...(opts.urlOverride ? { url: opts.urlOverride } : { serviceTargetUrl: opts.url }),
             localPortOverride: opts.localPortOverride,
