@@ -50,7 +50,7 @@ export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
 export const DEFAULT_INGRESS_ADOPTION_STALL_MS = 5 * 60 * 1000;
 
 /** Hold a draining claim before release so the pump cannot re-claim it immediately. */
-export const INGRESS_DRAINING_RELEASE_HOLD_MS = 5_000;
+const INGRESS_DRAINING_RELEASE_HOLD_MS = 5_000;
 
 type DeferredLaneOccupancy = "hold" | "release";
 
