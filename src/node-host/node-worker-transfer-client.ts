@@ -4,6 +4,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { boundedWorkerError } from "../gateway/worker-environments/worker-error.js";
@@ -29,6 +31,10 @@ import {
   isStagedInputPath,
   stagedInputDirectoriesFromEntries,
 } from "../media/staged-inputs.js";
+import {
+  boundedWorkspaceTransferChunks,
+  readWorkspaceTransferBody as readResponseBody,
+} from "../worker/node-workspace-transfer-body.js";
 import {
   isNodeWorkspaceTransferInvalidReason,
   nodeWorkspaceTransferBlobPath,
@@ -66,21 +72,6 @@ export type NodeWorkerTransferGateway = {
   cloudflareAccess?: CloudflareAccessCredentials;
 };
 
-async function readResponseBody(response: IncomingMessage, maxBytes: number): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const value of response) {
-    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-    total += chunk.byteLength;
-    if (total > maxBytes) {
-      response.destroy(new Error("workspace transfer response exceeded its byte limit"));
-      throw new Error("workspace transfer response exceeded its byte limit");
-    }
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
 async function requireOk(response: IncomingMessage): Promise<void> {
   if (response.statusCode === 200) {
     return;
@@ -117,9 +108,28 @@ async function requireOk(response: IncomingMessage): Promise<void> {
 }
 
 async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: number) {
-  const response = await openNodeWorkerTransferHttpRequest(params);
+  const response = await openNodeWorkerTransferHttpRequest({
+    ...params,
+    headers: { ...params.headers, "accept-encoding": "gzip" },
+  });
   await requireOk(response);
-  return await readResponseBody(response, maxBytes);
+  const encoding = response.headers["content-encoding"]?.trim().toLowerCase();
+  if (!encoding || encoding === "identity") {
+    return await readResponseBody(response, maxBytes);
+  }
+  if (encoding !== "gzip") {
+    response.destroy();
+    throw new Error("workspace transfer response has an unsupported content encoding");
+  }
+  // Bound both wire bytes and expansion. Join response and decoder shutdown
+  // on cancellation, corrupt gzip, or either limit before returning.
+  return await pipeline(
+    response,
+    (source) => boundedWorkspaceTransferChunks(source, maxBytes),
+    createGunzip(),
+    async (source) => await readResponseBody(source, maxBytes),
+    { signal: params.signal },
+  );
 }
 
 async function downloadFile(params: {
