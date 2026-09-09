@@ -261,7 +261,9 @@ function fixture() {
 }
 function sentFrame(send: ReturnType<typeof makeClient>["send"], index = 0) {
   const call = send.mock.calls[index];
-  if (!call) throw new Error(`Expected notification frame ${index}`);
+  if (!call) {
+    throw new Error(`Expected notification frame ${index}`);
+  }
   return JSON.parse(call[0]);
 }
 
@@ -303,16 +305,33 @@ describe("recipient-specific chat notification suppression", () => {
     "stop",
   ])("notifies for %s and discards a producer-supplied suppression hint", (reason) => {
     const f = fixture();
-    if (reason === "other-session")
+    if (reason === "other-session") {
       f.declarations.replace("viewer", ["agent:main:dashboard:other"]);
-    if (reason === "missing-identity") f.phone.client.authenticatedUserProfile = undefined;
-    if (reason === "expired") f.viewer.client.sessionViewerLease!.expiresAt = Date.now();
-    if (reason === "hidden") f.declarations.replace("viewer", []);
-    if (reason === "disconnected") f.clients.delete(f.viewer.client);
-    if (reason === "invalidated") f.viewer.client.invalidated = true;
-    if (reason === "node-viewer") f.viewer.client.connect.role = "node";
-    if (reason === "alias") f.payload.sessionKey = "main";
-    if (reason === "stop") f.declarations.stop();
+    }
+    if (reason === "missing-identity") {
+      f.phone.client.authenticatedUserProfile = undefined;
+    }
+    if (reason === "expired") {
+      f.viewer.client.sessionViewerLease!.expiresAt = Date.now();
+    }
+    if (reason === "hidden") {
+      f.declarations.replace("viewer", []);
+    }
+    if (reason === "disconnected") {
+      f.clients.delete(f.viewer.client);
+    }
+    if (reason === "invalidated") {
+      f.viewer.client.invalidated = true;
+    }
+    if (reason === "node-viewer") {
+      f.viewer.client.connect.role = "node";
+    }
+    if (reason === "alias") {
+      f.payload.sessionKey = "main";
+    }
+    if (reason === "stop") {
+      f.declarations.stop();
+    }
     f.broadcaster.broadcast("chat", { ...f.payload, suppressNotification: true });
     expect(sentFrame(f.phone.send).payload).toEqual(f.payload);
   });

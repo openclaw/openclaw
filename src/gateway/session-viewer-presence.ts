@@ -82,15 +82,18 @@ export function createSessionViewerPresenceDeclarations(
       // The websocket close boundary publishes reason=disconnect and clears watchedSessions.
       // Delete here first so a recycled connection id can never inherit an old declaration.
       const declaration = declarations.get(normalizedConnId);
-      if (declaration) declaration.client.sessionViewerLease = undefined;
+      if (declaration) {
+        declaration.client.sessionViewerLease = undefined;
+      }
       declarations.delete(normalizedConnId);
     }
   };
 
   const stop = () => {
     stopped = true;
-    for (const declaration of declarations.values())
+    for (const declaration of declarations.values()) {
       declaration.client.sessionViewerLease = undefined;
+    }
     declarations.clear();
   };
 
@@ -112,8 +115,9 @@ export function shouldSuppressAndroidChatNotification(
     (recipient.connect.role ?? "operator") !== "operator" ||
     typeof sessionKey !== "string" ||
     !parseAgentSessionKey(sessionKey)
-  )
+  ) {
     return false;
+  }
   // Raw aliases such as main cannot be mapped without runtime agent configuration. Never guess.
   const now = Date.now();
   for (const viewer of clients) {
@@ -127,8 +131,9 @@ export function shouldSuppressAndroidChatNotification(
       viewer.sessionViewerLease &&
       viewer.sessionViewerLease.expiresAt > now &&
       viewer.sessionViewerLease.sessionKeys.includes(sessionKey)
-    )
+    ) {
       return true;
+    }
   }
   return false;
 }

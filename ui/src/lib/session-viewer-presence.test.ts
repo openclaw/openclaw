@@ -68,7 +68,9 @@ function createGatewayHarness() {
 }
 
 async function flushSync() {
-  for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
+  for (let turn = 0; turn < 8; turn += 1) {
+    await Promise.resolve();
+  }
 }
 
 beforeEach(() => {

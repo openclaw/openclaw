@@ -39,13 +39,17 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     Date.now() - lastActivityAt < HUMAN_IDLE_MS;
 
   function stopTimer() {
-    if (timer !== null) clearTimeout(timer);
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
     timer = null;
   }
 
   function armTimer(available: boolean) {
     stopTimer();
-    if (!available || !isViewing()) return;
+    if (!available || !isViewing()) {
+      return;
+    }
     timer = setTimeout(
       () => {
         timer = null;
@@ -62,7 +66,9 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
   }
 
   function onActivity() {
-    if (!focused || document.visibilityState === "hidden") return;
+    if (!focused || document.visibilityState === "hidden") {
+      return;
+    }
     lastActivityAt = Date.now();
     lifecycle.schedule();
   }
@@ -243,7 +249,9 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
         retry.schedule(lifecycle.schedule);
       })
       .finally(() => {
-        if (inFlight !== flight) return;
+        if (inFlight !== flight) {
+          return;
+        }
         inFlight = null;
         if (syncQueued) {
           syncQueued = false;
