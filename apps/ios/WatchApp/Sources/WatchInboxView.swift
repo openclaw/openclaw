@@ -19,7 +19,7 @@ private enum WatchTextValue {
 struct WatchInboxView: View {
     @Binding var navigationPath: [WatchDestination]
     var store: WatchInboxStore
-    var directNode: WatchDirectNode
+    var directNode: WatchGatewayController
     var onAction: ((WatchPromptAction) -> Void)?
     var onExecApprovalDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
     var onRefreshExecApprovalReview: (() -> Void)?
@@ -43,6 +43,10 @@ struct WatchInboxView: View {
                     switch destination {
                     case .standaloneVoice:
                         WatchRealtimeCallView(directNode: self.directNode)
+                    case .directConversations:
+                        WatchDirectConversationsView(gateway: self.directNode)
+                    case .pairWatch:
+                        WatchPairingView(gateway: self.directNode)
                     }
                 }
         }
@@ -51,7 +55,7 @@ struct WatchInboxView: View {
 
 private struct WatchControlSurfaceView: View {
     var store: WatchInboxStore
-    var directNode: WatchDirectNode
+    var directNode: WatchGatewayController
     var onAction: ((WatchPromptAction) -> Void)?
     var onExecApprovalDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
     var onRefreshExecApprovalReview: (() -> Void)?
@@ -123,10 +127,20 @@ private struct WatchControlSurfaceView: View {
             .accessibilityHint("Opens standalone voice without starting the microphone")
             .accessibilityIdentifier("watch-standalone-voice")
 
+            NavigationLink(value: WatchDestination.directConversations) {
+                Label {
+                    Text("Chat on Watch")
+                        .font(WatchClawType.body(size: 13, weight: .semibold))
+                } icon: {
+                    Image(systemName: "text.bubble")
+                }
+            }
+            .accessibilityIdentifier("watch-direct-chat")
+
             NavigationLink {
                 self.chatTimelineDestination
             } label: {
-                WatchPrimaryLabel(title: "Talk to Claw")
+                WatchPrimaryLabel(title: "Chat via iPhone")
             }
             .buttonStyle(.plain)
 
@@ -369,21 +383,23 @@ private struct WatchControlSurfaceView: View {
                     ? String(localized: "Direct")
                     : String(localized: "Setup")),
                 title: .verbatim(
-                    self.directNode.endpointText ?? String(localized: "Enable from iPhone")),
+                    self.directNode.endpointText ?? String(localized: "Pair Watch")),
                 subtitle: .localized(
                     self.directNode.isConfigured
                         ? "Uses Wi-Fi or cellular while OpenClaw is active"
-                        : "Open iPhone Settings → Apple Watch"),
+                        : "Not paired"),
                 accessory: .verbatim(self.directNode.isConnected
                     ? String(localized: "Online")
                     : String(localized: "Offline")))
 
-            WatchDetailText(
-                text: .verbatim(String(localized: """
-                Direct mode supports device info, status, and notifications. \
-                Voice is included when you connect from iPhone Settings → Apple Watch. \
-                Chat and approvals still use the iPhone.
-                """)))
+            NavigationLink(value: WatchDestination.pairWatch) {
+                Label {
+                    Text("Enter setup code")
+                        .font(WatchClawType.body(size: 13, weight: .semibold))
+                } icon: {
+                    Image(systemName: "key")
+                }
+            }
 
             if self.directNode.isConfigured {
                 Toggle(isOn: Binding(
@@ -397,12 +413,8 @@ private struct WatchControlSurfaceView: View {
                 .padding(.horizontal, 8)
 
                 WatchSecondaryButton(title: "Forget direct setup") {
-                    self.directNode.forget()
+                    Task { await self.directNode.forget() }
                 }
-            } else {
-                WatchDetailText(
-                    text: .localized(
-                        "The iPhone securely sends a one-time setup code. Existing relay features stay available."))
             }
         }
     }

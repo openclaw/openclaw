@@ -3,7 +3,7 @@ import SwiftUI
 struct WatchRealtimeCallView: View {
     @Environment(\.scenePhase) private var scenePhase
 
-    let directNode: WatchDirectNode
+    let directNode: WatchGatewayController
 
     private var controller: WatchRealtimeCallController {
         self.directNode.voiceCall
@@ -140,9 +140,14 @@ struct WatchRealtimeCallView: View {
 
     private var setupGuidance: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("On iPhone, open OpenClaw → Settings → Apple Watch → Connect Apple Watch.")
-                .font(WatchClawType.body(size: 12))
-                .fixedSize(horizontal: false, vertical: true)
+            NavigationLink(value: WatchDestination.pairWatch) {
+                Label {
+                    Text("Pair Watch")
+                        .font(WatchClawType.body(size: 12, weight: .semibold))
+                } icon: {
+                    Image(systemName: "key")
+                }
+            }
             Text(verbatim: self.directNode.statusText)
                 .font(WatchClawType.caption2)
                 .foregroundStyle(.secondary)

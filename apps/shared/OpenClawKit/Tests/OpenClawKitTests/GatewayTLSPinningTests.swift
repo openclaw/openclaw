@@ -3,6 +3,9 @@ import Foundation
 import Security
 import Testing
 @testable import OpenClawKit
+#if os(macOS)
+import Network
+#endif
 
 private let gatewayTLSTestCertificateDER =
     Data(
@@ -26,6 +29,140 @@ private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
 
 @Suite(.gatewayTLSStoreIsolated)
 struct GatewayTLSPinningTests {
+    #if os(macOS)
+    @Test @MainActor
+    func `HTTP rejection belongs to its request and cannot turn bare cancellation into TLS failure`() async throws {
+        let identity = try GatewayTLSHTTPFixture.makeIdentity()
+        let server = try await GatewayTLSHTTPFixture.start(identity: identity.value)
+        defer { server.stop() }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GatewayTLSCancelledProtocol.self]
+        let transport = GatewayTLSPinningSession(
+            configuration: configuration,
+            params: .init(required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+            allowsRedirects: false,
+            allowsStoredCredentials: false)
+        defer { transport.finishTasksAndInvalidate() }
+        let failure = try await Self.rejection(transport, url: server.url())
+        #expect(failure.kind == .untrustedCertificate)
+        #expect(!failure.systemTrustOk)
+        #expect(failure.host == "localhost")
+        #expect(failure.port == Int(server.port))
+        #expect(transport.consumeLastTLSFailure() == nil)
+
+        do {
+            _ = try await transport.data(
+                for: URLRequest(url: server.url("/bare-cancellation")),
+                maximumBytes: 2)
+            Issue.record("Bare cancellation unexpectedly succeeded")
+        } catch {
+            let cancellation = try #require(error as? URLError)
+            #expect(cancellation.code == .cancelled)
+        }
+        #expect(transport.consumeLastTLSFailure() == nil)
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func `overlapping HTTP accept and rejections preserve request authority and pending WS failure`(
+        reverse: Bool) async throws
+    {
+        let identity = try GatewayTLSHTTPFixture.makeIdentity()
+        let accepted = try await GatewayTLSHTTPFixture.start(identity: identity.value, holdBody: true)
+        let rejected = try await GatewayTLSHTTPFixture.start(identity: identity.value)
+        let other = try await GatewayTLSHTTPFixture.start(identity: identity.value)
+        defer {
+            accepted.stop()
+            rejected.stop()
+            other.stop()
+        }
+        let transport = GatewayTLSPinningSession(
+            params: .init(
+                required: true, expectedFingerprint: identity.fingerprint, allowTOFU: false, storeKey: nil),
+            allowsRedirects: false,
+            allowsStoredCredentials: false)
+        defer { transport.finishTasksAndInvalidate() }
+        let authority = transport.makeWebSocketTask(url: accepted.url(scheme: "wss"))
+        defer { authority.cancel(with: .goingAway, reason: nil) }
+        let socket = transport.makeWebSocketTask(url: rejected.url(scheme: "wss"))
+        socket.resume()
+        defer { socket.cancel(with: .goingAway, reason: nil) }
+        do {
+            _ = try await socket.receive()
+            Issue.record("WebSocket crossed its registered authority")
+        } catch {
+            #expect(error is URLError)
+        }
+
+        // Both accepting and rejecting HTTP challenges must preserve this pending WS failure.
+        let reading = Task {
+            try await transport.data(for: URLRequest(url: accepted.url()), maximumBytes: 2)
+        }
+        defer { reading.cancel() }
+        let pendingBody = try await accepted.nextRequest()
+        let urls = reverse ? [other.url(), rejected.url()] : [rejected.url(), other.url()]
+        let tasks = urls.map { url in Task { try await Self.rejection(transport, url: url) } }
+        defer { tasks.forEach { $0.cancel() } }
+        for (index, task) in tasks.enumerated() {
+            let failure = try await task.value
+            #expect(failure.kind == .authorityMismatch)
+            #expect(failure.port == urls[index].port)
+        }
+        accepted.completeBody(pendingBody)
+        let (data, _) = try await reading.value
+        #expect(data == Data("ok".utf8))
+        let websocketFailure = try #require(transport.consumeLastTLSFailure())
+        #expect(websocketFailure.kind == .authorityMismatch)
+        #expect(websocketFailure.port == Int(rejected.port))
+        #expect(transport.consumeLastTLSFailure() == nil)
+    }
+
+    @Test @MainActor
+    func `cancelling a held HTTP body stays cancellation after another request rejects`() async throws {
+        let identity = try GatewayTLSHTTPFixture.makeIdentity()
+        let accepted = try await GatewayTLSHTTPFixture.start(identity: identity.value, holdBody: true)
+        let rejected = try await GatewayTLSHTTPFixture.start(identity: identity.value)
+        defer {
+            accepted.stop()
+            rejected.stop()
+        }
+        let transport = GatewayTLSPinningSession(
+            params: .init(
+                required: true, expectedFingerprint: identity.fingerprint, allowTOFU: false, storeKey: nil),
+            allowsRedirects: false,
+            allowsStoredCredentials: false)
+        defer { transport.finishTasksAndInvalidate() }
+        let reading = Task {
+            try await transport.data(for: URLRequest(url: accepted.url()), maximumBytes: 2)
+        }
+        defer { reading.cancel() }
+        _ = try await accepted.nextRequest()
+        let failure = try await Self.rejection(transport, url: rejected.url())
+        #expect(failure.kind == .authorityMismatch)
+        reading.cancel()
+        do {
+            _ = try await reading.value
+            Issue.record("Cancelled body unexpectedly completed")
+        } catch {
+            #expect(error is CancellationError)
+        }
+        #expect(transport.consumeLastTLSFailure() == nil)
+    }
+
+    private static func rejection(
+        _ transport: GatewayTLSPinningSession,
+        url: URL) async throws -> GatewayTLSValidationFailure
+    {
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 5
+            _ = try await transport.data(for: request, maximumBytes: 2)
+            throw URLError(.badServerResponse)
+        } catch {
+            return try #require(error as? GatewayTLSValidationError).failure
+        }
+    }
+    #endif
+
     @Test(
         arguments: [true, false],
         ["https://other.example/", "http://gateway.example/", "https://gateway.example/login"])
@@ -371,3 +508,195 @@ struct GatewayTLSPinningTests {
         #expect(GatewayTLSStore.loadFingerprint(stableID: "gateway-2") == nil)
     }
 }
+
+#if os(macOS)
+private final class GatewayTLSCancelledProtocol: URLProtocol, @unchecked Sendable {
+    override static func canInit(with request: URLRequest) -> Bool {
+        request.url?.path == "/bare-cancellation"
+    }
+
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        self.client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+    }
+
+    override func stopLoading() {}
+}
+
+/// Loopback TLS uses an in-memory identity, never an installed trust root or Keychain identity.
+@MainActor
+private final class GatewayTLSHTTPFixture {
+    let port: UInt16
+    private let listener: NWListener
+    private let holdBody: Bool
+    private var connections: [NWConnection] = []
+    private var stopped = false
+    private let requests = AsyncStream<NWConnection>.makeStream()
+
+    private init(listener: NWListener, port: UInt16, holdBody: Bool) {
+        self.listener = listener
+        self.port = port
+        self.holdBody = holdBody
+        listener.newConnectionHandler = { [weak self] connection in
+            Task { @MainActor in
+                guard let self, !self.stopped else {
+                    connection.cancel()
+                    return
+                }
+                self.connections.append(connection)
+                connection.start(queue: .main)
+                self.receive(connection, buffer: Data())
+            }
+        }
+    }
+
+    static func makeIdentity() throws -> (value: sec_identity_t, fingerprint: String) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for arguments in [
+            [
+                "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
+                "-keyout", "key.pem", "-out", "cert.pem",
+            ],
+            [
+                "pkcs12", "-export", "-inkey", "key.pem", "-in", "cert.pem", "-out", "identity.p12",
+                "-passout", "pass:fixture", "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES",
+                "-macalg", "sha1",
+            ],
+        ] {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+            process.currentDirectoryURL = directory
+            process.arguments = arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            try #require(process.terminationStatus == 0)
+        }
+        let bytes = try Data(contentsOf: directory.appendingPathComponent("identity.p12"))
+        var items: CFArray?
+        let options: [String: Any] = [
+            kSecImportExportPassphrase as String: "fixture",
+            kSecImportToMemoryOnly as String: true,
+        ]
+        try #require(SecPKCS12Import(bytes as CFData, options as CFDictionary, &items) == errSecSuccess)
+        let imported = try #require((items as? [[String: Any]])?.first?[kSecImportItemIdentity as String])
+        try #require(CFGetTypeID(imported as CFTypeRef) == SecIdentityGetTypeID())
+        let identity = unsafeDowncast(imported as AnyObject, to: SecIdentity.self)
+        var certificate: SecCertificate?
+        try #require(SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess)
+        let der = try SecCertificateCopyData(#require(certificate)) as Data
+        let fingerprint = SHA256.hash(data: der).map { String(format: "%02x", $0) }.joined()
+        return try (#require(sec_identity_create(identity)), fingerprint)
+    }
+
+    static func start(identity: sec_identity_t, holdBody: Bool = false) async throws -> GatewayTLSHTTPFixture {
+        let tls = NWProtocolTLS.Options()
+        sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
+        let parameters = NWParameters(tls: tls)
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let listener = try NWListener(using: parameters, on: .any)
+        let states = AsyncThrowingStream<UInt16, any Error>.makeStream()
+        listener.newConnectionHandler = { $0.cancel() }
+        listener.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                if let port = listener.port {
+                    states.continuation.yield(port.rawValue)
+                    states.continuation.finish()
+                }
+            case let .failed(error):
+                states.continuation.finish(throwing: error)
+            case .cancelled:
+                states.continuation.finish(throwing: CancellationError())
+            default:
+                break
+            }
+        }
+        listener.start(queue: DispatchQueue(label: "gateway-tls-fixture"))
+        do {
+            let port = try await AsyncTimeout.withTimeout(
+                seconds: 5,
+                onTimeout: { URLError(.timedOut) },
+                operation: {
+                    var iterator = states.stream.makeAsyncIterator()
+                    guard let port = try await iterator.next() else { throw CancellationError() }
+                    return port
+                })
+            listener.stateUpdateHandler = nil
+            return GatewayTLSHTTPFixture(listener: listener, port: port, holdBody: holdBody)
+        } catch {
+            listener.stateUpdateHandler = nil
+            listener.cancel()
+            throw error
+        }
+    }
+
+    func url(_ path: String = "/", scheme: String = "https") -> URL {
+        URL(string: "\(scheme)://localhost:\(self.port)\(path)")!
+    }
+
+    func nextRequest() async throws -> NWConnection {
+        let stream = self.requests.stream
+        return try await AsyncTimeout.withTimeout(
+            seconds: 5,
+            onTimeout: { URLError(.timedOut) },
+            operation: {
+                var iterator = stream.makeAsyncIterator()
+                guard let connection = await iterator.next() else { throw CancellationError() }
+                return connection
+            })
+    }
+
+    func completeBody(_ connection: NWConnection) {
+        connection.send(content: Data("ok".utf8), completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    func stop() {
+        self.stopped = true
+        self.listener.newConnectionHandler = nil
+        self.listener.cancel()
+        self.connections.forEach { $0.cancel() }
+        self.connections.removeAll()
+        self.requests.continuation.finish()
+    }
+
+    private func receive(_ connection: NWConnection, buffer: Data) {
+        connection.receive(
+            minimumIncompleteLength: 1,
+            maximumLength: 8192 - buffer.count)
+        { [weak self] data, _, complete, error in
+            Task { @MainActor in
+                guard let self, !self.stopped else {
+                    connection.cancel()
+                    return
+                }
+                let buffer = buffer + (data ?? Data())
+                if buffer.range(of: Data("\r\n\r\n".utf8)) != nil {
+                    let headers = Data("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n".utf8)
+                    connection.send(content: headers, completion: .contentProcessed { _ in
+                        Task { @MainActor in
+                            guard !self.stopped else { return }
+                            self.requests.continuation.yield(connection)
+                            if !self.holdBody { self.completeBody(connection) }
+                        }
+                    })
+                } else if error != nil || complete || buffer.count >= 8192 {
+                    connection.cancel()
+                } else {
+                    self.receive(connection, buffer: buffer)
+                }
+            }
+        }
+    }
+}
+#endif

@@ -63,13 +63,13 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     private let execApprovalSnapshotAcknowledgmentLock = NSLock()
     private var acceptedExecApprovalSnapshotRequests: Set<WatchExecApprovalSnapshotRequestToken> = []
     private var acceptedExecApprovalSnapshotRequestOrder: [WatchExecApprovalSnapshotRequestToken] = []
-    private let directNodeSetupHandler: @MainActor @Sendable (String, Int64) -> Void
+    private let directNodeSetupHandler: @MainActor @Sendable (String, Int64) async -> Void
     @MainActor private var chatDeliveryTask: Task<Void, Never>?
     @MainActor private var chatDeliveryReplayRequested = false
 
     init(
         store: WatchInboxStore,
-        directNodeSetupHandler: @escaping @MainActor @Sendable (String, Int64) -> Void)
+        directNodeSetupHandler: @escaping @MainActor @Sendable (String, Int64) async -> Void)
     {
         self.store = store
         self.directNodeSetupHandler = directNodeSetupHandler
@@ -772,7 +772,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
            let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
         {
             Task { @MainActor in
-                self.directNodeSetupHandler(setupCode, sentAtMs)
+                await self.directNodeSetupHandler(setupCode, sentAtMs)
                 acknowledgment?.accept()
             }
             return true

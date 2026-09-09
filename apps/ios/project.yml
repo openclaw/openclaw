@@ -553,8 +553,30 @@ targets:
       Release: Config/Signing.xcconfig
     sources:
       - path: WatchTests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/GatewayOperatorHTTPFixture.swift
+        group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/WatchGatewayOperatorHTTPFixture.swift
+        group: Tests
     dependencies:
       - target: OpenClawWatchApp
+    preBuildScripts:
+      - name: Generate Watch test TLS identity
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GatewayOperatorHTTPFixture.p12
+        script: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$DERIVED_FILE_DIR" "$(dirname "$SCRIPT_OUTPUT_FILE_0")"
+          identity_dir="$(mktemp -d "$DERIVED_FILE_DIR/watch-test-tls.XXXXXX")"
+          trap 'rm -rf "$identity_dir"' EXIT
+          /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj /CN=localhost -addext subjectAltName=DNS:localhost \
+            -keyout "$identity_dir/key.pem" -out "$identity_dir/cert.pem"
+          /usr/bin/openssl pkcs12 -export \
+            -inkey "$identity_dir/key.pem" -in "$identity_dir/cert.pem" \
+            -out "$SCRIPT_OUTPUT_FILE_0" -passout pass:fixture \
+            -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
     settings:
       base:
         CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"

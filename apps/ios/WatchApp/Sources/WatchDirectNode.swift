@@ -76,12 +76,6 @@ final class WatchDirectNode {
         }
     }
 
-    private static let keychainService = "ai.openclaw.watch.direct-node"
-    private static let keychainAccount = "gateway"
-    private static let enabledDefaultsKey = "watch.directNode.enabled"
-    private static let lastSetupSentAtDefaultsKey = "watch.directNode.lastSetupSentAtMs"
-    private static let maximumSetupAgeMs: Int64 = 12 * 60 * 1000
-    private static let maximumSetupClockSkewMs: Int64 = 2 * 60 * 1000
     private static let commands = [
         OpenClawDeviceCommand.info.rawValue,
         OpenClawDeviceCommand.status.rawValue,
@@ -91,26 +85,25 @@ final class WatchDirectNode {
     private let networkMetrics: WatchURLSessionMetrics
     private let urlSession: URLSession
     private let notificationCenter = LiveNotificationCenter()
-    private var configuration: WatchGatewayConfiguration?
+    private weak var owner: WatchGatewayController?
+    private var configuration: WatchGatewayConfiguration? {
+        self.owner?.configuration
+    }
+
+    private var isEnabled: Bool {
+        self.owner?.isEnabled == true
+    }
+
     private var connectTask: Task<Void, Never>?
     private var activeSession: ActiveSession?
     private var isForeground = false
     private var connectionGeneration = 0
 
-    let voiceCall = WatchRealtimeCallController()
-
-    private(set) var isEnabled: Bool
     private(set) var isConnected = false
-    private(set) var statusText = String(
-        localized: "Use iPhone Settings to enable direct connection.")
-    private(set) var endpointText: String?
-    private(set) var voiceConnection: WatchVoiceConnection?
+    private(set) var statusText = String(localized: "Enter a setup code to connect.")
 
-    var isConfigured: Bool {
-        self.configuration != nil
-    }
-
-    init() {
+    init(owner: WatchGatewayController) {
+        self.owner = owner
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.waitsForConnectivity = true
         sessionConfiguration.timeoutIntervalForRequest = 30
@@ -121,82 +114,10 @@ final class WatchDirectNode {
             configuration: sessionConfiguration,
             delegate: networkMetrics,
             delegateQueue: nil)
-        self.isEnabled = UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey)
-        self.configuration = Self.loadConfiguration()
-        if let setupSentAtMs = configuration?.setupSentAtMs,
-           setupSentAtMs > Self.lastAcceptedSetupSentAtMs()
-        {
-            Self.saveLastAcceptedSetupSentAtMs(setupSentAtMs)
-        }
-        self.endpointText = self.configuration?.endpointText
         if self.configuration != nil {
             self.statusText = self.isEnabled
                 ? String(localized: "Ready to connect")
                 : String(localized: "Direct connection is off")
-        }
-        self.refreshVoiceConnection()
-    }
-
-    func configure(setupCode: String, sentAtMs: Int64) {
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let oldestAcceptedMs = nowMs - Self.maximumSetupAgeMs
-        let newestAcceptedMs = nowMs + Self.maximumSetupClockSkewMs
-        guard (oldestAcceptedMs...newestAcceptedMs).contains(sentAtMs) else {
-            self.statusText = String(
-                localized: "Ignored an expired direct connection setup. Send setup again from iPhone.")
-            return
-        }
-        let newestInstalledSetupMs = configuration?.setupSentAtMs ?? 0
-        guard sentAtMs > max(Self.lastAcceptedSetupSentAtMs(), newestInstalledSetupMs) else { return }
-        guard let link = GatewayConnectDeepLink.fromSetupCode(setupCode),
-              let configuration = WatchGatewayConfiguration(setupLink: link, sentAtMs: sentAtMs)
-        else {
-            self.statusText = String(
-                localized: "Direct mode requires a trusted HTTPS Gateway endpoint.")
-            return
-        }
-        let previousConfiguration = self.configuration
-        guard Self.saveConfiguration(configuration) else {
-            self.statusText = String(localized: "Could not save direct connection securely.")
-            return
-        }
-        if let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary) {
-            if let previousConfiguration,
-               !previousConfiguration.gatewayID.utf8.elementsEqual(configuration.gatewayID.utf8)
-            {
-                self.clearCredentials(deviceId: identity.deviceId, gatewayID: previousConfiguration.gatewayID)
-            }
-            // A new setup can narrow an old grant. Do not retain voice authority while
-            // its one-time handoff is pending, even when pairing the same Gateway again.
-            DeviceAuthStore.clearToken(
-                deviceId: identity.deviceId,
-                role: "operator",
-                gatewayID: configuration.gatewayID,
-                profile: .primary)
-        }
-        Self.saveLastAcceptedSetupSentAtMs(sentAtMs)
-        self.disconnectActiveSession()
-        self.configuration = configuration
-        self.endpointText = configuration.endpointText
-        self.statusText = String(localized: "Setup received. Connecting…")
-        self.setEnabled(true)
-    }
-
-    func setEnabled(_ enabled: Bool) {
-        self.isEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: Self.enabledDefaultsKey)
-        self.refreshVoiceConnection()
-        if enabled {
-            self.connect()
-        } else {
-            self.disconnectActiveSession()
-            self.connectionGeneration &+= 1
-            self.connectTask?.cancel()
-            self.connectTask = nil
-            self.isConnected = false
-            self.statusText = self.isConfigured
-                ? String(localized: "Direct connection is off")
-                : String(localized: "Use iPhone Settings to enable direct connection.")
         }
     }
 
@@ -223,28 +144,9 @@ final class WatchDirectNode {
         self.connectTask?.cancel()
         self.connectTask = nil
         self.isConnected = false
-        if self.isEnabled, self.isConfigured {
+        if self.isEnabled, self.configuration != nil {
             self.statusText = String(localized: "Reconnects when OpenClaw is active")
         }
-    }
-
-    func forget() {
-        self.disconnectActiveSession()
-        self.connectionGeneration &+= 1
-        self.connectTask?.cancel()
-        self.connectTask = nil
-        if let configuration {
-            if let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary) {
-                self.clearCredentials(deviceId: identity.deviceId, gatewayID: configuration.gatewayID)
-            }
-        }
-        _ = GenericPasswordKeychainStore.delete(
-            service: Self.keychainService,
-            account: Self.keychainAccount)
-        configuration = nil
-        self.endpointText = nil
-        self.isConnected = false
-        self.setEnabled(false)
     }
 
     private func run(_ configuration: WatchGatewayConfiguration, generation: Int) async {
@@ -336,41 +238,9 @@ final class WatchDirectNode {
         // Finish that durable handoff across background/toggle cancellation, but
         // never let an obsolete attempt overwrite a forgotten or newer setup.
         do {
-            guard self.isInstalledConfiguration(configuration) else { throw CancellationError() }
-            guard usedBootstrap || response.voiceCredential == nil else {
-                throw HTTPError(
-                    status: 0,
-                    detail: String(localized: "Voice access requires a new setup from iPhone Settings."))
-            }
-            guard DeviceAuthStore.storeTokenPersisted(
-                deviceId: identity.deviceId,
-                role: "node",
-                token: response.deviceToken,
-                scopes: [],
-                gatewayID: configuration.gatewayID,
-                profile: .primary)
-            else {
-                throw HTTPError(
-                    status: 0,
-                    detail: String(localized: "Could not save the watch device credential"))
-            }
-            if let voice = response.voiceCredential,
-               !DeviceAuthStore.storeTokenPersisted(
-                   deviceId: identity.deviceId,
-                   role: voice.role,
-                   token: voice.deviceToken,
-                   scopes: voice.scopes,
-                   gatewayID: configuration.gatewayID,
-                   profile: .primary)
-            {
-                throw HTTPError(
-                    status: 0,
-                    detail: String(localized: "Voice setup was incomplete. Send voice setup again from iPhone."))
-            }
-            if link.bootstrapToken != nil {
-                try self.finishCredentialHandoff(configuration: configuration)
-            }
-            self.refreshVoiceConnection()
+            guard let owner = self.owner else { throw CancellationError() }
+            try await owner.acceptNodeHandshake(
+                response, configuration: configuration, identity: identity, usedBootstrap: usedBootstrap)
             try self.requireCurrentConnection(generation, configuration: configuration)
         } catch {
             self.sendDisconnect(ActiveSession(baseURL: baseURL, token: response.sessionToken))
@@ -380,9 +250,7 @@ final class WatchDirectNode {
         self.activeSession = session
         defer { releaseActiveSession(session) }
         self.isConnected = true
-        self.statusText = self.voiceConnection == nil
-            ? String(localized: "Connected directly. Reconnect from iPhone Settings → Apple Watch to add voice.")
-            : String(localized: "Connected directly. Voice setup saved.")
+        self.statusText = String(localized: "Node connected directly")
         while self.isCurrentConnection(generation, configuration: configuration) {
             let pollData = try await request(
                 baseURL: baseURL,
@@ -422,8 +290,7 @@ final class WatchDirectNode {
     }
 
     private func isInstalledConfiguration(_ configuration: WatchGatewayConfiguration) -> Bool {
-        GatewayStableIdentifier.matches(configuration.gatewayID, self.configuration?.gatewayID)
-            && configuration.setupSentAtMs == self.configuration?.setupSentAtMs
+        self.owner?.isInstalled(configuration) == true
     }
 
     private func requireCurrentConnection(
@@ -589,17 +456,6 @@ final class WatchDirectNode {
         return data
     }
 
-    private func finishCredentialHandoff(configuration: WatchGatewayConfiguration) throws {
-        let sanitized = configuration.withoutBootstrapToken()
-        guard Self.saveConfiguration(sanitized) else {
-            throw HTTPError(
-                status: 0,
-                detail: String(localized: "Paired, but could not finish secure setup"))
-        }
-        self.configuration = sanitized
-        self.endpointText = sanitized.endpointText
-    }
-
     private func handleInvoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         do {
             switch request.command {
@@ -741,54 +597,6 @@ final class WatchDirectNode {
             error: OpenClawNodeError(code: code, message: message))
     }
 
-    private static func loadConfiguration() -> WatchGatewayConfiguration? {
-        guard let raw = GenericPasswordKeychainStore.loadString(
-            service: keychainService,
-            account: keychainAccount),
-            let data = raw.data(using: .utf8)
-        else { return nil }
-        return try? JSONDecoder().decode(WatchGatewayConfiguration.self, from: data)
-    }
-
-    private static func saveConfiguration(_ configuration: WatchGatewayConfiguration) -> Bool {
-        guard let data = try? JSONEncoder().encode(configuration),
-              let raw = String(data: data, encoding: .utf8)
-        else { return false }
-        return GenericPasswordKeychainStore.saveString(
-            raw,
-            service: self.keychainService,
-            account: self.keychainAccount)
-    }
-
-    private func refreshVoiceConnection() {
-        let connection = self.resolveVoiceConnection()
-        guard connection != self.voiceConnection else { return }
-        // Retire media before publishing new authority or acknowledging a setup change.
-        self.voiceCall.end()
-        self.voiceConnection = connection
-    }
-
-    private func resolveVoiceConnection() -> WatchVoiceConnection? {
-        guard self.isEnabled,
-              let configuration,
-              configuration.link.bootstrapToken == nil,
-              let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary),
-              let credential = DeviceAuthStore.loadToken(
-                  deviceId: identity.deviceId,
-                  role: "operator",
-                  gatewayID: configuration.gatewayID,
-                  profile: .primary),
-              credential.scopes == WatchNodeConnectResponse.voiceScopes
-        else { return nil }
-        return configuration.voiceConnection
-    }
-
-    private func clearCredentials(deviceId: String, gatewayID: String) {
-        for role in ["node", "operator"] {
-            DeviceAuthStore.clearToken(deviceId: deviceId, role: role, gatewayID: gatewayID, profile: .primary)
-        }
-    }
-
     private func disconnectActiveSession() {
         self.isConnected = false
         guard let session = activeSession else { return }
@@ -810,14 +618,6 @@ final class WatchDirectNode {
                 method: "POST",
                 token: session.token)
         }
-    }
-
-    private static func lastAcceptedSetupSentAtMs() -> Int64 {
-        (UserDefaults.standard.object(forKey: self.lastSetupSentAtDefaultsKey) as? NSNumber)?.int64Value ?? 0
-    }
-
-    private static func saveLastAcceptedSetupSentAtMs(_ sentAtMs: Int64) {
-        UserDefaults.standard.set(NSNumber(value: sentAtMs), forKey: self.lastSetupSentAtDefaultsKey)
     }
 }
 

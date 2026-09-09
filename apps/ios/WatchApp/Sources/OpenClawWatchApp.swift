@@ -23,10 +23,21 @@ enum WatchScreenshotMode {
         || ProcessInfo.processInfo.environment["OPENCLAW_WATCH_SCREENSHOT_MODE"] == "1"
         || UserDefaults.standard.bool(forKey: WatchScreenshotMode.defaultsKey)
         || WatchScreenshotMode.approvals
+        || Self.directProofEnabled
+
+    private static var directProofEnabled: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        WatchDirectScreenshot.current != nil
+        #else
+        false
+        #endif
+    }
 }
 
 enum WatchDestination: Hashable {
     case standaloneVoice
+    case directConversations
+    case pairWatch
 }
 
 @main
@@ -34,7 +45,7 @@ struct OpenClawWatchApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var inboxStore = WatchInboxStore(
         requestNotificationAuthorization: !WatchScreenshotMode.enabled)
-    @State private var directNode = WatchDirectNode()
+    @State private var directNode = WatchGatewayController()
     @State private var navigationPath: [WatchDestination] = []
     @State private var notificationDelegate = WatchNotificationPresentationDelegate()
     @State private var receiver: WatchConnectivityReceiver?
@@ -105,7 +116,7 @@ struct OpenClawWatchApp: App {
                         let receiver = WatchConnectivityReceiver(
                             store: self.inboxStore,
                             directNodeSetupHandler: { [weak directNode = self.directNode] setupCode, sentAtMs in
-                                directNode?.configure(setupCode: setupCode, sentAtMs: sentAtMs)
+                                await directNode?.configure(setupCode: setupCode, sentAtMs: sentAtMs)
                             })
                         receiver.activate()
                         self.receiver = receiver
@@ -117,6 +128,11 @@ struct OpenClawWatchApp: App {
                     self.refreshExecApprovalReview()
                     self.receiver?.replayChatDelivery()
                 }
+                #if DEBUG && targetEnvironment(simulator)
+                .sheet(item: .constant(WatchDirectScreenshot.current)) { scenario in
+                    WatchDirectScreenshotView(scenario: scenario)
+                }
+                #endif
         }
         .onChange(of: self.scenePhase) { _, newPhase in
             switch newPhase {
@@ -143,6 +159,9 @@ struct OpenClawWatchApp: App {
                 // Destination removal is an intentional exit; background visibility is not.
                 if self.navigationPath.contains(.standaloneVoice), !path.contains(.standaloneVoice) {
                     self.directNode.voiceCall.end()
+                }
+                if self.navigationPath.contains(.directConversations), !path.contains(.directConversations) {
+                    self.directNode.conversations.disappear()
                 }
                 self.navigationPath = path
             })

@@ -7,6 +7,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
+    inputs:
+      watch_qualification:
+        description: Run focused shared and Watch tests instead of the Periphery scan
+        type: boolean
+        default: false
 
 concurrency:
   # Admission precedes scope skips: isolate passive drafts before they can cancel useful work.
@@ -14,6 +19,8 @@ concurrency:
   group: >-
     ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
       && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || github.event_name == 'workflow_dispatch' && inputs.watch_qualification
+      && format('ios-watch-qualification-{0}', github.sha)
       || format('ios-periphery-{0}-{1}', github.workflow, github.event.pull_request.number || github.sha) }}
   cancel-in-progress: true
 
@@ -128,10 +135,14 @@ jobs:
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
 
       - name: Install iOS Swift tooling
+        env:
+          WATCH_QUALIFICATION: ${{ github.event_name == 'workflow_dispatch' && inputs.watch_qualification }}
         run: |
-          periphery_dir="$RUNNER_TEMP/openclaw-periphery"
-          ./scripts/install-periphery.sh "$periphery_dir"
-          echo "$periphery_dir" >> "$GITHUB_PATH"
+          if [ "$WATCH_QUALIFICATION" != "true" ]; then
+            periphery_dir="$RUNNER_TEMP/openclaw-periphery"
+            ./scripts/install-periphery.sh "$periphery_dir"
+            echo "$periphery_dir" >> "$GITHUB_PATH"
+          fi
           swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
           # Homebrew's xcodegen bottle can arrive corrupted on runner images;
           # use the repo's pinned, checksummed release installer like ci.yml.
@@ -152,6 +163,7 @@ jobs:
           xcodegen generate
 
       - name: Run Periphery
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.watch_qualification) }}
         run: |
           set -euo pipefail
           output_dir="$RUNNER_TEMP/ios-periphery"
@@ -173,6 +185,7 @@ jobs:
           fi
 
       - name: Build Periphery report
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.watch_qualification) }}
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -261,7 +274,7 @@ jobs:
           NODE
 
       - name: Upload Periphery report
-        if: always()
+        if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.watch_qualification) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}
@@ -270,6 +283,55 @@ jobs:
           retention-days: 14
 
       - name: Fail on dead code
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.watch_qualification) }}
         run: |
           set -euo pipefail
           test "$(cat "$RUNNER_TEMP/ios-periphery/should-fail.txt")" = "0"
+
+      - name: Run focused shared Watch transport tests
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.watch_qualification }}
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/watch-qualification"
+          mkdir -p "$output_dir"
+          git rev-parse HEAD > "$output_dir/source-head.txt"
+          xcodebuild -version > "$output_dir/xcode-version.txt"
+          swift test --package-path apps/shared/OpenClawKit \
+            --scratch-path "$RUNNER_TEMP/watch-qualification-swift" \
+            --jobs 4 --no-parallel \
+            --filter 'GatewayOperatorHTTPSessionTests|GatewayOperatorHTTPWireTests|GatewayNativeTransportDeviceAuthTests|GatewayNodeSessionTests|DeviceAuthStoreTests|GatewayTLSPinningTests' \
+            2>&1 | tee "$output_dir/shared-tests.log"
+
+      - name: Run focused Apple Watch operation simulator tests
+        id: watch_tests
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.watch_qualification && !cancelled() }}
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/watch-qualification"
+          mkdir -p "$output_dir"
+          /bin/bash scripts/ios-watch-operation-tests.sh "$output_dir/WatchOperationTests.xcresult" \
+            2>&1 | tee "$output_dir/watch-tests.log"
+
+      - name: Prove Foundation operator HTTPS against a real Gateway
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.watch_qualification && !cancelled() }}
+        run: node --import ./scripts/tsx.mjs scripts/ios-watch-operator-https-proof.mts
+
+      - name: Capture direct Watch review surfaces
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.watch_qualification && steps.watch_tests.outcome == 'success' && !cancelled() }}
+        run: /bin/bash scripts/ios-watch-direct-captures.sh "$RUNNER_TEMP/watch-qualification/ui-fixtures"
+
+      - name: Upload Watch qualification evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.watch_qualification }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-watch-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/watch-qualification/source-head.txt
+            ${{ runner.temp }}/watch-qualification/xcode-version.txt
+            ${{ runner.temp }}/watch-qualification/shared-tests.log
+            ${{ runner.temp }}/watch-qualification/watch-tests.log
+            ${{ runner.temp }}/watch-qualification/WatchOperationTests.xcresult
+            ${{ runner.temp }}/watch-qualification/ui-fixtures
+            ${{ runner.temp }}/watch-qualification/operator-https.json
+          if-no-files-found: error
+          retention-days: 14

@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import Synchronization
 
 public struct GatewayTLSParams: Equatable, Sendable {
     public let required: Bool
@@ -752,15 +753,53 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, GatewayTLSRouteMetadataProviding,
     @unchecked Sendable
 {
+    private final class HTTPDelegate: NSObject, URLSessionTaskDelegate {
+        let owner: GatewayTLSPinningSession
+        let failure = Mutex<GatewayTLSValidationFailure?>(nil)
+
+        init(owner: GatewayTLSPinningSession) {
+            self.owner = owner
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+        {
+            self.owner.urlSession(
+                session,
+                task: task,
+                willPerformHTTPRedirection: response,
+                newRequest: request,
+                completionHandler: completionHandler)
+        }
+
+        func urlSession(
+            _: URLSession,
+            task _: URLSessionTask,
+            didReceive challenge: URLAuthenticationChallenge,
+            completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+        {
+            self.owner.handleChallenge(
+                challenge,
+                recordFailure: { failure in self.failure.withLock { $0 = failure } },
+                completionHandler: completionHandler)
+        }
+    }
+
     private let params: GatewayTLSParams
     private let allowsRedirects: Bool
     private let allowsStoredCredentials: Bool
+    private let configuration: URLSessionConfiguration?
     private let failureLock = NSLock()
     private var lastTLSFailure: GatewayTLSValidationFailure?
     private var pinningState: GatewayTLSPinningState
     private var expectedAuthority: GatewayTLSAuthority?
     private lazy var session: URLSession = {
-        let config = self.allowsStoredCredentials ? URLSessionConfiguration.default : .ephemeral
+        let config = self.configuration
+            ?? (self.allowsStoredCredentials ? URLSessionConfiguration.default : .ephemeral)
         if !self.allowsStoredCredentials {
             // Explicit per-request authority cannot inherit or persist another
             // account's cookies, HTTP credentials, or authenticated cache entries.
@@ -773,11 +812,25 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    public init(
+    public convenience init(
         params: GatewayTLSParams,
         allowsRedirects: Bool = true,
         allowsStoredCredentials: Bool = true)
     {
+        self.init(
+            configuration: nil,
+            params: params,
+            allowsRedirects: allowsRedirects,
+            allowsStoredCredentials: allowsStoredCredentials)
+    }
+
+    init(
+        configuration: URLSessionConfiguration?,
+        params: GatewayTLSParams,
+        allowsRedirects: Bool,
+        allowsStoredCredentials: Bool)
+    {
+        self.configuration = configuration?.copy() as? URLSessionConfiguration
         self.params = params
         self.allowsRedirects = allowsRedirects
         self.allowsStoredCredentials = allowsStoredCredentials
@@ -805,7 +858,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return failure
     }
 
-    private func recordTLSFailure(_ failure: GatewayTLSValidationFailure) {
+    private func recordTLSFailure(_ failure: GatewayTLSValidationFailure?) {
         self.failureLock.lock()
         self.lastTLSFailure = failure
         self.failureLock.unlock()
@@ -825,7 +878,6 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
     private func recordTLSAcceptance(_ fingerprint: String?, enforcePin: Bool) {
         self.failureLock.lock()
-        self.lastTLSFailure = nil
         self.pinningState.recordAcceptance(fingerprint, enforcePin: enforcePin)
         self.failureLock.unlock()
     }
@@ -868,36 +920,45 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
-        // AsyncBytes owns a task delegate; without ours, its authentication
-        // handling bypasses the session-level certificate policy.
-        let (bytes, response) = try await self.session.bytes(for: request, delegate: self)
-        let expectedLength = response.expectedContentLength
-        guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
-            bytes.task.cancel()
-            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
-        }
-
-        var data = Data()
-        if expectedLength > 0 {
-            data.reserveCapacity(Int(expectedLength))
-        }
-        return try await withTaskCancellationHandler {
-            do {
-                for try await byte in bytes {
-                    guard data.count < maximumBytes else {
-                        bytes.task.cancel()
-                        throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
-                    }
-                    data.append(byte)
-                }
-            } catch {
+        // Polls, writes, and cleanup may overlap. Attribute a rejection to this
+        // invocation, never the session-wide slot consumed by WebSocket callers.
+        let delegate = HTTPDelegate(owner: self)
+        do {
+            let (bytes, response) = try await self.session.bytes(for: request, delegate: delegate)
+            let expectedLength = response.expectedContentLength
+            guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
                 bytes.task.cancel()
-                throw error
+                throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
             }
-            return (data, response)
-        } onCancel: {
-            // Cancellation after headers must also interrupt a stalled body.
-            bytes.task.cancel()
+
+            var data = Data()
+            if expectedLength > 0 {
+                data.reserveCapacity(Int(expectedLength))
+            }
+            return try await withTaskCancellationHandler {
+                do {
+                    for try await byte in bytes {
+                        guard data.count < maximumBytes else {
+                            bytes.task.cancel()
+                            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+                        }
+                        data.append(byte)
+                    }
+                } catch {
+                    bytes.task.cancel()
+                    throw error
+                }
+                return (data, response)
+            } onCancel: {
+                // Cancellation after headers must also interrupt a stalled body.
+                bytes.task.cancel()
+            }
+        } catch {
+            try Task.checkCancellation()
+            if error is URLError, let failure = delegate.failure.withLock({ $0 }) {
+                throw GatewayTLSValidationError(failure: failure, context: "Gateway HTTPS")
+            }
+            throw error
         }
     }
 
@@ -927,9 +988,20 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     }
 
     public func urlSession(
-        _ session: URLSession,
+        _: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
+        self.handleChallenge(
+            challenge,
+            recordFailure: self.recordTLSFailure,
+            completionHandler: completionHandler)
+    }
+
+    private func handleChallenge(
+        _ challenge: URLAuthenticationChallenge,
+        recordFailure: (GatewayTLSValidationFailure?) -> Void,
+        completionHandler: (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
     {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust
@@ -944,7 +1016,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         guard let expectedAuthority = self.currentExpectedAuthority(),
               expectedAuthority.matches(host: host, port: port)
         else {
-            self.recordTLSFailure(GatewayTLSValidationFailure(
+            recordFailure(GatewayTLSValidationFailure(
                 kind: .authorityMismatch,
                 host: host,
                 storeKey: self.params.storeKey,
@@ -964,12 +1036,13 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         {
         case let .accept(fingerprint, enforcePin):
             self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
+            recordFailure(nil)
             completionHandler(.useCredential, URLCredential(trust: trust))
         case let .reject(failure, enforcedFingerprint):
             if let enforcedFingerprint {
                 self.recordTLSPinExpectation(enforcedFingerprint)
             }
-            self.recordTLSFailure(failure)
+            recordFailure(failure)
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }

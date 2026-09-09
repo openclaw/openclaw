@@ -318,7 +318,7 @@ or `openclaw doctor` run.
 ### Standalone voice
 
 Standalone voice needs a current Gateway with Gateway-controlled WebRTC Talk,
-an iPhone connection with `operator.admin` for setup, and a secure Gateway URL
+an authorized setup code, and a secure Gateway URL
 the Watch can reach independently. Use the same secure endpoint and initial
 pairing requirements as [direct Watch node setup](/platforms/ios#optional-direct-apple-watch-node):
 watchOS must trust the HTTPS certificate, and an iPhone-only or
@@ -328,9 +328,9 @@ tailnet-only route is not enough when the Watch is away from the phone.
    transport and a provider/authentication combination that supports
    `gateway-control-v1` and returns an ICE-lite answer with UDP candidates.
    Provider credentials stay on the Gateway.
-2. On iPhone, open **Settings -> This iPhone -> Apple Watch -> Connect Apple Watch**.
-   Voice access is included in normal Watch setup; there is no separate
-   voice enable setting.
+2. On iPhone, open **Settings -> This iPhone -> Apple Watch -> Connect Apple Watch**,
+   or enter a voice-node setup code in **Pair Watch** on the Watch.
+   Voice access is included in this setup; there is no separate voice enable setting.
 3. Open OpenClaw on the Watch before the setup code expires. Open **Talk on
    Watch** and wait for **Ready to talk**.
 4. Tap **Start**, allow microphone access, and choose an agent if prompted.
@@ -345,7 +345,8 @@ credential with exactly `operator.read` and `operator.talk`. It does not grant
 admin access or copy the iPhone's saved Gateway token or password. Setup
 configuration is stored in the Watch Keychain; issued device credentials are
 stored in its protected native-state SQLite database, scoped to that Gateway.
-If setup is incomplete or expired, send it again from iPhone Settings.
+If setup is incomplete or expired, enter a fresh voice-node setup code or send it
+again from iPhone Settings.
 Watches paired with the older node-only setup need **Connect Apple Watch**
 once more to authorize voice. Existing grants are not silently expanded, and
 revoked access is not automatically restored. Pairing does not start a call
@@ -396,8 +397,9 @@ pending exec requests on iPhone. The approval card shows the Gateway's
 sanitized command preview, warning, host context, expiry, and only the
 decisions offered by that request. The paired Apple Watch receives the same
 reviewer-safe prompt through the existing iPhone relay and offers the compact
-allow-once/deny decision subset. Direct Watch Gateway mode does not carry
-approval prompts.
+allow-once/deny decision subset. The separate
+[direct Watch chat](/platforms/ios#direct-chat-on-watch) surface supports
+session-scoped approvals after an explicit scope upgrade.
 
 Approval state is shared with the Control UI and supported chat surfaces. The
 first committed answer wins. iPhone and Watch fetch the Gateway's canonical
@@ -429,7 +431,8 @@ OpenClaw is active, even when the paired iPhone is unavailable.
 
 Requirements:
 
-- The iPhone is connected to the Gateway with `operator.admin` scope.
+- An administrator supplies a voice-node setup code, or the iPhone is connected
+  to the Gateway with `operator.admin` scope for companion-assisted setup.
 - The setup code advertises a `wss://` Gateway endpoint with a certificate trusted
   by watchOS; the watch polls the corresponding `https://` origin. Plain HTTP and
   self-signed or fingerprint-only trust are unsupported. See [Gateway-owned
@@ -442,12 +445,24 @@ Requirements:
   active-audio networking path. See Apple's
   [watchOS low-level networking guidance](https://developer.apple.com/documentation/technotes/tn3135-low-level-networking-on-watchos).
 
-Setup:
+Companion-assisted setup:
 
 1. On iPhone, open **Settings -> This iPhone -> Apple Watch** (or **Device -> Apple Watch** in the offline fallback).
 2. Tap **Connect Apple Watch**.
 3. Open OpenClaw on the watch before the short-lived setup code expires.
 4. Verify the separate Apple Watch row with `openclaw nodes status`.
+
+For setup without the iPhone app, generate a code on the Gateway host:
+
+```sh
+openclaw qr --voice-node --url wss://gateway.example.com --setup-code-only
+```
+
+On the Watch, open **Pair Watch -> Enter setup code** and enter the complete
+code before it expires. This uses the existing encoded setup-code or JSON
+format, not a short numeric pairing code. It does not expose the Gateway or
+provision a hosted service. The advertised endpoint must already be reachable
+and trusted by the Watch.
 
 The setup code contains a short-lived bootstrap credential for the Watch's
 node and limited read/Talk roles; treat it like a password until it expires.
@@ -455,8 +470,15 @@ It never contains the iPhone's saved Gateway password or token. After pairing,
 the watch stores its own device credentials and deletes the bootstrap
 credential. The same setup covers the commands below and
 [standalone voice](/platforms/ios#standalone-voice); calls still require **Start**
-and microphone permission. Companion chat, iPhone Talk controls, approvals,
-and the existing `watch.*` notification flow remain iPhone-relay features.
+and microphone permission. Companion chat, iPhone Talk controls, companion
+approvals, and the existing `watch.*` notification flow remain iPhone-relay
+features. Direct chat uses the separate operator connection below, never the
+node credential.
+
+If an expired bootstrap falls back to an existing node credential, node commands
+can reconnect, but **Setup incomplete** remains visible until operator access is
+authorized with a fresh setup code. Node-only recovery is not successful chat
+or voice onboarding.
 
 A `watch.notify` receipt reports Watch transport delivery or queuing, not
 completion of the best-effort iPhone notification mirror. Cancellation is
@@ -470,6 +492,40 @@ Direct watchOS node commands:
 | ------------- | ------------------------------ | ------------------------------------------------------- |
 | Device        | `device.info`, `device.status` | Watch identity, battery, thermal, storage, and network. |
 | Notifications | `system.notify`                | While the app is active; requires watch permission.     |
+
+## Direct chat on Watch
+
+**Chat on Watch** opens a foreground HTTPS operator connection using the Watch's
+own paired credential. Choose an agent and conversation from the Gateway.
+**Chat via iPhone** remains a separate companion route; direct selections do
+not reuse the phone's selected session or delivery journal.
+
+Initial setup grants `operator.read` and `operator.talk`: history and voice are
+available, while sending and approval decisions remain disabled. Use
+**Request chat access** and approve the device scope-upgrade request from an
+authorized administrator surface to add `operator.write` and
+`operator.approvals`. The Watch never requests `operator.admin` or
+`operator.pairing`. Installing the upgraded credential ends any active Watch
+voice call before replacing its stored authority.
+
+The direct conversation shows bounded history and session-scoped exec, plugin,
+and system-agent approvals, with only the Gateway's allowed decisions. A
+truncated history or approval replay is marked. Approval decisions are
+reconciled by exact ID against the Gateway's canonical result, including when
+another surface answered first.
+
+Backgrounding cancels the direct chat connection and polling. Returning to the
+foreground reloads history and subscriptions; it does not resend messages.
+Changing source IP, including some Wi-Fi/cellular handoffs, retires the logical
+connection. An uncertain send stays visibly uncertain until you check the
+original conversation. It is never replayed through a replacement connection
+or the iPhone route.
+
+If a rotated scope grant is lost before durable storage, the Watch requests
+fresh setup instead of silently restoring authority. This flow does not add
+background approval push or qualify independent installation from the Watch
+App Store. Clean installation without the phone and physical Wi-Fi/LTE
+reliability still require device qualification.
 
 ## Relay-backed push for official builds
 
