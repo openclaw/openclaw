@@ -50,17 +50,19 @@ PACKAGE_TGZ="$(
     update-first-hop-compat \
     "${OPENCLAW_UPDATE_FIRST_HOP_CANDIDATE_PACKAGE_TGZ:-}"
 )"
-docker_e2e_package_mount_args "$PACKAGE_TGZ" /tmp/openclaw-update-first-hop-candidate.tgz
+# Published updaters can intentionally skip same-version payloads. Relabel only
+# fixture metadata so every source performs a real hop with the candidate's bridges.
+FIRST_HOP_TGZ="$FIXTURE_ROOT/first-hop.tgz"
+node "$FIXTURE_HELPER" first-hop-tarball "$PACKAGE_TGZ" "$FIRST_HOP_TGZ" 0 \
+  >"$ARTIFACT_DIR/first-hop-fixture.json"
+node "$FIXTURE_HELPER" negative-tarball "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/negative.tgz" \
+  >"$ARTIFACT_DIR/negative-fixture.json"
+node "$FIXTURE_HELPER" future-tarball "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/future.tgz" 1 \
+  >"$ARTIFACT_DIR/second-hop-fixture.json"
+docker_e2e_package_mount_args "$FIRST_HOP_TGZ" /tmp/openclaw-update-first-hop-candidate.tgz
 
-mkdir -p "$FIXTURE_ROOT/packages/negative" "$FIXTURE_ROOT/packages/future"
-tar -xzf "$PACKAGE_TGZ" -C "$FIXTURE_ROOT/packages/negative"
-tar -xzf "$PACKAGE_TGZ" -C "$FIXTURE_ROOT/packages/future"
-node "$FIXTURE_HELPER" negative "$FIXTURE_ROOT/packages/negative/package"
-node "$FIXTURE_HELPER" future "$FIXTURE_ROOT/packages/future/package"
-COPYFILE_DISABLE=1 tar --no-xattrs -czf "$FIXTURE_ROOT/negative.tgz" \
-  -C "$FIXTURE_ROOT/packages/negative" package
-COPYFILE_DISABLE=1 tar --no-xattrs -czf "$FIXTURE_ROOT/future.tgz" \
-  -C "$FIXTURE_ROOT/packages/future" package
+mkdir -p "$FIXTURE_ROOT/packages/original"
+tar -xzf "$PACKAGE_TGZ" -C "$FIXTURE_ROOT/packages/original"
 
 docker_e2e_build_or_reuse \
   "$IMAGE_NAME" \
@@ -73,7 +75,7 @@ docker_e2e_build_or_reuse \
 SOURCE_VERSIONS=("")
 if [ -z "$SOURCE_PACKAGE" ]; then
   SOURCE_VERSIONS=()
-  node "$FIXTURE_HELPER" sources "$FIXTURE_ROOT/packages/negative/package" \
+  node "$FIXTURE_HELPER" sources "$FIXTURE_ROOT/packages/original/package" \
     >"$FIXTURE_ROOT/source-versions.txt"
   while IFS= read -r version; do
     SOURCE_VERSIONS+=("$version")
@@ -95,7 +97,7 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     ' "$lane_artifact_dir/source-pack.json")"
   fi
   chmod a+rwx "$lane_artifact_dir"
-  node "$FIXTURE_HELPER" source "$FIXTURE_ROOT/packages/negative/package" \
+  node "$FIXTURE_HELPER" source "$FIXTURE_ROOT/packages/original/package" \
     "$source_package" "$version" >"$lane_artifact_dir/source.json"
   expected_missing_chunk="$(node -e '
     const source = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
@@ -103,11 +105,13 @@ for version in "${SOURCE_VERSIONS[@]}"; do
   ' "$lane_artifact_dir/source.json")"
   {
     printf 'source=%s\n' "$source_package"
-    printf 'candidate=%s\n' "$PACKAGE_TGZ"
+    printf 'original_candidate=%s\n' "$PACKAGE_TGZ"
+    printf 'candidate=%s\n' "$FIRST_HOP_TGZ"
     printf 'expected_missing_chunk=%s\n' "$expected_missing_chunk"
-    shasum -a 256 "$source_package" "$PACKAGE_TGZ" "$FIXTURE_ROOT/negative.tgz" "$FIXTURE_ROOT/future.tgz"
+    shasum -a 256 "$source_package" "$PACKAGE_TGZ" "$FIRST_HOP_TGZ" "$FIXTURE_ROOT/negative.tgz" "$FIXTURE_ROOT/future.tgz"
     printf '\nsource_build_info=' && tar -xOf "$source_package" package/dist/build-info.json
-    printf '\ncandidate_build_info=' && tar -xOf "$PACKAGE_TGZ" package/dist/build-info.json
+    printf '\noriginal_candidate_build_info=' && tar -xOf "$PACKAGE_TGZ" package/dist/build-info.json
+    printf '\ncandidate_build_info=' && tar -xOf "$FIRST_HOP_TGZ" package/dist/build-info.json
     printf '\nfuture_build_info=' && tar -xOf "$FIXTURE_ROOT/future.tgz" package/dist/build-info.json
   } >"$lane_artifact_dir/inputs.txt"
 
@@ -119,6 +123,7 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     -v "$lane_artifact_dir:/tmp/openclaw-update-first-hop-artifacts" \
     -v "$(docker_e2e_abs_path "$source_package"):/tmp/openclaw-update-first-hop-source.tgz:ro" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+    -v "$PACKAGE_TGZ:/tmp/openclaw-update-first-hop-original.tgz:ro" \
     -v "$FIXTURE_ROOT/negative.tgz:/tmp/openclaw-update-first-hop-negative.tgz:ro" \
     -v "$FIXTURE_ROOT/future.tgz:/tmp/openclaw-update-first-hop-future.tgz:ro" \
     "$IMAGE_NAME" \

@@ -60,7 +60,7 @@ export function renderChatDetailSlot(params: {
       .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
       .attachmentRuntime=${{
         sessionKey: params.chat.sessionKey,
-        agentId: params.chat.fullMessageAgentId,
+        agentId: params.chat.currentAgentId ?? params.chat.fullMessageAgentId,
         policyKey: assistantMediaPolicyKey(
           params.chat.selectedSession,
           params.chat.mediaPolicyEpoch,

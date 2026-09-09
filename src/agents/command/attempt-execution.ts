@@ -1079,6 +1079,9 @@ export function runAgentAttempt(params: {
             model: params.modelOverride,
             modelRoutingProvenance: params.modelRoutingProvenance,
             thinkLevel: params.resolvedThinkLevel,
+            fastMode: params.fastMode,
+            fastModeStartedAtMs: params.fastModeStartedAtMs,
+            fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
             timeoutMs: params.timeoutMs,
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
@@ -1296,6 +1299,7 @@ export function runAgentAttempt(params: {
         return result;
       },
       {
+        preparedRunAdmission: params.preparedRunAdmission,
         lifecycleGeneration: params.lifecycleGeneration,
         abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
         trigger: "user",
@@ -1304,13 +1308,18 @@ export function runAgentAttempt(params: {
     );
   }
 
-  const embeddedModelPrompt = appendGitCoauthorContext(
-    effectivePrompt,
-    params.opts.gitCoauthorAttribution,
-  );
-  const embeddedPersistencePrompt = params.opts.gitCoauthorAttribution
-    ? (continuationTranscriptBody ?? effectivePrompt)
-    : continuationTranscriptBody;
+  // The native carrier keeps host instructions stable across transcript replay.
+  const replayableAttribution =
+    !isRawModelRun && agentHarnessPolicy.runtime === "openclaw"
+      ? params.opts.gitCoauthorAttribution?.trim()
+      : undefined;
+  const embeddedModelPrompt = replayableAttribution
+    ? effectivePrompt
+    : appendGitCoauthorContext(effectivePrompt, params.opts.gitCoauthorAttribution);
+  const embeddedPersistencePrompt =
+    params.opts.gitCoauthorAttribution && !replayableAttribution
+      ? (continuationTranscriptBody ?? effectivePrompt)
+      : continuationTranscriptBody;
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     preparedRunAdmission: params.preparedRunAdmission,
     sessionId: params.sessionId,
@@ -1386,7 +1395,12 @@ export function runAgentAttempt(params: {
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
     internalEvents: params.opts.internalEvents,
-    runtimeContextFragments: params.opts.runtimeContextFragments,
+    runtimeContextFragments: replayableAttribution
+      ? [
+          ...(params.opts.runtimeContextFragments ?? []),
+          { kind: "runtime-instruction", text: replayableAttribution },
+        ]
+      : params.opts.runtimeContextFragments,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,

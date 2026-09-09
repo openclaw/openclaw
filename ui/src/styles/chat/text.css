@@ -493,7 +493,6 @@
    opacity, which composited the link toward its background and cost another 1.1. */
 .chat-text :where(a) {
   color: var(--link);
-  text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
@@ -736,7 +735,7 @@
 }
 
 .chat-text :where(.markdown-inline-image-button:focus-visible) {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
 
@@ -789,7 +788,6 @@
 :is(.chat-text, .sidebar-markdown) .markdown-external-image > a:hover {
   background: color-mix(in srgb, var(--text) 13%, transparent);
   color: var(--link-hover);
-  text-decoration: none;
 }
 
 /* Code surfaces must lift off the host bubble in every theme. --secondary equals
@@ -963,8 +961,13 @@
 
 .code-block-expand:focus-visible,
 .code-block-wrap:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+
+.code-block-expand:focus-visible {
+  /* Keep the bottom edge inside the clipped code wrapper. */
+  outline-offset: -2px;
 }
 
 .chat-group.user .chat-text :where(pre) {
@@ -1180,7 +1183,7 @@
 }
 
 /* renderBody is shared by normal bubbles and expanded tool output. */
-:is(.chat-bubble, .chat-tool-msg-body) {
+:is(.chat-bubble, .chat-tool-msg-body, .chat-message-avatar-anchor) {
   > :is(
     .chat-message-images,
     .chat-assistant-attachments,
@@ -1191,6 +1194,7 @@
     .chat-text,
     .chat-json-collapse,
     .chat-message-disclosure,
+    .chat-message-avatar-anchor,
     .chat-tools-inline
   ) {
     margin-block: 0;
@@ -1205,11 +1209,17 @@
       .chat-text,
       .chat-json-collapse,
       .chat-message-disclosure,
+      .chat-message-avatar-anchor,
       .chat-tools-inline
     ) {
       margin-block-start: var(--chat-block-gap);
     }
   }
+}
+
+/* A display-contents anchor transfers its block gap to the first rendered box. */
+.chat-bubble:not(.chat-bubble--with-images) > .chat-message-avatar-anchor > :first-child {
+  margin-block-start: inherit;
 }
 
 .chat-text > * + *,

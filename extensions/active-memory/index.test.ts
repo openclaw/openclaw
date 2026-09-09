@@ -2074,6 +2074,113 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 
+  it.each([0, -1_000])(
+    "continues model recall after trigger timeout with a %d ms wall-clock change",
+    async (wallClockChangeMs) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const elapsedNow = performance.now.bind(performance);
+      let elapsedFractionMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsedNow() + elapsedFractionMs);
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((delayMs: number) => {
+        expect(Number.isInteger(delayMs)).toBe(true);
+        const controller = new AbortController();
+        setTimeout(() => {
+          controller.abort(new DOMException("trigger lookup timed out", "TimeoutError"));
+        }, delayMs);
+        return controller.signal;
+      });
+      // Preflight setup consumes most of the budget before lane one starts, so a
+      // fresh or fixed-offset trigger timeout would still lose to the watchdog.
+      vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
+        lookup: async () =>
+          await new Promise<undefined>((resolve) => {
+            setTimeout(() => {
+              elapsedFractionMs = 0.25;
+              const elapsedBeforeCorrection = performance.now();
+              vi.setSystemTime(Date.now() + wallClockChangeMs);
+              expect(performance.now()).toBe(elapsedBeforeCorrection);
+              resolve(undefined);
+            }, 1_000);
+          }),
+      });
+      hoisted.getActiveMemorySearchManager.mockImplementationOnce(
+        () => new Promise<never>(() => {}),
+      );
+
+      let settled = false;
+      const isSettled = () => settled;
+      const resultPromise = runPromptBuild(
+        { prompt: "what did we decide?" },
+        {
+          sessionKey: "agent:main:telegram:direct:owner",
+          messageProvider: "telegram",
+          channelId: "owner",
+        },
+      ).finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      for (let attempt = 0; attempt < 40 && !isSettled(); attempt += 1) {
+        await vi.advanceTimersByTimeAsync(25);
+      }
+
+      const result = await resultPromise;
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+      expect(typeof result?.prependContext).toBe("string");
+      expect(
+        hasDebugLine("active-memory: lane-1 trigger recall failed: trigger lookup timed out"),
+      ).toBe(true);
+      expect(
+        vi
+          .mocked(api.logger.warn)
+          .mock.calls.some((call: unknown[]) => String(call[0]).includes("preflight timed out")),
+      ).toBe(false);
+    },
+  );
+
+  it("skips trigger lookup outright when the remaining preflight budget cannot cover its settle reserve", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    // Setup consumes all but 10 ms of the 1500 ms preflight budget, less than
+    // the reserve lane one needs to abort before the watchdog.
+    vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
+      lookup: async () =>
+        await new Promise<undefined>((resolve) => {
+          setTimeout(() => resolve(undefined), 1_490);
+        }),
+    });
+    hoisted.getActiveMemorySearchManager.mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    let settled = false;
+    const isSettled = () => settled;
+    const resultPromise = runPromptBuild(
+      { prompt: "what did we decide?" },
+      {
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    ).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_490);
+    for (let attempt = 0; attempt < 40 && !isSettled(); attempt += 1) {
+      await vi.advanceTimersByTimeAsync(25);
+    }
+
+    const result = await resultPromise;
+    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(
+      hasDebugLine("active-memory: lane-1 trigger recall skipped: preflight budget exhausted"),
+    ).toBe(true);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(typeof result?.prependContext).toBe("string");
+    expect(
+      vi
+        .mocked(api.logger.warn)
+        .mock.calls.some((call: unknown[]) => String(call[0]).includes("preflight timed out")),
+    ).toBe(false);
+  });
+
   it("frames the blocking memory subagent as a memory search agent for another model", async () => {
     await runPromptBuild({
       prompt: "What is my favorite food? strict-style-check",
@@ -4587,7 +4694,7 @@ describe("active-memory plugin", () => {
   });
 
   it("preserves recall settlement time after near-limit preflight latency", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     testing.setTimeoutPartialDataGraceMsForTests(100);

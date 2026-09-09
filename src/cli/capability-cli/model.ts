@@ -20,7 +20,7 @@ import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store
 import { buildExplicitSessionIdSessionKey } from "../../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../../agents/model-selection.js";
-import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -59,7 +59,7 @@ const HEIC_MODEL_RUN_MIMES = new Set([
 async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: string) {
   const agentId =
     rawAgentId === undefined ? undefined : resolveCapabilityProviderAgentId(cfg, rawAgentId);
-  const prepared = await loadPreparedModelCatalog({ config: cfg, agentId, readOnly: true });
+  const prepared = await readPreparedModelCatalog({ config: cfg, agentId, readOnly: true });
   return prepared.toSorted(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
   );
@@ -76,7 +76,7 @@ async function canonicalizeModelRunRef(params: {
     raw: params.raw,
     defaultProvider: DEFAULT_PROVIDER,
     loadCatalog: () =>
-      loadPreparedModelCatalog({ config: params.cfg, agentId: params.agentId, readOnly: true }),
+      readPreparedModelCatalog({ config: params.cfg, agentId: params.agentId, readOnly: true }),
     preserveAuthProfile: params.preserveAuthProfile,
   });
 }

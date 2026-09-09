@@ -1,6 +1,7 @@
 // Pure grouping helpers for the sessions table "Group by" modes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { resolveSessionDisplayKind } from "../session-display.ts";
 import {
   checkoutDisplayName,
   foldWorktreeCheckoutPath,
@@ -166,7 +167,7 @@ function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy): s
     case "channel":
       return sessionRowChannel(row);
     case "kind":
-      return row.kind;
+      return resolveSessionDisplayKind(row);
     case "agent":
       // parseSessionKeyParts only matches channel-style keys; plain agent
       // sessions like "agent:main:main" need the agent:<id>:<rest> parser.

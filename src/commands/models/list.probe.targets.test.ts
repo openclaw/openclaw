@@ -23,7 +23,7 @@ const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: loadModelCatalogMock,
+  readPreparedModelCatalog: loadModelCatalogMock,
 }));
 vi.mock("../../agents/model-auth.js", () => ({
   hasSyntheticLocalProviderAuthConfig: () => false,

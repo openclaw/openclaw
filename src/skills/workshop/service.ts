@@ -54,7 +54,6 @@ export {
   SkillProposalStaleTargetError,
 } from "./service-propose.js";
 export {
-  getSkillProposalRunProgress,
   inspectSkillProposal,
   listSkillProposals,
   resolvePendingSkillProposal,

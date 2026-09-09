@@ -19,6 +19,7 @@ import type {
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
 import {
+  isUpdateDoctorRun,
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
@@ -508,7 +509,23 @@ async function runDoctorHealthContributionList(
 ): Promise<void> {
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
   throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
+  const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
+  const deferred = updateDoctorRun
+    ? contributions.filter((contribution) => contribution.updatePolicy === "standalone")
+    : [];
+  if (deferred.length > 0) {
+    const { note } = await loadNoteModule();
+    note(
+      `Omitted during update: ${deferred.map((contribution) => contribution.option.label).join(", ")}.\nRun \`openclaw doctor\` after the update to inspect these diagnostics.`,
+      "Update Doctor scope",
+    );
+  }
   for (const contribution of contributions) {
+    // Skip before opening a plugin snapshot; these diagnostics cannot establish
+    // required migration readiness and have their own standalone invocation.
+    if (updateDoctorRun && contribution.updatePolicy === "standalone") {
+      continue;
+    }
     try {
       const run = async () => {
         try {

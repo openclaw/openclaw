@@ -389,12 +389,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         (localExpires === undefined || mainExpires > localExpires) &&
         isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCred)
       ) {
-        params.store.profiles[params.profileId] = { ...mainCred };
-        authProfilesLog.info("adopted newer OAuth credentials from main agent", {
-          profileId: params.profileId,
-          agentDir: params.agentDir,
-          expires: new Date(mainCred.expires).toISOString(),
-        });
         return mainCred;
       }
     } catch (err) {
@@ -412,13 +406,50 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return `${provider}\u0000${profileId}`;
   }
 
+  class OAuthSettlementCredentialValidationError extends Error {
+    constructor(cause: unknown, cleanupErrors: readonly unknown[] = []) {
+      const error = toErrorObject(cause, "OAuth credential validation failed");
+      super(error.message, { cause: appendOAuthRefreshCleanupErrors(error, cleanupErrors) });
+      this.name = "OAuthSettlementCredentialValidationError";
+    }
+  }
+
+  function validateSettlementCredential(
+    validateCredential: ((credential: OAuthCredential) => void) | undefined,
+    credential: OAuthCredential,
+  ): void {
+    try {
+      validateCredential?.(credential);
+    } catch (error) {
+      throw new OAuthSettlementCredentialValidationError(error);
+    }
+  }
+
   async function resolveAuthoritativeSharedOAuthCredentialUnderLock(params: {
     profileId: string;
     candidate: OAuthCredential;
+    validateCredential?: (credential: OAuthCredential) => void;
   }): Promise<OAuthCredential | undefined> {
+    let validatedAuthoritative = false;
+    const acceptAuthoritative = (credential: OAuthCredential): boolean => {
+      try {
+        validateSettlementCredential(params.validateCredential, credential);
+        validatedAuthoritative = true;
+        return true;
+      } catch {
+        authProfilesLog.warn(
+          "refused shared OAuth credential during settlement: credential validation failed",
+          {
+            profileId: params.profileId,
+          },
+        );
+        return false;
+      }
+    };
     const updated = await updateAuthProfileStoreWithLock({
       agentDir: undefined,
       profileId: params.profileId,
+      sharedStoreWrite: true,
       updater: (store) => {
         const existing = store.profiles[params.profileId];
         const decision = shouldMirrorRefreshedOAuthCredential({
@@ -434,9 +465,16 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               },
             );
           }
+          if (decision.reason === "incoming-not-fresher" && existing?.type === "oauth") {
+            acceptAuthoritative(existing);
+          }
+          return false;
+        }
+        if (existing?.type === "oauth" && !acceptAuthoritative(existing)) {
           return false;
         }
         store.profiles[params.profileId] = { ...params.candidate };
+        validatedAuthoritative = true;
         authProfilesLog.debug("mirrored refreshed OAuth credential to main agent store", {
           profileId: params.profileId,
           expires: Number.isFinite(params.candidate.expires)
@@ -449,6 +487,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     if (updated === null) {
       throw new Error("Failed to read authoritative shared OAuth credential");
     }
+    if (!validatedAuthoritative) {
+      return undefined;
+    }
     const authoritative = updated.profiles[params.profileId];
     return authoritative?.type === "oauth" ? authoritative : undefined;
   }
@@ -457,13 +498,16 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     claim: Extract<OAuthRefreshClaim, { kind: "claimed" }>;
     claims: readonly OAuthRefreshPeerClaim[];
     replacement: OAuthCredential;
+    validateCredential?: (credential: OAuthCredential) => void;
   }): Promise<void> {
+    validateSettlementCredential(params.validateCredential, params.replacement);
     const authoritativeSharedCredential =
       params.claim.authPath === resolveSharedAuthStorePath()
         ? params.replacement
         : await resolveAuthoritativeSharedOAuthCredentialUnderLock({
             profileId: params.claim.profileId,
             candidate: params.replacement,
+            validateCredential: params.validateCredential,
           });
     settleOAuthRefreshPeerClaims({
       profileId: params.claim.profileId,
@@ -539,6 +583,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     agentDir?: string;
     profileId: string;
     fence: OAuthCredential;
+    settledCredential?: OAuthCredential;
   }): Promise<void> {
     const updated = await updateAuthProfileStoreWithLock({
       agentDir: params.agentDir,
@@ -546,7 +591,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       updater: (store) => {
         const existing = store.profiles[params.profileId];
         if (
-          !isExactOAuthCredential(existing?.type === "oauth" ? existing : undefined, params.fence)
+          !isExactOAuthCredential(
+            existing?.type === "oauth" ? existing : undefined,
+            params.settledCredential ?? params.fence,
+          )
         ) {
           return false;
         }
@@ -614,6 +662,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     attemptedCredential: OAuthCredential;
     bootstrapCredential?: OAuthCredential | null;
     bootstrapBaseCredential?: OAuthCredential;
+    validateCredential?: (credential: OAuthCredential) => void;
   }): Promise<OAuthRefreshClaim> {
     const personalProfile = isUserModelAuthProfileId(params.profileId);
     const ownerAgentDir = personalProfile
@@ -635,6 +684,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             return { kind: "unavailable" };
           }
           const storedFence = isOAuthRefreshFence(cred);
+          if (!storedFence) {
+            params.validateCredential?.(cred);
+          }
           let credentialToRefresh = cred;
           if (
             !storedFence &&
@@ -693,6 +745,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 !params.forceRefresh &&
                 isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
               ) {
+                params.validateCredential?.(mainCred);
                 authProfilesLog.info(
                   "adopted fresh OAuth credential from main store (under refresh lock)",
                   {
@@ -756,6 +809,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               );
             } else {
               credentialToRefresh = externallyManaged;
+              params.validateCredential?.(credentialToRefresh);
               if (!params.forceRefresh && hasUsableOAuthCredential(externallyManaged)) {
                 return { kind: "use", credential: externallyManaged };
               }
@@ -820,6 +874,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             ];
             if (current?.type !== "oauth" || current.provider !== params.provider) {
               return { kind: "unavailable" };
+            }
+            if (!isOAuthRefreshFence(current)) {
+              params.validateCredential?.(current);
             }
             if (isPendingOAuthRefreshFence(current)) {
               return {
@@ -929,6 +986,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     attemptedCredentials?: OAuthCredential[];
     bootstrapCredential?: OAuthCredential | null;
     bootstrapBaseCredential?: OAuthCredential;
+    validateCredential?: (credential: OAuthCredential) => void;
   }): Promise<ResolvedOAuthAccess | null> {
     const claim = await claimOAuthRefresh(params);
     if (claim.kind === "unavailable") {
@@ -953,6 +1011,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           ) {
             return null;
           }
+          params.validateCredential?.(credential);
           return {
             apiKey: await adapter.buildApiKey(credential.provider, credential, {
               cfg: params.cfg,
@@ -965,6 +1024,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       return observed;
     }
     if (claim.kind === "use") {
+      params.validateCredential?.(claim.credential);
       return {
         apiKey: await adapter.buildApiKey(claim.credential.provider, claim.credential, {
           cfg: params.cfg,
@@ -980,17 +1040,23 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
 
     type FailureSettlement = {
       supersedingOwner: OAuthCredential | null;
+      validationError: OAuthSettlementCredentialValidationError | null;
       cleanupErrors: unknown[];
     };
 
     const failClaim = async (): Promise<FailureSettlement> => {
-      let result: FailureSettlement = { supersedingOwner: null, cleanupErrors: [] };
+      let result: FailureSettlement = {
+        supersedingOwner: null,
+        validationError: null,
+        cleanupErrors: [],
+      };
       try {
         await withOAuthProfileLock(
           { provider: params.provider, profileId: params.profileId },
           async () => {
             const cleanupErrors: unknown[] = [];
             let supersedingOwner: OAuthCredential | null = null;
+            let validationError: OAuthSettlementCredentialValidationError | null = null;
             try {
               const owner = loadStoredOAuthRefreshStore(claim.ownerAgentDir, params.profileId)
                 .profiles[params.profileId];
@@ -1034,11 +1100,16 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                   claim,
                   claims: activePeerClaims,
                   replacement: supersedingOwner,
+                  validateCredential: params.validateCredential,
                 });
-                result = { supersedingOwner, cleanupErrors };
+                result = { supersedingOwner, validationError, cleanupErrors };
                 return;
               } catch (error) {
-                cleanupErrors.push(error);
+                if (error instanceof OAuthSettlementCredentialValidationError) {
+                  validationError = error;
+                } else {
+                  cleanupErrors.push(error);
+                }
               }
             }
             try {
@@ -1059,13 +1130,14 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             } catch (error) {
               cleanupErrors.push(error);
             }
-            result = { supersedingOwner: null, cleanupErrors };
+            result = { supersedingOwner: null, validationError, cleanupErrors };
           },
         );
         return result;
       } catch (error) {
         return {
           supersedingOwner: null,
+          validationError: result.validationError,
           cleanupErrors: [...result.cleanupErrors, error],
         };
       }
@@ -1077,9 +1149,13 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       const initiatingError = failure
         ? toErrorObject(failure.error, "OAuth refresh failed")
         : undefined;
-      const { supersedingOwner, cleanupErrors } = await failClaim();
+      const { supersedingOwner, validationError, cleanupErrors } = await failClaim();
+      if (validationError) {
+        throw new OAuthSettlementCredentialValidationError(validationError, cleanupErrors);
+      }
       if (supersedingOwner) {
         try {
+          params.validateCredential?.(supersedingOwner);
           return {
             apiKey: await adapter.buildApiKey(supersedingOwner.provider, supersedingOwner, {
               cfg: params.cfg,
@@ -1130,6 +1206,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         if (!isSafeOAuthOwnerRefreshResult(claim.credential, rotated)) {
           throw new Error("OAuth refresh returned credentials for a different OAuth account");
         }
+        params.validateCredential?.(rotated);
         const settled = await withOAuthProfileLock(
           { provider: params.provider, profileId: params.profileId },
           async () => {
@@ -1168,8 +1245,37 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 claim,
                 claims: activePeerClaims,
                 replacement: claimSettlement.credential,
+                validateCredential: params.validateCredential,
               });
             } catch (peerSettlementError) {
+              if (peerSettlementError instanceof OAuthSettlementCredentialValidationError) {
+                const cleanupErrors: unknown[] = [];
+                try {
+                  failOAuthRefreshPeerClaims({
+                    profileId: params.profileId,
+                    fence: claim.fence,
+                    claims: activePeerClaims,
+                  });
+                } catch (error) {
+                  cleanupErrors.push(error);
+                }
+                if (claimSettlement.persisted) {
+                  try {
+                    await markOAuthRefreshClaimFailed({
+                      agentDir: claim.ownerAgentDir,
+                      profileId: params.profileId,
+                      fence: claim.fence,
+                      settledCredential: claimSettlement.credential,
+                    });
+                  } catch (error) {
+                    cleanupErrors.push(error);
+                  }
+                }
+                throw new OAuthSettlementCredentialValidationError(
+                  peerSettlementError,
+                  cleanupErrors,
+                );
+              }
               try {
                 failOAuthRefreshPeerClaims({
                   profileId: params.profileId,
@@ -1193,6 +1299,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         if (!settled) {
           throw new Error("Failed to persist refreshed OAuth credential");
         }
+        params.validateCredential?.(settled.credential);
         return {
           apiKey: await adapter.buildApiKey(settled.credential.provider, settled.credential, {
             cfg: params.cfg,
@@ -1201,6 +1308,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           credential: settled.credential,
         };
       } catch (error) {
+        if (error instanceof OAuthSettlementCredentialValidationError) {
+          throw error;
+        }
         return await settleFailure({ error });
       }
     })();
@@ -1228,6 +1338,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     agentDir?: string;
     cfg?: OpenClawConfig;
     forceRefresh?: boolean;
+    validateCredential?: (credential: OAuthCredential) => void;
   }): Promise<ResolvedOAuthAccess | null> {
     const personalProfile = isUserModelAuthProfileId(params.profileId);
     let credential = params.credential;
@@ -1240,13 +1351,22 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       }
       credential = owned;
     }
-    const adoptedCredential =
-      adoptNewerMainOAuthCredential({
-        store: params.store,
+    const newerMainCredential = adoptNewerMainOAuthCredential({
+      store: params.store,
+      profileId: params.profileId,
+      agentDir: params.agentDir,
+      credential,
+    });
+    if (newerMainCredential) {
+      params.validateCredential?.(newerMainCredential);
+      params.store.profiles[params.profileId] = { ...newerMainCredential };
+      authProfilesLog.info("adopted newer OAuth credentials from main agent", {
         profileId: params.profileId,
         agentDir: params.agentDir,
-        credential,
-      }) ?? credential;
+        expires: new Date(newerMainCredential.expires).toISOString(),
+      });
+    }
+    const adoptedCredential = newerMainCredential ?? credential;
     const bootstrapCredential = personalProfile
       ? null
       : adapter.readBootstrapCredential({
@@ -1267,6 +1387,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       !isOAuthRefreshFence(adoptedCredential) &&
       hasUsableOAuthCredential(effectiveCredential)
     ) {
+      params.validateCredential?.(effectiveCredential);
       return {
         apiKey: await adapter.buildApiKey(effectiveCredential.provider, effectiveCredential, {
           cfg: params.cfg,
@@ -1287,18 +1408,21 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         attemptedCredentials,
         bootstrapCredential,
         bootstrapBaseCredential: adoptedCredential,
+        validateCredential: params.validateCredential,
       });
       return refreshed;
     } catch (error) {
       let refreshError: unknown = error;
       let recoveryBuildFailed =
-        refreshError instanceof Error && oauthRefreshRecoveryBuildFailures.has(refreshError);
+        refreshError instanceof OAuthSettlementCredentialValidationError ||
+        (refreshError instanceof Error && oauthRefreshRecoveryBuildFailures.has(refreshError));
       let refreshedStore = params.store;
       let recoveryStoreLoaded = false;
       const buildRecoveryAccess = async (
         candidate: OAuthCredential,
       ): Promise<ResolvedOAuthAccess | null> => {
         try {
+          params.validateCredential?.(candidate);
           return {
             apiKey: await adapter.buildApiKey(candidate.provider, candidate, {
               cfg: params.cfg,
@@ -1351,6 +1475,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               candidate: mainCred,
             })
           ) {
+            params.validateCredential?.(mainCred);
             refreshedStore.profiles[params.profileId] = { ...mainCred };
             authProfilesLog.info("inherited fresh OAuth credentials from main agent", {
               profileId: params.profileId,

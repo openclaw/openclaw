@@ -8,6 +8,7 @@ import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-co
 import {
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
+  stateDirGatewayFixtureEntrypoint,
 } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
@@ -42,6 +43,7 @@ export const vitestWorkerBuildEntries = {
       ...publishedSdkBridgeEntrypoints,
       ...Object.values(cliRecoveryEntrypoints),
       ...Object.values(gatewayDirectStopEntrypoints),
+      stateDirGatewayFixtureEntrypoint,
       ...Object.values(doctorConfigRuntimeEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
       ...Object.values(tuiPtyRuntimeEntrypoints),

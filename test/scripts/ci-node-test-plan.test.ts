@@ -440,6 +440,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "ui/src/styles/cursor-policy.node.test.ts",
     ]);
     expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
+    expect(resolvePolicyTestTargets(["extensions/anthropic/openclaw.plugin.json"])).toEqual([
+      "src/agents/model-ref-shared.test.ts",
+    ]);
   });
 
   it("matches policy owners only for exact changed paths", () => {
@@ -2212,6 +2215,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       Array.from({ length: 10 }, (_, index) => `test/scripts/zz-growth-probe-${index}.test.ts`),
       ["test/scripts/openclaw-performance-crabbox.test.ts"],
       ["test/scripts/install-smoke-ref-admission.test.ts"],
+      [
+        "test/scripts/npm-package-locks-report.test.ts",
+        "test/scripts/openclaw-performance-crabbox.test.ts",
+        "test/scripts/install-smoke-ref-admission.test.ts",
+      ],
     ];
     const growthFiles = new Set([inventoryGrowthFile, ...extraInventories.flat()]);
     const isHostedToolingGroup = (group: { shard_name: string }) =>

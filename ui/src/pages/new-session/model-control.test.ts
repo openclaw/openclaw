@@ -246,7 +246,15 @@ describe("new-session model runtime", () => {
   it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
     const { context } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
-      { id: "llama-4", name: "Llama 4", provider: "ollama" },
+      {
+        id: "llama-4",
+        name: "Llama 4",
+        provider: "ollama",
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High" },
+        ],
+      },
     ]);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
@@ -360,6 +368,10 @@ describe("new-session model runtime", () => {
     container = renderControl(control, context, "main", {
       id: "main",
       model: { primary: "openai/gpt-5.6-sol" },
+      thinkingLevels: [
+        { id: "off", label: "Off" },
+        { id: "high", label: "High" },
+      ],
       thinkingDefault: "high",
     });
     expect(
@@ -382,7 +394,43 @@ describe("new-session model runtime", () => {
     expect(control.thinkingLevel).toBe("");
   });
 
-  it("shows Medium for a hydrated agent without a projected thinking default", async () => {
+  it("uses the draft model's published thinking profile instead of inventing Medium", async () => {
+    const { context } = contextWith([
+      {
+        id: "published",
+        name: "Published thinking",
+        provider: "thinking-fixture",
+        reasoning: true,
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High" },
+        ],
+        thinkingDefault: "high",
+      },
+    ]);
+    const agent = { id: "main", model: { primary: "thinking-fixture/published" } };
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true, { agent });
+    await waitForFast(() =>
+      expect(renderControl(control, context, "main", agent).textContent).toContain(
+        "Published thinking",
+      ),
+    );
+
+    const container = renderControl(control, context, "main", agent);
+    const picker = container.querySelector('[data-chat-thinking-select="true"]');
+    expect(picker).not.toBeNull();
+    expect(picker?.textContent).toContain("High");
+    expect(picker?.textContent).not.toContain("Medium");
+    expect(
+      container
+        .querySelector('[data-chat-thinking-slider="true"]')
+        ?.getAttribute("data-chat-thinking-values"),
+    ).toBe("low,high");
+    expect(control.thinkingLevel).toBe("");
+  });
+
+  it("does not invent Medium for a hydrated agent without a thinking profile", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
     ]);
@@ -402,9 +450,8 @@ describe("new-session model runtime", () => {
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "GPT-5.6 Sol",
     );
-    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
-      "Medium",
-    );
+    expect(container.textContent).not.toContain("Medium");
+    expect(container.querySelector('[data-chat-thinking-slider="true"]')).toBeNull();
     expect(control.selected).toBe("");
     expect(control.thinkingLevel).toBe("");
   });
@@ -413,6 +460,10 @@ describe("new-session model runtime", () => {
     const agent = {
       id: "main",
       model: { primary: "openai/gpt-5.6-sol" },
+      thinkingLevels: [
+        { id: "off", label: "Off" },
+        { id: "high", label: "High" },
+      ],
       thinkingDefault: "high",
     } satisfies GatewayAgentRow;
     const { context } = contextWith([

@@ -47,7 +47,6 @@ const scalarInputState = new WeakMap<
   {
     controlIdentity: unknown;
     sourceIdentity: unknown;
-    rowIdentity: unknown;
     pathKey: string;
     presentationIdentity: string;
     renderedValue: string;
@@ -64,7 +63,6 @@ function syncScalarInputIdentity(
   element: Element | undefined,
   controlIdentity: unknown,
   sourceIdentity: unknown,
-  rowIdentity: unknown,
   pathKey: string,
   presentationIdentity: string,
   renderedValue: string,
@@ -77,7 +75,6 @@ function syncScalarInputIdentity(
   if (previous) {
     if (
       !Object.is(previous.sourceIdentity, sourceIdentity) ||
-      !Object.is(previous.rowIdentity, rowIdentity) ||
       previous.pathKey !== pathKey ||
       previous.presentationIdentity !== presentationIdentity ||
       previous.renderedValue !== renderedValue
@@ -100,7 +97,6 @@ function syncScalarInputIdentity(
   scalarInputState.set(element, {
     controlIdentity,
     sourceIdentity,
-    rowIdentity,
     pathKey,
     presentationIdentity,
     renderedValue,
@@ -304,7 +300,10 @@ export function renderTextInput(
       : undefined;
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
-  const controlPathKey = configFieldId(path, "scalar-identity");
+  const controlPathKey = configFieldId(
+    path.filter((segment) => typeof segment === "string"),
+    "scalar-identity",
+  );
   const renderedValue = formatConfigValueText(displayValue);
   const presentationIdentity = [
     effectiveRedacted ? "redacted" : "visible",
@@ -350,12 +349,11 @@ export function renderTextInput(
   const inputControl = html`
     <input
       ${ref((element) => {
-        syncScalarEditIdentity(element, params.rowIdentity, controlPathKey, presentationIdentity);
+        syncScalarEditIdentity(element, controlPathKey, presentationIdentity);
         syncScalarInputIdentity(
           element,
           controlIdentity,
           sourceIdentity,
-          params.rowIdentity,
           controlPathKey,
           presentationIdentity,
           renderedValue,
@@ -504,7 +502,10 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const numericStep = typeof constraints.step === "number" ? constraints.step : 1;
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
-  const controlPathKey = configFieldId(path, "scalar-identity");
+  const controlPathKey = configFieldId(
+    path.filter((segment) => typeof segment === "string"),
+    "scalar-identity",
+  );
   const renderedValue = formatConfigValueText(displayValue);
   const revalidate = (target: HTMLInputElement) => {
     setControlValidity(
@@ -550,7 +551,6 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           element,
           controlIdentity,
           sourceIdentity,
-          params.rowIdentity,
           controlPathKey,
           "number",
           renderedValue,

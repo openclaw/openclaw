@@ -149,7 +149,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 ### Platform-specific security shards
 
 - `CodeQL Android Critical Security` — scheduled Android security shard. Builds the Android app manually for CodeQL on the smallest Blacksmith Linux runner accepted by workflow sanity. Uploads under `/codeql-critical-security/android`.
-- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Builds the macOS app manually for CodeQL on GitHub-hosted macOS, filters dependency build results out of uploaded SARIF, and uploads under `/codeql-critical-security/macos`. Kept outside daily defaults because macOS build dominates runtime even when clean.
+- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Prepares the generated Mermaid resources on GitHub-hosted Linux, then builds the ARM64 macOS app manually for CodeQL on a GitHub-hosted Intel runner without unused index-store or debug-info artifacts; filters dependency build results out of uploaded SARIF; and uploads under `/codeql-critical-security/macos`. Its macOS job has a 90-minute ceiling because the complete traced build and analysis exceed the previous 45-minute budget. Kept outside daily defaults because macOS build dominates runtime even when clean.
 
 ### Critical Quality categories
 
@@ -224,6 +224,25 @@ For local reproduction, run
 selects a shorter 30-second diagnostic budget but preserves exit codes: 0 means
 no matching findings, 1 means findings or an error, and 2 means incomplete coverage.
 Ordinary CI, scheduled audits, and local hooks propagate every non-zero exit.
+
+### Docs Sync Publish Repo
+
+`Docs Sync Publish Repo` assembles English, ClawHub, and preserved translated
+pages in `openclaw/docs`. After each final rebase and before pushing, it installs
+the publisher's existing npm lock with `npm ci` and checks the resulting docs
+tree. Push retries reuse that install unless the publisher manifest or lock
+changes. The checker runs natively on Node 24; no separate checker dependency
+graph or TypeScript loader is installed.
+
+The disposable Actions validation cache records successful page checks by
+repository-relative path and complete raw content hash. Checker and helper
+changes, Node/runtime changes, or requested/installed npm lock changes invalidate
+reuse. Missing or corrupt cache data triggers full checking; deleted pages are
+pruned from the next successful cache. `docs.json` is checked every time, including
+on warm runs. Only successful main-branch workflows save the artifact, outside
+the publish repository. The checker preserves its Markdown/MDX format detection,
+poison-text checks, and component-indentation checks; it does not replace the
+site renderer or cross-page link validation.
 
 ### Docs Agent
 

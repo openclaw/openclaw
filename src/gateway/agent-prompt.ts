@@ -1,7 +1,7 @@
 // Gateway agent prompt builder.
 // Converts conversation entries into the latest-message-plus-history prompt.
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
+import { buildHistoryContext, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 
 export type ConversationEntry = {
@@ -22,28 +22,15 @@ export function renderConversationToolCall(call: ConversationToolCall): string {
 // for the active user turn. Keep it shared so the two endpoints stay in sync.
 export const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
 
-/**
- * Coerce body to string. Handles cases where body is a content array
- * (e.g. [{type:"text", text:"hello"}]) that would serialize as
- * [object Object] if used directly in a template literal.
- */
-function safeBody(body: unknown): string {
-  return typeof body === "string" ? body : (extractTextFromChatContent(body) ?? "");
-}
-
-function toPromptEntry(entry: ConversationEntry): HistoryEntry | null {
-  const body = safeBody(entry.entry.body);
-  if (
-    entry.role === "assistant" &&
+/** Normalize content-array bodies and omit provenance-marked stream-error placeholders. */
+function toPromptBody(entry: ConversationEntry): string | null {
+  const raw = entry.entry.body;
+  const body = typeof raw === "string" ? raw : (extractTextFromChatContent(raw) ?? "");
+  return entry.role === "assistant" &&
     entry.internalStreamError === true &&
     body.trim() === STREAM_ERROR_FALLBACK_TEXT
-  ) {
-    return null;
-  }
-  return {
-    ...entry.entry,
-    body,
-  };
+    ? null
+    : body;
 }
 
 /** Build the prompt text sent to an agent from ordered conversation entries. */
@@ -72,27 +59,26 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
     return "";
   }
 
-  const historyEntries: HistoryEntry[] = [];
-  entries.slice(0, currentIndex).forEach((entry) => {
-    const promptEntry = toPromptEntry(entry);
-    if (promptEntry) {
-      historyEntries.push(promptEntry);
+  const historyLines: string[] = [];
+  // Both HTTP adapters construct dense entries before selecting the current turn.
+  for (let index = 0; index < currentIndex; index += 1) {
+    const entry = entries[index]!;
+    const body = toPromptBody(entry);
+    if (body !== null) {
+      historyLines.push(`${entry.entry.sender}: ${body}`);
     }
-  });
-  const currentPromptEntry = toPromptEntry(currentConversationEntry);
-  if (!currentPromptEntry) {
+  }
+  const currentBody = toPromptBody(currentConversationEntry);
+  if (currentBody === null) {
     return "";
   }
   // A completed tool call still needs its identity when its output is empty.
-  if (historyEntries.length === 0 && currentConversationEntry.role !== "tool") {
-    return currentPromptEntry.body;
+  if (historyLines.length === 0 && currentConversationEntry.role !== "tool") {
+    return currentBody;
   }
 
-  const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${entry.body}`;
-  return buildHistoryContextFromEntries({
-    entries: historyEntries,
-    currentMessage: formatEntry(currentPromptEntry),
-    formatEntry,
-    excludeLast: false,
+  return buildHistoryContext({
+    historyText: historyLines.join("\n"),
+    currentMessage: `${currentEntry.sender}: ${currentBody}`,
   });
 }

@@ -152,9 +152,12 @@ function repairStateSchema(
         const applied: string[] = [];
         const previousVersion = readStateSchemaContentVersion(db);
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
-          for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-            allowMissingColumns: true,
-          })) {
+          for (const name of verifyAndRepairCanonicalSqliteIndexes(
+            db,
+            pathname,
+            OPENCLAW_STATE_SCHEMA_SQL,
+            { allowMissingColumns: true },
+          )) {
             rebuiltIndexNames.add(name);
           }
           // Current-schema doctor repair may normalize recognized columns or
@@ -164,8 +167,6 @@ function repairStateSchema(
           });
         } else {
           openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
-        }
-        if (rebuiltIndexNames.size === 0) {
           assertSqliteIntegrity(db, pathname);
         }
         dropLegacyStateTables(db);

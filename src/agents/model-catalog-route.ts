@@ -3,11 +3,16 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
+  matchesProviderScopedModelId,
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
 } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import {
+  resolveProviderModelCatalogId,
+  resolveProviderModelPolicySurface,
+} from "../plugins/provider-model-routes.js";
 import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
@@ -60,16 +65,26 @@ export function resolveConfiguredModelCatalogOverrides(params: {
 }): ModelCatalogLogicalOverrides | undefined {
   const provider = normalizeProviderId(params.entry.provider);
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
-  if (!providerConfig) {
+  if (!providerConfig?.models?.length) {
     return undefined;
   }
+  const surface = resolveProviderModelPolicySurface(provider);
   const normalizeConfiguredModelId = (modelId: string) =>
     params.policy?.resolveIdentity({ provider: params.entry.provider, id: modelId })?.key ??
+    resolveProviderModelCatalogId({ provider, modelId, surface }) ??
     modelId.trim();
+  const modelId =
+    params.policy?.resolveIdentity(params.entry)?.id ??
+    resolveProviderModelCatalogId({ provider, modelId: params.entry.id, surface }) ??
+    params.entry.id.trim();
+  const exactModels = providerConfig.models.filter((candidate) =>
+    matchesProviderScopedModelId({ candidateId: candidate.id, provider, modelId }),
+  );
+  // Match the row group execution will use, then retain same-spelling duplicate merges.
   const model = resolveMergedModelProviderModels({
-    models: providerConfig.models,
+    models: exactModels.length > 0 ? exactModels : providerConfig.models,
     normalizeModelId: normalizeConfiguredModelId,
-  }).get(normalizeConfiguredModelId(params.entry.id));
+  }).get(normalizeConfiguredModelId(modelId));
   const overrides: ModelCatalogLogicalOverrides = {
     ...(model?.name ? { name: model.name } : {}),
     ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
@@ -154,9 +169,17 @@ export function projectModelCatalogEntryForRoute(params: {
   overrides?: ModelCatalogLogicalOverrides;
 }): { entry: ModelCatalogEntry; runtimeEntry: ModelCatalogEntry } {
   if (params.projection.kind === "unmanaged") {
-    const entry = applyLogicalOverrides(params.entry, params.overrides);
+    const provider = normalizeProviderId(params.entry.provider);
+    const surface = resolveProviderModelPolicySurface(provider);
+    // Route-capable owners project identity only with their route facts.
+    const id = surface?.resolveModelRoutes
+      ? null
+      : resolveProviderModelCatalogId({ provider, modelId: params.entry.id, surface });
+    const logicalEntry = id && id !== params.entry.id ? { ...params.entry, id } : params.entry;
+    const entry = applyLogicalOverrides(logicalEntry, params.overrides);
     return { entry, runtimeEntry: entry };
   }
+
   const id =
     params.projection.policy.resolveIdentity(params.entry)?.id ??
     splitTrailingAuthProfile(params.entry.id).model;

@@ -62,6 +62,7 @@ const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
 const DIST_BUILD_INFO = "dist/build-info.json";
 const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT = "dist/shared-Y6bNiw2w.js";
 const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT = "dist/shared-DTaQo6Hi.js";
+const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108 = "dist/shared-1Uyqkfns.js";
 const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1 = "dist/shared-DFJEouXv.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
@@ -180,6 +181,7 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
     [DIST_BUILD_INFO]: '{"buildId":"test-build"}\n',
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT]: "export function resolveNodeRunner() {}\n",
+    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_OPENCLAW_ALIAS_PACKAGE]:
@@ -200,6 +202,7 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
       DIST_PLUGIN_SDK_CORE,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
       `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
       ...previousReleaseInventory.releases.flatMap((release) =>
         release.chunks.map((chunk) => `dist/${chunk.path}`),
@@ -2132,6 +2135,7 @@ describe("run-node script", () => {
       DIST_BUILD_INFO,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
+      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_STABLE_ROOT_RUNTIME_ALIAS,

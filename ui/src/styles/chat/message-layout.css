@@ -218,13 +218,45 @@
 
 .chat-position-rail__preview-copy {
   display: -webkit-box;
+  max-height: 3lh;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+  overflow-wrap: anywhere;
+}
+
+.chat-position-rail__preview-copy :where(p, h1, h2, h3, h4, ul, ol, blockquote, pre) {
+  margin: 0;
+  font: inherit;
+}
+
+.chat-position-rail__preview-copy :where(ul, ol) {
+  padding-inline-start: 1.25em;
+}
+
+.chat-position-rail__preview-copy :where(code) {
+  font-family: var(--mono);
 }
 
 .chat-thread-inner > :first-child {
   margin-top: 0 !important;
+}
+
+/* Keep the destination responsive without flashing a loader on fast history.
+   Removing the skeleton when content arrives also cancels its pending reveal. */
+.chat-thread-inner > openclaw-panel-loading-skeleton {
+  animation: chat-skeleton-reveal 150ms ease-out 500ms backwards;
+}
+
+@keyframes chat-skeleton-reveal {
+  from {
+    visibility: hidden;
+    opacity: 0;
+  }
+  to {
+    visibility: visible;
+    opacity: 1;
+  }
 }
 
 .chat-thread-inner {
@@ -353,7 +385,7 @@
 }
 
 .chat-image-action:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -363,7 +395,7 @@
 }
 
 .chat-message-image-button:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: -3px;
 }
 
@@ -375,6 +407,81 @@
   border-radius: var(--radius-xl);
   object-fit: contain;
   transition: transform 150ms ease-out;
+}
+
+.chat-video-preview {
+  width: 400px;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--bg-muted);
+}
+
+.chat-video-preview__content,
+.chat-video-preview .chat-message-image-button,
+.chat-video-preview .chat-message-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.chat-video-preview__content {
+  min-width: 0;
+}
+
+.chat-video-preview__play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: auto;
+  border-radius: 50%;
+  color: var(--media-foreground);
+  background: color-mix(in srgb, var(--media-bg) 55%, transparent);
+  pointer-events: none;
+}
+
+.chat-video-preview__play svg {
+  width: 24px;
+  height: 24px;
+}
+
+.chat-video-preview__play svg polygon {
+  fill: currentColor;
+}
+
+/* A failed poster retains its tile without squeezing the existing card actions. */
+.chat-message-images--gallery .chat-video-preview {
+  .chat-assistant-attachment-card {
+    height: 100%;
+    overflow: auto;
+  }
+
+  .chat-assistant-attachment-card__header {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .chat-attachment-file-icon,
+  .chat-assistant-attachment-card__status-separator {
+    display: none;
+  }
+
+  .chat-assistant-attachment-card__status-meta {
+    display: grid;
+    gap: 2px;
+  }
+
+  .chat-assistant-attachment-card__status-meta,
+  .chat-assistant-attachment-card__status-reason {
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 .chat-message-image--small {
@@ -401,21 +508,26 @@
   transform: scale(1.02);
 }
 
-/* Local user images sit above the text bubble. Multi-image turns use compact
-   gallery tiles; assistant and peer transcript images remain one per row. */
-.chat-group.user:not(.chat-group--peer) .chat-message-images {
+/* User media shares the text bubble's side. Multi-item turns use compact
+   gallery tiles; assistant transcript images remain one per row. */
+.chat-group.user .chat-message-images {
   --chat-user-image-grid-size: min(128px, calc((100vw - 48px) / 3));
   display: grid;
   grid-template-columns: repeat(3, var(--chat-user-image-grid-size));
-  justify-content: end;
-  justify-items: end;
+  justify-content: var(--chat-user-content-align);
+  justify-items: var(--chat-user-content-align);
   width: fit-content;
   max-width: 100%;
   gap: 4px;
   margin: 0;
 }
 
-.chat-group.user:not(.chat-group--peer) .chat-message-images--two-column {
+.chat-group.user .chat-message-images > * {
+  display: grid;
+  justify-items: var(--chat-user-content-align);
+}
+
+.chat-group.user .chat-message-images--two-column {
   grid-template-columns: repeat(2, var(--chat-user-image-grid-size));
 }
 
@@ -425,11 +537,11 @@
   grid-column: 2;
 }
 
-.chat-group.user:not(.chat-group--peer) .chat-message-images--single {
+.chat-group.user .chat-message-images--single {
   grid-template-columns: minmax(0, auto);
 }
 
-.chat-group.user:not(.chat-group--peer)
+.chat-group.user
   .chat-message-images--gallery
   :is(.chat-image-frame, .chat-message-image-button, .chat-message-image) {
   width: var(--chat-user-image-grid-size);
@@ -439,16 +551,16 @@
   object-fit: cover;
 }
 
-.chat-group.user.chat-group--peer .chat-message-images {
-  align-items: flex-start;
-}
-
 .chat-assistant-attachments {
   display: flex;
   flex-direction: column;
   width: 100%;
   max-width: 100%;
   gap: var(--chat-block-gap);
+}
+
+.chat-group.user .chat-bubble--with-files {
+  width: 100%;
 }
 
 .chat-group.assistant .chat-bubble:has(.chat-assistant-attachments),
@@ -463,6 +575,7 @@
 .chat-assistant-attachment-card {
   --chat-attachment-border: var(--border-strong);
   --chat-attachment-surface: var(--bg);
+  --chat-attachment-action-size: 30px;
 
   width: 100%;
   max-width: 100%;
@@ -578,7 +691,6 @@
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
-  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -642,17 +754,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: var(--chat-attachment-action-size);
+  height: var(--chat-attachment-action-size);
   flex: none;
   gap: 5px;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--text);
   background: transparent;
   font: inherit;
-  text-decoration: none;
   cursor: var(--cursor-action);
   transition:
     color 120ms ease,
@@ -663,11 +774,10 @@
 .chat-assistant-attachment-card__action:hover {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--media-foreground) 8%, transparent);
-  text-decoration: none;
 }
 
 .chat-assistant-attachment-card__action:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -712,16 +822,17 @@
 
 .chat-assistant-attachment-card__action-skeleton {
   position: absolute;
-  inset-block: 0;
+  inset-block-start: 0;
   inset-inline-end: 0;
-  width: 64px;
-  border-radius: 50%;
+  width: calc(100% - 38px);
+  height: var(--chat-attachment-action-size);
+  border-radius: var(--radius-full);
 }
 
 .chat-assistant-attachment-card__actions--loading {
   position: relative;
   padding-inline: 38px 0;
-  height: 30px;
+  height: var(--chat-attachment-action-size);
   font-size: 12px;
   font-weight: 600;
 }

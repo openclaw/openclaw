@@ -590,7 +590,7 @@ async function noteXaiDeviceCode(
       ctx.isRemote
         ? "Open this URL in your LOCAL browser and enter the code below."
         : "Open this URL in your browser and enter the code below.",
-      `URL: ${deviceCode.verificationUriComplete ?? deviceCode.verificationUri}`,
+      `URL: <${deviceCode.verificationUriComplete ?? deviceCode.verificationUri}>`,
       `Code: ${deviceCode.userCode}`,
       `Code expires in ${expiresInMinutes} minutes. Never share it.`,
     ].join("\n"),

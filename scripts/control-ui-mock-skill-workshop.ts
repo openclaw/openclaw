@@ -135,27 +135,6 @@ export function buildSkillWorkshopMocks(baseTime: number) {
     },
     evaluation,
     requestRevision: { runId: "skill-workshop-revision-mock", status: "started" },
-    historyStatus: {
-      schema: "openclaw.skill-workshop.history-scan.v1",
-      hasScanned: false,
-      reviewedSessions: 0,
-      ideasFound: 0,
-      hasMore: false,
-      lastScanReviewed: 0,
-      lastScanIdeas: 0,
-    },
-    historyScan: {
-      schema: "openclaw.skill-workshop.history-scan.v1",
-      hasScanned: true,
-      reviewedSessions: 34,
-      ideasFound: 2,
-      hasMore: true,
-      lastScanReviewed: 20,
-      lastScanIdeas: 2,
-      lastScanAt: new Date(baseTime).toISOString(),
-      oldestReviewedAt: new Date(baseTime - 25 * day).toISOString(),
-      newestReviewedAt: new Date(baseTime).toISOString(),
-    },
   };
 }
 
@@ -171,7 +150,6 @@ function installSkillWorkshopMock(seed: ReturnType<typeof buildSkillWorkshopMock
     {
       list: SkillsProposalsListResult;
       details: Map<string, SkillsProposalInspectResult>;
-      history: typeof seed.historyStatus | typeof seed.historyScan;
     }
   >();
   for (const method of [
@@ -187,6 +165,16 @@ function installSkillWorkshopMock(seed: ReturnType<typeof buildSkillWorkshopMock
     gateway.setRequestHandler(
       method === "read" ? "skills.workshop.read" : `skills.proposals.${method}`,
       ({ params: input, respond }) => {
+        if (method === "historyStatus" || method === "historyScan") {
+          respond({
+            __mockError: {
+              code: "INVALID_REQUEST",
+              message:
+                "Historical batch scans are retired. Start a learning session from Workshop to review past conversations.",
+            },
+          });
+          return;
+        }
         const params = (input ?? {}) as {
           agentId?: string;
           proposalId?: string;
@@ -207,7 +195,6 @@ function installSkillWorkshopMock(seed: ReturnType<typeof buildSkillWorkshopMock
                 structuredClone(entry.response),
               ]),
             ),
-            history: structuredClone(seed.historyStatus),
           };
           scopes.set(agentId, scope);
         }
@@ -234,13 +221,6 @@ function installSkillWorkshopMock(seed: ReturnType<typeof buildSkillWorkshopMock
                   },
                 },
           );
-          return;
-        }
-        if (method === "historyStatus" || method === "historyScan") {
-          if (method === "historyScan") {
-            scope.history = structuredClone(seed.historyScan);
-          }
-          respond(scope.history);
           return;
         }
         const detail = params.proposalId ? scope.details.get(params.proposalId) : undefined;

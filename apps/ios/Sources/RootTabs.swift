@@ -913,7 +913,7 @@ extension RootTabs {
         } else if problem.retryable {
             self.gatewayRetryFailure = nil
             Task {
-                if case let .failed(message) = await self.gatewayController.connectActiveGateway() {
+                if case let .failed(message) = await self.gatewayController.retryGatewayConnection() {
                     self.gatewayRetryFailure = message
                 }
             }

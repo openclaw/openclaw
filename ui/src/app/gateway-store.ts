@@ -21,6 +21,7 @@ import {
   type GatewayHelloOk,
 } from "../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
+import { configuredUiDevGateway, isConfiguredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { readConnectionAuthReason } from "../lib/connection-hints.ts";
@@ -50,7 +51,7 @@ import {
   resolveGatewayCredentialsForUrlEdit,
 } from "./settings.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
-import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts";
+import { readPresenceEntries, resolveSelfPresenceUser, sameSelfUser } from "./user-profile.ts";
 
 type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
 type CanvasSurfaceLeaseModule = typeof import("./canvas-surface-lease.runtime.ts");
@@ -68,19 +69,6 @@ function readSuspensionPhase(payload: unknown): ApplicationGatewaySnapshot["susp
     phase === "prepared"
     ? phase
     : undefined;
-}
-
-function sameSelfUser(
-  left: ApplicationGatewaySnapshot["selfUser"],
-  right: ApplicationGatewaySnapshot["selfUser"],
-): boolean {
-  return (
-    left?.id === right?.id &&
-    left?.identity?.id === right?.identity?.id &&
-    left?.email === right?.email &&
-    left?.name === right?.name &&
-    left?.avatarUrl === right?.avatarUrl
-  );
 }
 
 export function createApplicationGateway(
@@ -339,6 +327,17 @@ export function createApplicationGateway(
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
+    const requestedGatewayUrl = overrides.gatewayUrl ?? connection.gatewayUrl;
+    if (configuredUiDevGateway() && !isConfiguredUiDevGateway(requestedGatewayUrl)) {
+      gateway.stop();
+      setSnapshot({
+        ...snapshot,
+        phase: "offline",
+        lastError:
+          "This development server targets a different Gateway. Restart ui:dev with OPENCLAW_UI_DEV_GATEWAY_URL set to that Gateway, or reconnect to the configured Gateway.",
+      });
+      return;
+    }
     setUnavailableDeadline("suspensionPhase");
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;

@@ -36,6 +36,71 @@ afterEach(() => resetPluginStateStoreForTests());
 afterAll(async () => testState?.cleanup());
 
 describe("plugin state open errors", () => {
+  it.each(["decode", "sqlite-step"] as const)(
+    "preserves %s failures and releases the listing cursor",
+    async (failure) => {
+      await withOpenClawTestState({ label: "plugin-state-entry-cursor" }, async () => {
+        const store = createPluginStateSyncKeyedStore("discord", {
+          namespace: "cursor",
+          maxEntries: 10,
+        });
+        store.register("a", { value: 1 });
+        store.register("b", { value: 2 });
+        const { db, path } = openOpenClawStateDatabase();
+        db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
+          "invalid first JSON",
+          "a",
+        );
+        if (failure === "sqlite-step") {
+          // The listing index lets SQLite return the corrupt first row before
+          // evaluating the second row's native JSON expression.
+          db.exec(`
+            ALTER TABLE plugin_state_entries RENAME TO plugin_state_source;
+            CREATE VIEW plugin_state_entries AS
+              SELECT plugin_id, namespace, entry_key,
+                CASE WHEN entry_key = 'b' THEN json_extract('invalid SQL JSON', '$')
+                  ELSE value_json END AS value_json,
+                created_at, expires_at
+              FROM plugin_state_source;
+          `);
+        }
+        for (const connection of ["warm", "readonly"]) {
+          if (connection === "readonly") {
+            closePluginStateDatabase();
+          }
+          expect(() => store.entries()).toThrowError(
+            expect.objectContaining({
+              code: failure === "decode" ? "PLUGIN_STATE_CORRUPT" : "PLUGIN_STATE_READ_FAILED",
+              operation: "entries",
+              path,
+              cause:
+                failure === "decode"
+                  ? expect.any(SyntaxError)
+                  : expect.objectContaining({
+                      code: "ERR_SQLITE_ERROR",
+                      message: "malformed JSON",
+                    }),
+            }),
+          );
+          const writer = new DatabaseSync(path);
+          try {
+            writer.exec("PRAGMA busy_timeout = 0");
+            const table = failure === "decode" ? "plugin_state_entries" : "plugin_state_source";
+            writer.exec(`UPDATE ${table} SET created_at = created_at + 1`);
+            // A leaked reader would pin this committed WAL and make TRUNCATE busy.
+            expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+              busy: 0,
+              log: 0,
+              checkpointed: 0,
+            });
+          } finally {
+            writer.close();
+          }
+        }
+      });
+    },
+  );
+
   it("reports the opened database path for corrupt values with an explicit env", async () => {
     await withOpenClawTestState(
       { label: "plugin-state-corrupt-explicit-env", applyEnv: false },

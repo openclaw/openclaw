@@ -132,7 +132,7 @@ runtime modes at runtime.
 The explicit mode contract used by `video_generate`, contract tests, and
 the shared live sweep:
 
-| Provider   | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes today                                                                                                                 |
+| Provider   | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes                                                                                                                       |
 | ---------- | :--------: | :------------: | :------------: | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Alibaba    |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | BytePlus   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
@@ -141,7 +141,7 @@ the shared live sweep:
 | fal        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                                  |
 | Google     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input |
 | MiniMax    |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| OpenAI     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path currently needs provider-side video edit access   |
+| OpenAI     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path needs provider-side video edit access             |
 | OpenRouter |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | Qwen       |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
@@ -516,8 +516,8 @@ transform modes the shared sweep can exercise safely with local media:
   provider/model accepts buffer-backed local video input in the shared
   sweep.
 
-Today the shared `videoToVideo` live lane covers `runway` only when you
-select `runway/gen4_aleph`.
+In the shared sweep, buffer-backed `videoToVideo` runs for `runway` only with
+`runway/gen4_aleph`, and for `fal` only with a `reference-to-video` model.
 
 ## Configuration
 

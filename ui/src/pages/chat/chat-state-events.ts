@@ -2,7 +2,6 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import {
@@ -575,15 +574,12 @@ export function handlePageGatewayEvent(
       if (payload?.state === "delta" && typeof payload.deltaText === "string" && sessionMatches) {
         refreshPullRequestsForStreamedLinks(state, payload.runId, payload.deltaText);
       }
-      const shouldCelebrateFirstReply = hasVisibleFinalAssistantReply(state, payload);
       const shouldRefreshPullRequests =
-        shouldCelebrateFirstReply && finalAssistantReplyHasPullRequestLink(state, payload);
-      const result = handleChatGatewayEvent(state, payload);
+        hasVisibleFinalAssistantReply(state, payload) &&
+        finalAssistantReplyHasPullRequestLink(state, payload);
+      handleChatGatewayEvent(state, payload);
       if (terminalPayload && sessionMatches) {
         clearPendingQueueItemsForRun(state, terminalPayload.runId);
-      }
-      if (shouldCelebrateFirstReply && result === "final") {
-        fireFirstReplyConfetti();
       }
       if (shouldRefreshPullRequests && payload) {
         refreshPullRequestsForFinalReply(state, payload.runId, payload.message);

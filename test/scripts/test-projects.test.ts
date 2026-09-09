@@ -1103,7 +1103,10 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       changedPath: ".github/actions/setup-node-env/action.yml",
-      exactTargets: ["test/scripts/install-trufflehog.test.ts"],
+      exactTargets: [
+        "test/scripts/install-trufflehog.test.ts",
+        "test/scripts/setup-node-env-bun.test.ts",
+      ],
     },
   ])("unions exact owners and references for $changedPath", ({ changedPath, exactTargets }) => {
     withTinyGitRepo(
@@ -1120,6 +1123,13 @@ describe("scripts/test-projects changed-target routing", () => {
         expect(targets).toContain("test/scripts/direct-workflow-reference.test.ts");
         expect(targets).toContain("test/scripts/ci-workflow-guards.test.ts");
       },
+    );
+  });
+
+  it("routes the Bun image consumer to its executable action regression", () => {
+    expectChangedTargets(
+      [".github/actions/setup-node-env/seed-bun-from-image.mjs"],
+      ["test/scripts/setup-node-env-bun.test.ts"],
     );
   });
 
@@ -1171,6 +1181,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
+        "test/scripts/frv.test.ts",
         "test/scripts/npm-prepared-bundle.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
@@ -1203,6 +1214,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/clawhub-parent-authorization.test.ts",
         "test/scripts/clawhub-postpublish.test.ts",
+        "test/scripts/frv.test.ts",
         "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
@@ -1336,6 +1348,7 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/setup-pnpm-store-cache-image.test.ts",
         ],
       ],
     ]);
@@ -4076,17 +4089,17 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
-    "src/gateway/gateway.test.ts",
-    "src/gateway/server.startup-matrix-migration.integration.test.ts",
-    "src/gateway/sessions-history-http.test.ts",
-  ])("routes gateway integration fixture %s to the e2e lane", (target) => {
+    ["src/gateway/gateway.test.ts", "e2e"],
+    ["src/gateway/server.startup-matrix-migration.integration.test.ts", "e2e"],
+    ["src/gateway/sessions-history-http.test.ts", "gateway"],
+  ])("routes gateway integration fixture %s to the %s lane", (target, lane) => {
     const plans = buildVitestRunPlans([target], process.cwd());
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.e2e.config.ts",
-        forwardedArgs: [target],
-        includePatterns: null,
+        config: `test/vitest/vitest.${lane}.config.ts`,
+        forwardedArgs: lane === "e2e" ? [target] : [],
+        includePatterns: lane === "e2e" ? null : [target],
         watchMode: false,
       },
     ]);

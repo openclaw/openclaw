@@ -33,6 +33,7 @@ import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
+import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
 
@@ -127,6 +128,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       timeoutMs: params.timeoutMs,
       maxBuffer: 4 * 1024 * 1024,
       logOutput: false,
+      onOutputChunk: captureUpdateFinalizationDoctorOutput(params.phase),
       baseEnv,
       env: {
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,

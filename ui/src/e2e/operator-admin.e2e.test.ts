@@ -323,8 +323,7 @@ suite.define(() => {
         "skills.install",
         "skills.proposals.apply",
         "skills.proposals.evaluate",
-        "skills.proposals.historyScan",
-        "skills.proposals.historyStatus",
+        "sessions.create",
         "skills.proposals.inspect",
         "skills.proposals.list",
         "skills.proposals.reject",
@@ -376,13 +375,6 @@ suite.define(() => {
           schema: "openclaw.skill-workshop.proposals-manifest.v1",
           installedSkills: [],
           updatedAt: proposal.updatedAt,
-        },
-        "skills.proposals.historyStatus": {
-          hasScanned: false,
-          hasMore: true,
-          ideasFound: 0,
-          reviewedSessions: 0,
-          lastScanReviewed: 0,
         },
         "skills.status": skillStatus(false),
       },
@@ -487,11 +479,12 @@ suite.define(() => {
       await expect.poll(() => selfLearning.isDisabled()).toBe(true);
       await selfLearning.click({ force: true });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-      const scanHistory = page.getByRole("button", { name: "Find skill ideas" });
-      await expect.poll(() => scanHistory.isDisabled()).toBe(true);
-      await scanHistory.click({ force: true });
-      expect(await gateway.getRequests("skills.proposals.historyScan")).toHaveLength(0);
-      await screenshot(page, "07-read-only-workshop.png", scanHistory);
+      const learn = page.getByRole("button", { name: "Learn from past conversations" });
+      await expect.poll(() => learn.isDisabled()).toBe(true);
+      const creates = (await gateway.getRequests("sessions.create")).length;
+      await learn.click({ force: true });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(creates);
+      await screenshot(page, "07-read-only-workshop.png", learn);
     } finally {
       await context.close();
     }

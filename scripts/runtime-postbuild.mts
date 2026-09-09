@@ -204,9 +204,9 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
 }));
 /** Compatibility chunks for old updater and CLI exit modules after package replacement. */
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
-  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
+  // v2026.8.2 and the exact d413210 and 0229a108 builds load these after replacing dist/.
   // Remove only after the source artifacts fall outside the supported upgrade window.
-  ...["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"].map((fileName) => ({
+  ...["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js", "shared-1Uyqkfns.js"].map((fileName) => ({
     dest: `dist/${fileName}`,
     contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
   })),

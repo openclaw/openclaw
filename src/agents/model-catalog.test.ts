@@ -731,6 +731,7 @@ describe("prepared model catalog builder", () => {
       });
 
       const selectedRoute = {
+        name: retarget ? "Earlier Route A" : "Route A",
         api: "openai-responses",
         baseUrl: "https://route-a.example.test/v1",
         thinkingLevelMap: retarget ? { xhigh: "high", max: "max" } : { xhigh: null, max: null },

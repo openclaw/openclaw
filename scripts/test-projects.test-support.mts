@@ -2234,9 +2234,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["install-trufflehog", packageAcceptance, workflowGuards],
+    ["install-trufflehog", "setup-node-env-bun", packageAcceptance, workflowGuards],
   ],
   [".github/actions/setup-node-env/dependency-fingerprint.mjs", [workflowGuards]],
+  [".github/actions/setup-node-env/seed-bun-from-image.mjs", ["setup-node-env-bun"]],
   [".github/actions/setup-pnpm-store-cache/action.yml", [packageAcceptance, workflowGuards]],
   [".github/actions/setup-pnpm-store-cache/ensure-node.sh", ["setup-pnpm-store-cache-ensure-node"]],
   ["test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts", [dockerE2e, pluginPrerelease]],
@@ -3543,8 +3544,7 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (
     relative === "src/gateway/gateway.test.ts" ||
-    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts" ||
-    relative === "src/gateway/sessions-history-http.test.ts"
+    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts"
   ) {
     return "e2e";
   }

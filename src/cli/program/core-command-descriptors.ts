@@ -84,7 +84,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   },
   {
     name: "uninstall",
-    description: "Uninstall the gateway service + local data (CLI remains)",
+    description: "Uninstall the gateway service + local data",
     hasSubcommands: false,
   },
   {

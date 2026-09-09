@@ -52,7 +52,7 @@ openclaw hooks list [--agent <id>] [--eligible] [--json] [-v|--verbose]
 
 Discovery includes bundled hooks, active plugin hooks, managed hooks, extra
 directories, and the selected workspace. Hook-name collisions follow the
-[source policy](/automation/hooks#hook-discovery).
+[source policy](/automation/hooks/configuration#hook-discovery).
 
 | Option          | Meaning                                                                                                                 |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -142,7 +142,7 @@ Gateway logs too.
 
 The entry is **global**, even with `--agent`: it applies wherever that key is
 discovered. Adding named entries can narrow a previously open-ended directory
-selection. See [Configuration](/automation/hooks#configuration).
+selection. See [Configuration](/automation/hooks/configuration#configuration).
 
 The running Gateway reloads the selection in `hybrid` mode. If a selected hook
 cannot load, it keeps the previous handlers; inspect Gateway logs. Reload does
@@ -261,7 +261,7 @@ not the preferred interface for new automation.
 ## Bundled hooks
 
 The maintained catalog, event subscriptions, options, and verification notes
-are in [Bundled hooks](/automation/hooks#bundled-hooks). This includes
+are in [Bundled hooks](/automation/hooks/bundled-hooks). This includes
 `boot-md`, `bootstrap-extra-files`, `command-logger`, `compaction-notifier`, and
 `session-memory` (manual **and automatic** reset capture).
 

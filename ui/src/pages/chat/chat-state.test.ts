@@ -13,6 +13,7 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -57,20 +58,27 @@ describe("canonical session message recovery", () => {
       thinkingLevel: null,
     });
     const requestUpdate = overrides.requestUpdate ?? vi.fn();
-    const state = {
-      ...makeChatHost(),
-      client: { request } as unknown as GatewayBrowserClient,
+    const host = makeChatHost({
+      client: createTestGatewayClient(request),
       connectionEpoch: 1,
       sessionKey: "agent:main:main",
+      ...overrides,
+    });
+    if (!overrides.sessions) {
+      vi.spyOn(host.sessions, "reconcileChanged").mockImplementation(() => ({
+        applied: false,
+        result: host.sessions.state.result,
+      }));
+      vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
+      vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
+    }
+    const state = {
+      ...host,
       currentSessionId: "selected-session",
       chatMessagesBySession: new Map(),
       chatThinkingLevel: null,
       chatVerboseLevel: null,
       chatStreamStartedAt: null,
-      sessions: {
-        reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
-        refresh: vi.fn().mockResolvedValue(undefined),
-      },
       renderLifecycle: { invalidate: requestUpdate },
       requestUpdate,
       ...overrides,
@@ -1171,6 +1179,92 @@ describe("canonical session message recovery", () => {
     expect(renderedTranscript(state)).toEqual([
       { role: "user", text: "Original prompt" },
       { role: "assistant", text: replyText },
+    ]);
+  });
+
+  it("hydrates one final when an earlier same-run tool boundary overlaps terminal persistence", async () => {
+    const runId = "tool-heavy-run";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: "Inspect the repository." }],
+      __openclaw: { id: "prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const toolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking the repository." },
+        { type: "toolCall", id: "read-1", name: "read", arguments: { path: "AGENTS.md" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", seq: 2, runId },
+    };
+    const persistedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: "The repair is complete." }],
+      __openclaw: { id: "assistant-final", seq: 4, runId, runTerminal: true },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [prompt, toolBoundary, persistedFinal],
+      sessionId: "selected-session",
+      sessionInfo: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: false,
+        activeRunIds: [],
+        lastRunId: runId,
+        status: "done",
+      },
+    });
+    const { state } = createSessionEventState({
+      chatMessages: [prompt],
+      chatHistoryPagination: { hasMore: false },
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      client: createTestGatewayClient(request),
+    });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: state.sessionKey,
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "The repair is complete." }],
+        },
+      },
+    });
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: state.sessionKey,
+        message: prompt,
+        messageId: "prompt",
+        messageSeq: 1,
+        hasActiveRun: false,
+        activeRunIds: [],
+        session: {
+          key: state.sessionKey,
+          kind: "direct",
+          status: "done",
+          hasActiveRun: false,
+          activeRunIds: [],
+          updatedAt: 1,
+        },
+      },
+    });
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([prompt, toolBoundary, persistedFinal]);
+    expect(renderedTranscript(state)).toEqual([
+      { role: "user", text: "Inspect the repository." },
+      { role: "tool", text: "Checking the repository." },
+      { role: "assistant", text: "The repair is complete." },
     ]);
   });
 

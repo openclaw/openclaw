@@ -176,9 +176,7 @@ function futureFixtureVersion(sequence) {
   return FUTURE_FIXTURE_VERSION.replace(/0$/, String(sequence));
 }
 
-export function markFutureUpdateFixture(packageRoot, sequence = 0) {
-  const version = futureFixtureVersion(sequence);
-  removeLegacyUpdateCompatChunks(packageRoot);
+function stampFixtureVersion(packageRoot, version) {
   const paths = resolveFixturePaths(packageRoot);
   const packageJson = readJson(paths.packageJson);
   const buildInfo = readJson(paths.buildInfo);
@@ -187,6 +185,34 @@ export function markFutureUpdateFixture(packageRoot, sequence = 0) {
   // The unchanged compiled UI still carries the prepared artifact's opaque build ID.
   writeJson(paths.packageJson, packageJson);
   writeJson(paths.buildInfo, buildInfo);
+}
+
+export function markFutureUpdateFixture(packageRoot, sequence = 0) {
+  const version = futureFixtureVersion(sequence);
+  removeLegacyUpdateCompatChunks(packageRoot);
+  stampFixtureVersion(packageRoot, version);
+}
+
+function packageMembers(root) {
+  const members = new Map();
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(file);
+      } else {
+        const bytes = entry.isSymbolicLink()
+          ? `link:${fs.readlinkSync(file)}`
+          : fs.readFileSync(file);
+        members.set(
+          path.relative(root, file).split(path.sep).join("/"),
+          createHash("sha256").update(bytes).digest("hex"),
+        );
+      }
+    }
+  };
+  visit(root);
+  return new Map([...members].toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
 function packTransformedFixture(candidateTarball, outputTarball, transform) {
@@ -200,7 +226,9 @@ function packTransformedFixture(candidateTarball, outputTarball, transform) {
     execFileSync("tar", ["-xzf", source, "-C", root]);
     const packageRoot = path.join(root, "package");
     const sourceVersion = readJson(path.join(packageRoot, "package.json")).version;
+    const before = packageMembers(packageRoot);
     transform(packageRoot);
+    const after = packageMembers(packageRoot);
     execFileSync("tar", ["-czf", output, "-C", root, "package"], {
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     });
@@ -209,10 +237,43 @@ function packTransformedFixture(candidateTarball, outputTarball, transform) {
       targetVersion: readJson(path.join(packageRoot, "package.json")).version,
       sourceSha256: createHash("sha256").update(fs.readFileSync(source)).digest("hex"),
       targetSha256: createHash("sha256").update(fs.readFileSync(output)).digest("hex"),
+      members: {
+        sourceSha256: createHash("sha256")
+          .update(JSON.stringify([...before]))
+          .digest("hex"),
+        targetSha256: createHash("sha256")
+          .update(JSON.stringify([...after]))
+          .digest("hex"),
+        changes: [...new Set([...before.keys(), ...after.keys()])]
+          .toSorted((left, right) => left.localeCompare(right))
+          .filter((name) => before.get(name) !== after.get(name))
+          .map((name) => ({
+            path: name,
+            before: before.get(name) ?? null,
+            after: after.get(name) ?? null,
+          })),
+      },
     };
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+}
+
+export function packFirstHopUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
+  const version = futureFixtureVersion(sequence);
+  return {
+    method: "candidate-same-schema-first-hop-fixture",
+    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
+      stampFixtureVersion(root, version);
+    }),
+  };
+}
+
+function packNegativeUpdateFixture(candidateTarball, outputTarball) {
+  return {
+    method: "candidate-missing-compatibility-fixture",
+    ...packTransformedFixture(candidateTarball, outputTarball, removeLegacyUpdateCompatChunks),
+  };
 }
 
 export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
@@ -273,11 +334,19 @@ function main() {
     return;
   }
   if (
-    (mode === "future-tarball" || mode === "future-runtime-tarball") &&
+    (mode === "first-hop-tarball" ||
+      mode === "negative-tarball" ||
+      mode === "future-tarball" ||
+      mode === "future-runtime-tarball") &&
     packageRoot &&
     outputTarball
   ) {
-    const pack = mode === "future-tarball" ? packFutureUpdateFixture : packFutureRuntimeFixture;
+    const pack = {
+      "first-hop-tarball": packFirstHopUpdateFixture,
+      "negative-tarball": packNegativeUpdateFixture,
+      "future-tarball": packFutureUpdateFixture,
+      "future-runtime-tarball": packFutureRuntimeFixture,
+    }[mode];
     process.stdout.write(
       `${JSON.stringify(pack(packageRoot, outputTarball, sequence === undefined ? 0 : Number(sequence)), null, 2)}\n`,
     );
@@ -285,7 +354,7 @@ function main() {
   }
   if (!packageRoot || (mode !== "negative" && mode !== "future")) {
     throw new Error(
-      "usage: update-first-hop-package-fixtures.mjs <negative|future> <package-root> OR <future-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
+      "usage: update-first-hop-package-fixtures.mjs <negative|future> <package-root> OR <first-hop-tarball|negative-tarball|future-tarball|future-runtime-tarball> <source.tgz> <new-output.tgz> [sequence0–9]",
     );
   }
   if (mode === "negative") {

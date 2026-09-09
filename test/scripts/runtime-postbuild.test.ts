@@ -7,7 +7,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   copyStaticExtensionAssets,
-  copyStaticExtensionAssetsForPackage,
   copyStaticExtensionAssetsToRuntimeOverlay,
   discoverStaticExtensionAssets,
 } from "../../scripts/lib/static-extension-assets.mts";
@@ -241,13 +240,12 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
-  it("copies declared static assets into root and package dist", async () => {
+  it("copies declared static assets into root dist", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const src = "extensions/acpx/src/runtime-internals/mcp-proxy.mjs";
     const dest = "dist/extensions/acpx/mcp-proxy.mjs";
     const sourcePath = path.join(rootDir, src);
     const destPath = path.join(rootDir, dest);
-    const packageDestPath = path.join(rootDir, "extensions", "acpx", "dist", "mcp-proxy.mjs");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, "proxy-data\n", "utf8");
 
@@ -255,16 +253,7 @@ describe("runtime postbuild static assets", () => {
       rootDir,
       assets: [{ src, dest }],
     });
-    expect(
-      copyStaticExtensionAssetsForPackage({
-        rootDir,
-        pluginDir: "acpx",
-        assets: [{ src, dest }],
-      }),
-    ).toEqual(["dist/mcp-proxy.mjs"]);
-
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
-    expect(await fs.readFile(packageDestPath, "utf8")).toBe("proxy-data\n");
   });
 
   it("stages copied static assets byte-for-byte during the same postbuild run", async () => {
@@ -1198,6 +1187,41 @@ describe("runtime postbuild static assets", () => {
         }
       }
     }
+  });
+
+  it("keeps the 2026.9.1 Git updater restart import loadable after dist replacement", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-old-updater-");
+    const distDir = path.join(rootDir, "dist");
+    const ownerPath = path.join(distDir, "update-command-service-command.mjs");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      ownerPath,
+      'export async function restart() { return (await import("./shared-1Uyqkfns.js")).resolveNodeRunner(); }\n',
+    );
+    const output = childProcess.execFileSync(
+      process.execPath,
+      [
+        "--import",
+        path.join(MODULE_ROOT, "scripts/tsx.mjs"),
+        "--input-type=module",
+        "-e",
+        [
+          'import fs from "node:fs/promises";',
+          'import path from "node:path";',
+          'import { pathToFileURL } from "node:url";',
+          `import { writeLegacyCliExitCompatChunks } from ${JSON.stringify(pathToFileURL(path.join(MODULE_ROOT, "scripts/runtime-postbuild.mts")).href)};`,
+          "const rootDir = process.argv[1];",
+          'const owner = await import(pathToFileURL(path.join(rootDir, "dist/update-command-service-command.mjs")).href);',
+          'await fs.rm(path.join(rootDir, "dist"), { recursive: true, force: true });',
+          "writeLegacyCliExitCompatChunks({ rootDir });",
+          "process.stdout.write(await owner.restart());",
+        ].join("\n"),
+        rootDir,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(output).toBe(process.execPath);
   });
 
   it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"])(

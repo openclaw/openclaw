@@ -1,6 +1,7 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
+import { uiDevGatewayResourceBasePath } from "../dev-gateway.ts";
 import { isNativeEmbedHost } from "./native-web-chrome.ts";
 
 type WindowWithControlUiBasePath = Window &
@@ -25,7 +26,7 @@ function readControlUiResourceBasePath(): string | null {
 export function resolveControlUiPaths(pathname: string) {
   const resourceBasePath = readControlUiResourceBasePath();
   const basePath = resourceBasePath || inferBasePathFromPathname(pathname);
-  return [basePath, resourceBasePath ?? basePath] as const;
+  return [basePath, uiDevGatewayResourceBasePath() ?? resourceBasePath ?? basePath] as const;
 }
 
 function readLocation(): RouteLocation {

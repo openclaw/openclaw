@@ -10,6 +10,7 @@ import {
   LEGACY_UPDATE_COMPAT_CHUNKS,
   listFirstHopSourceVersions,
   markFutureUpdateFixture,
+  packFirstHopUpdateFixture,
   packFutureUpdateFixture,
   removeLegacyUpdateCompatChunks,
 } from "../../scripts/e2e/lib/update-first-hop-package-fixtures.mjs";
@@ -234,7 +235,11 @@ describe("first-hop package fixtures", () => {
     const original = fs.readFileSync(candidate);
     const receipts = [0, 1].map((sequence) => {
       const output = path.join(root, `future-${sequence}.tgz`);
-      const receipt = packFutureUpdateFixture(candidate, output, sequence);
+      const input = sequence === 0 ? candidate : path.join(root, "future-0.tgz");
+      const receipt =
+        sequence === 0
+          ? packFirstHopUpdateFixture(input, output, sequence)
+          : packFutureUpdateFixture(input, output, sequence);
       const pkg = JSON.parse(
         execFileSync("tar", ["-xOf", output, "package/package.json"], { encoding: "utf8" }),
       );
@@ -243,7 +248,40 @@ describe("first-hop package fixtures", () => {
       expect(
         execFileSync("tar", ["-xOf", output, "package/dist/index.js"], { encoding: "utf8" }),
       ).toBe("export {};\n");
-      expect(receipt.sourceVersion).toBe("2026.8.1");
+      expect(receipt.sourceVersion).toBe(sequence === 0 ? "2026.8.1" : FUTURE_FIXTURE_VERSION);
+      expect(receipt.members.changes.map((entry: { path: string }) => entry.path)).toEqual(
+        [
+          "dist/build-info.json",
+          "package.json",
+          ...(sequence === 0
+            ? []
+            : [
+                "dist/postinstall-inventory.json",
+                ...LEGACY_UPDATE_COMPAT_CHUNKS.map((name) => `dist/${name}`),
+              ]),
+        ].toSorted((left, right) => left.localeCompare(right)),
+      );
+      const members = execFileSync("tar", ["-tzf", output], { encoding: "utf8" });
+      for (const change of receipt.members.changes) {
+        const entry = `package/${change.path}`;
+        const beforeBytes = execFileSync("tar", ["-xOf", input, entry]);
+        expect(change.before).toBe(createHash("sha256").update(beforeBytes).digest("hex"));
+        expect(change.after).toBe(
+          members.split("\n").includes(entry)
+            ? createHash("sha256")
+                .update(execFileSync("tar", ["-xOf", output, entry]))
+                .digest("hex")
+            : null,
+        );
+      }
+      for (const bridge of LEGACY_UPDATE_COMPAT_CHUNKS) {
+        expect(members.includes(`package/dist/${bridge}`)).toBe(sequence === 0);
+        if (sequence === 0) {
+          expect(execFileSync("tar", ["-xOf", output, `package/dist/${bridge}`])).toEqual(
+            execFileSync("tar", ["-xOf", candidate, `package/dist/${bridge}`]),
+          );
+        }
+      }
       const unpacked = path.join(root, `unpacked-${sequence}`);
       fs.mkdirSync(unpacked);
       execFileSync("tar", ["-xzf", output, "-C", unpacked]);
@@ -265,6 +303,7 @@ describe("first-hop package fixtures", () => {
       "2026.9.99-first-hop.1",
     ]);
     expect(new Set(receipts.map((receipt) => receipt.targetSha256)).size).toBe(2);
+    expect(receipts[1]?.sourceSha256).toBe(receipts[0]?.targetSha256);
     expect(fs.readFileSync(candidate)).toEqual(original);
     expect(() => packFutureUpdateFixture(candidate, candidate)).toThrow("new tarball path");
     expect(fs.readFileSync(candidate)).toEqual(original);
@@ -444,12 +483,22 @@ describe("first-hop package fixtures", () => {
         `#!${process.execPath}
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 if (process.argv[2] === "run") {
   const args = process.argv.slice(3);
   fs.appendFileSync(process.env.DOCKER_ARGS_FILE, JSON.stringify(args) + "\\n");
   const artifact = args.find(arg => arg.endsWith(":/tmp/openclaw-update-first-hop-artifacts")).split(":")[0];
   const source = JSON.parse(fs.readFileSync(path.join(artifact, "source.json"), "utf8"));
-  fs.writeFileSync(path.join(artifact, "summary.json"), JSON.stringify({ source }));
+  const inspect = (name) => {
+    const mount = args.find(arg => arg.endsWith(":/tmp/openclaw-update-first-hop-" + name + ".tgz:ro"));
+    if (!mount) return undefined;
+    const archive = mount.split(":")[0];
+    const manifest = JSON.parse(execFileSync("tar", ["-xOf", archive, "package/package.json"], { encoding: "utf8" }));
+    const entries = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).trim().split("\\n");
+    return { version: manifest.version, entries };
+  };
+  fs.writeFileSync(path.join(artifact, "summary.json"), JSON.stringify({ source,
+    candidate: inspect("candidate"), negative: inspect("negative"), future: inspect("future"), original: inspect("original") }));
 }
 `,
         { mode: 0o755 },
@@ -493,12 +542,46 @@ process.stdout.write(JSON.stringify([{ filename }]));
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(invocations).toHaveLength(sourceMode === "explicit" ? 1 : 3);
+      const firstFixture = JSON.parse(
+        fs.readFileSync(path.join(root, "artifacts/first-hop-fixture.json"), "utf8"),
+      );
+      const negativeFixture = JSON.parse(
+        fs.readFileSync(path.join(root, "artifacts/negative-fixture.json"), "utf8"),
+      );
+      const secondFixture = JSON.parse(
+        fs.readFileSync(path.join(root, "artifacts/second-hop-fixture.json"), "utf8"),
+      );
+      expect(firstFixture.sourceSha256).toBe(
+        createHash("sha256").update(fs.readFileSync(tarball)).digest("hex"),
+      );
+      expect(firstFixture.members.changes.map((entry: { path: string }) => entry.path)).toEqual([
+        "dist/build-info.json",
+        "package.json",
+      ]);
+      expect(negativeFixture.sourceSha256).toBe(firstFixture.targetSha256);
+      expect(secondFixture.sourceSha256).toBe(firstFixture.targetSha256);
+      expect(negativeFixture.sourceVersion).toBe(negativeFixture.targetVersion);
+      const recorded = JSON.parse(
+        fs.readFileSync(path.join(root, "artifacts/summary.json"), "utf8"),
+      );
+      const packages = sourceMode === "recorded" ? recorded.sources : [recorded];
+      for (const artifact of packages) {
+        expect(artifact.candidate.version).toBe("2026.9.99-first-hop.0");
+        expect(artifact.negative.version).toBe("2026.9.99-first-hop.0");
+        expect(artifact.future.version).toBe("2026.9.99-first-hop.1");
+        expect(artifact.original.version).toBe("2026.8.1");
+        for (const bridge of LEGACY_UPDATE_COMPAT_CHUNKS) {
+          expect(artifact.candidate.entries).toContain(`package/dist/${bridge}`);
+          expect(artifact.negative.entries).not.toContain(`package/dist/${bridge}`);
+          expect(artifact.future.entries).not.toContain(`package/dist/${bridge}`);
+        }
+      }
       for (const args of invocations) {
         expect(args[args.indexOf("--entrypoint") + 1]).toBe(
           "/opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh",
         );
         expect(args).toContain(`${registry}:/tmp/openclaw-prepublish-plugin-registry:ro`);
-        expect(args).toContain(`${tarball}:/tmp/openclaw-update-first-hop-candidate.tgz:ro`);
+        expect(args).toContain(`${tarball}:/tmp/openclaw-update-first-hop-original.tgz:ro`);
         expect(args).toContain("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION=2026.8.1");
         expect(args).toContain("bash");
         expect(args).toContain("scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh");

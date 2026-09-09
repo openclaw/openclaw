@@ -2213,19 +2213,44 @@ describe("release state artifacts", () => {
     ).toThrow(/invalid|gapped|malformed/u);
   });
 
-  it("selects the newest decision and drain independently across asymmetric retries", () => {
-    const sealedPlan = executionPlan({ rerunGroup: "ci" });
-    const selected = selectReleaseStateArtifacts(
-      sealedPlan,
-      [
-        { name: "full-release-decision-77-1", payload: artifact("decision", 1, sealedPlan) },
-        { name: "full-release-decision-77-2", payload: artifact("decision", 2, sealedPlan) },
-      ],
-      [{ name: "full-release-diagnostics-77-1", payload: artifact("drain", 1, sealedPlan) }],
-      stateExpected(3),
-    );
-    expect(selected.sourceAttempts).toEqual({ decision: 2, drain: 1, executionPlan: 1 });
-  });
+  it.each(["passed", "blocked_complete"])(
+    "validates the newest decision and drain across asymmetric retries from %s",
+    (initialState) => {
+      const sealedPlan = executionPlan({ rerunGroup: "ci" });
+      const initialChild =
+        initialState === "blocked_complete" ? { conclusion: "failure", jobs: [FAILED_JOB] } : {};
+      const select = () =>
+        selectReleaseStateArtifacts(
+          sealedPlan,
+          [
+            {
+              name: "full-release-decision-77-1",
+              payload: artifact("decision", 1, sealedPlan, initialChild),
+            },
+            { name: "full-release-decision-77-2", payload: artifact("decision", 2, sealedPlan) },
+          ],
+          [
+            {
+              name: "full-release-diagnostics-77-1",
+              payload: artifact("drain", 1, sealedPlan, initialChild),
+            },
+          ],
+          stateExpected(3),
+        );
+      if (initialState === "blocked_complete") {
+        expect(select).toThrow("release decision and diagnostic drain transition is invalid");
+        expect(select).toThrow(
+          "release decision and diagnostic drain transition is invalid: " +
+            "decision(parentRunAttempt=2, state=passed), " +
+            "drain(parentRunAttempt=1, state=blocked_complete); " +
+            `executionPlan(originalParentRunAttempt=1, sha256=${String(sealedPlan.sha256)}); ` +
+            "compatible collector evidence for the same execution plan is required",
+        );
+      } else {
+        expect(select().sourceAttempts).toEqual({ decision: 2, drain: 1, executionPlan: 1 });
+      }
+    },
+  );
 
   it("selects a blocked decision with its completed diagnostic drain", () => {
     const { decision, sealedPlan } = blockedArtifacts();

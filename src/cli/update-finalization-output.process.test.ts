@@ -37,6 +37,8 @@ const scenarios = [
 const finalizeScenarios = [
   "json",
   "phase-hang",
+  "doctor-hang",
+  "doctor-progress",
   "completion-hang",
   "handle-hang",
   "borrowed-phase",
@@ -78,11 +80,13 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       );
       const json = !scenario.startsWith("human");
       const blockedPhase =
-        scenario === "phase-hang"
-          ? "configSnapshot"
-          : scenario === "completion-hang"
-            ? "completionCache"
-            : undefined;
+        scenario === "doctor-hang" || scenario === "doctor-progress"
+          ? "doctor"
+          : scenario === "phase-hang"
+            ? "configSnapshot"
+            : scenario === "completion-hang"
+              ? "completionCache"
+              : undefined;
       const args = [
         "update",
         ...(scenario === "inherited-json" ? ["--json"] : []),
@@ -145,8 +149,39 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       const failure = formatCliProcessFailure({ reason: `${command} ${scenario}`, ...result });
       expect(result.signal, failure).toBeNull();
       expect(result.code, failure).toBe(
-        scenario.endsWith("error") || scenario === "phase-hang" ? 1 : 0,
+        scenario.endsWith("error") || scenario === "phase-hang" || blockedPhase === "doctor"
+          ? 1
+          : 0,
       );
+      if (blockedPhase === "doctor") {
+        const output = JSON.parse(result.stdout);
+        expect(output, failure).toMatchObject({ status: "failed", stuckPhase: "doctor" });
+        for (const marker of ["STEP completed fixture-schema", "STEP active fixture-validation"]) {
+          expect(JSON.stringify(output.doctorOutput), failure).toContain(marker);
+          expect(result.stderr, failure).toContain(marker);
+          expect(readRun(), failure).toMatchObject({
+            status: "failed",
+            steps: expect.arrayContaining([
+              expect.objectContaining({
+                step: "finalize:doctor",
+                status: "failed",
+                detail: expect.stringContaining(marker),
+              }),
+            ]),
+          });
+        }
+        const timing = output.phaseTimings.find(
+          (entry: { phase: string }) => entry.phase === "doctor",
+        );
+        expect(timing.durationMs, failure).toBeGreaterThanOrEqual(1_000);
+        expect(timing.durationMs, failure).toBeLessThan(3_000);
+        if (scenario === "doctor-progress") {
+          expect(output.doctorOutput.stderr.excerpt, failure).toContain(
+            "PROGRESS fixture-validation",
+          );
+        }
+        return;
+      }
       if (scenario.startsWith("borrowed-")) {
         expect(result.stderr, failure).toContain("Borrowed caller completed.");
         expect(result.stderr, failure).not.toContain("Process still alive after terminal output");

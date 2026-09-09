@@ -278,7 +278,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
               ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
               origin: attempt.skillWorkshopOrigin,
               proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
-              proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
               proposalRevision: attempt.skillWorkshopProposalRevision,
               libraryAuthoring: attempt.skillLibraryAuthoring,
             },

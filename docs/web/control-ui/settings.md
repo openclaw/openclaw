@@ -10,6 +10,8 @@ sidebarTitle: "Settings"
 
 Everything under Settings, plus the settings-owned pages the sidebar links to.
 
+Use **Search settings** to find pages and configuration fields. Add `tag:storage`, for example, to filter configuration fields by tag. Tags can appear before, within, or after a text phrase: `Log File tag:storage` and `Log tag:storage File` both find **Log File Path**. Multiple tags require a field to match every tag.
+
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
 
 ## Environment identity
@@ -125,13 +127,11 @@ target the store directly with `/settings/plugins/discover`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
-**Workshop** tab keeps the Skill Workshop board and Today review flow for
-[skill proposals](/tools/skill-workshop). **Find skill ideas** reviews a bounded
-window of substantial sessions from newest to oldest and leaves any results as
-pending proposals. The panel shows cumulative coverage; **Scan earlier work**
-continues from the persisted cursor, then becomes **Scan new work** after older
-history is exhausted. Manual history review works while autonomous self-learning
-is disabled and uses the selected agent's configured model.
+**Workshop** tab shows installed skills and pending
+[skill proposals](/tools/skill-workshop). **Learn from past conversations** opens
+a normal session with the selected agent's configured model and permitted tools.
+The agent chooses which history and skills to inspect, following the current
+Workshop mode. Chat shows progress, results, and normal stop and follow-up controls.
 
 Included plugins are already present on the Gateway and show **Enable** or
 **Disable** instead of **Install**. For example, Workboard is included with
@@ -199,6 +199,8 @@ Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts 
 Choice fields that accept an explicit `null` value show it as a dropdown option. For optional fields, `null` remains distinct from clearing the setting or selecting its default. Rejected choices, such as a duplicate in a unique-value list, leave the previous selection in place.
 
 For an empty integer field without a default, step buttons initialize positive-only or negative-only ranges at the permitted endpoint, matching keyboard arrows. For example, a field with a minimum of 1 starts at 1 on the first increment.
+
+Incomplete array-row edits stay with their item when you remove earlier rows or edit other settings. Correct the field to save its new value.
 
 On desktop web, the expanded sidebar header places the agent identity beside the sidebar collapse toggle (⌘B), command-palette search button (⌘K), and new-session button. Clicking the identity opens the agent menu; **Home** opens the main session. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The identity shows the agent's avatar (identity image or emoji), name, optional environment pill, and unread dot; active-run status appears on the owning session row instead of beneath the agent name. Its agent-scoped menu contains the inline agent switcher (multi-agent setups), **New agent**, "What can this agent do?", and **Agent settings**. Rosters above ten agents get a filter field and list pinned agents first; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own [URL selection](/web/urls#route-table) and does not follow the shared page scope. The footer is one full-width identity card that remains available offline and shows **Reconnecting…** beneath the last-known account name. It opens the app/account menu, whose profile identity header is followed by **Settings**, **Usage**, mobile pairing, **Get the apps**, **Help** (help, Discord, Docs, and the changelog), an offline retry action when needed, the version/build chip, and the color-mode toggle. The build chip opens the About page. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma on Apple platforms or Ctrl-Shift-Comma elsewhere opens **Settings** without overriding the browser's plain Command-Comma shortcut. Collapsing the sidebar (⌘B) hides it entirely for a full-width workspace; the top-left content cluster then provides expand, search, and new-session controls — mirroring what the macOS app hosts natively in its titlebar. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title. In the macOS app the separate header row folds the titlebar clearance into a single compact strip beside the window controls, while the sidebar header retains the agent identity and right-aligned new-session button. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and new-session buttons while it is collapsed.
 
@@ -316,6 +318,11 @@ existing default agent workspace; it does not choose another destination agent
 or replace conflicts. It reports each source's confirmed copy count and warns
 when a failure may have happened after a partial copy. Use the dedicated Import
 Memory page when you need destination selection, a file preview, or replacement.
+
+If an error says that apply completed but its result could not be returned,
+inspect the migration report and destination files before starting another
+import. Retrying the same pending request reuses its recorded outcome while
+the Gateway retains it. A plugin cleanup warning does not undo completed copies.
 
 Planning and applying require `operator.admin`. Every apply creates a verified
 OpenClaw backup when state exists, writes a redacted migration report, and keeps

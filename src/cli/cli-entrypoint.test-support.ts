@@ -17,6 +17,14 @@ export const cliRecoveryEntrypoints = {
   },
 } as const;
 
+// Prepare the real Gateway fixture before its readiness hook starts; source
+// transforms must not consume that hook's startup deadline.
+export const stateDirGatewayFixtureEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "state-dir-gateway-check.server-fixture.test-support",
+  distWorkerPath: "cli/state-dir-gateway-check.server-fixture.test-support.js",
+} as const;
+
 // Direct-stop children use the invocation's prepared graph before readiness starts.
 export const gatewayDirectStopEntrypoints = {
   ingressDrain: {

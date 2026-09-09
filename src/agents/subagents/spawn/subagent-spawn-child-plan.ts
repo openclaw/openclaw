@@ -70,7 +70,7 @@ async function resolveSpawnModelError(params: {
   const provider = selected.provider ?? defaults.provider;
   let catalog: ModelCatalogEntry[];
   try {
-    catalog = await getSubagentSpawnDeps().loadPreparedModelCatalog({
+    catalog = await getSubagentSpawnDeps().readPreparedModelCatalog({
       config: params.cfg,
       agentDir: params.targetAgentDir,
       workspaceDir: params.workspaceDir,

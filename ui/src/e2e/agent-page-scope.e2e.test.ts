@@ -184,8 +184,8 @@ suite.define(() => {
             .toBe("reviewer");
           await waitForRequest(
             gateway,
-            "agents.files.list",
-            (params) => params.agentId === "reviewer",
+            "models.list",
+            (params) => params.agentId === "reviewer" && params.view === "configured",
           );
           await screenshot(page, "10-reloaded-reviewer.png");
           await page.goBack();

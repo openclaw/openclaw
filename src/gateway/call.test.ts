@@ -19,6 +19,7 @@ import {
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
 } from "./gateway-connection.test-mocks.js";
+import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
 
 const TLS_FINGERPRINT = "ab".repeat(32);
 
@@ -982,15 +983,7 @@ describe("callGateway url resolution", () => {
 
     await callGatewayCli({ method: "plugin.custom.unclassified" });
 
-    expect(lastClientOptions?.scopes).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    expect(lastClientOptions?.scopes).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("falls back to broad operator scopes for unresolved plugin session actions", async () => {
@@ -1005,15 +998,7 @@ describe("callGateway url resolution", () => {
       },
     });
 
-    expect(lastClientOptions?.scopes).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    expect(lastClientOptions?.scopes).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("passes explicit scopes through, including empty arrays", async () => {

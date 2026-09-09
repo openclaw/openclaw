@@ -5,6 +5,7 @@ export {
   resolveSubagentModelFallbacksOverride,
 } from "../../agents/agent-scope.js";
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+export { resolveFastModeState } from "../../agents/fast-mode.js";
 export { resolveCronAgentLane } from "../../agents/lanes.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 export { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";

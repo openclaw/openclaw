@@ -66,7 +66,7 @@ menu, it closes without choosing an action. Reopen it explicitly when space
 permits; it does not reopen automatically when the layout recovers. Dismissing
 the menu does not reset Chat's draft, editor, or reader state.
 
-Chat's Model picker, its Permissions page, Thinking effort, and Background tasks sheets initially
+Chat's Model picker, its Permissions page, Thinking effort, Background tasks, and Switch branch sheets initially
 use the largest safe region with usable sheet space, not the trigger's region.
 They keep that region while it remains usable. Valid geometry changes retain
 the same sheet and local state. An invalid opening closes without selecting an
@@ -77,8 +77,15 @@ layout changes retain the opening and its reading state. Switching Gateway,
 agent, or chat closes it; a same-owner disconnect leaves read errors visible
 with Refresh available.
 
-Branch-switching sheets and other dialogs, sheets, and popup menus are not
-fold-adapted yet.
+Switch branch keeps its list and reading position through safe layout changes;
+the title and rows scroll together in short panes. Changing Gateway, agent, or
+chat retires the opening. Reading remains available when a run is pending,
+outbox restoration is incomplete, the current session has outbox items, or a
+branch switch is already in flight. Mutation rows stay disabled in those
+states. Closing or retiring the sheet does not cancel an admitted switch,
+and its completion cannot dismiss a replacement opening.
+
+Other dialogs, sheets, and popup menus are not fold-adapted yet.
 
 ## Wear OS companion
 
@@ -170,6 +177,13 @@ animations, captures the screenshots, then shuts down the emulator it started.
 Install the API 36 Google APIs and API 34 Wear OS system images in the local
 Android SDK. Use `--form-factor phone|wear` with `--avd` or `--device` to
 explicitly capture one form factor from another emulator.
+
+For local branch-switching proof, launch a debug build with the intent extras
+`openclaw.screenshotMode=true` and `openclaw.screenshotScene=branches`. This Chat
+scene has 12 local branch alternatives and no active run. Switching updates the
+selected branch and transcript only in fixture memory, never on a live Gateway.
+Start a fresh app process before choosing a scene; restarting only the Activity
+reuses the process runtime. Same-scene re-entry retains the selected branch.
 
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
@@ -340,6 +354,12 @@ openclaw devices approve <requestId>
 ```
 
 More details: `docs/platforms/android.md`.
+
+If the gateway cannot be reached, the app keeps the connection error visible during automatic retries.
+For an address that may use Tailscale, **Set up Tailscale** opens the Android installation guide.
+Open Tailscale and connect to the gateway's tailnet. Check that the gateway computer is online and OpenClaw is running, then retry.
+This advice does not verify Tailscale's connection state or change certificate trust.
+If an earlier network request is still stopping, the app waits for it before starting another request.
 
 ## Permissions
 

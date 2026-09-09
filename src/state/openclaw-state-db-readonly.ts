@@ -28,6 +28,10 @@ export function withArtifactPreservingStateReads<T>(operation: () => T): T {
   return artifactPreservingReads.run(true, operation);
 }
 
+export function isArtifactPreservingStateRead(): boolean {
+  return artifactPreservingReads.getStore() === true;
+}
+
 type OpenClawStateReadOnlyDatabase = {
   db: DatabaseSync;
   path: string;
@@ -94,7 +98,7 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   // Admission snapshots preserve the source sidecars. Explicit async readers
   // already supplied a snapshot from their live mutation owner.
   const prepared =
-    location === pathname && artifactPreservingReads.getStore()
+    location === pathname && isArtifactPreservingStateRead()
       ? prepareSqliteReadOnlyLocationSync(pathname)
       : undefined;
   const readLocation = prepared?.location ?? location;

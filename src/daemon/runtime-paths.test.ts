@@ -142,6 +142,16 @@ describe.each(["node", "bun"] as const)("%s probe failures", (runtime) => {
   });
 });
 
+it("treats an unparseable Node version as a probe failure", async () => {
+  mockNodePathPresent("/usr/bin/node");
+  const result = await resolveSystemNodeInfo({
+    env: {},
+    platform: "linux",
+    execFile: async () => nodeRuntime("unparseable"),
+  });
+  expect(result?.status).toBe("probe-failed");
+});
+
 describe("resolvePreferredNodePath", () => {
   const darwinNode = "/opt/homebrew/bin/node";
   const fnmNode = "/Users/test/.fnm/node-versions/v24.16.0/installation/bin/node";
@@ -189,6 +199,21 @@ describe("resolvePreferredNodePath", () => {
 
     expect(result).toBe(darwinNode);
     expect(execFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("prefers the supported CLI runtime when repairing an unsupported service runtime", async () => {
+    mockNodePathPresent(darwinNode);
+    const execFile = vi.fn().mockResolvedValue(nodeRuntime("26.8.1"));
+    expect(
+      await resolvePreferredNodePath({
+        env: {},
+        runtime: "node",
+        platform: "darwin",
+        execFile,
+        execPath: fnmNode,
+        preferCurrentExecPath: true,
+      }),
+    ).toBe(fnmNode);
   });
 
   it.each([
@@ -341,6 +366,28 @@ describe("resolvePreferredNodePath", () => {
 
     expect(result).toBe(darwinNode);
     expect(execFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("finds a later system Node accepted by the target engine", async () => {
+    const targetCompatibleNode = "/opt/homebrew/opt/node/bin/node";
+    mockNodePathPresent(darwinNode, targetCompatibleNode);
+    const execFile = vi
+      .fn()
+      .mockResolvedValueOnce(nodeRuntime("24.16.0"))
+      .mockResolvedValueOnce(nodeRuntime("26.8.1"));
+
+    const result = await resolveSystemNodeInfo({
+      env: {},
+      platform: "darwin",
+      execFile,
+      acceptNodeVersion: (version) => version?.startsWith("26.") === true,
+    });
+
+    expect(result).toMatchObject({
+      path: targetCompatibleNode,
+      version: "26.8.1",
+      status: "supported",
+    });
   });
 
   it.each([

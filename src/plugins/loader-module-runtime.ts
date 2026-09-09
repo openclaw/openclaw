@@ -114,7 +114,15 @@ export function runPluginRegisterSyncInRegistry(
   withPluginRegistrationContext(
     registry,
     pluginId,
-    () => runPluginRegisterSync(register, api, registry),
+    () => {
+      const inspection = getPluginRegistryInspectionResources(registry);
+      const run = () => runPluginRegisterSync(register, api, registry);
+      if (inspection) {
+        inspection.runRegistration(pluginId, run);
+      } else {
+        run();
+      }
+    },
     {
       registerMemoryCapability: api.registerMemoryCapability,
     },
