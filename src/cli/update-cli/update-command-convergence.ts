@@ -152,7 +152,7 @@ export async function convergeUpdatePlugins(params: {
         });
       }
 
-      if (postCorePluginUpdate) {
+      if (postCorePluginUpdate && (!params.coreAlreadyCurrent || postCorePluginUpdate.changed)) {
         // Both package paths release the plugin lease before Doctor; the parent
         // owns the service boundary after package and network work has finished.
         const completedPluginUpdate = await completePostCorePluginUpdate({

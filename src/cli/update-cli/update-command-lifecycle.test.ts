@@ -9,18 +9,22 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const validConfigSnapshot = {
+  path: "/tmp/openclaw.json",
+  exists: true,
+  raw: "{}",
   valid: true,
   parsed: {},
   config: {},
   runtimeConfig: {},
   sourceConfig: {},
+  resolved: {},
   warnings: [],
   issues: [],
   legacyIssues: [],
 };
 
 const successfulPluginUpdate = {
-  status: "ok",
+  status: "ok" as const,
   changed: true,
   sync: {
     changed: false,
@@ -160,12 +164,14 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   writePostCorePluginUpdateResultFile: vi.fn(async () => undefined),
 }));
 
+import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
 function expectLifecycleBoundary(preLeaseEvent: string): void {
@@ -197,6 +203,44 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+  });
+
+  it("keeps an unchanged already-current update on the no-op path", async () => {
+    vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
+      ...successfulPluginUpdate,
+      changed: false,
+    });
+
+    const result = await convergeUpdatePlugins({
+      coreAlreadyCurrent: true,
+      result: {
+        status: "skipped",
+        mode: "npm",
+        root: "/tmp/openclaw",
+        reason: "already-current",
+        before: { version: "2026.9.3" },
+        after: { version: "2026.9.3" },
+        steps: [],
+        durationMs: 1,
+      },
+      root: "/tmp/openclaw",
+      installKindChanged: false,
+      configSnapshot: validConfigSnapshot,
+      requestedChannel: null,
+      storedChannel: null,
+      channel: "stable",
+      downgradeRisk: false,
+      opts: {},
+      preUpdatePluginInstallRecords: {},
+      startedAt: 1,
+      updateStepTimeoutMs: 1_000,
+    });
+
+    expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
+    expect(result.resultWithPostUpdate).toMatchObject({
+      status: "skipped",
+      reason: "already-current",
+    });
   });
 
   it.each(["copied", "live"] as const)(
