@@ -22,6 +22,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { listDurableSqliteTargetOwnersForSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { resolveAgentRestartRecoveryExecutionIdentityAdmission } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { callGateway } from "../../gateway/call.js";
 import type { RestartRecoveryCandidate } from "../../gateway/chat-abort.js";
@@ -74,6 +75,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
@@ -426,9 +428,12 @@ async function writeMainSession({
 }
 
 function readStore(storePath: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
+  const owners = listDurableSqliteTargetOwnersForSessionStorePath(storePath);
+  const entries =
+    owners.length > 0
+      ? owners.flatMap((agentId) => listSessionEntriesCore({ agentId, storePath }))
+      : listSessionEntriesCore({ storePath });
+  return Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
 }
 
 async function writeTranscript(
@@ -569,7 +574,7 @@ describe("main-session-restart-recovery", () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
-        ...runningSessionEntry("main-session"),
+        ...runningSessionEntry("main-session", { lifecycleRunId: "restart-run" }),
       },
       "agent:main:completed": {
         sessionId: "completed-session",
@@ -620,6 +625,166 @@ describe("main-session-restart-recovery", () => {
       { runId: "key-only-run", lifecycleGeneration },
       { runId: "restart-run", lifecycleGeneration },
     ]);
+    // The marker records the canonical interrupted terminal event so a
+    // restart-interrupted session is never silently absent from its trajectory.
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "main-session",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "restart-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
+  it("records an interrupted trajectory ending for fixed-store global sessions", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("global-session", { lifecycleRunId: "global-run" }),
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
+      cfg,
+      activeRuns: [activeRestartRun("global", "global-session", { runId: "global-run" })],
+    });
+
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    const store = readStore(storePath);
+    expect(store.global?.abortedLastRun).toBe(true);
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      agentId: "ops",
+      sessionId: "global-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "global-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
+  it("recovers an ops-owned fixed-store global session from the same partition", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("global-session", {
+        lifecycleRunId: "global-run",
+        pendingFinalDelivery: makePendingFinalDelivery(),
+        restartRecoveryForceSafeTools: true,
+      }),
+    );
+
+    const markResult = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
+      cfg,
+      activeRuns: [activeRestartRun("global", "global-session", { runId: "global-run" })],
+    });
+    expect(markResult).toEqual({ marked: 1, skipped: 0 });
+
+    const recovery = await recoverRestartAbortedMainSessions({ cfg });
+    expect(recovery).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
+
+    expect(gatewayParams()).toMatchObject({ agentId: "ops", sessionKey: "global" });
+
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      agentId: "ops",
+      sessionId: "global-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "global-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
+  it("records an interrupted trajectory ending for config-less fixed-store global sessions", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStorePath(storePath, {
+      global: runningSessionEntry("global-session", { lifecycleRunId: "global-run" }),
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
+      stateDir: tmpDir,
+      activeRuns: [activeRestartRun("global", "global-session", { runId: "global-run" })],
+    });
+
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    const store = readStore(storePath);
+    expect(store.global?.abortedLastRun).toBe(true);
+    // A config-less unscoped row commits under the legacy implicit owner, and
+    // its interrupted terminal event must land in that same durable owner.
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "global-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "global-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
+  it("skips the interrupted trajectory event when capture is disabled but still marks the session", async () => {
+    // OPENCLAW_TRAJECTORY=0 is the shipped capture opt-out: the state owner must
+    // still commit its interruption marking while recording stays off.
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStorePath(storePath, {
+      "agent:main:main": runningSessionEntry("main-session", { lifecycleRunId: "restart-run" }),
+    });
+    const previousTrajectory = process.env.OPENCLAW_TRAJECTORY;
+    process.env.OPENCLAW_TRAJECTORY = "0";
+    let result: { marked: number; skipped: number } | undefined;
+    try {
+      result = await markRestartAbortedMainSessions({
+        resolveGatewayContext,
+        stateDir: tmpDir,
+        activeRuns: [activeRestartRun()],
+      });
+    } finally {
+      if (previousTrajectory === undefined) {
+        delete process.env.OPENCLAW_TRAJECTORY;
+      } else {
+        process.env.OPENCLAW_TRAJECTORY = previousTrajectory;
+      }
+    }
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    const store = readStore(storePath);
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+    await expect(
+      loadSqliteTrajectoryRuntimeEvents({ sessionId: "main-session", storePath }),
+    ).resolves.toEqual([]);
   });
 
   it.each<{
@@ -2533,6 +2698,22 @@ describe("main-session-restart-recovery", () => {
     expect(entry).toMatchObject({ status: "running", abortedLastRun: true });
     expect(entry?.mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
     expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
+    // The committed interruption restore clears the row's run id, so the
+    // canonical terminal event must carry the recovery fence's run id.
+    const recoveryRunId = entry?.restartRecoveryRuns?.find(
+      (run) => run.lifecycleGeneration === getAgentEventLifecycleGeneration(),
+    )?.runId;
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "main-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: recoveryRunId,
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
   });
 
   it("settles an admitted recovery that completed before its ambiguous response", async () => {
@@ -3320,6 +3501,7 @@ describe("main-session-restart-recovery", () => {
         sessionId: "main-session",
         updatedAt: cutoff - 10_000,
         status: "running",
+        lifecycleRunId: "orphan-run",
       },
       "agent:main:active-key": {
         sessionId: "active-key-session",
@@ -3399,6 +3581,19 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:completed"]?.restartRecoveryRuns).toHaveLength(1);
     expect(store["agent:main:already-marked"]?.restartRecoveryRuns).toHaveLength(1);
+    // The startup-orphan marker writes the same canonical interrupted terminal
+    // event, so a crash-orphaned session has a durable trajectory ending.
+    const orphanTrajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "main-session",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
+    expect(orphanTrajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "orphan-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
 
     const recovered = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 
@@ -3407,6 +3602,49 @@ describe("main-session-restart-recovery", () => {
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
+  });
+
+  it("records an interrupted trajectory ending for orphaned fixed-store global sessions", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    const cutoff = Date.now() - 60_000;
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("orphan-global-session", {
+        lifecycleRunId: "orphan-global-run",
+        updatedAt: cutoff - 10_000,
+      }),
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    const result = await markStartupOrphanedMainSessionsForRecovery({
+      cfg,
+      activeSessionKeys: [],
+      activeSessionIds: [],
+      updatedBeforeMs: cutoff,
+    });
+
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    const store = readStore(storePath);
+    expect(store.global?.abortedLastRun).toBe(true);
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      agentId: "ops",
+      sessionId: "orphan-global-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "orphan-global-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
   });
 
   it("does not create empty agent databases while scanning startup recovery", async () => {
@@ -4359,6 +4597,62 @@ describe("main-session-restart-recovery", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
+  it("retries an ops-partition owner-release recovery through its durable owner", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("global-session", {
+        lifecycleRunId: "global-run",
+        pendingFinalDelivery: makePendingFinalDelivery(),
+        restartRecoveryForceSafeTools: true,
+      }),
+    );
+    const markResult = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
+      cfg,
+      activeRuns: [activeRestartRun("global", "global-session", { runId: "global-run" })],
+    });
+    expect(markResult).toEqual({ marked: 1, skipped: 0 });
+
+    vi.mocked(callGateway)
+      .mockRejectedValueOnce(new Error("temporary dispatch failure"))
+      .mockResolvedValueOnce({ runId: "run-resumed" })
+      .mockResolvedValueOnce({ runId: "run-resumed" });
+
+    scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease({
+      delayMs: 0,
+      expectedSessionId: "global-session",
+      getConfig: () => cfg,
+      getGatewayRuntime: () => mockRecoveryRuntime,
+      maxRetries: 3,
+      sessionKey: "global",
+      storePath,
+      agentId: "ops",
+    });
+
+    // Without the carried owner the exact retry reads the store's default
+    // partition, finds nothing, and silently stops before any dispatch.
+    await waitForFast(() => {
+      expect(loadSessionEntry({ agentId: "ops", sessionKey: "global", storePath })).toMatchObject({
+        abortedLastRun: false,
+      });
+    });
+    await waitForFast(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    expect(callGateway).toHaveBeenCalledTimes(3);
+    expect(gatewayParams()).toMatchObject({ agentId: "ops", sessionKey: "global" });
+  });
+
   it("tombstones exhausted recovery with replacement-session instructions", async () => {
     const { storePath } = await makeMainSessionFixture({
       sessionKey: "agent:main:discord:direct:123",
@@ -4916,6 +5210,123 @@ describe("main-session-restart-recovery", () => {
         loadSessionEntry({ sessionKey: "agent:main:main", storePath })
           ?.restartRecoveryDeliveryRunId,
       ).toBeUndefined();
+      const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+        sessionId: "main-session",
+        storePath,
+      });
+      expect(trajectoryEvents).toEqual([
+        expect.objectContaining({
+          type: "session.ended",
+          runId: expect.any(String),
+          data: expect.objectContaining({ status: "interrupted", aborted: true }),
+        }),
+      ]);
+    } finally {
+      scheduleSpy.mockRestore();
+    }
+  });
+
+  it("restores an accepted recovery that fails before execution starts for an ops-owned fixed-store global session", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("global-session", {
+        abortedLastRun: true,
+        lifecycleRunId: "global-run",
+        restartRecoveryDeliveryRunId: "recovery-global",
+        restartRecoveryDeliverySourceRunId: "source-global",
+      }),
+    );
+    await writeTranscript(path.dirname(storePath), "global-session", [
+      { role: "user", content: "recover without losing the owner" },
+    ]);
+
+    const scheduleSpy = vi
+      .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
+      .mockImplementation(() => {});
+    let acceptedObserver: ((payload: unknown) => void) | undefined;
+    const dispatchAgent = vi.fn<GatewayRecoveryRuntime["dispatchAgent"]>(
+      async (request, _timeoutMs, options) => {
+        const runId = request.idempotencyKey!;
+        await commitMainSessionRecovery({
+          command: {
+            kind: "admit_recovery",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            now: Date.now(),
+            runId,
+            sessionId: "global-session",
+          },
+          requireWriteSuccess: true,
+          target: { agentId: "ops", sessionKey: "global", storePath },
+        });
+        acceptedObserver = options?.onAccepted;
+        acceptedObserver?.({ runId, status: "accepted" });
+        throw new Error("detached execution failed before provider start");
+      },
+    );
+
+    try {
+      const result = await retryRestartAbortedMainSessionRecovery({
+        cfg,
+        agentId: "ops",
+        expectedRecoveryRunId: "recovery-global",
+        expectedRecoverySourceRunId: "source-global",
+        expectedSessionId: "global-session",
+        sessionKey: "global",
+        storePath,
+        gatewayRuntime: {
+          dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
+          waitForAgent: vi.fn(async () => ({
+            runId: "recovery-global",
+            status: "timeout",
+            timeoutPhase: "queue",
+            providerStarted: false,
+          })) as GatewayRecoveryRuntime["waitForAgent"],
+          sendRecoveryNotice: vi.fn(),
+        },
+      });
+
+      expect(result).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
+      expect(acceptedObserver).toBeTypeOf("function");
+      expect(scheduleSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "global-session",
+          sessionKey: "global",
+          storePath,
+          agentId: "ops",
+        }),
+      );
+      expect(loadSessionEntry({ sessionKey: "global", storePath, agentId: "ops" })).toMatchObject({
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliverySourceRunId: "source-global",
+        mainRestartRecovery: { chargedAttempts: 1 },
+      });
+      expect(
+        loadSessionEntry({ sessionKey: "global", storePath, agentId: "ops" })
+          ?.restartRecoveryDeliveryRunId,
+      ).toBeUndefined();
+      const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+        agentId: "ops",
+        sessionId: "global-session",
+        storePath,
+      });
+      expect(trajectoryEvents).toEqual([
+        expect.objectContaining({
+          type: "session.ended",
+          runId: expect.any(String),
+          data: expect.objectContaining({ status: "interrupted", aborted: true }),
+        }),
+      ]);
     } finally {
       scheduleSpy.mockRestore();
     }

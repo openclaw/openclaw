@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveSessionStoreCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type {
   InternalSessionEntry as SessionEntry,
@@ -18,7 +19,9 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
+import { LEGACY_IMPLICIT_AGENT_ID, parseAgentSessionKey } from "../../routing/session-key.js";
 import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { appendInterruptedSessionTrajectoryEndSync } from "../../trajectory/interrupted-end.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -39,12 +42,34 @@ import {
 } from "./main-session-restart-recovery-shared.js";
 import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
 
+function resolveInterruptedSessionOwner(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionKey: string;
+}): string | undefined {
+  const parsed = parseAgentSessionKey(params.sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  // Global and legacy-alias keys in a fixed store are owned by the configured
+  // compatibility agent (an explicit persisted owner or the legacy default).
+  // Without config the store writer resolves those rows to the legacy implicit
+  // owner. Agent-scoped keys already returned above, so this only applies to
+  // unscoped keys.
+  if (params.cfg) {
+    return resolveSessionStoreCompatibilityAgentId(params.cfg);
+  }
+  return LEGACY_IMPLICIT_AGENT_ID;
+}
+
 async function markRecoveryStore(params: {
   agentId?: string;
   storePath: string;
   sessionKey?: string;
   assertCommitAllowed?: () => void;
   statuses?: Array<NonNullable<SessionEntry["status"]>>;
+  cfg?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  trajectoryReason?: string;
   plan: (
     entry: SessionEntry,
     sessionKey: string,
@@ -60,7 +85,20 @@ async function markRecoveryStore(params: {
     | { action: "restore_yielded"; isCurrent: () => boolean }
     | undefined;
 }) {
+  // Resolve the trajectory database target for this owner partition before
+  // opening the session write transaction so filesystem/registry inspection
+  // does not run while the session lock is held.
+  const trajectoryTarget = resolveSqliteTargetFromSessionStorePath(
+    params.storePath,
+    params.agentId ? { agentId: params.agentId } : {},
+  );
   const yieldOwners: Array<() => boolean> = [];
+  const markedSessions: Array<{
+    sessionKey: string;
+    sessionId: string;
+    runId?: string;
+    agentId?: string;
+  }> = [];
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
     agentId: params.agentId,
     storePath: params.storePath,
@@ -109,6 +147,13 @@ async function markRecoveryStore(params: {
         if (plan.forceRestartSafeTools) {
           entry.restartRecoveryForceSafeTools = true;
         }
+        const interruptedRunId = entry.lifecycleRunId;
+        // The row was just committed in this scan's durable owner partition
+        // (or the store's default-owner pass when no partition is recorded),
+        // so the scanned owner is the authoritative trajectory owner; key and
+        // config resolution only covers the unscanned default-owner pass.
+        const sessionOwnerAgentId =
+          params.agentId ?? resolveInterruptedSessionOwner({ cfg: params.cfg, sessionKey });
         transitionMainSessionRecovery(entry, {
           kind: "mark_interrupted",
           cycleId: randomUUID(),
@@ -116,9 +161,29 @@ async function markRecoveryStore(params: {
           ...plan,
         });
         replacements.push({ sessionKey, entry });
+        markedSessions.push({
+          sessionKey,
+          sessionId: entry.sessionId,
+          runId: interruptedRunId,
+          agentId: sessionOwnerAgentId,
+        });
         counts.marked++;
       }
       return { result: counts, replacements };
+    },
+    afterWriteInTransaction: () => {
+      for (const marked of markedSessions) {
+        appendInterruptedSessionTrajectoryEndSync({
+          agentDatabaseAgentId: trajectoryTarget.agentId ?? marked.agentId,
+          agentDatabasePath: trajectoryTarget.path,
+          env: params.env,
+          runId: marked.runId,
+          sessionKey: marked.sessionKey,
+          sessionId: marked.sessionId,
+          storePath: params.storePath,
+          reason: params.trajectoryReason,
+        });
+      }
     },
   });
 }
@@ -160,6 +225,7 @@ export async function markRestartAbortedMainSessions(params: {
     }
   };
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(Boolean);
   for (const cfg of configs.length > 0 ? configs : [undefined]) {
     try {
@@ -198,6 +264,9 @@ export async function markRestartAbortedMainSessions(params: {
         const storeResult = await markRecoveryStore({
           ...target,
           sessionKey: selectedSessionKey,
+          cfg: params.cfg,
+          env,
+          trajectoryReason: params.reason,
           assertCommitAllowed: () => {
             if (isCurrent && !isCurrent()) {
               throw new Error("Restart recovery owner changed before commit");
@@ -313,6 +382,10 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
   const resolveActiveSessionKeys = () =>
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
+  const env =
+    params.stateDir === undefined
+      ? process.env
+      : { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
 
   // A flat locator can name multiple agent stores; checkpoint each owner once.
   // Publish checkpoints only after every marking write succeeds so failed scans retry safely.
@@ -326,6 +399,8 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     const storeResult = await markRecoveryStore({
       ...target,
       statuses: ["running"],
+      cfg: params.cfg,
+      env,
       assertCommitAllowed: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
       plan: (entry, sessionKey) => {
         if (entry.status !== "running") {
