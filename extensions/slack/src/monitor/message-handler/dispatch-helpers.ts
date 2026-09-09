@@ -36,7 +36,10 @@ export function resolveSlackBotLoopProtection(
   }
   return {
     scopeId: prepared.route.accountId,
-    conversationId: prepared.message.thread_ts ?? prepared.message.channel,
+    // Slack thread timestamps are unique only within their channel.
+    conversationId: prepared.message.thread_ts
+      ? `${prepared.message.channel}:${prepared.message.thread_ts}`
+      : prepared.message.channel,
     senderId: senderBotId,
     receiverId: receiverBotId,
     eventId: prepared.message.ts,
