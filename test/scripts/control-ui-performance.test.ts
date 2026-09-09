@@ -287,10 +287,16 @@ describe("Control UI performance budgets", () => {
       violations: ["largest locale catalog JS gzip"],
     },
     {
-      name: "rejects duplicate locale catalog artifacts",
+      name: "rejects multiple deferred chunks for one locale",
+      gzipBytes: 200_000,
+      duplicateCount: 1,
+      violations: ["locale catalog JS assets per locale"],
+    },
+    {
+      name: "retains the 20-file aggregate locale catalog limit",
       gzipBytes: 200_000,
       duplicateCount: 20,
-      violations: ["locale catalog JS assets"],
+      violations: ["locale catalog JS assets", "locale catalog JS assets per locale"],
     },
     {
       name: "rejects a locale catalog in startup preloads",
@@ -308,6 +314,12 @@ describe("Control UI performance budgets", () => {
       name: "does not exempt unsupported locale chunks",
       gzipBytes: 300 * 1024,
       localeName: "en-a.js",
+      violations: ["largest JS gzip"],
+    },
+    {
+      name: "does not exempt locale chunks without a suffix",
+      gzipBytes: 300 * 1024,
+      localeName: "ru-.js",
       violations: ["largest JS gzip"],
     },
   ])(

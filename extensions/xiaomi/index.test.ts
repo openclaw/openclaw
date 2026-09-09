@@ -1,11 +1,11 @@
 // Xiaomi tests cover index plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
   resolveProviderPluginChoice,
-  type RegisteredProviderCollections,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
@@ -34,17 +34,7 @@ type ReplayToolCall = {
   };
 };
 
-type RegisteredProvider = RegisteredProviderCollections["providers"][number];
 const emptyUsage = createZeroUsageFixture();
-
-function requireThinkingProfileResolver(
-  provider: RegisteredProvider,
-): NonNullable<RegisteredProvider["resolveThinkingProfile"]> {
-  if (!provider.resolveThinkingProfile) {
-    throw new Error("Xiaomi provider did not register a thinking profile resolver");
-  }
-  return provider.resolveThinkingProfile;
-}
 
 const readToolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
 const readToolResult = {
@@ -154,16 +144,6 @@ function createPayloadCapturingStream(capture: PayloadCapture, model: OpenAIComp
     queueMicrotask(() => stream.end());
     return stream;
   };
-}
-
-function requireThinkingWrapper(
-  wrapper: ReturnType<typeof createMiMoThinkingWrapper>,
-  label: string,
-): NonNullable<ReturnType<typeof createMiMoThinkingWrapper>> {
-  if (!wrapper) {
-    throw new Error(`expected MiMo thinking wrapper for ${label}`);
-  }
-  return wrapper;
 }
 
 function readThinking(payload: Record<string, unknown> | undefined): ThinkingPayload | undefined {
@@ -470,7 +450,10 @@ describe("xiaomi provider plugin", () => {
 
   it("advertises thinking profiles for MiMo reasoning models only", async () => {
     const provider = await getXiaomiProvider();
-    const resolveThinkingProfile = requireThinkingProfileResolver(provider);
+    const resolveThinkingProfile = expectDefined(
+      provider.resolveThinkingProfile,
+      "Xiaomi thinking profile resolver",
+    );
     const expectedLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
     for (const modelId of ["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-pro"]) {
@@ -511,9 +494,9 @@ describe("xiaomi provider plugin", () => {
     );
     const baseStreamFn = createPayloadCapturingStream(capture, model);
 
-    const wrapThinkingHigh = requireThinkingWrapper(
+    const wrapThinkingHigh = expectDefined(
       createMiMoThinkingWrapper(baseStreamFn as never, "high"),
-      "high",
+      "MiMo thinking wrapper for high",
     );
     await wrapThinkingHigh(model, context, {});
 
@@ -533,9 +516,9 @@ describe("xiaomi provider plugin", () => {
     const context = mimoReasoningToolReplayContext("xiaomi-token-plan");
     const baseStreamFn = createPayloadCapturingStream(capture, model);
 
-    const wrapThinkingHigh = requireThinkingWrapper(
+    const wrapThinkingHigh = expectDefined(
       createMiMoThinkingWrapper(baseStreamFn as never, "high"),
-      "high",
+      "MiMo thinking wrapper for high",
     );
     await wrapThinkingHigh(model, context, {});
 
@@ -555,9 +538,9 @@ describe("xiaomi provider plugin", () => {
     const context = mimoReasoningToolReplayContext();
     const baseStreamFn = createPayloadCapturingStream(capture, model);
 
-    const wrapThinkingNone = requireThinkingWrapper(
+    const wrapThinkingNone = expectDefined(
       createMiMoThinkingWrapper(baseStreamFn as never, "none" as never),
-      "none",
+      "MiMo thinking wrapper for none",
     );
     await wrapThinkingNone(model, context, {});
 

@@ -1,18 +1,21 @@
 /** Locale-independent Task Scheduler registration and runtime facts. */
 import { spawnSync } from "node:child_process";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasErrnoCode } from "../infra/errno.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 type ScheduledTaskStateProbe =
   | { status: "found"; state: number | null; lastRunResult?: string; lastRunTime?: string }
   | { status: "missing" }
-  | { status: "unknown"; detail: string };
+  | { status: "unknown"; detail: string; timeoutMs?: number };
 
 export function probeScheduledTaskState(
   taskName: string,
   timeoutMs?: number,
 ): ScheduledTaskStateProbe {
+  const probeTimeoutMs =
+    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5_000;
   const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
   const script = [
     "$ErrorActionPreference='Stop'",
@@ -37,11 +40,18 @@ export function probeScheduledTaskState(
     {
       env: resolveServiceManagerEnv(),
       encoding: "utf8",
-      timeout: timeoutMs && timeoutMs > 0 ? Math.min(timeoutMs, 5_000) : 5_000,
+      timeout: probeTimeoutMs,
       windowsHide: true,
     },
   );
   if (probe.error) {
+    if (hasErrnoCode(probe.error, "ETIMEDOUT")) {
+      return {
+        status: "unknown",
+        detail: `Scheduled Task probe timed out after ${probeTimeoutMs} ms (ETIMEDOUT).`,
+        timeoutMs: probeTimeoutMs,
+      };
+    }
     return { status: "unknown", detail: probe.error.message };
   }
   if (probe.status === 0) {

@@ -92,6 +92,13 @@ Opening a read-only or suggestion session as a viewer leaves its unread marker i
 
 **New group** from the sidebar, chat header, or Sessions page keeps the original session selection while the dialog is open and the group is being saved. A deleted or replaced session is not moved; an error is shown and the new group remains available. For a sidebar multi-selection, sessions that still exist can move even if another target fails. Paging a selected session out of the visible list does not cancel its move.
 
+Your saved custom name always takes precedence over an automatic title, even if
+it resembles an Android device label such as `OpenClaw App · Phone · abc123`.
+Older device labels saved as custom names keep that precedence until you clear
+or replace them explicitly. New Android device labels are stored separately, so
+a generated conversation title can replace the device label without changing
+your custom name.
+
 ### Session menu
 
 Only root sessions can be pinned; child/subagent sessions live in their parent's tree and reject pin requests, including when they appear as top-level threads.

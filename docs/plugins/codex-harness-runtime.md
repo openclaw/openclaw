@@ -257,6 +257,14 @@ restrictions remain. Completed actions are transcript evidence, not instructions
 to replay. Preserving a native model does not, by itself, disable host-authenticated
 finalization.
 
+Recovery reserves its existing limits for the complete current turn, then keeps
+the nearest whole earlier exchanges that fit. Older exchanges can be omitted,
+including a whole exchange that is too large. A notice identifies missing history
+when space permits; the finalizer is always instructed to state uncertainty about
+missing facts. Current evidence that exceeds the limits, invalid tool pairs, or
+unsupported content still makes recovery unavailable. Existing conversation
+history stays intact, and completed actions are never repeated.
+
 A Chat created through Codex Sessions is different: its private supervision
 connection owns native authentication. Stock Codex does not expose a generic
 tool-free summary operation that preserves that connection's account. OpenClaw

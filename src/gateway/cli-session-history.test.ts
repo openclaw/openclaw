@@ -12,6 +12,7 @@ import {
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
@@ -2515,25 +2516,59 @@ describe("cli session history", () => {
     });
   });
 
-  it("falls back to legacy claudeCliSessionId when newer fields are absent", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = resolveChatHistoryWithCliSessionImports({
-        entry: {
+  it.each([false, true])(
+    "imports a legacy Claude conversation after Doctor migration (locked=%s)",
+    async (locked) => {
+      await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
+        const { maybeRepairCodexSessionRoutes } =
+          await import("../commands/doctor/shared/codex-route-session-repair.js");
+        const stateDir = path.join(homeDir, "state");
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const key = "agent:main:cli-history";
+        const entry: SessionEntry = {
           sessionId: "openclaw-session",
-          updatedAt: Date.now(),
+          updatedAt: 1,
           claudeCliSessionId: sessionId,
-        },
-        provider: "claude-cli",
-        localMessages: [],
-        homeDir,
-      }).messages;
-      expect(messages).toHaveLength(3);
-      expectFields(messages[0], {
-        role: "user",
+          ...(locked ? { modelSelectionLocked: true, agentHarnessId: "claude-cli" } : {}),
+        };
+        expect(
+          resolveChatHistoryWithCliSessionImports({
+            entry,
+            provider: "claude-cli",
+            localMessages: [],
+            homeDir,
+          }).messages,
+        ).toEqual([]);
+        await fs.mkdir(path.dirname(storePath), { recursive: true });
+        await fs.writeFile(storePath, JSON.stringify({ [key]: entry }));
+        await maybeRepairCodexSessionRoutes({
+          cfg: {
+            plugins: { enabled: false },
+            session: { store: storePath },
+            agents: { entries: { main: {} }, defaults: { model: "anthropic/claude-sonnet-4-6" } },
+          },
+          env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_HOME: homeDir },
+          shouldRepair: true,
+        });
+        const reopened: Record<string, SessionEntry> = JSON.parse(
+          await fs.readFile(storePath, "utf8"),
+        );
+        expect(reopened[key]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(sessionId);
+        expect(reopened[key]?.modelSelectionLocked).toBe(locked ? true : undefined);
+        const messages = resolveChatHistoryWithCliSessionImports({
+          entry: reopened[key],
+          provider: "claude-cli",
+          localMessages: [],
+          homeDir,
+        }).messages;
+        expect(messages).toHaveLength(3);
+        expectFields(messages[0], {
+          role: "user",
+        });
+        expectCliSessionMarker(messages[0], sessionId);
       });
-      expectCliSessionMarker(messages[0], sessionId);
-    });
-  });
+    },
+  );
 });
 
 describe("readClaudeCliFallbackSeed", () => {

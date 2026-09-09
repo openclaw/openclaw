@@ -56,9 +56,11 @@ export function buildCopilotPromptGuidance(params: {
       messageToolAvailable: callableTools.has("message"),
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     }),
-    buildCredentialSafetyPrompt(
-      params.attempt.disableTools !== true && callableTools.has("secrets") ? "secrets" : undefined,
-    ),
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable:
+        params.attempt.disableTools !== true &&
+        (callableTools.has("openclaw") || callableTools.has("gateway")),
+    }),
     params.workspaceBootstrapInstructions?.trim(),
     extraSystemPrompt
       ? `${isMinimal ? "## Subagent Context" : "## Conversation Context"}\n${extraSystemPrompt}`

@@ -6,7 +6,7 @@ import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayDreamingSummary
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.GatewaySkillWorkshopSummary
@@ -1776,9 +1776,9 @@ private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
 
 private fun GatewayNodesDevicesSummary.hasNodeCapabilityApprovalPending(): Boolean =
   nodes.any { node ->
-    node.approvalState == GatewayNodeApprovalState.PendingApproval ||
-      node.approvalState == GatewayNodeApprovalState.PendingReapproval ||
-      node.approvalState == GatewayNodeApprovalState.Unapproved
+    node.approvalState is GatewayNodeCapabilityApproval.PendingApproval ||
+      node.approvalState is GatewayNodeCapabilityApproval.PendingReapproval ||
+      node.approvalState == GatewayNodeCapabilityApproval.Unapproved
   }
 
 /** Summarizes channel connection state, surfacing errors before connected counts. */

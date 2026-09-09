@@ -153,8 +153,17 @@ with transcript cleanup enabled. The Gateway removes the live session row,
 transcript generations, session-owned runtime state, bindings, boards, and
 other lifecycle artifacts. For ordinary sessions it retains the transcript as
 a verified `.jsonl.deleted.<timestamp>` archive; incognito transcripts are
-removed without an archive. If a managed worktree cannot be removed safely,
-the command reports the preserved branch and path for manual cleanup.
+removed without an archive. Retained deleted-session archives can remain
+eligible for memory search. To remove indexed memories, run
+`openclaw memory forget --agent <agent-id> --session <id-or-key>` on the Gateway
+host or container using that Gateway's state and configuration. Select the agent
+that owned the deleted session, including for `global` keys. Memory cleanup runs
+locally; deleting through `--url` or a configured remote Gateway does not forward
+the cleanup command to that Gateway. See [Memory forget](/cli/memory#memory-forget)
+for preview and deletion details.
+
+If a managed worktree cannot be removed safely, the command reports the preserved
+branch and path for manual cleanup.
 
 Both lifecycle commands:
 

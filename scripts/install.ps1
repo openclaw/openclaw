@@ -11,6 +11,8 @@ param(
     [switch]$NoOnboard,
     [switch]$NoGitUpdate,
     [switch]$DryRun,
+    [switch]$NodeOnly,
+    [string]$NodePrefix,
     [switch]$Help
 )
 
@@ -29,6 +31,8 @@ Options:
   -NoOnboard              Skip onboarding
   -NoGitUpdate            Skip git pull
   -DryRun                 Print actions only
+  -NodeOnly               Install only a private Node.js runtime; do not change PATH
+  -NodePrefix <path>      Absolute private directory for -NodeOnly (required)
   -Help                   Show this help
 "@ | Write-Output
     return
@@ -310,22 +314,61 @@ function Test-NodeSqliteSupported {
 }
 
 function Check-Node {
+    param([string]$NodePath)
+
     try {
-        $nodeCommand = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
-        $nodePath = $nodeCommand.Source
-        $nodeVersion = (& $nodePath -v 2>$null)
-        $sqliteProbe = 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); try { process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get().version)); } finally { db.close(); }'
-        $sqliteVersion = ($sqliteProbe | & $nodePath - 2>$null)
-        if ($LASTEXITCODE -ne 0) {
-            $sqliteVersion = $null
+        if ([string]::IsNullOrWhiteSpace($NodePath)) {
+            $nodeCommand = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
+            $NodePath = $nodeCommand.Source
         }
+        $nodeVersion = (& $nodePath -v 2>$null)
+        $sqliteProbe = @'
+const result = { available: false, version: null, text: false, blob: false, json: false };
+let db;
+try {
+    const { DatabaseSync } = require("node:sqlite");
+    db = new DatabaseSync(":memory:");
+    result.available = true;
+    result.version = db.prepare("SELECT sqlite_version() AS version").get()?.version ?? null;
+    const text = "a\u0000b\u0000";
+    const bytes = Buffer.from(text, "utf8");
+    const json = JSON.stringify({ value: text });
+    db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
+    db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
+    const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+    result.text = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
+    result.blob = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
+    result.json = row?.json_value === json && JSON.parse(row.json_value).value === text;
+} catch (error) {
+    result.error = error instanceof Error ? error.message : String(error);
+} finally {
+    db?.close();
+}
+process.stdout.write(JSON.stringify(result));
+'@
+        $sqliteOutput = ($sqliteProbe | & $nodePath - 2>$null)
+        $sqlite = $null
+        if ($LASTEXITCODE -ne 0) {
+            $sqliteOutput = $null
+        }
+        if ($sqliteOutput) {
+            $sqlite = $sqliteOutput | ConvertFrom-Json
+        }
+        $sqliteVersion = $sqlite.version
         if ($nodeVersion) {
             if (
                 (Test-NodeVersionSupported -Version $nodeVersion) -and
-                (Test-NodeSqliteSupported -Version $sqliteVersion)
+                (Test-NodeSqliteSupported -Version $sqliteVersion) -and
+                $sqlite.text -and $sqlite.blob -and $sqlite.json -and -not $sqlite.error
             ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
+            } elseif ($sqlite.available -and -not $sqlite.text -and -not $sqlite.error) {
+                Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
+                return $false
+            } elseif ($sqlite.error -or -not $sqlite.blob -or -not $sqlite.json) {
+                Write-Host "[!] Node $nodeVersion`: node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
+                return $false
             } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
                 $sqliteVersionLabel = if ([string]::IsNullOrWhiteSpace($sqliteVersion)) {
                     "unavailable"
@@ -544,6 +587,66 @@ function Install-PortableNode {
 
     $nodeVersion = (& node -v 2>$null)
     Write-Host "[OK] User-local Node.js ready: $nodeVersion" -ForegroundColor Green
+}
+
+function Install-PrivateNode {
+    param([Parameter(Mandatory = $true)][string]$Prefix)
+
+    $download = Resolve-PortableNodeDownload
+    $temporaryRoot = Join-Path $script:InstallerTempDirectory ("openclaw-private-node-" + [guid]::NewGuid().ToString("N"))
+    $archive = Join-Path $temporaryRoot $download.Name
+    $checksums = Join-Path $temporaryRoot "SHASUMS256.txt"
+    $parent = Split-Path -Parent $Prefix
+    $extracted = Join-Path $parent (".openclaw-node-" + [guid]::NewGuid().ToString("N"))
+    $backup = $null
+    try {
+        New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
+        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
+        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $archive @downloadTimeouts
+        Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/$($download.Version)/SHASUMS256.txt" -OutFile $checksums @downloadTimeouts
+        $checksumPattern = '^(?<hash>[0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($download.Name) + '$'
+        $expected = @(Get-Content -LiteralPath $checksums | ForEach-Object {
+            if ($_ -match $checksumPattern) { $Matches["hash"] }
+        })
+        if ($expected.Count -ne 1 -or (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected[0]) {
+            throw "Node.js archive checksum verification failed."
+        }
+
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        Expand-PortableNodeArchive -ZipPath $archive -DestinationPath $extracted
+        $nodeExe = Join-Path $extracted "node.exe"
+        if (-not (Check-Node -NodePath $nodeExe)) {
+            throw "Downloaded Node.js does not satisfy OpenClaw runtime requirements."
+        }
+
+        # Keep the matching npm/npx alongside node.exe, without touching global packages or PATH.
+        # Stage on the destination volume and preserve the previous private runtime until publication.
+        if (Test-Path -LiteralPath $Prefix) {
+            $backup = Join-Path $parent (".openclaw-node-backup-" + [guid]::NewGuid().ToString("N"))
+            [System.IO.Directory]::Move($Prefix, $backup)
+        }
+        try {
+            [System.IO.Directory]::Move($extracted, $Prefix)
+        } catch {
+            if ($backup) {
+                [System.IO.Directory]::Move($backup, $Prefix)
+                $backup = $null
+            }
+            throw
+        }
+        if ($backup) {
+            Remove-Item -LiteralPath $backup -Recurse -Force
+            $backup = $null
+        }
+        Write-Host "[OK] Private Node.js ready: $(Join-Path $Prefix 'node.exe')" -ForegroundColor Green
+    } finally {
+        if (Test-Path -LiteralPath $extracted) {
+            Remove-Item -LiteralPath $extracted -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $temporaryRoot) {
+            Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
+        }
+    }
 }
 
 # Install Node.js
@@ -2071,6 +2174,36 @@ function Complete-NpmShimBackup {
 
 # Main installation flow
 function Main {
+    if ($NodeOnly) {
+        $prefixRoot = if (-not [string]::IsNullOrWhiteSpace($NodePrefix)) { [System.IO.Path]::GetPathRoot($NodePrefix) } else { "" }
+        if (
+            [string]::IsNullOrWhiteSpace($prefixRoot) -or
+            $prefixRoot.EndsWith(":") -or
+            ($prefixRoot -eq "\") -or
+            [string]::Equals([System.IO.Path]::GetFullPath($NodePrefix).TrimEnd('\', '/'), $prefixRoot.TrimEnd('\', '/'), [System.StringComparison]::OrdinalIgnoreCase)
+        ) {
+            Write-Host "Error: -NodeOnly requires -NodePrefix with an absolute private directory, not a filesystem root." -ForegroundColor Red
+            Fail-Install -Code 2
+            return
+        }
+        if ($DryRun) {
+            Write-Host "[OK] Would install private Node.js to $NodePrefix (PATH unchanged)." -ForegroundColor Green
+            return $true
+        }
+        try {
+            Install-PrivateNode -Prefix ([System.IO.Path]::GetFullPath($NodePrefix))
+        } catch {
+            Write-Host "Error: Node.js update failed: $($_.Exception.Message)" -ForegroundColor Red
+            Fail-Install
+        }
+        return
+    }
+    if (-not [string]::IsNullOrWhiteSpace($NodePrefix)) {
+        Write-Host "Error: -NodePrefix requires -NodeOnly." -ForegroundColor Red
+        Fail-Install -Code 2
+        return
+    }
+
     if ($InstallMethod -ne "npm" -and $InstallMethod -ne "git") {
         Write-Host "Error: invalid -InstallMethod (use npm or git)." -ForegroundColor Red
         Fail-Install -Code 2

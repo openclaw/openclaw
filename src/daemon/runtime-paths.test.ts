@@ -1,5 +1,7 @@
-// Daemon runtime path tests cover executable and config path resolution.
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+// Daemon runtime path tests cover executable and config path resolution.
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fsMocks = vi.hoisted(() => ({
@@ -55,9 +57,12 @@ function nodeRuntime(
   nodeVersion: string,
   sqliteVersion: string | null = "3.51.3",
   nodeSharedSqlite = false,
+  text = !["22.", "24.14.", "24.15.", "25.", "26.0."].some((prefix) =>
+    nodeVersion.startsWith(prefix),
+  ),
 ) {
   return {
-    stdout: `${JSON.stringify({ nodeVersion, sqliteVersion, nodeSharedSqlite })}\n`,
+    stdout: `${JSON.stringify({ nodeVersion, sqliteVersion, nodeSharedSqlite, sqliteProbe: { available: sqliteVersion !== null, version: sqliteVersion, text, blob: true, json: true } })}\n`,
     stderr: "",
   };
 }
@@ -68,8 +73,9 @@ function bunRuntime(
   sqliteVersion: string | null = hasNodeSqlite ? "3.51.3" : null,
   sqliteSelectionError: string | null = null,
 ) {
+  const available = hasNodeSqlite && !sqliteSelectionError;
   return {
-    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite, sqliteVersion, sqliteSelectionError })}\n`,
+    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite, sqliteVersion, sqliteSelectionError, sqliteProbe: { available, version: sqliteVersion, text: available, blob: available, json: available } })}\n`,
     stderr: "",
   };
 }
@@ -153,6 +159,50 @@ it("treats an unparseable Node version as a probe failure", async () => {
 });
 
 describe("resolvePreferredNodePath", () => {
+  it.each([
+    ["24.16.0", false, "unsupported"],
+    ["24.15.0+vendor.1", true, "supported"],
+  ] as const)(
+    "probes the selected binary's decoder on Node %s",
+    async (version, lossless, expected) => {
+      mockNodePathPresent("/usr/bin/node");
+      const execFile = vi.fn<NonNullable<Parameters<typeof resolveSystemNodeInfo>[0]["execFile"]>>(
+        async (_file, args, options) => {
+          expect(options.timeoutMs).toBe(5_000);
+          let stdout = "";
+          class CandidateDatabase extends DatabaseSync {
+            override prepare(sql: string) {
+              if (!lossless && sql === "SELECT text_value, blob_value, json_value FROM probe") {
+                return super.prepare("SELECT 'a' AS text_value, blob_value, json_value FROM probe");
+              }
+              return super.prepare(sql);
+            }
+          }
+          runInNewContext(args[1] ?? "", {
+            require: () => ({ DatabaseSync: CandidateDatabase }),
+            Buffer,
+            Uint8Array,
+            process: {
+              versions: { node: version },
+              stdout: {
+                write: (value: string) => {
+                  stdout += value;
+                },
+              },
+            },
+          });
+          return { stdout, stderr: "" };
+        },
+      );
+      const result = await resolveSystemNodeInfo({ env: {}, platform: "linux", execFile });
+      expect(result).toMatchObject({
+        status: expected,
+        version,
+        sqliteProbe: { text: lossless, blob: true, json: true },
+      });
+    },
+  );
+
   const darwinNode = "/opt/homebrew/bin/node";
   const fnmNode = "/Users/test/.fnm/node-versions/v24.16.0/installation/bin/node";
   const linuxSystemNode = "/usr/bin/node";
@@ -590,6 +640,7 @@ describe("resolvePreferredBunPath", () => {
     await expect(resolveBunRuntimeInfo(bunPath, execFile, env)).resolves.toEqual({
       status: "supported",
       version: "1.4.2",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       sqliteVersion: "3.53.4",
       nodeSharedSqlite: false,
     });
@@ -637,6 +688,7 @@ describe("resolvePreferredBunPath", () => {
     ).resolves.toEqual({
       status: "unsupported",
       version: "1.4.2",
+      sqliteProbe: { available: false, version: null, text: false, blob: false, json: false },
       sqliteVersion: null,
       nodeSharedSqlite: false,
       sqliteSelectionError: INVALID_SQLITE_OVERRIDE,
@@ -761,6 +813,7 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(result).toEqual({
       path: darwinNode,
+      sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
       sqliteVersion: "3.51.3",
       version: "24.16.0",
       nodeSharedSqlite: false,
@@ -808,6 +861,7 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(result).toEqual({
       path: homebrewOptNode,
+      sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
       sqliteVersion: "3.51.3",
       version: "24.16.0",
       nodeSharedSqlite: false,
@@ -833,6 +887,7 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(result).toEqual({
       path: homebrewOptNode,
+      sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
       sqliteVersion: "3.51.3",
       version: "24.16.0",
       nodeSharedSqlite: false,
@@ -869,6 +924,7 @@ describe("resolveSystemNodeInfo", () => {
     const warning = renderSystemNodeWarning(
       {
         path: darwinNode,
+        sqliteProbe: { available: false, version: null, text: true, blob: true, json: true },
         sqliteVersion: null,
         version: "18.19.0",
         nodeSharedSqlite: false,
@@ -886,6 +942,7 @@ describe("resolveSystemNodeInfo", () => {
     const warning = renderSystemNodeWarning(
       {
         path: darwinNode,
+        sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
         sqliteVersion: "3.51.3",
         version: "24.16.0",
         nodeSharedSqlite: false,
@@ -900,6 +957,7 @@ describe("resolveSystemNodeInfo", () => {
   it("renders a WAL safety warning for supported Node with unsafe SQLite", () => {
     const warning = renderSystemNodeWarning({
       path: darwinNode,
+      sqliteProbe: { available: true, version: "3.51.2", text: true, blob: true, json: true },
       sqliteVersion: "3.51.2",
       version: "24.17.0",
       nodeSharedSqlite: false,
@@ -914,6 +972,7 @@ describe("resolveSystemNodeInfo", () => {
   it("renders a shared-system-SQLite remediation when Node is supported but the system library is unsafe", () => {
     const warning = renderSystemNodeWarning({
       path: "/usr/bin/node",
+      sqliteProbe: { available: true, version: "3.51.2", text: true, blob: true, json: true },
       sqliteVersion: "3.51.2",
       version: "24.17.0",
       nodeSharedSqlite: true,

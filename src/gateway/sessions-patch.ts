@@ -283,6 +283,7 @@ function* projectSessionPatchSteps(
   };
   if (existing && !existing.sessionId) {
     delete next.label;
+    delete next.autoLabel;
     delete next.category;
     delete next.displayName;
   }

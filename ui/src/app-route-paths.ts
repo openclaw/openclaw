@@ -13,6 +13,7 @@ import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { DEFAULT_AGENT_PANEL, isAgentsPanel, type AgentsPanel } from "./lib/agents/panels.ts";
 import type { BoardFace } from "./lib/board/settings.ts";
 import { takeGraphemes } from "./lib/graphemes.ts";
+
 export const INTERNAL_AGENT_PATH_PARAM = "__openclawAgentPath";
 export const INTERNAL_ACTIVITY_PATH_PARAM = "__openclawActivityPath";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
@@ -93,6 +94,7 @@ const APP_ROUTE_DEFINITIONS = {
 } as const;
 
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;
+// SAFETY: Object.keys returns only the own keys of this closed route catalog.
 export const APP_ROUTE_IDS = Object.keys(APP_ROUTE_DEFINITIONS) as RouteId[];
 const APP_ROUTE_PATHS: string[] = [];
 const ROUTE_ID_BY_PATH = new Map<string, RouteId>();
@@ -108,6 +110,84 @@ for (const routeId of APP_ROUTE_IDS) {
       ROUTE_ID_BY_PATH.set(normalizedPath, routeId);
     }
   }
+}
+
+const NATIVE_ROUTE_SEGMENTS = new Set(APP_ROUTE_PATHS.map((path) => path.split("/")[1]));
+
+export const INTERNAL_PLUGIN_PATH_PARAM = "__openclawPluginPath";
+type PluginTab = { pluginId: string; id: string; slug?: string };
+const tabsBySlug = new Map<string, PluginTab>();
+const warnedSlugs = new Set<string>();
+
+function pluginTabSlug(tab: PluginTab): string | undefined {
+  const slug = tab.slug;
+  if (!slug) {
+    return undefined;
+  }
+  if (NATIVE_ROUTE_SEGMENTS.has(slug)) {
+    if (!warnedSlugs.has(slug)) {
+      warnedSlugs.add(slug);
+      console.warn(`[openclaw] /${slug} is a native route; using /plugin.`);
+    }
+    return undefined;
+  }
+  return slug;
+}
+
+export function setPluginTabSlugs(tabs: readonly PluginTab[] = []): void {
+  tabsBySlug.clear();
+  for (const tab of tabs) {
+    const slug = pluginTabSlug(tab);
+    if (slug && !tabsBySlug.has(slug)) {
+      tabsBySlug.set(slug, tab);
+    }
+  }
+}
+
+export function pluginSlugCandidate(pathname: string, basePath = ""): string | null {
+  const path = normalizePath(pathname);
+  const base = normalizeBasePath(basePath);
+  if (!path.startsWith(`${base}/`)) {
+    return null;
+  }
+  const slug = path.slice(base.length + 1);
+  return slug.length <= 64 &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) &&
+    !NATIVE_ROUTE_SEGMENTS.has(slug)
+    ? slug
+    : null;
+}
+
+export function pluginTabSlugFromPath(pathname: string, basePath = ""): PluginTab | null {
+  return tabsBySlug.get(pluginSlugCandidate(pathname, basePath) ?? "") ?? null;
+}
+
+export function pluginTabLocation(tab: PluginTab, basePath = ""): RouteLocation {
+  const slug = pluginTabSlug(tab);
+  return {
+    pathname: slug ? `${normalizeBasePath(basePath)}/${slug}` : pathForRoute("plugin", basePath),
+    search: slug ? "" : `?${new URLSearchParams({ plugin: tab.pluginId, id: tab.id })}`,
+    hash: "",
+  };
+}
+
+export function canonicalPluginTabLocation(location: RouteLocation, basePath = ""): RouteLocation {
+  if (normalizePath(location.pathname) !== pathForRoute("plugin", basePath)) {
+    return location;
+  }
+  const search = new URLSearchParams(location.search);
+  const tab = [...tabsBySlug.values()].find(
+    (entry) => entry.pluginId === search.get("plugin") && entry.id === search.get("id"),
+  );
+  if (!tab) {
+    return location;
+  }
+  const params = new URLSearchParams([...search].filter(([key]) => key.startsWith("p.")));
+  return {
+    ...pluginTabLocation(tab, basePath),
+    search: params.size ? `?${params}` : "",
+    hash: location.hash,
+  };
 }
 
 export function isRouteId(routeId: string): routeId is RouteId {
@@ -305,6 +385,9 @@ export function workboardBoardIdFromPath(pathname: string, basePath = ""): strin
 }
 
 function dynamicRouteIdFromPath(pathname: string, basePath = ""): RouteId | null {
+  if (pluginTabSlugFromPath(pathname, basePath)) {
+    return "plugin";
+  }
   if (agentRouteFromPath(pathname, basePath)) {
     return "agents";
   }

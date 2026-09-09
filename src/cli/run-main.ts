@@ -1289,6 +1289,7 @@ async function runCliWithPreparedOutputMode(
     installProxySignalHandlers();
   };
   let uninstallGatewayRunRuntimeHooks: (() => void) | null = null;
+  let unhandledRejectionHandlerInstalled = false;
 
   try {
     const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
@@ -1490,6 +1491,16 @@ async function runCliWithPreparedOutputMode(
       !isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv);
     const bootstrapProxyBeforeFastPath =
       shouldUseCliEnvProxy && shouldBootstrapCliProxyBeforeFastPath();
+    // Gateway execution can return before full CLI bootstrap, so install the
+    // shared process policy before the fast path can start asynchronous work.
+    if (isGatewayRunFastPathArgv(normalizedArgv)) {
+      const { installUnhandledRejectionHandler } = await startupTrace.measure(
+        "unhandled-rejection-handler-import",
+        () => import("../infra/unhandled-rejections.js"),
+      );
+      installUnhandledRejectionHandler();
+      unhandledRejectionHandlerInstalled = true;
+    }
     if (
       !bootstrapProxyBeforeFastPath &&
       (await tryRunGatewayRunFastPath(normalizedArgv, startupTrace))
@@ -1570,7 +1581,9 @@ async function runCliWithPreparedOutputMode(
 
       // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
       // These log the error and exit gracefully instead of crashing without trace.
-      installUnhandledRejectionHandler();
+      if (!unhandledRejectionHandlerInstalled) {
+        installUnhandledRejectionHandler();
+      }
 
       process.on("uncaughtException", (error) => {
         if (isUncaughtExceptionHandled(error)) {

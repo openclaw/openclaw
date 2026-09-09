@@ -6,7 +6,7 @@ import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
@@ -423,8 +423,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingApproval,
-                  pendingRequestId = null,
+                  approvalState = GatewayNodeCapabilityApproval.PendingApproval(null),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -478,8 +477,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingReapproval,
-                  pendingRequestId = "node-request",
+                  approvalState = GatewayNodeCapabilityApproval.PendingReapproval("node-request"),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -633,8 +631,7 @@ class ShellScreenLogicTest {
                   deviceFamily = null,
                   paired = true,
                   connected = index <= 2,
-                  approvalState = GatewayNodeApprovalState.Approved,
-                  pendingRequestId = null,
+                  approvalState = GatewayNodeCapabilityApproval.Approved,
                   capabilities = emptyList(),
                   commands = emptyList(),
                 )

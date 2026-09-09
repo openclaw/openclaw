@@ -41,9 +41,11 @@ boots a canary with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
 copied agent databases. Installed plugin payloads and their dependencies are also
 copied; the rehearsal install records point to those copies, and their OpenClaw
-host links target the staged candidate. The live plugin files and host links stay
-unchanged. Channels, cron, automatic updates, and other side services are
-suppressed in this canary.
+host links target the staged candidate. Path aliases that resolve to a running
+package's bundled plugin use the staged bundled plugin with the same ID when
+available, preserving bundled trust. External path installs keep their existing
+classification. The live plugin files and host links stay unchanged. Channels,
+cron, automatic updates, and other side services are suppressed in this canary.
 
 Schema checks also use private SQLite copies so inspection does not create or
 modify WAL sidecars beside live databases. Each schema inspection has a

@@ -10,18 +10,23 @@ import type {
 import {
   activityPersonFromPath,
   agentRouteFromPath,
+  canonicalPluginTabLocation,
   INTERNAL_ACTIVITY_PATH_PARAM,
   INTERNAL_AGENT_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
+  INTERNAL_PLUGIN_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
   INTERNAL_SESSION_PATH_PARAM,
   INTERNAL_WORKBOARD_PATH_PARAM,
   memoryTabFromPath,
   pathForAgentPanel,
   pathForRoute,
+  pluginSlugCandidate,
+  pluginTabSlugFromPath,
   pluginsHubTabFromPath,
   routeIdFromPath,
   sessionRouteNamespaceFromPath,
+  setPluginTabSlugs,
   workboardBoardIdFromPath,
   type RouteId,
 } from "./app-route-paths.ts";
@@ -147,7 +152,9 @@ function canonicalRouteLocation(
 ): RouteLocation {
   return routeId === "workboard"
     ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
-    : location;
+    : routeId === "plugin"
+      ? canonicalPluginTabLocation(location, basePath)
+      : location;
 }
 
 export function createApplicationRouter(): ApplicationRouter {
@@ -172,6 +179,9 @@ export function createApplicationRouter(): ApplicationRouter {
 type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
 
 function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
+  if (pluginTabSlugFromPath(pathname, basePath)) {
+    return ["plugin", INTERNAL_PLUGIN_PATH_PARAM, pathname];
+  }
   if (activityPersonFromPath(pathname, basePath)) {
     return ["activity", INTERNAL_ACTIVITY_PATH_PARAM, pathname];
   }
@@ -239,6 +249,7 @@ export async function startApplicationRouter(
   basePath: string,
   context: ApplicationContext<RouteId>,
 ): Promise<void> {
+  setPluginTabSlugs(context.gateway.snapshot.hello?.controlUiTabs);
   let location = history.location();
   const canonicalLocation = canonicalRouteLocation(
     routeIdFromPath(location.pathname, basePath),
@@ -258,9 +269,11 @@ export async function startApplicationRouter(
     });
     location = history.location();
   }
-  // Unknown paths (including retired routes like /overview) land on chat, so
-  // removed pages need no legacy aliases for stale bookmarks or history.
-  if (routeIdFromPath(location.pathname, basePath) === null) {
+  // Single-segment plugin deep links wait for hello before outlet recovery.
+  if (
+    routeIdFromPath(location.pathname, basePath) === null &&
+    !pluginSlugCandidate(location.pathname, basePath)
+  ) {
     history.replace({
       ...location,
       pathname: router.pathForRoute("chat", basePath),
@@ -272,8 +285,43 @@ export async function startApplicationRouter(
     location: () => routerHistoryLocation(history.location(), basePath),
     push: (next) => history.push(next),
     replace: (next) => history.replace(next),
-    listen: (listener) =>
-      history.listen((next) => {
+    listen: (listener) => {
+      let listening = true;
+      let lastHello = context.gateway.snapshot.hello;
+      const stopGateway = context.gateway.subscribe((snapshot) => {
+        if (lastHello === snapshot.hello) {
+          return;
+        }
+        lastHello = snapshot.hello;
+        setPluginTabSlugs(snapshot.hello?.controlUiTabs);
+        queueMicrotask(() => {
+          if (!listening || context.gateway.snapshot.phase !== "connected") {
+            return;
+          }
+          const current = history.location();
+          const canonical = canonicalPluginTabLocation(current, basePath);
+          const state = router.getState();
+          if (state.pendingMatches.some((match) => !sameRouteLocation(match.location, current))) {
+            return;
+          }
+          const slugRoute =
+            current.pathname !== pathForRoute("plugin", basePath) &&
+            [...state.matches, ...state.pendingMatches].some((match) => match.routeId === "plugin");
+          if (
+            !sameRouteLocation(current, canonical) ||
+            (slugRoute && pluginTabSlugFromPath(current.pathname, basePath))
+          ) {
+            void router
+              .navigate("plugin", context, { history: "replace" }, canonical)
+              .catch((error: unknown) => {
+                console.error("[openclaw] Plugin tab navigation failed", error);
+              });
+          } else if (slugRoute) {
+            listener(current);
+          }
+        });
+      });
+      const stopHistory = history.listen((next) => {
         const canonical = canonicalRouteLocation(
           routeIdFromPath(next.pathname, basePath),
           next,
@@ -292,7 +340,13 @@ export async function startApplicationRouter(
           return;
         }
         listener(canonical);
-      }),
+      });
+      return () => {
+        listening = false;
+        stopGateway();
+        stopHistory();
+      };
+    },
   };
   await tolerateRouteNotFound(router.start(applicationHistory, basePath, context));
   if (initialDynamicRoute && sameRouteLocation(history.location(), location)) {

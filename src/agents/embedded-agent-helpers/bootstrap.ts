@@ -105,6 +105,10 @@ const AGENTS_POLICY_DIGEST_RATIO = 0.35;
 const AGENTS_POLICY_HEAD_RATIO = 0.45;
 const AGENTS_POLICY_TAIL_RATIO = 0.15;
 const AGENTS_POLICY_DIGEST_MAX_LINE_CHARS = 240;
+const AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|owner|security|secret|credential|test|validation|command|commit|push|github|pr)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿|必須|務必|一律|紅線)/iu;
+const AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿)/iu;
 
 type TrimBootstrapResult = {
   content: string;
@@ -159,9 +163,7 @@ function isPolicyDigestCandidate(line: string): boolean {
   if (/^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line)) {
     return true;
   }
-  return /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|owner|security|secret|credential|test|validation|command|commit|push|github|pr)\b/iu.test(
-    line,
-  );
+  return AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line);
 }
 
 function normalizePolicyDigestLine(line: string): string {
@@ -218,8 +220,6 @@ function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBoot
   // Budget refinement reselects these distinct source-ordered lines without reparsing them.
   const candidates: PolicyDigestCandidate[] = [];
   if (!(digestBudget <= 0)) {
-    const highPriorityPattern =
-      /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b/iu;
     let lastProseLine: string | null = null;
     for (const sourceLine of trimmed.split(/\r?\n/u)) {
       const line = normalizePolicyDigestLine(sourceLine);
@@ -234,7 +234,7 @@ function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBoot
         candidates.push({
           // Select framing and its candidate as one indivisible text unit.
           text: lastProseLine === null ? line : `${lastProseLine}\n${line}`,
-          highPriority: highPriorityPattern.test(line),
+          highPriority: AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN.test(line),
         });
         lastProseLine = null;
       } else {

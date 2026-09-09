@@ -93,7 +93,6 @@ vi.mock("../../state/openclaw-state-ownership.js", () => ({
 
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
-  parseTimeoutMsOrExit: vi.fn(() => 1_000),
   readPackageVersion: vi.fn(async () => "2026.8.27"),
   resolveUpdateRoot: vi.fn(async () => "/tmp/openclaw"),
   tryWriteCompletionCache: vi.fn(async () => "completed"),
@@ -162,6 +161,10 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
 }));
 
 import { updateFinalizeCommand } from "./update-command-finalize.js";
+import {
+  completePostCorePluginUpdate,
+  runUpdateFinalizationDoctorInFreshProcess,
+} from "./update-command-fresh-doctor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
@@ -239,22 +242,33 @@ describe("update plugin lifecycle lease boundaries", () => {
     expect(mocks.events).toContain("persisted-index:true");
   });
 
-  it("runs finalizer doctors outside the lease and rereads mutation state after acquisition", async () => {
-    await updateFinalizeCommand({
-      channel: "stable",
-      deferCompletionCache: true,
-      json: true,
-      yes: true,
-    });
+  it.each([undefined, "5"])(
+    "runs finalizer doctors outside the lease with timeout %s",
+    async (timeout) => {
+      await updateFinalizeCommand({
+        channel: "stable",
+        deferCompletionCache: true,
+        json: true,
+        yes: true,
+        timeout,
+      });
 
-    expectLifecycleBoundary("fresh-doctor");
-    const doctorIndex = mocks.events.indexOf("fresh-doctor:false");
-    expect(mocks.events.slice(0, doctorIndex)).toContain("read-config:true");
-    expect(mocks.events.indexOf("complete:false")).toBeGreaterThan(
-      mocks.events.lastIndexOf("lease-exit:false"),
-    );
-    expect(mocks.events).not.toContain("persisted-index:true");
-  });
+      expectLifecycleBoundary("fresh-doctor");
+      const doctorIndex = mocks.events.indexOf("fresh-doctor:false");
+      expect(mocks.events.slice(0, doctorIndex)).toContain("read-config:true");
+      expect(mocks.events.indexOf("complete:false")).toBeGreaterThan(
+        mocks.events.lastIndexOf("lease-exit:false"),
+      );
+      expect(mocks.events).not.toContain("persisted-index:true");
+      const timeoutMs = timeout === undefined ? undefined : 5_000;
+      expect(runUpdateFinalizationDoctorInFreshProcess).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs }),
+      );
+      expect(completePostCorePluginUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs }),
+      );
+    },
+  );
 
   it("keeps nonfatal Doctor warnings in terminal JSON without failing finalization", async () => {
     mocks.doctorWarnings = ["Optional version probe timed out; recheck after restart."];

@@ -45,6 +45,12 @@ const invalidAnswerCases: Array<[string, Question[], QuestionAnswers, string]> =
   ],
   ["an empty string", questions, { answers: { choice: ["  "] } }, "choice"],
   [
+    "an empty secret value",
+    [{ ...questions[0]!, options: [], isSecret: true }],
+    { answers: { choice: [""] } },
+    "choice",
+  ],
+  [
     "multiple values for a single-select question",
     questions,
     { answers: { choice: ["One", "Two"] } },
@@ -395,6 +401,31 @@ describe("QuestionManager", () => {
 });
 
 describe("answer canonicalization", () => {
+  it.each(["  synthetic-secret  ", "\tsynthetic-secret\n", "   "])(
+    "preserves exact secret bytes while normalizing ordinary answers: %j",
+    async (value) => {
+      const record = manager.request({
+        questions: [
+          {
+            questionId: "secret_value",
+            header: "Secret",
+            question: "Enter a synthetic secret.",
+            options: [],
+            isSecret: true,
+          },
+          ...questions,
+        ],
+        timeoutMs: 10_000,
+      });
+      const waiting = manager.waitAnswer(record.id);
+      manager.resolve(record.id, { answers: { secret_value: [value], choice: ["  Two  "] } });
+      expect(await waiting).toEqual({
+        status: "answered",
+        answers: { answers: { secret_value: [value], choice: ["Two"] } },
+      });
+    },
+  );
+
   it("stores declared option labels for trim-variant submissions", () => {
     const localManager = new QuestionManager();
     const record = localManager.request({

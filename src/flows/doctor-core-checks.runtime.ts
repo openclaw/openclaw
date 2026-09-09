@@ -1,5 +1,6 @@
 // Doctor runtime checks inspect tool names, browser residue, and runtime state.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { nodeRuntimeFailure, nodeRuntimeNote } from "../../node-sqlite.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
@@ -40,6 +41,8 @@ import {
   gatewayConnectErrorWasRateLimited,
 } from "../commands/gateway-health-auth-diagnostic.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isNodeRuntime } from "../daemon/runtime-binary.js";
+import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
 import {
   getSystemdCgroupHygieneSummary,
   type GatewayServiceRuntime,
@@ -52,6 +55,7 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { detectRuntime } from "../infra/runtime-guard.js";
 import {
   formatLocalAudioSelection,
   inspectLocalAudioSelection,
@@ -203,6 +207,25 @@ function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): strin
   return runtime?.status ?? runtime?.state ?? runtime?.subState;
 }
 
+export function collectNodeRuntimeFindings(): readonly HealthFinding[] {
+  const runtime = detectRuntime();
+  if (runtime.kind !== "node" || !runtime.sqliteProbe) {
+    return [];
+  }
+  const failure = nodeRuntimeFailure(runtime.version, runtime.sqliteProbe);
+  const message = failure ?? nodeRuntimeNote(runtime.version, runtime.sqliteProbe);
+  return message
+    ? [
+        {
+          checkId: "core/doctor/node-runtime",
+          severity: failure ? "error" : "info",
+          message,
+          target: runtime.execPath ?? undefined,
+        },
+      ]
+    : [];
+}
+
 export async function collectGatewayDaemonFindings(
   ctx: Pick<HealthCheckContext, "cfg">,
 ): Promise<readonly HealthFinding[]> {
@@ -233,6 +256,26 @@ export async function collectGatewayDaemonFindings(
       fixHint: "Run `openclaw gateway install` to install the service.",
     });
     return findings;
+  }
+  const nodePath = state.command?.programArguments[0];
+  if (nodePath && isNodeRuntime(nodePath)) {
+    const runtime = await resolveNodeRuntimeInfo(nodePath, state.env);
+    const message =
+      runtime.status === "probe-failed"
+        ? runtime.error.message
+        : (runtime.capabilityError ?? runtime.note);
+    if (message) {
+      findings.push({
+        checkId: "core/doctor/gateway-daemon",
+        severity: runtime.status === "supported" ? "info" : "warning",
+        message,
+        path: state.command?.sourcePath,
+        target: nodePath,
+        ...(runtime.status !== "supported"
+          ? { fixHint: "Repair the Node runtime, then run `openclaw gateway install`." }
+          : {}),
+      });
+    }
   }
   if (state.loadState.status === "not-loaded") {
     findings.push({

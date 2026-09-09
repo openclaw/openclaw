@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AssistantMessage, Model } from "@openclaw/llm-core";
 /**
  * Tests Anthropic Messages transport streaming.
@@ -6,6 +7,7 @@ import type { AssistantMessage, Model } from "@openclaw/llm-core";
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   configureAiTransportHost,
@@ -160,7 +162,9 @@ function createInterruptedThinkingEvents(): Record<string, unknown>[] {
   ];
 }
 
-function createStalledSseResponse(params: { onCancel: (reason: unknown) => void }): Response {
+function createStalledSseResponse(params: {
+  onCancel: (reason: unknown) => void | Promise<void>;
+}): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -171,7 +175,7 @@ function createStalledSseResponse(params: { onCancel: (reason: unknown) => void 
       );
     },
     cancel(reason) {
-      params.onCancel(reason);
+      return params.onCancel(reason);
     },
   });
 
@@ -190,7 +194,7 @@ function createRawSseResponse(body: string): Response {
 
 function createOpenRawSseResponse(params: {
   body: string;
-  onCancel: (reason: unknown) => void;
+  onCancel: (reason: unknown) => void | Promise<void>;
 }): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -198,7 +202,7 @@ function createOpenRawSseResponse(params: {
       controller.enqueue(encoder.encode(params.body));
     },
     cancel(reason) {
-      params.onCancel(reason);
+      return params.onCancel(reason);
     },
   });
   return new Response(stream, {
@@ -3757,39 +3761,92 @@ describe("anthropic transport stream", () => {
     expect(toolResult.is_error).toBe(false);
   });
 
-  it("cancels stalled SSE body reads when the abort signal fires mid-stream", async () => {
-    const controller = new AbortController();
-    const abortReason = new Error("anthropic test abort");
-    let cancelReason: unknown;
-    guardedFetchMock.mockResolvedValueOnce(
-      createStalledSseResponse({
-        onCancel: (reason) => {
-          cancelReason = reason;
+  it.each(["resolve", "reject", "throw"] as const)(
+    "owns %s cancellation after reporting an abort from another context",
+    async (outcome) => {
+      const context = new AsyncLocalStorage<string>();
+      const controller = new AbortController();
+      const abortReason = new Error("anthropic test abort");
+      const finishCancellation = createDeferred();
+      const observed: Promise<unknown>[] = [];
+      const observerContexts: Array<string | undefined> = [];
+      let cancelReason: unknown;
+      let cancelContext: string | undefined;
+      let cancellationFinished = false;
+      configureAiTransportHost({
+        ...getAiTransportHost(),
+        observePendingProviderWork: (pending) => {
+          observerContexts.push(context.getStore());
+          observed.push(pending);
         },
-      }),
-    );
-
-    setTimeout(() => controller.abort(abortReason), 50);
-
-    const timedOut = Symbol("timed out");
-    const startedAt = Date.now();
-    const result = await Promise.race([
-      runTransportStream(
-        makeAnthropicTransportModel(),
-        { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
-        { apiKey: "sk-ant-api", signal: controller.signal } as AnthropicStreamOptions,
-      ),
-      delay(1_000, timedOut),
-    ]);
-
-    if (result === timedOut) {
-      throw new Error("Anthropic SSE stream did not abort within 1000ms");
-    }
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(result.stopReason).toBe("aborted");
-    expect(result.errorMessage).toBe("anthropic test abort");
-    expect(cancelReason).toBe(abortReason);
-  });
+      });
+      guardedFetchMock.mockResolvedValueOnce(
+        createStalledSseResponse({
+          onCancel: (reason) => {
+            cancelReason = reason;
+            cancelContext = context.getStore();
+            if (outcome === "throw") {
+              cancellationFinished = true;
+              throw new Error("synchronous cancellation cleanup failure");
+            }
+            return finishCancellation.promise.finally(() => {
+              cancellationFinished = true;
+            });
+          },
+        }),
+      );
+      const startedAt = Date.now();
+      const completion = context.run("origin", () =>
+        runTransportStream(
+          makeAnthropicTransportModel(),
+          { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+          { apiKey: "fixture", signal: controller.signal } as AnthropicStreamOptions,
+        ),
+      );
+      const abortTimer = setTimeout(
+        () => context.run("foreign", () => controller.abort(abortReason)),
+        50,
+      );
+      try {
+        const timedOut = Symbol("timed out");
+        const result = await Promise.race([completion, delay(1_000, timedOut)]);
+        if (result === timedOut) {
+          throw new Error("Anthropic SSE stream did not abort within 1000ms");
+        }
+        expect(Date.now() - startedAt).toBeLessThan(1_000);
+        expect(result.stopReason).toBe("aborted");
+        expect(result.errorMessage).toBe("anthropic test abort");
+        expect(cancelReason).toBe(abortReason);
+        expect.soft(cancelContext).toBe("origin");
+        expect(cancellationFinished).toBe(outcome === "throw");
+        expect.soft(observed.length).toBeGreaterThan(0);
+        expect.soft(observerContexts.every((owner) => owner === "origin")).toBe(true);
+        let joined = false;
+        const joining = Promise.allSettled(observed).then(() => {
+          joined = true;
+        });
+        if (outcome === "throw") {
+          await joining;
+        } else {
+          await Promise.resolve();
+          expect.soft(joined).toBe(false);
+        }
+        if (outcome === "reject") {
+          finishCancellation.reject(new Error("cancellation cleanup failed"));
+        } else {
+          finishCancellation.resolve();
+        }
+        await joining;
+        expect(cancellationFinished).toBe(true);
+        expect((await completion).errorMessage).toBe("anthropic test abort");
+      } finally {
+        clearTimeout(abortTimer);
+        finishCancellation.resolve();
+        await completion;
+        await Promise.allSettled(observed);
+      }
+    },
+  );
 
   it("treats already-aborted signals as abort errors before reading SSE chunks", async () => {
     const controller = new AbortController();
@@ -3845,26 +3902,39 @@ describe("anthropic transport stream", () => {
     await vi.waitFor(() => expect(cancelCalled).toBe(true));
   });
 
-  it("cancels open SSE bodies when Anthropic stream consumers throw", async () => {
-    let cancelCalled = false;
+  it("joins open SSE body cancellation when a non-abort stream consumer throws", async () => {
+    const cancelStarted = createDeferred();
+    const finishCancellation = createDeferred();
     guardedFetchMock.mockResolvedValueOnce(
       createOpenRawSseResponse({
         body: 'data: {"type":"error","error":{"message":"stream exploded"}}\n\n',
         onCancel: () => {
-          cancelCalled = true;
+          cancelStarted.resolve();
+          return finishCancellation.promise;
         },
       }),
     );
-
-    const result = await runTransportStream(
+    let settled = false;
+    const completion = runTransportStream(
       makeAnthropicTransportModel(),
       { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
-      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
-    );
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("stream exploded");
-    expect(cancelCalled).toBe(true);
+      { apiKey: "fixture" } as AnthropicStreamOptions,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await cancelStarted.promise;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      finishCancellation.resolve();
+      const result = await completion;
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toBe("stream exploded");
+    } finally {
+      finishCancellation.resolve();
+      await completion;
+    }
   });
 
   it.each([

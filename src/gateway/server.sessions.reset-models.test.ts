@@ -77,6 +77,7 @@ type ResetSessionEntry = {
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
+  autoLabel?: string;
 };
 
 type ModelResetEntry = Pick<
@@ -219,6 +220,7 @@ const ownedChildMetadata = {
   },
   claudeCliSessionId: "cli-session-123",
   label: "owned child",
+  autoLabel: "Device",
 } satisfies SessionEntryOverrides & ResetSessionEntry;
 
 function expectSqliteSessionFile(entry: ResetSessionEntry | undefined) {

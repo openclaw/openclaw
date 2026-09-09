@@ -70,8 +70,9 @@ describe("legacy runtime session model migration", () => {
       agentRuntimeOverride: row.expectedRuntime,
       authProfileOverride: "authored:account",
       authProfileOverrideSource: "user",
-      claudeCliSessionId: "retained-binding",
+      cliSessionBindings: { "claude-cli": { sessionId: "retained-binding" } },
     });
+    expect(entry).not.toHaveProperty("claudeCliSessionId");
     expect(entry?.agentHarnessId).toBeUndefined();
     expect(
       (await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true }))
@@ -171,8 +172,9 @@ describe("legacy runtime session model migration", () => {
       agentHarnessId: "codex",
       agentRuntimeOverride: "codex",
       authProfileOverride: "authored:account",
-      claudeCliSessionId: "retained-binding",
+      cliSessionBindings: { "claude-cli": { sessionId: "retained-binding" } },
     });
+    expect(loadSessionEntry(scope)).not.toHaveProperty("claudeCliSessionId");
   });
 
   it.each([
@@ -287,8 +289,9 @@ describe("legacy runtime session model migration", () => {
         authProfileOverride: "authored:account",
         authProfileOverrideSource: "user",
         agentRuntimeOverride: row.expectedRuntime,
-        claudeCliSessionId: "retained-binding",
+        cliSessionBindings: { "claude-cli": { sessionId: "retained-binding" } },
       });
+      expect(loadSessionEntry(scope)).not.toHaveProperty("claudeCliSessionId");
       expect(
         (await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true }))
           .repairedSessions,

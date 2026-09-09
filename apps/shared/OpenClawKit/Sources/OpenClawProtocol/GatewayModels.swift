@@ -6586,6 +6586,7 @@ public struct SessionRow: Codable, Sendable {
     public let incognito: Bool?
     public let kind: AnyCodable
     public let label: String?
+    public let autolabel: String?
     public let icon: String?
     public let color: String?
     public let channelavatarurl: String?
@@ -6668,6 +6669,7 @@ public struct SessionRow: Codable, Sendable {
         incognito: Bool? = nil,
         kind: AnyCodable,
         label: String? = nil,
+        autolabel: String? = nil,
         icon: String? = nil,
         color: String? = nil,
         channelavatarurl: String? = nil,
@@ -6749,6 +6751,7 @@ public struct SessionRow: Codable, Sendable {
         self.incognito = incognito
         self.kind = kind
         self.label = label
+        self.autolabel = autolabel
         self.icon = icon
         self.color = color
         self.channelavatarurl = channelavatarurl
@@ -6832,6 +6835,7 @@ public struct SessionRow: Codable, Sendable {
         case incognito
         case kind
         case label
+        case autolabel = "autoLabel"
         case icon
         case color
         case channelavatarurl = "channelAvatarUrl"
@@ -10391,6 +10395,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let expectedtooloverrides: AnyCodable?
     public let expectedmarkedunreadat: AnyCodable?
     public let label: AnyCodable?
+    public let autolabel: AnyCodable?
     public let icon: AnyCodable?
     public let color: AnyCodable?
     public let category: AnyCodable?
@@ -10432,6 +10437,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         expectedtooloverrides: AnyCodable? = nil,
         expectedmarkedunreadat: AnyCodable? = nil,
         label: AnyCodable? = nil,
+        autolabel: AnyCodable? = nil,
         icon: AnyCodable? = nil,
         color: AnyCodable? = nil,
         category: AnyCodable? = nil,
@@ -10472,6 +10478,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.expectedtooloverrides = expectedtooloverrides
         self.expectedmarkedunreadat = expectedmarkedunreadat
         self.label = label
+        self.autolabel = autolabel
         self.icon = icon
         self.color = color
         self.category = category
@@ -10514,6 +10521,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case expectedtooloverrides = "expectedToolOverrides"
         case expectedmarkedunreadat = "expectedMarkedUnreadAt"
         case label
+        case autolabel = "autoLabel"
         case icon
         case color
         case category
@@ -10550,6 +10558,7 @@ public struct SessionsPatchParams: Codable, Sendable {
 
 public struct SessionsPatchMutation: Codable, Sendable {
     public let label: AnyCodable?
+    public let autolabel: AnyCodable?
     public let icon: AnyCodable?
     public let color: AnyCodable?
     public let category: AnyCodable?
@@ -10584,6 +10593,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
 
     public init(
         label: AnyCodable? = nil,
+        autolabel: AnyCodable? = nil,
         icon: AnyCodable? = nil,
         color: AnyCodable? = nil,
         category: AnyCodable? = nil,
@@ -10617,6 +10627,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         groupactivation: AnyCodable? = nil)
     {
         self.label = label
+        self.autolabel = autolabel
         self.icon = icon
         self.color = color
         self.category = category
@@ -10652,6 +10663,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case label
+        case autolabel = "autoLabel"
         case icon
         case color
         case category

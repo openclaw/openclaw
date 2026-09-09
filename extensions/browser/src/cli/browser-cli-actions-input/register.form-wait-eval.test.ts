@@ -73,7 +73,7 @@ describe("browser action input fill command", () => {
       ],
       targetId: "tab-1",
     });
-    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 126_250 });
   });
 
   it("reports malformed fields without sending a browser request", async () => {
@@ -154,7 +154,7 @@ describe("browser action input wait command", () => {
     const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
       | { timeoutMs?: number }
       | undefined;
-    expect(options?.timeoutMs).toBe(26_000);
+    expect(options?.timeoutMs).toBe(127_250);
   });
 
   it("budgets every supplied wait condition before adding transport slack", async () => {
@@ -245,12 +245,12 @@ describe("browser action input evaluate command", () => {
       ref: "button-1",
       targetId: "tab-2",
     });
-    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 126_250 });
   });
 
   it.each([
-    { rawTimeout: "+030000", actionTimeoutMs: 30_000, requestTimeoutMs: 35_250 },
-    { rawTimeout: "1", actionTimeoutMs: 1, requestTimeoutMs: 5_750 },
+    { rawTimeout: "+030000", actionTimeoutMs: 30_000, requestTimeoutMs: 66_250 },
+    { rawTimeout: "1", actionTimeoutMs: 1, requestTimeoutMs: 6_252 },
   ])(
     "preserves the $rawTimeout evaluate timeout and canonical outer deadline",
     async ({ rawTimeout, actionTimeoutMs, requestTimeoutMs }) => {

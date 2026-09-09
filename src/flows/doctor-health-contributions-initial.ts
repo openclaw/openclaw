@@ -63,6 +63,15 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:node-runtime",
+      label: "Node runtime",
+      healthCheckIds: ["core/doctor/node-runtime"],
+      async run(ctx) {
+        const { runCoreHealthFindingNote } = await import("./doctor-health-contribution-core.js");
+        await runCoreHealthFindingNote(ctx, "core/doctor/node-runtime");
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:gateway-config",
       label: "Gateway config",
       healthCheckIds: ["core/doctor/gateway-config"],

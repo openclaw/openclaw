@@ -90,7 +90,7 @@ extensions/browser/src/browser/pw-tools-core.snapshot.ts	1
 extensions/browser/src/browser/pw-tools-core.state.ts	2
 extensions/browser/src/browser/routes/agent.act.normalize.ts	1
 extensions/browser/src/browser/routes/agent.act.shared.ts	3
-extensions/browser/src/browser/routes/agent.act.ts	2
+extensions/browser/src/browser/routes/agent.act.ts	1
 extensions/browser/src/browser/routes/agent.shared.ts	2
 extensions/browser/src/browser/routes/agent.snapshot.ts	8
 extensions/browser/src/browser/routes/agent.storage.ts	2
@@ -506,7 +506,6 @@ extensions/google-meet/src/cli-space-commands.ts	3
 extensions/google-meet/src/meet-api.ts	1
 extensions/google-meet/src/plugin-registration.ts	1
 extensions/google-meet/src/transports/chrome-create.ts	4
-extensions/google-meet/src/transports/chrome.ts	2
 extensions/google-meet/src/transports/google-meet-platform-adapter.ts	1
 extensions/google/cli-backend-auth.runtime.ts	1
 extensions/google/cli-backend-isolated-auth.runtime.ts	5
@@ -2027,7 +2026,7 @@ src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
 src/agents/tools/terminal-tool.ts	1
 src/agents/tools/tts-tool.ts	1
-src/agents/tools/video-generate-tool.ts	3
+src/agents/tools/video-generate-tool.ts	2
 src/agents/tools/web-fetch.ts	3
 src/agents/tools/web-guarded-fetch.ts	2
 src/agents/tools/web-search-output.ts	3
@@ -3681,7 +3680,6 @@ src/worker/worker-session-tools.ts	4
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/api/gateway.ts	1
 ui/src/app-navigation.ts	2
-ui/src/app-route-paths.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1
 ui/src/app/app-shell-chrome.ts	2

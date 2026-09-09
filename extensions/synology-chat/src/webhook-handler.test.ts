@@ -306,6 +306,27 @@ describe("createWebhookHandler", () => {
     expect(res.status).toBe(400);
   });
 
+  it("returns 400 without admission when the request stream fails", async () => {
+    const receive = vi.fn();
+    const handler = createWebhookHandlerWithIngress({
+      account: makeAccount(),
+      receive,
+      log,
+    });
+
+    const req = makeStalledReq("POST");
+    const res = makeRes();
+    const pending = handler(req, res);
+    req.emit("data", Buffer.from(validBody));
+    req.emit("error", new Error("request stream failed"));
+    await pending;
+
+    expect(res.status).toBe(400);
+    expect(res.body).toBe(JSON.stringify({ error: "Invalid request body" }));
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
+    expect(receive).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "413 when the upload exceeds the pre-auth body limit",

@@ -138,3 +138,16 @@ Call a model, resolve model-selection policy, and resolve provider auth without 
 
   </Accordion>
 </AccordionGroup>
+
+## Prepared completion SDK compatibility
+
+Prefer `api.runtime.llm.complete` for new plugin code. Existing callers of
+`openclaw/plugin-sdk/simple-completion-runtime` can continue to prepare a model
+with `prepareSimpleCompletionModelForAgent` and execute it with
+`completeWithPreparedSimpleCompletionModel`.
+
+These prepared results have no release method. Their original Gateway or CLI
+host retains the model resources until shutdown; standalone callers retain them
+for the process lifetime. A closed host rejects new preparation and execution.
+Shutdown waits for accepted provider callbacks and cancellation work before
+releasing the prepared resources, even when the completion has already returned.

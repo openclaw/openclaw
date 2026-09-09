@@ -69,6 +69,8 @@ describe("isControlUiFocusDocumentPath", () => {
 describe("Control UI SPA fallback Accept routing", () => {
   it.each<[string, string, string, string, string | undefined, boolean]>([
     ["missing Accept header", "", "/chat", "GET", undefined, true],
+    ["plugin tab slug at root", "", "/reports", "GET", "text/html", true],
+    ["plugin tab slug under a base path", "/team", "/team/reports", "HEAD", "text/html", true],
     ["empty Accept header", "/openclaw", "/openclaw/chat", "HEAD", "  ", true],
     [
       "browser Accept header",

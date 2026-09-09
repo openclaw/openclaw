@@ -67,6 +67,13 @@ submit a report.
 
 ## Options
 
+Updater-managed `openclaw update finalize` runs repair Doctor without an automatic
+wall-clock deadline, including post-plugin repair. It waits for completion,
+failure, or manual cancellation. An explicit `--timeout <seconds>` still limits
+each finalization phase and its child commands. Post-plugin config validation and
+readiness checks keep their separate three-minute defaults; other finalization
+phase limits are unchanged.
+
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--no-restart`                                   | Skip restarting the Gateway service after a successful update. Package-manager updates that do restart verify the restarted service reports the expected version before the command succeeds.                                                                                                                                                 |
