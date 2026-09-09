@@ -282,8 +282,10 @@ function readNoActiveRunResponse(response: unknown): boolean {
   if (!response || typeof response !== "object") {
     return false;
   }
-  const payload = response as { aborted?: unknown; status?: unknown };
-  return payload.aborted === false || payload.status === "no-active-run";
+  return (
+    ("aborted" in response && response.aborted === false) ||
+    ("status" in response && response.status === "no-active-run")
+  );
 }
 
 async function requestChatAbort(
