@@ -2858,9 +2858,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     const events = parseSseEvents(text);
-    const completed = events.find((event) => event.event === "response.completed");
-    expect(completed).toBeDefined();
-    const completedPayload = JSON.parse(completed?.data ?? "{}") as {
+    // The terminal event type must carry the truncation outcome, not only the
+    // nested resource fields: event-dispatching clients never see status otherwise.
+    const terminal = events.find(
+      (event) => event.event === "response.incomplete" || event.event === "response.completed",
+    );
+    expect(terminal?.event).toBe("response.incomplete");
+    const completedPayload = JSON.parse(terminal?.data ?? "{}") as {
       response?: {
         status?: string;
         incomplete_details?: { reason?: string };

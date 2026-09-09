@@ -1001,8 +1001,15 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       rememberResponseSession();
+      // Event-dispatching clients select their terminal handler by event type,
+      // so the terminal event must carry the response's own outcome.
       writeSseEvent(res, {
-        type: finalizeRequested.status === "failed" ? "response.failed" : "response.completed",
+        type:
+          finalResponse.status === "failed"
+            ? "response.failed"
+            : finalResponse.status === "incomplete"
+              ? "response.incomplete"
+              : "response.completed",
         response: finalResponse,
       });
       writeDone(res);

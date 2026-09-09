@@ -290,6 +290,7 @@ export type StreamingEvent =
   | { type: "response.created"; response: ResponseResource }
   | { type: "response.in_progress"; response: ResponseResource }
   | { type: "response.completed"; response: ResponseResource }
+  | { type: "response.incomplete"; response: ResponseResource }
   | { type: "response.failed"; response: ResponseResource }
   | { type: "response.output_item.added"; output_index: number; item: OutputItem }
   | { type: "response.output_item.done"; output_index: number; item: OutputItem }
