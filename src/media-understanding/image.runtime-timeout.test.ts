@@ -485,7 +485,7 @@ describe("describeImageWithModelCore", () => {
     expect(options.timeoutMs).toBe(25);
   });
 
-  it("releases the prepared runtime when a provider ignores caller cancellation", async () => {
+  it("retains the prepared runtime until an aborted provider actually settles", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         api: "openai-responses",
@@ -495,7 +495,11 @@ describe("describeImageWithModelCore", () => {
         baseUrl: "https://api.openai.com/v1",
       })),
     });
-    completeMock.mockImplementation(() => new Promise(() => {}));
+    const completion = createDeferred();
+    completeMock.mockImplementation(async () => {
+      await completion.promise;
+      throw new Error("late provider failure");
+    });
     const controller = new AbortController();
     const result = describeImageWithModelCore({
       cfg: {},
@@ -510,12 +514,17 @@ describe("describeImageWithModelCore", () => {
       signal: controller.signal,
     });
 
-    await vi.waitFor(() => expect(completeMock).toHaveBeenCalledOnce());
-    const assertion = expect(result).rejects.toThrow("caller cancelled provider request");
-    controller.abort(new Error("caller cancelled provider request"));
-    await assertion;
+    try {
+      await vi.waitFor(() => expect(completeMock).toHaveBeenCalledOnce());
+      const assertion = expect(result).rejects.toThrow("caller cancelled provider request");
+      controller.abort(new Error("caller cancelled provider request"));
+      await assertion;
 
-    expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce();
+      expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
+    } finally {
+      completion.resolve();
+    }
+    await vi.waitFor(() => expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce());
   });
 
   it("keeps the full configured timeout for provider requests after slow setup", async () => {

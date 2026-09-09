@@ -90,6 +90,13 @@ An already accepted task keeps its captured resources until its work settles.
 Raw prepared registries retain their existing host lifetime; this does not enable
 automatic physical disposal for all prepared runtimes.
 
+When model-backed image understanding reports request timeout or cancellation,
+its prepared runtime borrow stays held until the actual provider operation and
+tracked transport cleanup settle.
+Supplied managed snapshots retain their original prepared resources, including
+adopted donors; raw snapshots keep their caller-owned lifetime. A timeout reports
+an unfinished request, not completed resource cleanup.
+
 Executable CLI command registration also uses an owned, uncached registry. Its
 resources remain available through asynchronous registration, command actions,
 and their tracked cleanup, then `dispose()` runs. Closing command preparation
