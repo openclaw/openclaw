@@ -1181,6 +1181,18 @@ jobs:
       # Artifact bytes may belong to an FRV child; the input run still authorizes npm dispatch.
       PREFLIGHT_ARTIFACT_RUN_ID: ${{ needs.resolve_release_target.outputs.preflight_artifact_run_id }}
       ANDROID_RELEASE_NOTE: ${{ needs.resolve_release_target.outputs.android_release_note }}
+      TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+      PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+      PLUGINS: ${{ inputs.plugins }}
+      WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
+      NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
+      RELEASE_EVIDENCE_MODE: ${{ inputs.release_evidence_mode }}
+      FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
+      FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+      FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
     permissions:
       actions: write
       attestations: write
@@ -1278,6 +1290,14 @@ jobs:
           # Node resolves --import tsx from the process cwd. Point that root at
           # the trusted harness install instead of the frozen target checkout.
           ln -s .release-harness/node_modules node_modules
+
+      - name: Initialize postpublish diagnostics
+        env:
+          POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
+        run: |
+          set -euo pipefail
+          source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
+          record_postpublish_diagnostics initialize
 
       - name: Verify all prepared plugin bytes before publication
         if: inputs.prepared_plugins != ''
@@ -1771,6 +1791,7 @@ jobs:
           retention-days: 30
 
       - name: Complete publish workflows
+        id: complete
         if: ${{ always() && !cancelled() && steps.core_start.outputs.plugin_npm_completed == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1921,9 +1942,11 @@ jobs:
 
           if [[ "${release_target_current}" == "true" && ( ( -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ) || "${openclaw_npm_already_published}" == "true" ) ]]; then
             verify_published_release
+            record_postpublish_diagnostics assets-start
             upload_dependency_evidence_release_asset
             upload_release_evidence_assets
             append_release_proof_to_github_release
+            record_postpublish_diagnostics assets-success
             if [[ "${failed}" == "0" ]]; then
               echo "- GitHub release: kept draft until required publication checks complete" >> "$GITHUB_STEP_SUMMARY"
             else
@@ -1934,12 +1957,39 @@ jobs:
             exit 1
           fi
 
+      - name: Record postpublish outcome
+        if: ${{ always() }}
+        env:
+          POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
+          CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.children.outputs.plugin_npm_run_id }}
+          CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_run_id }}
+          CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
+          CHILD_OPENCLAW_NPM_RUN_ID: ${{ steps.core_start.outputs.openclaw_npm_run_id }}
+          CORE_START_OUTCOME: ${{ steps.core_start.outcome }}
+          COMPLETION_OUTCOME: ${{ steps.complete.outcome }}
+          PUBLISH_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          if [[ -f "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh" ]]; then
+            source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
+            record_postpublish_diagnostics terminal
+          fi
+
+      - name: Upload postpublish diagnostics
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-release-postpublish-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-diagnostics.json
+          if-no-files-found: warn
+
       - name: Upload postpublish evidence
-        if: ${{ always() && inputs.publish_openclaw_npm }}
+        if: ${{ always() && inputs.publish_openclaw_npm && (steps.complete.outcome == 'success' || steps.complete.outputs.postpublish_evidence_ready == 'true') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-postpublish-evidence-${{ inputs.tag }}
-          path: ${{ runner.temp }}/openclaw-release-postpublish-evidence
+          path: ${{ runner.temp }}/openclaw-release-postpublish-evidence/release-postpublish-evidence.json
           if-no-files-found: error
 
   verify_core_npm_registry:

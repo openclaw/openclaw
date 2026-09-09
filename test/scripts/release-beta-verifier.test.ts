@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 // Release Beta Verifier tests cover release beta verifier script behavior.
 /* oxlint-disable typescript/no-base-to-string -- fetch mock normalizes standard RequestInfo inputs for URL assertions. */
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { crc32 } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -19,6 +20,7 @@ import {
   validateClawHubBootstrapEvidence,
   verifyBetaRelease,
 } from "../../scripts/lib/release-beta-verifier.ts";
+import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
@@ -96,7 +98,11 @@ afterEach(() => {
 describe("verifyBetaRelease workflow outcomes", () => {
   const version = "2026.5.10-beta.3";
 
-  function workflowFixture(overrides: Record<string, unknown> = {}, telegram = true) {
+  function workflowFixture(
+    overrides: Record<string, unknown> = {},
+    telegram = true,
+    npmError?: string,
+  ) {
     const rootDir = tempDirs.make("release-workflow-outcome-");
     const binDir = join(rootDir, "bin");
     mkdirSync(binDir);
@@ -119,10 +125,24 @@ describe("verifyBetaRelease workflow outcomes", () => {
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
-if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1] === "openclaw@${version}") {
+fs.appendFileSync(path.join(path.dirname(process.argv[1]), "commands.jsonl"), JSON.stringify([path.basename(process.argv[1]), ...args]) + "\\n");
+if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1].endsWith("@${version}")) {
+  if (${JSON.stringify(npmError ?? "")}) {
+    process.stderr.write(${JSON.stringify(npmError ?? "")});
+    process.exit(7);
+  }
+  const failures = path.join(path.dirname(process.argv[1]), "npm-failures.json");
+  if (fs.existsSync(failures)) {
+    const failure = JSON.parse(fs.readFileSync(failures, "utf8"))[args[1]];
+    if (failure) { process.stderr.write(failure); process.exit(9); }
+  }
   console.log(JSON.stringify({version: "${version}", "dist-tags.beta": "${version}", "dist.integrity": "sha512-test", "dist.tarball": "https://example.invalid/openclaw.tgz"}));
 } else if (args[0] === "run" && args[1] === "view" && args[2] === "44") {
   process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), "run.json")));
+} else if (args[0] === "api" && args[1].endsWith("/actions/runs/34")) {
+  process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), "bootstrap.json")));
+} else if (args[0] === "api" && args[1].includes("/actions/runs/34/artifacts?")) {
+  console.log(JSON.stringify({ artifacts: [] }));
 } else {
   throw new Error("Unexpected release verifier command: " + args.join(" "));
 }
@@ -145,8 +165,300 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1] ==
       "--evidence-out",
       "evidence.json",
     ]);
-    return { args, rootDir };
+    return { args, rootDir, binDir };
   }
+
+  function runCli(fixture: ReturnType<typeof workflowFixture>, extra: string[] = [], preload = "") {
+    const timers = join(fixture.rootDir, "timers.mjs");
+    // Keep the production retry budget; only the isolated fixture's clock advances.
+    writeFileSync(
+      timers,
+      `const delay = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => delay(fn, 0, ...args);\n${preload}`,
+    );
+    return spawnSync(
+      process.execPath,
+      [
+        "--import",
+        resolve("node_modules/tsx/dist/loader.mjs"),
+        "--import",
+        timers,
+        resolve("scripts/release-verify-beta.ts"),
+        version,
+        "--skip-postpublish",
+        "--skip-github-release",
+        "--skip-clawhub",
+        "--openclaw-npm-run",
+        "44",
+        "--evidence-out",
+        "evidence.json",
+        ...extra,
+      ],
+      {
+        cwd: fixture.rootDir,
+        encoding: "utf8",
+        timeout: 20_000,
+        env: { PATH: `${fixture.binDir}:${process.env.PATH}` },
+      },
+    );
+  }
+
+  it.each(["E404", "ETARGET"])(
+    "retains CLI diagnostics after core npm %s exhaustion without a success receipt",
+    (code) => {
+      const privateUrl = new URL("https://example.invalid/");
+      privateUrl.username = "fixture-user";
+      privateUrl.password = "fixture-password";
+      privateUrl.searchParams.set("token", "fixture-token");
+      const secret = `synthetic-secret /private/operator/token ${privateUrl.href}`;
+      const fixture = workflowFixture({}, false, `${code}: ${secret}`);
+      const result = runCli(fixture);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(code);
+      expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+      const text = readFileSync(
+        join(fixture.rootDir, "release-postpublish-diagnostics.json"),
+        "utf8",
+      );
+      const diagnostic = JSON.parse(text);
+      expect(diagnostic).toMatchObject({
+        kind: "release-postpublish-diagnostics",
+        verification: "failure",
+        stages: {
+          coreNpm: { state: "failure", error: { class: "registry-not-visible", status: 7 } },
+          pluginNpm: { state: "unattempted" },
+          openclawNpm: { state: "unattempted" },
+        },
+        children: { openclawNpm: { suppliedRunId: "44", runAttempt: null } },
+      });
+      expect(text).not.toMatch(/synthetic-secret|private\/operator|password|token=secret/u);
+      const commands = readFileSync(join(fixture.binDir, "commands.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(commands).toHaveLength(30);
+      expect(commands.every((args) => args[0] === "npm" && args[1] === "view")).toBe(true);
+    },
+  );
+
+  it("retains successful core readback when the CLI later rejects a workflow", () => {
+    const fixture = workflowFixture({ conclusion: "failure" }, false);
+    const result = runCli(fixture);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("OpenClaw NPM Release: run 44 is completed/failure");
+    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+    expect(
+      JSON.parse(
+        readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+      ),
+    ).toMatchObject({
+      verification: "failure",
+      stages: {
+        coreNpm: { state: "success", publication: "observed" },
+        openclawNpm: { state: "failure" },
+        evidence: { state: "unattempted" },
+      },
+      children: { openclawNpm: { suppliedRunId: "44", runAttempt: null } },
+    });
+  });
+
+  it("initializes CLI diagnostics before checkout version verification", () => {
+    const fixture = workflowFixture({}, false);
+    writeFileSync(join(fixture.rootDir, "package.json"), JSON.stringify({ version: "2026.1.1" }));
+    const result = runCli(fixture);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("package.json version is 2026.1.1");
+    expect(
+      JSON.parse(
+        readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+      ),
+    ).toMatchObject({
+      verification: "failure",
+      stages: { checkout: { state: "failure" }, coreNpm: { state: "unattempted" } },
+    });
+    expect(existsSync(join(fixture.binDir, "commands.jsonl"))).toBe(false);
+  });
+
+  it.each([true, false])(
+    "retains only bound bootstrap attempts before later artifact failure (bound=%s)",
+    (bound) => {
+      const fixture = workflowFixture({}, false);
+      const releaseSha = "a".repeat(40);
+      writeFileSync(join(fixture.binDir, "git"), `#!/bin/sh\nprintf '%s\\n' '${releaseSha}'\n`, {
+        mode: 0o755,
+      });
+      writeFileSync(
+        join(fixture.binDir, "bootstrap.json"),
+        JSON.stringify({
+          id: bound ? 34 : 35,
+          name: "Plugin ClawHub New",
+          event: "workflow_dispatch",
+          head_branch: "main",
+          head_sha: "b".repeat(40),
+          run_attempt: 3,
+          path: ".github/workflows/plugin-clawhub-new.yml",
+          status: "completed",
+          conclusion: "success",
+        }),
+      );
+      const result = runCli(fixture, [
+        "--release-sha",
+        releaseSha,
+        "--plugin-clawhub-bootstrap-run",
+        "34",
+        "--clawhub-bootstrap-plugins",
+        "@openclaw/example",
+      ]);
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        bound ? "must have exactly one clawhub-bootstrap-readback-34-3" : "run id is 35",
+      );
+      const diagnostic = JSON.parse(
+        readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+      );
+      expect(diagnostic.stages.pluginClawHubBootstrap.state).toBe("failure");
+      expect(diagnostic.children.pluginClawHubBootstrap).toMatchObject({
+        suppliedRunId: "34",
+        runAttempt: bound ? "3" : null,
+        producerRunAttempt: null,
+        status: bound ? "completed" : "unknown",
+        conclusion: bound ? "success" : "unknown",
+      });
+      expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+    },
+  );
+
+  it.each(["npm", "clawhub"] as const)(
+    "retains completed packages and later unattempted packages after %s fails",
+    async (surface) => {
+      const fixture = workflowFixture({}, false);
+      for (const extensionId of ["first", "middle", "last"]) {
+        writePublishablePluginFixture(fixture.rootDir, {
+          version,
+          extensionId,
+          publishTo: "both",
+        });
+      }
+      // The collector's order is alphabetical: first, last, middle.
+      if (surface === "npm") {
+        writeFileSync(
+          join(fixture.binDir, "npm-failures.json"),
+          JSON.stringify({
+            [`@openclaw/last@${version}`]: "EACCES: synthetic-secret",
+          }),
+        );
+      } else {
+        fixture.args.skipClawHub = false;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: string) => {
+            if (input.includes(encodeURIComponent("@openclaw/last"))) {
+              return new Response("synthetic-secret", { status: 403 });
+            }
+            return Response.json({ package: { tags: { beta: version } } });
+          }),
+        );
+      }
+      await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow();
+      const diagnostic = JSON.parse(
+        readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+      );
+      const stage = diagnostic.stages[surface === "npm" ? "pluginNpm" : "clawHub"];
+      expect(stage.state).toBe("failure");
+      expect(stage.packages).toMatchObject([
+        { name: "@openclaw/first", state: "success", publication: "observed" },
+        { name: "@openclaw/last", state: "failure", publication: "unknown" },
+        { name: "@openclaw/middle", state: "unattempted", publication: "unknown" },
+      ]);
+      expect(diagnostic.stages.coreNpm.state).toBe("success");
+      expect(diagnostic.stages.openclawNpm.state).toBe("unattempted");
+      expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+    },
+  );
+
+  it("keeps the primary CLI failure when diagnostic initialization cannot write", () => {
+    const fixture = workflowFixture({ conclusion: "failure" }, false);
+    mkdirSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"));
+    const result = runCli(fixture);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("diagnostics unavailable");
+    expect(result.stderr).toContain("OpenClaw NPM Release: run 44 is completed/failure");
+    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+  });
+
+  it("retains the last valid atomic diagnostic when updates and the verifier both fail", () => {
+    const fixture = workflowFixture({}, false, "EACCES: primary-registry-denial");
+    const result = runCli(
+      fixture,
+      [],
+      `
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const link = fs.linkSync;
+fs.linkSync = (source, target) => {
+  link(source, target);
+  fs.copyFileSync(target, target + ".original");
+};
+fs.renameSync = () => { throw new Error("synthetic-secret update failure"); };
+syncBuiltinESMExports();
+`,
+    );
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("primary-registry-denial");
+    expect(result.stderr).toContain("diagnostics unavailable");
+    expect(result.stderr).not.toContain("synthetic-secret");
+    const diagnosticPath = join(fixture.rootDir, "release-postpublish-diagnostics.json");
+    expect(readFileSync(diagnosticPath)).toEqual(readFileSync(`${diagnosticPath}.original`));
+    expect(JSON.parse(readFileSync(diagnosticPath, "utf8")).verification).toBe("unattempted");
+    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
+  });
+
+  it.each(["stale", "unwritable"] as const)(
+    "does not turn a %s success-output path into a successful CLI result",
+    (mode) => {
+      const fixture = workflowFixture({}, false);
+      const evidencePath = join(fixture.rootDir, "evidence.json");
+      if (mode === "stale") {
+        writeFileSync(evidencePath, "previous invocation\n");
+      } else {
+        mkdirSync(evidencePath);
+      }
+      const result = runCli(fixture);
+      expect(result.status, result.stderr).toBe(1);
+      const diagnostic = JSON.parse(
+        readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+      );
+      expect(diagnostic).toMatchObject({
+        verification: "success",
+        stages: { evidence: { state: "failure", error: { class: "evidence-write-failure" } } },
+      });
+      if (mode === "stale") {
+        expect(readFileSync(evidencePath, "utf8")).toBe("previous invocation\n");
+      }
+    },
+  );
+
+  it("bounds and validates selected diagnostic metadata without retaining hostile inputs", () => {
+    const fixture = workflowFixture({}, false);
+    writeFileSync(join(fixture.rootDir, "package.json"), JSON.stringify({ version: "2026.1.1" }));
+    const names = Array.from({ length: 300 }, (_, i) => `@openclaw/plugin-${i}`);
+    const result = runCli(fixture, [
+      "--plugins",
+      names.join(","),
+      "--workflow-ref",
+      "https://example.invalid/?token=synthetic-secret",
+    ]);
+    expect(result.status).toBe(1);
+    const text = readFileSync(
+      join(fixture.rootDir, "release-postpublish-diagnostics.json"),
+      "utf8",
+    );
+    const diagnostic = JSON.parse(text);
+    expect(diagnostic.selection.plugins).toHaveLength(256);
+    expect(diagnostic.selection.pluginsTruncated).toBe(true);
+    expect(diagnostic.selection.workflowRef).toBeNull();
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(128 * 1024);
+    expect(text).not.toMatch(/password|token=|synthetic-secret/u);
+  });
 
   it.each([
     { status: "completed", conclusion: "failure" },
@@ -174,6 +486,16 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1] ==
           },
         }),
       ]);
+      const diagnostic = JSON.parse(
+        readFileSync(join(fixture.rootDir, "release-postpublish-diagnostics.json"), "utf8"),
+      );
+      expect(diagnostic.children.npmTelegram).toMatchObject({
+        status: run.status,
+        conclusion: run.conclusion,
+        runAttempt: null,
+      });
+      expect(diagnostic.stages.clawHub.state).toBe("skipped");
+      expect(diagnostic.stages.githubRelease.state).toBe("skipped");
     },
   );
 
