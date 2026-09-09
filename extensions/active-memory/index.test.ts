@@ -1700,8 +1700,8 @@ describe("active-memory plugin", () => {
     },
   );
 
-  it("records why default escalation skips an ordinary turn", async () => {
-    registerPluginConfig({ mode: undefined });
+  it("logs why default escalation skips an ordinary turn when logging is enabled", async () => {
+    registerPluginConfig({ mode: undefined, logging: true });
 
     const result = await runPromptBuild(
       { prompt: "Explain the current configuration" },
@@ -1714,8 +1714,8 @@ describe("active-memory plugin", () => {
 
     expectPrependContextContains(result, skippedRecallContext);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    expect(hasDebugLine("active-memory: recall skipped reason=no-recall-intent")).toBe(true);
-    expect(hasInfoLine("active-memory: recall skipped reason=no-recall-intent")).toBe(false);
+    expect(hasDebugLine("active-memory: recall skipped reason=no-recall-intent")).toBe(false);
+    expect(hasInfoLine("active-memory: recall skipped reason=no-recall-intent")).toBe(true);
   });
 
   it("does not run deep recall when the live active-memory plugin entry is removed", async () => {

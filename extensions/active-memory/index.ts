@@ -443,10 +443,15 @@ export default definePluginEntry({
               hasStrongLaneOneHit: laneOne.hasStrongHit,
             });
             if (escalationDecision !== "recall") {
-              // Stays at debug: escalate is the default mode and ordinary
-              // prompts resolve to no-recall-intent, so this is the healthy
-              // path rather than an actionable skip.
-              api.logger.debug?.(`active-memory: recall skipped reason=${escalationDecision}`);
+              const logLine = `active-memory: recall skipped reason=${escalationDecision}`;
+              if (invocationConfig.logging) {
+                api.logger.info?.(logLine);
+              } else {
+                // Escalate is the default mode and ordinary prompts resolve to
+                // no-recall-intent, so keep the healthy path at debug unless
+                // the operator explicitly enables Active Memory logging.
+                api.logger.debug?.(logLine);
+              }
               const outcomeContext =
                 escalationDecision === "no-recall-intent"
                   ? buildRecallOutcomePrefix("skipped-no-recall-intent")
