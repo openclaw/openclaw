@@ -3794,5 +3794,33 @@
   {
     "source": "Docker",
     "target": "Docker"
+  },
+  {
+    "source": "Text-to-speech quickstart",
+    "target": "文本转语音快速上手"
+  },
+  {
+    "source": "Text-to-speech configuration",
+    "target": "文本转语音配置"
+  },
+  {
+    "source": "Text-to-speech personas",
+    "target": "文本转语音人设"
+  },
+  {
+    "source": "Text-to-speech commands and directives",
+    "target": "文本转语音命令与指令"
+  },
+  {
+    "source": "Text-to-speech output and Auto-TTS behavior",
+    "target": "文本转语音输出与自动 TTS 行为"
+  },
+  {
+    "source": "Text-to-speech field reference",
+    "target": "文本转语音字段参考"
+  },
+  {
+    "source": "Text-to-speech agent tool and Gateway RPC",
+    "target": "文本转语音代理工具与 Gateway RPC"
   }
 ]

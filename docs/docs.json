@@ -1931,6 +1931,18 @@
                       "tools/music-generation",
                       "tools/pdf",
                       "tools/tts",
+                      {
+                        "group": "Text to speech",
+                        "pages": [
+                          "tools/tts/quickstart",
+                          "tools/tts/configuration",
+                          "tools/tts/personas",
+                          "tools/tts/commands",
+                          "tools/tts/output",
+                          "tools/tts/field-reference",
+                          "tools/tts/api"
+                        ]
+                      },
                       "tools/video-generation"
                     ]
                   },
