@@ -2154,6 +2154,80 @@ describe("google transport stream", () => {
     },
   );
 
+  // Gemini 3.x models are only served from Vertex's `global` location, while
+  // Gemini 2.5 models are regional. A single GOOGLE_CLOUD_LOCATION env var
+  // can't express both when a provider config lists models from both
+  // generations, so a model's own recognizable Vertex baseUrl takes
+  // precedence over the shared env var for that model's request.
+  it("derives the Vertex location from a model's own global baseUrl, overriding a regional env location", async () => {
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("oauth-token");
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
+    );
+
+    await runGoogleVertexStreamResult({
+      model: buildGoogleVertexModel({
+        id: "gemini-3.6-flash",
+        baseUrl: "https://aiplatform.googleapis.com",
+      }),
+      fetch: vi.fn(),
+    });
+
+    const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(String(url)).toBe(
+      "https://aiplatform.googleapis.com/v1/projects/demo/locations/global/publishers/google/models/gemini-3.6-flash:streamGenerateContent?alt=sse",
+    );
+  });
+
+  it("derives the Vertex location from a model's own regional baseUrl, overriding a global env location", async () => {
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("oauth-token");
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
+    );
+
+    await runGoogleVertexStreamResult({
+      model: buildGoogleVertexModel({
+        id: "gemini-2.5-flash",
+        baseUrl: "https://us-east5-aiplatform.googleapis.com",
+      }),
+      fetch: vi.fn(),
+    });
+
+    const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(String(url)).toBe(
+      "https://us-east5-aiplatform.googleapis.com/v1/projects/demo/locations/us-east5/publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+    );
+  });
+
+  it("falls back to the env location for a model using the {location} template placeholder", async () => {
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("oauth-token");
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
+    );
+
+    // buildGoogleVertexModel()'s default baseUrl is the literal
+    // "https://{location}-aiplatform.googleapis.com" template placeholder.
+    // The WHATWG URL parser accepts "{location}" as a literal hostname
+    // component without error, so this guards against misreading it as a
+    // concrete (and bogus) "{location}" location instead of falling back to
+    // the env var as before this change.
+    await runGoogleVertexStreamResult({ model: buildGoogleVertexModel(), fetch: vi.fn() });
+
+    const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(String(url)).toBe(
+      "https://us-central1-aiplatform.googleapis.com/v1/projects/demo/locations/us-central1/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
+    );
+  });
+
   it("resolves non-file Vertex ADC through google-auth-library without OAuth refresh fetch", async () => {
     await useGoogleAuthLibraryCredentials("authlib", "ya29.google-auth-token");
     const tokenFetchMock = vi.fn();

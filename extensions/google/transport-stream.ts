@@ -395,13 +395,65 @@ function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined)
   return project;
 }
 
-function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined): string {
+// Gemini 3.x models are only served from Vertex's `global` location; Gemini
+// 2.5 models are regional (e.g. `us-central1`). A single `GOOGLE_CLOUD_LOCATION`
+// env var can't express both at once when a provider config lists models from
+// both generations under one `google-vertex` provider entry. When a model
+// carries its own recognizable Vertex `baseUrl` (already the documented way
+// to pin a model to a specific endpoint), derive its location from that host
+// instead of the process-wide env var, so mixed-generation model lists route
+// correctly without needing a second provider entry (which would also lose
+// this provider's automatic ADC credential resolution — see vertex-adc.ts).
+const GOOGLE_VERTEX_GLOBAL_HOST = "aiplatform.googleapis.com";
+const GOOGLE_VERTEX_REGION_HOST_SUFFIX = "-aiplatform.googleapis.com";
+const GOOGLE_VERTEX_MULTI_REGION_HOST_LOCATIONS: Readonly<Record<string, string>> = {
+  "aiplatform.eu.rep.googleapis.com": "eu",
+  "aiplatform.us.rep.googleapis.com": "us",
+};
+
+function resolveGoogleVertexLocationFromModelBaseUrl(
+  model: GoogleTransportModel,
+): string | undefined {
+  const raw = normalizeOptionalString(model.baseUrl);
+  // A baseUrl containing the literal "{location}" template placeholder (the
+  // documented way to defer origin selection to `resolveGoogleVertexBaseOrigin`)
+  // is not a concrete host to parse — e.g. the WHATWG URL parser accepts
+  // "https://{location}-aiplatform.googleapis.com" verbatim, which would
+  // otherwise be misread as a literal (and bogus) "{location}" location.
+  if (!raw || raw.includes("{location}")) {
+    return undefined;
+  }
+  let hostname: string;
+  try {
+    hostname = new URL(raw).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  if (hostname === GOOGLE_VERTEX_GLOBAL_HOST) {
+    return "global";
+  }
+  const multiRegionLocation = GOOGLE_VERTEX_MULTI_REGION_HOST_LOCATIONS[hostname];
+  if (multiRegionLocation) {
+    return multiRegionLocation;
+  }
+  if (hostname.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX)) {
+    return hostname.slice(0, -GOOGLE_VERTEX_REGION_HOST_SUFFIX.length);
+  }
+  return undefined;
+}
+
+function resolveGoogleVertexLocation(
+  model: GoogleTransportModel,
+  options: GoogleTransportOptions | undefined,
+): string {
   const location =
     normalizeOptionalString((options as { location?: unknown } | undefined)?.location) ||
+    resolveGoogleVertexLocationFromModelBaseUrl(model) ||
     normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
   if (!location) {
     throw new Error(
-      "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",
+      "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION, configure a recognized " +
+        "Vertex baseUrl for this model, or pass location in options.",
     );
   }
   return location;
@@ -437,7 +489,7 @@ function buildGoogleVertexRequestUrl(
   options: GoogleTransportOptions | undefined,
 ): string {
   const project = encodeURIComponent(resolveGoogleVertexProject(options));
-  const location = encodeURIComponent(resolveGoogleVertexLocation(options));
+  const location = encodeURIComponent(resolveGoogleVertexLocation(model, options));
   // Mirror resolveGoogleModelPath: strip the google/ provider prefix so a
   // provider-qualified id does not become an invalid models/google%2F... path.
   const modelId = encodeURIComponent(stripGoogleProviderPrefix(model.id));
