@@ -80,7 +80,7 @@ export function classifyUnsupportedNodeCommand(argv) {
   }
   const command = args[index++];
   const tail = args.slice(index);
-  if (["--version", "-V", "--help"].includes(command)) {
+  if (["--version", "-V", "-v", "--help", "-h"].includes(command)) {
     return diagnosticOptions(tail, []) ? "diagnostic" : null;
   }
   if (command === "gateway") {

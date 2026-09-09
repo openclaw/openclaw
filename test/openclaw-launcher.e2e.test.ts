@@ -476,7 +476,9 @@ describe("openclaw launcher", () => {
   it.each([
     ["--version"],
     ["-V"],
+    ["-v"],
     ["--help"],
+    ["-h"],
     ["gateway", "status", "--deep"],
     ["doctor", "--lint"],
     ["doctor"],
