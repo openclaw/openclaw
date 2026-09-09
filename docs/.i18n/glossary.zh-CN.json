@@ -3188,6 +3188,38 @@
     "target": "其他检查与修复"
   },
   {
+    "source": "Agent harness core ownership",
+    "target": "Agent harness 核心归属"
+  },
+  {
+    "source": "Register an agent harness",
+    "target": "注册 agent harness"
+  },
+  {
+    "source": "Agent harness selection policy",
+    "target": "Agent harness 选择策略"
+  },
+  {
+    "source": "Agent harness attempt runtime",
+    "target": "Agent harness 尝试运行时"
+  },
+  {
+    "source": "Agent harness user input and execution authority",
+    "target": "Agent harness 用户输入与执行权限"
+  },
+  {
+    "source": "Agent harness native inventories",
+    "target": "Agent harness 原生清单"
+  },
+  {
+    "source": "Agent harness runtime configuration",
+    "target": "Agent harness 运行时配置"
+  },
+  {
+    "source": "Agent harness sessions and results",
+    "target": "Agent harness 会话与结果"
+  },
+  {
     "source": "Update status and run history",
     "target": "更新状态与运行历史"
   },
