@@ -33,7 +33,7 @@ async function refreshHostedApps(context: CodexPluginCommandContext) {
     async (_params, run) => await run(context),
   );
   return await handleCodexSubcommand(
-    { ...ctx, args: "apps refresh", commandBody: "/codex apps refresh" },
+    { ...ctx, args: "plugins refresh", commandBody: "/codex plugins refresh" },
     { deps: { bindingStore: createCodexTestBindingStore() } },
   );
 }
@@ -346,7 +346,7 @@ describe("Codex plugin status command", () => {
       buttons: [
         {
           label: "Refresh hosted apps",
-          action: { type: "command", command: "/codex apps refresh" },
+          action: { type: "command", command: "/codex plugins refresh" },
         },
         {
           label: "Check status",
@@ -536,9 +536,8 @@ describe("Codex hosted app refresh", () => {
   });
 
   it.each([
-    { args: "apps", owner: true, expected: "Usage: /codex apps refresh" },
-    { args: "apps refresh notes", owner: true, expected: "Usage: /codex apps refresh" },
-    { args: "apps refresh", owner: false, expected: "Only an owner or operator.admin" },
+    { args: "plugins refresh notes", owner: true, expected: "Usage: /codex plugins refresh" },
+    { args: "plugins refresh", owner: false, expected: "Only an owner or operator.admin" },
   ])(
     "rejects $args for owner=$owner before opening a runtime",
     async ({ args, owner, expected }) => {
@@ -675,7 +674,7 @@ describe("Codex hosted app refresh", () => {
       const test = fixture({ refreshError: error });
       const result = await refreshHostedApps(test.context);
       expect(result.text).toContain(expected);
-      expect(result.text).toContain("/codex apps refresh");
+      expect(result.text).toContain("/codex plugins refresh");
       expect(result.text).toContain("Previous inventory was not confirmed");
       expect(result.text).not.toContain("request completed");
       expect(result.text).not.toContain("private upstream response");

@@ -55,7 +55,7 @@ export async function refreshCodexHostedApps(
           ? "The hosted app refresh was cancelled."
           : "Hosted app tools could not be refreshed. Check the Codex connection and try again.";
     return {
-      text: `${reason} Run /codex apps refresh to retry for the current Codex account/runtime. Previous inventory was not confirmed; no conversation policy was changed.`,
+      text: `${reason} Run /codex plugins refresh to retry for the current Codex account/runtime. Previous inventory was not confirmed; no conversation policy was changed.`,
     };
   }
   const presentation: MessagePresentation = {

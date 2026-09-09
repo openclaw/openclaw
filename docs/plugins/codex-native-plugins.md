@@ -172,11 +172,11 @@ select **I've completed this step** and submit to let Codex refresh and retry.
 Opening the link alone does not resume the tool or confirm a connection. Clients
 without a link action still show the URL to open manually before answering.
 
-After completing sign-in, refresh hosted app inventory for the current Codex
-account/runtime:
+For setup completed outside an active Codex sign-in prompt, refresh hosted app
+inventory for the current Codex account/runtime:
 
 ```text
-/codex apps refresh
+/codex plugins refresh
 ```
 
 This refresh covers all hosted apps in that runtime; it is not a per-plugin
@@ -230,7 +230,7 @@ same chat where you operate the Codex harness:
 /codex plugins available
 /codex plugins install security-review@company-tools
 /codex plugins status security-review@company-tools
-/codex apps refresh
+/codex plugins refresh
 /codex plugins disable google-calendar
 /codex plugins enable google-calendar
 /codex plugins disable security-review@company-tools
@@ -275,11 +275,12 @@ OpenClaw app access. Status does not infer a separate connection state. Missing
 app records and failed reads are reported explicitly instead of becoming false
 flags.
 
-`/codex apps refresh` requires owner or `operator.admin` authority and confirmed
+`/codex plugins refresh` requires owner or `operator.admin` authority and confirmed
 hosted-app support in the selected Codex account/runtime. It works without a
 configured plugin. It invalidates that runtime's OpenClaw app cache, calls
 Codex `app/installed` with `forceRefresh: true` and no `threadId`, and reads
-metadata for the returned apps. It does not reload native MCP servers.
+metadata for the returned apps. It does not refresh marketplace catalogs,
+reinstall plugin bundles, or reload native MCP servers.
 
 After refreshing, use `/codex plugins status <configured-plugin>` to inspect
 one plugin. Status never forces a hosted refresh. Disabled or blocked plugins
@@ -569,7 +570,7 @@ its explicitly configured thread. Revoked auth, missing metadata, disabled
 workspace plugins, and Codex managed or workspace restrictions still block
 access. Reauthorize or repair those upstream conditions before starting a new
 thread. If you changed that state after the gateway cached app inventory, run
-`/codex apps refresh`, then use `/new` or `/reset`.
+`/codex plugins refresh`, then use `/new` or `/reset`.
 OpenClaw does not authenticate plugin apps on the owner's behalf.
 
 For `plugin_detail_unavailable`, verify that the exact installed marketplace

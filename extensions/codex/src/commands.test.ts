@@ -500,7 +500,7 @@ describe("codex command", () => {
       "/codex fast menu",
       "/codex computer-use menu",
       "/codex account",
-      "/codex apps refresh",
+      "/codex plugins refresh",
       "/codex help",
     ]);
   });
@@ -512,6 +512,8 @@ describe("codex command", () => {
 
     expectResultTextContains(result, "/codex plugins enable");
     expect(buttonCommands(result)).toContain("/codex plugins list");
+    expect(buttonCommands(result)).toContain("/codex plugins refresh");
+    expectResultTextContains(result, "/codex plugins refresh");
   });
 
   it("lists Codex sub-plugins through the /codex plugins command surface", async () => {

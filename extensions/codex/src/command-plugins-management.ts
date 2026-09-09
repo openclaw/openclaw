@@ -226,6 +226,7 @@ function buildPluginsMenuReply(): PluginCommandResult {
   const buttons: CodexCommandPickerButton[] = [
     { label: "list", command: "/codex plugins list" },
     { label: "available", command: "/codex plugins available" },
+    { label: "Refresh hosted apps", command: "/codex plugins refresh" },
     { label: "enable", command: "/codex plugins enable" },
     { label: "disable", command: "/codex plugins disable" },
     { label: "help", command: "/codex plugins help" },
@@ -237,9 +238,10 @@ function buildPluginsMenuReply(): PluginCommandResult {
     "  1. /codex plugins list",
     "  2. /codex plugins available",
     "  3. /codex plugins status <name>@<marketplace>",
-    "  4. /codex plugins enable",
-    "  5. /codex plugins disable",
-    "  6. /codex plugins help",
+    "  4. /codex plugins refresh — refresh hosted apps",
+    "  5. /codex plugins enable",
+    "  6. /codex plugins disable",
+    "  7. /codex plugins help",
     "",
     "Type '/codex' to go back to the main menu.",
   ].join("\n");
@@ -321,11 +323,11 @@ function buildPluginsHelp(): string {
     "- /codex plugins list                       show explicitly configured plugins",
     "- /codex plugins available                  list discoverable Codex marketplaces",
     "- /codex plugins status <name>@<marketplace> [page]  inspect app readiness without refreshing",
-    "- /codex apps refresh                      refresh all hosted apps for the current Codex account/runtime",
+    "- /codex plugins refresh                   refresh all hosted apps for the current Codex account/runtime",
     "- /codex plugins install <name>@<marketplace>  install and authorize one plugin",
     "- /codex plugins enable <name>              enable a configured plugin",
     "- /codex plugins disable <name>             disable a configured plugin",
-    "Only an owner or operator.admin can discover, inspect, install, enable, or disable plugins.",
+    "Only an owner or operator.admin can discover, inspect, refresh hosted apps, install, enable, or disable plugins.",
   ].join("\n");
 }
 
@@ -529,7 +531,7 @@ async function installCodexPlugin(
               ? [
                   {
                     label: "Refresh hosted apps",
-                    action: { type: "command" as const, command: "/codex apps refresh" },
+                    action: { type: "command" as const, command: "/codex plugins refresh" },
                   },
                 ]
               : []),
