@@ -18,6 +18,24 @@ import { msTeamsChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SecretInputSchema = buildSecretInputSchema();
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+const MSTeamsEmployeeSelfServiceOnboardingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    acknowledgementText: z.string().optional(),
+    failureAcknowledgementText: z.string().optional(),
+    postProvisionAuthPromptWaitMs: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const MSTeamsEmployeeContainerDispatchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    gatewayUrlTemplate: z.string().optional(),
+    tokenConfigPathTemplate: z.string().optional(),
+    agentId: z.string().optional(),
+    waitTimeoutMs: z.number().int().positive().optional(),
+  })
+  .strict();
 
 const MSTeamsChannelSchema = z
   .object({
@@ -124,6 +142,8 @@ export const MSTeamsConfigSchema = z
     feedbackEnabled: z.boolean().optional(),
     feedbackReflection: z.boolean().optional(),
     feedbackReflectionCooldownMs: z.number().int().min(0).optional(),
+    employeeSelfServiceOnboarding: MSTeamsEmployeeSelfServiceOnboardingSchema.optional(),
+    employeeContainerDispatch: MSTeamsEmployeeContainerDispatchSchema.optional(),
     delegatedAuth: z
       .object({
         enabled: z.boolean().optional(),

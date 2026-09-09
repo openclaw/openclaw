@@ -1,6 +1,7 @@
 // Msteams type declarations define plugin contracts.
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
+import type { MSTeamsEmployeeOnboardingRequestStore } from "./employee-onboarding.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -17,5 +18,6 @@ export type MSTeamsMessageHandlerDeps = {
   mediaMaxBytes: number;
   conversationStore: MSTeamsConversationStore;
   pollStore: MSTeamsPollStore;
+  employeeOnboardingStore?: MSTeamsEmployeeOnboardingRequestStore;
   log: MSTeamsMonitorLogger;
 };

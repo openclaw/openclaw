@@ -7,5 +7,6 @@ export {
   resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveSessionAgentIds,
+  resolveSessionAgentIds as resolveSessionAgentIdsStrict,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";

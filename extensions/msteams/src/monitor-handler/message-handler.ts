@@ -11,6 +11,12 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  createMSTeamsEmployeeOnboardingDecisionTrace,
+  resolveMSTeamsEmployeeOnboardingAcknowledgement,
+  resolveMSTeamsEmployeeOnboardingDecision,
+  resolveMSTeamsEmployeeOnboardingFailureAcknowledgement,
+} from "../employee-onboarding.js";
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId, parseMSTeamsActivityTimestamp } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
@@ -21,13 +27,19 @@ import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { admitMSTeamsMessage } from "./access.js";
 import { prepareMSTeamsInboundContent } from "./inbound-content.js";
-import { dispatchMSTeamsInboundTurn } from "./inbound-dispatch.js";
+import { dispatchMSTeamsInboundTurn, startEmployeeCodexDeviceLogin } from "./inbound-dispatch.js";
 import {
   assembleMSTeamsInboundFacts,
   prepareMSTeamsDebounceEntry,
   type MSTeamsDebounceEntry,
 } from "./inbound-facts.js";
 import { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thread-context.js";
+
+const EMPLOYEE_ONBOARDING_ROUTE_POLL_MS = 1_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
@@ -64,6 +76,57 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     cfg,
     channel: "msteams",
   });
+
+  const waitForProvisionedEmployeeRoute = async (params: {
+    isDirectMessage: boolean;
+    requestId: string;
+    senderId: string;
+    teamId?: string;
+  }) => {
+    if (!params.isDirectMessage) {
+      return undefined;
+    }
+    const waitMs = Math.max(
+      0,
+      Math.floor(
+        (
+          msteamsCfg?.employeeSelfServiceOnboarding as
+            | { postProvisionAuthPromptWaitMs?: number }
+            | undefined
+        )?.postProvisionAuthPromptWaitMs ?? 30_000,
+      ),
+    );
+    if (waitMs <= 0) {
+      return undefined;
+    }
+    const deadline = Date.now() + waitMs;
+    while (Date.now() <= deadline) {
+      const route = core.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "msteams",
+        teamId: params.teamId,
+        peer: {
+          kind: "direct",
+          id: params.senderId,
+        },
+      });
+      if (route.matchedBy === "binding.peer" && route.agentId !== "main") {
+        return route;
+      }
+      const request = await deps.employeeOnboardingStore?.getRequest?.(params.requestId);
+      const provisionedAgentId =
+        typeof request?.provisionedAgentId === "string" ? request.provisionedAgentId.trim() : "";
+      if (request?.status === "provisioned" && provisionedAgentId) {
+        return {
+          ...route,
+          agentId: provisionedAgentId,
+          matchedBy: "binding.peer" as const,
+        };
+      }
+      await delay(EMPLOYEE_ONBOARDING_ROUTE_POLL_MS);
+    }
+    return undefined;
+  };
 
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
     const facts = assembleMSTeamsInboundFacts({ entry: params, mediaMaxBytes });
@@ -174,6 +237,128 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log,
     });
     const { route, deadline: preprocessingDeadline } = threadRouting;
+
+    const employeeOnboardingDecision = resolveMSTeamsEmployeeOnboardingDecision({
+      cfg,
+      isDirectMessage,
+      route,
+      senderId,
+      senderName,
+      conversationId,
+    });
+    log.info(
+      "msteams employee onboarding decision",
+      createMSTeamsEmployeeOnboardingDecisionTrace({
+        decision: employeeOnboardingDecision,
+        route,
+      }),
+    );
+    if (employeeOnboardingDecision.kind === "pending-onboarding") {
+      let persisted = false;
+      let persistenceAttempted = false;
+      let terminalStatusGuard = false;
+      try {
+        persistenceAttempted = Boolean(deps.employeeOnboardingStore);
+        const result = deps.employeeOnboardingStore
+          ? await deps.employeeOnboardingStore.upsertRequest(employeeOnboardingDecision.request)
+          : null;
+        const requestStatus = result?.request.status;
+        terminalStatusGuard = Boolean(requestStatus && requestStatus !== "pending");
+        persisted = Boolean(result && !terminalStatusGuard);
+        log.info("msteams employee onboarding request pending", {
+          ...createMSTeamsEmployeeOnboardingDecisionTrace({
+            decision: employeeOnboardingDecision,
+            route,
+            request: result?.request,
+            requestCreated: result?.created ?? false,
+            terminalStatusGuard,
+          }),
+          persisted,
+        });
+        if (terminalStatusGuard) {
+          log.warn?.("msteams employee onboarding terminal request suppressed acknowledgement", {
+            ...createMSTeamsEmployeeOnboardingDecisionTrace({
+              decision: employeeOnboardingDecision,
+              route,
+              request: result?.request,
+              requestCreated: result?.created ?? false,
+              terminalStatusGuard,
+            }),
+          });
+        }
+      } catch (err) {
+        log.error("failed to persist msteams employee onboarding request", {
+          ...createMSTeamsEmployeeOnboardingDecisionTrace({
+            decision: employeeOnboardingDecision,
+            route,
+          }),
+          error: formatUnknownError(err),
+        });
+        runtime.error(
+          `msteams employee onboarding request persistence failed: ${formatUnknownError(err)}`,
+        );
+      }
+      if (!persisted && !persistenceAttempted) {
+        log.error("msteams employee onboarding request store unavailable", {
+          ...createMSTeamsEmployeeOnboardingDecisionTrace({
+            decision: employeeOnboardingDecision,
+            route,
+          }),
+        });
+        runtime.error("msteams employee onboarding request store unavailable");
+      }
+      try {
+        await context.sendActivity(
+          persisted
+            ? resolveMSTeamsEmployeeOnboardingAcknowledgement(cfg)
+            : resolveMSTeamsEmployeeOnboardingFailureAcknowledgement(cfg),
+        );
+      } catch (err) {
+        log.debug?.("failed to send msteams employee onboarding acknowledgement", {
+          requestId: employeeOnboardingDecision.request.id,
+          error: formatUnknownError(err),
+        });
+      }
+      if (persisted) {
+        try {
+          const provisionedRoute = await waitForProvisionedEmployeeRoute({
+            isDirectMessage,
+            requestId: employeeOnboardingDecision.request.id,
+            senderId,
+            teamId,
+          });
+          if (provisionedRoute) {
+            log.info("msteams employee onboarding route provisioned during first turn", {
+              requestId: employeeOnboardingDecision.request.id,
+              routeAgentId: provisionedRoute.agentId,
+              routeMatchedBy: provisionedRoute.matchedBy,
+            });
+            await startEmployeeCodexDeviceLogin({
+              cfg,
+              runtime,
+              routeAgentId: provisionedRoute.agentId,
+              sendText: async (message) => {
+                await context.sendActivity(message);
+              },
+              log,
+            });
+          } else {
+            log.warn?.("msteams employee onboarding route not provisioned before auth prompt", {
+              requestId: employeeOnboardingDecision.request.id,
+            });
+          }
+        } catch (err) {
+          log.error("msteams employee onboarding auth prompt failed", {
+            requestId: employeeOnboardingDecision.request.id,
+            error: formatUnknownError(err),
+          });
+          runtime.error(
+            `msteams employee onboarding auth prompt failed: ${formatUnknownError(err)}`,
+          );
+        }
+      }
+      return;
+    }
 
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`

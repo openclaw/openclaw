@@ -85,6 +85,10 @@ import {
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
+import {
+  resolveRoutedDispatchSurface,
+  resolveRouterSafeRoutedDispatchPaths,
+} from "./router-safe-routed-dispatch-paths.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
@@ -364,7 +368,7 @@ export async function getReplyFromConfig(
   const preparedModelCatalog: ModelCatalogSnapshot | undefined =
     preparedReplyDispatchRuntime?.modelCatalog;
   const traceAttributes = resolverTiming.measureSync("reply.resolve_trace_context", () => ({
-    surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
+    surface: resolveRoutedDispatchSurface(finalized) ?? "unknown",
     hasSessionKey: Boolean(agentSessionKey),
     isHeartbeat: opts?.isHeartbeat === true,
     hasMedia: hasInboundMedia(finalized),
@@ -446,14 +450,23 @@ export async function getReplyFromConfig(
 
   const { workspaceDirRaw, workspaceDirForNativeCommand, agentDir, timeoutMs } =
     resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
+      const routerSafeDispatchPaths = resolveRouterSafeRoutedDispatchPaths({
+        cfg,
+        agentId,
+        surface: resolveRoutedDispatchSurface(finalized),
+        preparedWorkspaceDir,
+        preparedAgentDir,
+      });
       const workspaceDirRawLocal =
+        routerSafeDispatchPaths?.workspaceDir ??
         preparedWorkspaceDir ??
         resolveAgentWorkspaceDir(cfg, agentId) ??
         DEFAULT_AGENT_WORKSPACE_DIR;
       return {
         workspaceDirRaw: workspaceDirRawLocal,
         workspaceDirForNativeCommand: workspaceDirRawLocal,
-        agentDir: preparedAgentDir ?? resolveAgentDir(cfg, agentId),
+        agentDir:
+          routerSafeDispatchPaths?.agentDir ?? preparedAgentDir ?? resolveAgentDir(cfg, agentId),
         timeoutMs: resolveAgentTimeoutMs({
           cfg,
           overrideSeconds: opts?.timeoutOverrideSeconds,

@@ -1,4 +1,5 @@
 // Agent command-list tests cover provider metadata and command output for configured agents.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -174,6 +175,37 @@ describe("agentsListCommand", () => {
     expect(summary).not.toHaveProperty("createdVia");
     expect(summary).not.toHaveProperty("creatorAgentId");
     expect(summary).not.toHaveProperty("createdAt");
+  });
+
+  it("redacts peer ids in JSON binding details", async () => {
+    const peerId = "29:teams-user-a";
+    const peerHash = createHash("sha256")
+      .update(`msteams:default:direct:${peerId}`)
+      .digest("hex")
+      .slice(0, 24);
+    requireValidConfigMock.mockResolvedValueOnce({
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "msteams",
+            peer: { kind: "direct", id: peerId },
+          },
+        },
+      ],
+    } satisfies OpenClawConfig);
+    const runtime = createRuntime();
+
+    await agentsListCommand({ json: true, bindings: true }, runtime);
+
+    const output = JSON.stringify(runtime.json[0]);
+    expect(output).not.toContain(peerId);
+    expect(output).toContain(`peer=direct:sha256:${peerHash}`);
+    const [summary] = runtime.json[0] as Array<Record<string, unknown>>;
+    expect(summary?.bindingDetails).toStrictEqual([`msteams peer=direct:sha256:${peerHash}`]);
   });
 
   it("keeps human output enriched from read-only provider metadata", async () => {

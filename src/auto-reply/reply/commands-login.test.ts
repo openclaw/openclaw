@@ -114,7 +114,7 @@ describe("handleLoginCommand", () => {
   it("registers /login as a built-in command handler", () => {
     expect(buildBuiltinChatCommands().find((entry) => entry.key === "login")).toMatchObject({
       nativeName: "login",
-      nativeProviders: ["discord", "slack", "telegram"],
+      nativeProviders: ["discord", "msteams", "slack", "telegram"],
       textAliases: ["/login"],
       scope: "both",
     });
@@ -131,7 +131,9 @@ describe("handleLoginCommand", () => {
 
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "Codex login complete. Try your request again now." },
+      reply: {
+        text: "Codex login complete. Your main agent has been associated with your frontier provider. Try interacting with your agent, such as asking what its name is or what it knows.",
+      },
     });
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -148,7 +150,7 @@ describe("handleLoginCommand", () => {
     );
   });
 
-  it.each(["web", "discord", "slack"] as const)(
+  it.each(["web", "discord", "msteams", "slack"] as const)(
     "supports /login codex on the %s command surface",
     async (surface) => {
       const onBlockReply = vi.fn(async () => {});
@@ -189,7 +191,9 @@ describe("handleLoginCommand", () => {
       });
       const result = await handleLoginCommand(params, true);
 
-      expect(result?.reply?.text).toBe("Codex login complete. Try your request again now.");
+      expect(result?.reply?.text).toBe(
+        "Codex login complete. Your main agent has been associated with your frontier provider. Try interacting with your agent, such as asking what its name is or what it knows.",
+      );
       expect(onBlockReply).toHaveBeenCalledWith(
         expect.objectContaining({
           text: expect.stringContaining("https://auth.openai.com/device"),
@@ -328,7 +332,13 @@ describe("handleLoginCommand", () => {
       providerId: " openai ",
       methodId: " device-code ",
       defaultModel: " openai/gpt-5.4 ",
-      profiles: [{ profileId: " openai:owner@example.com ", provider: " openai ", mode: "oauth" }],
+      profiles: [
+        {
+          profileId: " openai:owner@example.com ",
+          provider: " openai ",
+          mode: "oauth",
+        },
+      ],
     });
     const params = buildLoginParams("/login codex", {
       opts: blockReplyOpts(),
@@ -341,7 +351,9 @@ describe("handleLoginCommand", () => {
 
     const result = await handleLoginCommand(params, true);
 
-    expect(result?.reply?.text).toBe("Codex login complete. Try your request again now.");
+    expect(result?.reply?.text).toBe(
+      "Codex login complete. Your main agent has been associated with your frontier provider. Try interacting with your agent, such as asking what its name is or what it knows.",
+    );
     expect(params.sessionEntry?.authProfileOverride).toBe("openai:owner@example.com");
   });
 

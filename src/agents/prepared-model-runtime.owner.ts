@@ -33,6 +33,7 @@ import type {
   PreparedModelRuntimeReplacement,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
+import { resolveRouterSafePreparedRuntimePaths } from "./router-safe-prepared-runtime-paths.js";
 
 export type {
   PreparedModelRuntimeInput,
@@ -286,11 +287,13 @@ export function resolvePublishedOwner(
   }
   // Gateway launch may supply an authoritative workspace outside config. Request readers still
   // resolve the one configured lifecycle owner by agent; standalone/explicit owners remain exact.
-  const candidates = [...owners.values()].filter(
-    (owner) =>
+  const candidates = [...owners.values()].filter((owner) => {
+    const routerSafePaths = resolvePublishedOwnerConfiguredRouterSafePaths(owner, input);
+    return (
       owner.provenance === "configured" &&
       (input.agentId === undefined || owner.input.agentId === input.agentId) &&
-      owner.input.agentDir === input.agentDir &&
+      (owner.input.agentDir === input.agentDir ||
+        routerSafePaths?.agentDir === owner.input.agentDir) &&
       owner.input.inheritedAuthDir === input.inheritedAuthDir &&
       owner.input.readOnly === input.readOnly &&
       owner.input.loadRuntimePlugins === input.loadRuntimePlugins &&
@@ -307,9 +310,29 @@ export function resolvePublishedOwner(
           JSON.stringify(input.runtimePluginSelections)) &&
       (input.env === undefined ||
         owner.environmentFingerprint === environmentFingerprint(input.env)) &&
-      (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
-  );
+      (input.workspaceDir === undefined ||
+        owner.input.workspaceDir === input.workspaceDir ||
+        routerSafePaths?.workspaceDir === owner.input.workspaceDir)
+    );
+  });
   return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function resolvePublishedOwnerConfiguredRouterSafePaths(
+  owner: PreparedModelRuntimeOwner,
+  input: PreparedModelRuntimeInput,
+) {
+  if (!input.agentId || owner.input.agentId !== input.agentId) {
+    return undefined;
+  }
+  return resolveRouterSafePreparedRuntimePaths({
+    agentId: input.agentId,
+    agentDir: input.agentDir,
+    workspaceDir: input.workspaceDir,
+    env: input.env,
+    source: "published",
+    failClosed: false,
+  });
 }
 
 export function hasSameLifecycleInput(
@@ -353,14 +376,23 @@ export function listConfiguredOwnerInputs(
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
   return listAgentIds(config).map((agentId) => {
     const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
+    const configuredAgentDir = resolveAgentDir(config, agentId);
+    const configuredWorkspaceDir = preserveWorkspaceDirOnRefresh
+      ? defaultWorkspaceDir
+      : resolveAgentWorkspaceDir(config, agentId);
+    const routerSafePaths = resolveRouterSafePreparedRuntimePaths({
+      agentId,
+      agentDir: configuredAgentDir,
+      workspaceDir: configuredWorkspaceDir,
+      source: "auth-refresh",
+      failClosed: false,
+    });
     const input: PreparedModelRuntimeInput = {
       agentId,
-      agentDir: resolveAgentDir(config, agentId),
+      agentDir: routerSafePaths?.agentDir ?? configuredAgentDir,
       config,
       inheritedAuthDir,
-      workspaceDir: preserveWorkspaceDirOnRefresh
-        ? defaultWorkspaceDir
-        : resolveAgentWorkspaceDir(config, agentId),
+      workspaceDir: routerSafePaths?.workspaceDir ?? configuredWorkspaceDir,
       runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
     };
     if (allowGatewaySubagentBinding === true) {

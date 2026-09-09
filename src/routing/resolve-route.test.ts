@@ -1279,6 +1279,66 @@ describe("unknown direct-message route decisions", () => {
 });
 
 describe("wildcard peer bindings (peer.id=*)", () => {
+  test("routes two Teams direct peers on the same account to separate employee agents", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "kevin-k" }, { id: "second-pilot" }, { id: "main", default: true }] },
+      bindings: [
+        {
+          agentId: "kevin-k",
+          match: {
+            channel: "msteams",
+            accountId: "default",
+            peer: { kind: "direct", id: "29:kevin" },
+          },
+        },
+        {
+          agentId: "second-pilot",
+          match: {
+            channel: "msteams",
+            accountId: "default",
+            peer: { kind: "direct", id: "29:second" },
+          },
+        },
+        {
+          agentId: "main",
+          match: { channel: "telegram" },
+        },
+      ],
+    };
+
+    const kevinRoute = resolveAgentRoute({
+      cfg,
+      channel: "msteams",
+      accountId: "default",
+      peer: { kind: "direct", id: "29:kevin" },
+    });
+    const secondRoute = resolveAgentRoute({
+      cfg,
+      channel: "msteams",
+      accountId: "default",
+      peer: { kind: "direct", id: "29:second" },
+    });
+    const unknownRoute = resolveAgentRoute({
+      cfg,
+      channel: "msteams",
+      accountId: "default",
+      peer: { kind: "direct", id: "29:unknown" },
+    });
+
+    expectResolvedRoute(kevinRoute, {
+      agentId: "kevin-k",
+      matchedBy: "binding.peer",
+    });
+    expectResolvedRoute(secondRoute, {
+      agentId: "second-pilot",
+      matchedBy: "binding.peer",
+    });
+    expectResolvedRoute(unknownRoute, {
+      agentId: "main",
+      matchedBy: "default",
+    });
+  });
+
   test("peer.id=* matches any direct peer and routes to the bound agent", () => {
     const cfg: OpenClawConfig = {
       agents: { list: [{ id: "second-ana" }] },

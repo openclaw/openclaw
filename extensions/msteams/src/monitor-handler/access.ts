@@ -19,6 +19,7 @@ import type {
   StoredConversationReference,
   MSTeamsConversationStore,
 } from "../conversation-store.js";
+import { isMSTeamsEmployeeSelfServiceOnboardingEnabled } from "../employee-onboarding.js";
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";
@@ -269,6 +270,31 @@ export async function admitMSTeamsMessage(params: {
       senderName,
       allowNameMatching,
     });
+    if (
+      senderAccess.decision === "pairing" &&
+      isMSTeamsEmployeeSelfServiceOnboardingEnabled(params.cfg)
+    ) {
+      params.log.info("allowing dm for employee self-service onboarding capture", {
+        sender: senderId,
+        label: senderName,
+        dmPolicy,
+        reason: formatMSTeamsSenderReason({
+          reasonCode: senderAccess.reasonCode,
+          dmPolicy,
+          groupPolicy,
+        }),
+        allowlistMatch: formatAllowlistMatchMeta(allowMatch),
+      });
+      return {
+        ...access,
+        allowTextCommands,
+        isControlCommand,
+        commandAuthorized: commandAccess.requested ? commandAccess.authorized : undefined,
+        effectiveDmAllowFrom,
+        effectiveGroupAllowFrom,
+        isChannel: params.isChannel,
+      };
+    }
     if (senderAccess.decision === "pairing") {
       params.conversationStore
         .upsert(params.conversationId, params.conversationRef)

@@ -143,6 +143,19 @@ export type MSTeamsConfig = Omit<
     feedbackReflection?: boolean;
     /** Minimum interval (ms) between reflections per session. Default: 300000 (5 min). */
     feedbackReflectionCooldownMs?: number;
+    /** Route mapped direct-message employees through their dedicated container gateway. */
+    employeeContainerDispatch?: {
+      /** Enable employee-container execution for direct-message routes with non-main agent ids. */
+      enabled?: boolean;
+      /** Gateway URL template; {agentId} is replaced with the routed employee agent id. */
+      gatewayUrlTemplate?: string;
+      /** Path to the employee container config whose gateway auth token should be read. */
+      tokenConfigPathTemplate?: string;
+      /** Agent id inside each employee container. Default: main. */
+      agentId?: string;
+      /** Max time to wait for the employee-container run. Default: 180000. */
+      waitTimeoutMs?: number;
+    };
     /** Delegated auth settings for user-scoped Graph API actions (e.g., reactions). */
     delegatedAuth?: {
       /** Enable delegated auth (user sign-in for Graph actions that need user scope). */

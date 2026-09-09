@@ -101,6 +101,10 @@ describe("msteams monitor handler authz", () => {
       shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
       createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
       resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+      employeeOnboardingStore?: NonNullable<
+        Parameters<typeof createMessageHandlerDeps>[1]
+      >["employeeOnboardingStore"];
+      resolveAgentRoute?: Parameters<typeof createMessageHandlerDeps>[1]["resolveAgentRoute"];
     } = {},
   ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
@@ -111,17 +115,23 @@ describe("msteams monitor handler authz", () => {
       readAllowFromStore,
       upsertPairingRequest,
       recordInboundSession,
-      resolveAgentRoute: vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
-        sessionKey: `msteams:${peer.kind}:${peer.id}`,
-        agentId: "default",
-        accountId: "default",
-      })),
+      resolveAgentRoute:
+        options.resolveAgentRoute ??
+        vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
+          sessionKey: `msteams:${peer.kind}:${peer.id}`,
+          agentId: "default",
+          accountId: "default",
+          mainSessionKey: "agent:main:main",
+          lastRoutePolicy: "session" as const,
+          matchedBy: "default" as const,
+        })),
       hasControlCommand: options.hasControlCommand,
       isControlCommandMessage: options.isControlCommandMessage,
       shouldComputeCommandAuthorized: options.shouldComputeCommandAuthorized,
       shouldHandleTextCommands: options.shouldHandleTextCommands,
       createInboundDebouncer: options.createInboundDebouncer,
       resolveInboundDebounceMs: options.resolveInboundDebounceMs,
+      employeeOnboardingStore: options.employeeOnboardingStore,
     });
   }
 
@@ -451,6 +461,315 @@ describe("msteams monitor handler authz", () => {
       locale: "en-US",
       timezone: "America/New_York",
     });
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("captures unknown Teams DMs as pending employee onboarding when self-service is enabled", async () => {
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const sendActivity = vi.fn(async () => undefined);
+    const upsertRequest = vi.fn(async (request) => ({ request, created: true }));
+    const { conversationStore, deps, recordInboundSession, upsertPairingRequest } = createDeps(
+      {
+        channels: {
+          msteams: {
+            dmPolicy: "pairing",
+            groupPolicy: "disabled",
+            allowFrom: [],
+            configWrites: false,
+            employeeSelfServiceOnboarding: {
+              enabled: true,
+              acknowledgementText:
+                "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+              failureAcknowledgementText: "Your setup request could not be recorded.",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      {
+        employeeOnboardingStore: { upsertRequest },
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-self-service",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "new-user-id",
+          aadObjectId: "new-user-aad",
+          name: "New User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:self-service-personal-chat",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        locale: "en-US",
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity,
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(upsertRequest).toHaveBeenCalledTimes(1);
+    expect(upsertPairingRequest).not.toHaveBeenCalled();
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+    const request = upsertRequest.mock.calls[0]?.[0];
+    expect(request).toMatchObject({
+      channel: "msteams",
+      accountId: "default",
+      peerKind: "direct",
+      senderName: "New User",
+      status: "pending",
+      reason: "missing-direct-peer-assignment",
+      protectedRoute: {
+        peerId: "new-user-aad",
+        conversationId: "a:self-service-personal-chat",
+      },
+    });
+    expect(sendActivity).toHaveBeenCalledWith(
+      "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+    );
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("does not send created acknowledgement for terminal employee onboarding requests", async () => {
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const sendActivity = vi.fn(async () => undefined);
+    const upsertRequest = vi.fn(async (request) => ({
+      request: {
+        ...request,
+        status: "provisioned" as const,
+        transitionedAt: "2026-08-26T19:20:00.000Z",
+        transitionEvidence: {
+          operator: "employee-onboarding-admin" as const,
+          requestId: request.id,
+          peerHash: request.peerHash,
+        },
+      },
+      created: false,
+    }));
+    const { deps, recordInboundSession } = createDeps(
+      {
+        channels: {
+          msteams: {
+            dmPolicy: "pairing",
+            groupPolicy: "disabled",
+            allowFrom: [],
+            configWrites: false,
+            employeeSelfServiceOnboarding: {
+              enabled: true,
+              acknowledgementText:
+                "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+              failureAcknowledgementText: "Your setup request could not be recorded.",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      {
+        employeeOnboardingStore: { upsertRequest },
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-self-service-terminal",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "new-user-id",
+          aadObjectId: "new-user-aad",
+          name: "New User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:self-service-personal-chat",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        locale: "en-US",
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity,
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(upsertRequest).toHaveBeenCalledTimes(1);
+    expect(sendActivity).toHaveBeenCalledWith("Your setup request could not be recorded.");
+    expect(sendActivity).not.toHaveBeenCalledWith(
+      "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+    );
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "msteams employee onboarding request pending",
+      expect.objectContaining({
+        peerHash: expect.stringMatching(/^[a-f0-9]{24}$/u),
+        requestStatus: "provisioned",
+        terminalStatusGuard: true,
+      }),
+    );
+    const onboardingLog = (deps.log.info as unknown as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0] === "msteams employee onboarding request pending",
+    );
+    expect(JSON.stringify(onboardingLog)).not.toContain("new-user-aad");
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("passes matched Teams direct-peer routes through to the employee agent", async () => {
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const sendActivity = vi.fn(async () => undefined);
+    const upsertRequest = vi.fn(async (request) => ({ request, created: true }));
+    const { deps, recordInboundSession } = createDeps(
+      {
+        channels: {
+          msteams: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            employeeSelfServiceOnboarding: {
+              enabled: true,
+              acknowledgementText:
+                "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      {
+        employeeOnboardingStore: { upsertRequest },
+        resolveAgentRoute: vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
+          sessionKey: `agent:r-harris:msteams:${peer.kind}:${peer.id}`,
+          agentId: "r-harris",
+          accountId: "default",
+          mainSessionKey: "agent:main:main",
+          lastRoutePolicy: "session" as const,
+          matchedBy: "binding.peer" as const,
+        })),
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-direct-peer",
+        type: "message",
+        text: "hello r-harris",
+        from: {
+          id: "new-user-id",
+          aadObjectId: "new-user-aad",
+          name: "New User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:self-service-personal-chat",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        locale: "en-US",
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity,
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(upsertRequest).not.toHaveBeenCalled();
+    expect(sendActivity).not.toHaveBeenCalledWith(
+      "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+    );
+    expect(recordInboundSession).toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "msteams employee onboarding decision",
+      expect.objectContaining({
+        decision: "route-existing-assignment",
+        routeMatchedBy: "binding.peer",
+        routeAgentId: "r-harris",
+      }),
+    );
+  });
+
+  it("does not send success acknowledgement when employee onboarding persistence fails", async () => {
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    const sendActivity = vi.fn(async () => undefined);
+    const upsertRequest = vi.fn(async () => {
+      throw new Error("state unavailable");
+    });
+    const { deps, recordInboundSession } = createDeps(
+      {
+        channels: {
+          msteams: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            employeeSelfServiceOnboarding: {
+              enabled: true,
+              acknowledgementText:
+                "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+              failureAcknowledgementText: "Your setup request could not be recorded.",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      {
+        employeeOnboardingStore: { upsertRequest },
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-self-service-fail",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "new-user-id",
+          aadObjectId: "new-user-aad",
+          name: "New User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:self-service-personal-chat",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        locale: "en-US",
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity,
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(upsertRequest).toHaveBeenCalledTimes(1);
+    expect(sendActivity).toHaveBeenCalledWith("Your setup request could not be recorded.");
+    expect(sendActivity).not.toHaveBeenCalledWith(
+      "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+    );
+    expect(deps.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("msteams employee onboarding request persistence failed"),
+    );
     expect(recordInboundSession).not.toHaveBeenCalled();
     expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });

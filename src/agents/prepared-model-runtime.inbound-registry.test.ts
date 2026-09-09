@@ -4,7 +4,7 @@ import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -22,6 +22,10 @@ const mocks = getPreparedModelRuntimeMocks();
 describe("prepared reply dispatch runtime", () => {
   beforeEach(() => {
     resetPreparedModelRuntimeHarness();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("returns undefined while the Gateway lifecycle is inactive", async () => {
@@ -142,6 +146,42 @@ describe("prepared reply dispatch runtime", () => {
     expect(runtimes[0]?.inboundPluginRegistry).toBeDefined();
     expect(published).toBeDefined();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(publicationLoadCount);
+  });
+
+  it("publishes a reply dispatch runtime for router-safe paths backed by host config paths", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/openclaw/.openclaw");
+    vi.stubEnv("HOME", "/home/openclaw");
+    mocks.configuredAgentIds = ["r-harris"];
+    mocks.configuredAgentDirs.set("r-harris", "/srv/openclaw/data/employee-agents/r-harris/agent");
+    mocks.configuredWorkspaces.set(
+      "r-harris",
+      "/srv/openclaw/data/employee-agents/r-harris/workspace",
+    );
+    const config = {
+      agents: {
+        entries: {
+          "r-harris": {
+            model: "openai/gpt-5.5",
+            workspace: "/srv/openclaw/data/employee-agents/r-harris/workspace",
+            agentDir: "/srv/openclaw/data/employee-agents/r-harris/agent",
+          },
+        },
+      },
+    };
+
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      allowGatewaySubagentBinding: true,
+    });
+
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "r-harris" }),
+    ).resolves.toMatchObject({
+      agentId: "r-harris",
+      agentDir: "/home/openclaw/.openclaw/agents/r-harris/agent",
+      workspaceDir: "/home/openclaw/.openclaw/agents/r-harris/workspace",
+    });
   });
 
   it("reuses configured and retained dynamic plugin generations during auth refresh", async () => {

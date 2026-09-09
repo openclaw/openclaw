@@ -25,6 +25,7 @@ import {
   resolveApiKeyForProviderCore,
   resolveEnvApiKey,
   resolveModelAuthMode,
+  requireApiKey,
 } from "./model-auth.js";
 import { hasAuthForModelProvider } from "./model-provider-auth.js";
 
@@ -2327,6 +2328,62 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
         },
       }),
     ).rejects.toThrow(/matched a stored profile but failed to resolve/);
+  });
+});
+
+describe("r-harris direct-session OpenAI auth binding proof", () => {
+  it("selects a synthetic employee-owned OpenAI profile without exposing values", async () => {
+    const resolved = await resolveApiKeyForProviderCore({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-responses",
+      preferredProfile: "openai:r-harris",
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai:r-harris"],
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "openai:r-harris": {
+            type: "api_key",
+            provider: "openai",
+            key: "synthetic-openai-credential",
+          },
+        },
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      profileId: "openai:r-harris",
+      source: "profile:openai:r-harris",
+      mode: "api-key",
+    });
+    expect(Boolean(requireApiKey(resolved, "openai"))).toBe(true);
+  });
+
+  it("fails closed when the selected employee-owned OpenAI profile has no runtime material", async () => {
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelApi: "openai-responses",
+        profileId: "openai:r-harris",
+        lockedProfile: true,
+        store: {
+          version: 1,
+          profiles: {
+            "openai:r-harris": {
+              type: "api_key",
+              provider: "openai",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/No credentials found for profile "openai:r-harris"/);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
@@ -32,6 +32,10 @@ describe("runPreparedReply prepared metadata", () => {
   beforeEach(() => {
     setCurrentPluginMetadataSnapshot(undefined);
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("keeps the admitted Gateway generation active through a different reply workspace", async () => {
@@ -109,5 +113,72 @@ describe("runPreparedReply prepared metadata", () => {
     expect(release).toHaveBeenCalledOnce();
     expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
     expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
+  });
+
+  it("sanitizes prepared reply run owner paths before acquiring a runtime lease", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/openclaw/.openclaw");
+    vi.stubEnv("HOME", "/home/openclaw");
+    const config = {
+      channels: { msteams: {} },
+      agents: {
+        entries: {
+          "r-harris": {
+            model: "openai/gpt-5.5",
+            workspace: "/srv/openclaw/data/employee-agents/r-harris/workspace",
+            agentDir: "/srv/openclaw/data/employee-agents/r-harris/agent",
+          },
+        },
+      },
+    };
+    const pluginGeneration = {
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: {
+        index: { plugins: [] },
+        policyHash: resolveInstalledPluginIndexPolicyHash(config),
+      },
+    } as never;
+    const release = vi.fn();
+    mocks.prepareContext.mockResolvedValue({
+      kind: "run",
+      params: { cfg: config },
+      promptSessionCtx: { OriginatingChannel: "msteams" },
+      workspaceDir: "/srv/openclaw/data/employee-agents/r-harris/workspace",
+    });
+    mocks.acquireRuntime.mockResolvedValue({
+      snapshot: {
+        config,
+        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+        workspaceDir: "/home/openclaw/.openclaw/agents/r-harris/workspace",
+      },
+      release,
+    });
+    mocks.prepareAdmission.mockResolvedValue({ kind: "run" });
+    mocks.execute.mockResolvedValue({ text: "ok" });
+
+    const run = bindPreparedReplyDispatchRuntime(
+      {
+        agentId: "r-harris",
+        agentDir: "/srv/openclaw/data/employee-agents/r-harris/agent",
+        workspaceDir: "/srv/openclaw/data/employee-agents/r-harris/workspace",
+        config,
+        pluginGeneration,
+      } as never,
+      async () => await runPreparedReply({} as never),
+    );
+
+    await expect(run()).resolves.toEqual({ text: "ok" });
+    expect(mocks.acquireRuntime).toHaveBeenCalledWith(
+      {
+        config,
+        agentId: "r-harris",
+        agentDir: "/home/openclaw/.openclaw/agents/r-harris/agent",
+        workspaceDir: "/home/openclaw/.openclaw/agents/r-harris/workspace",
+      },
+      { pluginGeneration },
+    );
+    const [leaseInput] = mocks.acquireRuntime.mock.calls[0] ?? [];
+    expect((leaseInput as { agentDir?: string }).agentDir).not.toContain("/srv/openclaw");
+    expect((leaseInput as { workspaceDir?: string }).workspaceDir).not.toContain("/srv/openclaw");
   });
 });

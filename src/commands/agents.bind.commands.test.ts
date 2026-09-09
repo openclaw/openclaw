@@ -1,4 +1,5 @@
 // Agent bind command tests cover channel bindings, plugin metadata, and command output.
+import { createHash } from "node:crypto";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -113,6 +114,10 @@ vi.mock("../channels/plugins/bundled.js", () => {
       createBindingResolverTestPlugin({ id: "telegram", config: { listAccountIds: () => [] } }),
     ],
     [
+      "msteams",
+      createBindingResolverTestPlugin({ id: "msteams", config: { listAccountIds: () => [] } }),
+    ],
+    [
       "whatsapp",
       createBindingResolverTestPlugin({
         id: "whatsapp",
@@ -185,6 +190,54 @@ describe("agents bind/unbind commands", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       ["Routing bindings:", "- main <- matrix", "- ops <- telegram accountId=work"].join("\n"),
     );
+  });
+
+  it("redacts direct peer ids in text and JSON binding output", async () => {
+    const peerId = "29:teams-user-a";
+    const peerHash = createHash("sha256")
+      .update(`msteams:default:direct:${peerId}`)
+      .digest("hex")
+      .slice(0, 24);
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        bindings: [
+          {
+            agentId: "ops",
+            match: {
+              channel: "msteams",
+              peer: { kind: "direct", id: peerId },
+            },
+          },
+        ],
+      },
+    });
+
+    await agentsBindingsCommand({}, runtime);
+
+    const textOutput = runtime.log.mock.calls.flat().join("\n");
+    expect(textOutput).not.toContain(peerId);
+    expect(textOutput).toContain(`peer=direct:sha256:${peerHash}`);
+
+    const jsonRuntime = createJsonTestRuntime();
+    await agentsBindingsCommand({ json: true }, jsonRuntime);
+
+    const jsonPayload = jsonRuntime.writeJson.mock.calls[0]?.[0];
+    expect(JSON.stringify(jsonPayload)).not.toContain(peerId);
+    expect(jsonPayload).toStrictEqual([
+      {
+        agentId: "ops",
+        match: {
+          channel: "msteams",
+          peer: {
+            kind: "direct",
+            idHash: peerHash,
+            redacted: true,
+          },
+        },
+        description: `msteams peer=direct:sha256:${peerHash}`,
+      },
+    ]);
   });
 
   it("binds routes to default agent when --agent is omitted", async () => {
@@ -272,6 +325,109 @@ describe("agents bind/unbind commands", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("binds a Teams sender id as a direct peer route", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        agents: { list: [{ id: "kevin-k", workspace: "/tmp/kevin-k" }] },
+      },
+    });
+
+    await agentsBindCommand(
+      {
+        agent: "kevin-k",
+        bind: ["msteams"],
+        teamsUserId: "29:teams-user-a",
+        json: true,
+      },
+      runtime,
+    );
+
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = firstWrittenConfig();
+    expect(writtenConfig?.bindings).toStrictEqual([
+      {
+        type: "route",
+        agentId: "kevin-k",
+        match: {
+          channel: "msteams",
+          peer: { kind: "direct", id: "29:teams-user-a" },
+        },
+      },
+    ]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("binds an explicit direct peer route", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        agents: { list: [{ id: "ops", workspace: "/tmp/ops" }] },
+      },
+    });
+
+    await agentsBindCommand(
+      {
+        agent: "ops",
+        bind: ["msteams:default"],
+        peerKind: "direct",
+        peerId: "29:teams-user-b",
+      },
+      runtime,
+    );
+
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    expect(firstWrittenConfig().bindings).toStrictEqual([
+      {
+        type: "route",
+        agentId: "ops",
+        match: {
+          channel: "msteams",
+          accountId: "default",
+          peer: { kind: "direct", id: "29:teams-user-b" },
+        },
+      },
+    ]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("rejects Teams sender aliases for non-Teams bindings", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await agentsBindCommand({ bind: ["telegram"], teamsUserId: "29:teams-user-a" }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--teams-user-id can only be used with --bind msteams[:accountId].",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects peer options with multiple bind values", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await agentsBindCommand(
+      {
+        bind: ["msteams", "telegram"],
+        peerKind: "direct",
+        peerId: "29:teams-user-a",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Peer binding options can only be used with one --bind value.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("unbinds all routes for an agent", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
@@ -328,5 +484,51 @@ describe("agents bind/unbind commands", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith("Bindings are owned by another agent:");
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("unbinds only the matching Teams direct peer route", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        agents: { list: [{ id: "kevin-k", workspace: "/tmp/kevin-k" }] },
+        bindings: [
+          {
+            agentId: "kevin-k",
+            match: {
+              channel: "msteams",
+              peer: { kind: "direct", id: "29:teams-user-a" },
+            },
+          },
+          {
+            agentId: "kevin-k",
+            match: {
+              channel: "msteams",
+              peer: { kind: "direct", id: "29:teams-user-b" },
+            },
+          },
+        ],
+      },
+    });
+
+    await agentsUnbindCommand(
+      {
+        agent: "kevin-k",
+        bind: ["msteams"],
+        teamsUserId: "29:teams-user-a",
+      },
+      runtime,
+    );
+
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    expect(firstWrittenConfig().bindings).toStrictEqual([
+      {
+        agentId: "kevin-k",
+        match: {
+          channel: "msteams",
+          peer: { kind: "direct", id: "29:teams-user-b" },
+        },
+      },
+    ]);
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });

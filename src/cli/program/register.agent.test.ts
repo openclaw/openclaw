@@ -343,12 +343,21 @@ describe("agent command registration", () => {
       "matrix:ops",
       "--bind",
       "telegram",
+      "--peer-kind",
+      "direct",
+      "--peer-id",
+      "29:teams-user-a",
+      "--teams-user-id",
+      "29:teams-user-a",
       "--json",
     ]);
     expect(agentsBindCommandMock).toHaveBeenCalledWith(
       {
         agent: "ops",
         bind: ["matrix:ops", "telegram"],
+        peerKind: "direct",
+        peerId: "29:teams-user-a",
+        teamsUserId: "29:teams-user-a",
         json: true,
       },
       runtime,
@@ -365,12 +374,27 @@ describe("agent command registration", () => {
   });
 
   it("forwards agents unbind options", async () => {
-    await runCli(["agents", "unbind", "--agent", "ops", "--all", "--json"]);
+    await runCli([
+      "agents",
+      "unbind",
+      "--agent",
+      "ops",
+      "--bind",
+      "msteams",
+      "--peer-kind",
+      "direct",
+      "--peer-id",
+      "29:teams-user-a",
+      "--json",
+    ]);
     expect(agentsUnbindCommandMock).toHaveBeenCalledWith(
       {
         agent: "ops",
-        bind: [],
-        all: true,
+        bind: ["msteams"],
+        peerKind: "direct",
+        peerId: "29:teams-user-a",
+        teamsUserId: undefined,
+        all: false,
         json: true,
       },
       runtime,

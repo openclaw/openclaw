@@ -9,7 +9,7 @@ import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { describeBinding } from "./agents.binding-format.js";
+import { describeBinding, redactBindingMatchForOutput } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./config-validation.js";
 
 type AgentBindingsModule = typeof import("./agents.bindings.js");
@@ -22,12 +22,18 @@ type AgentsBindingsListOptions = {
 type AgentsBindOptions = {
   agent?: string;
   bind?: string[];
+  peerKind?: string;
+  peerId?: string;
+  teamsUserId?: string;
   json?: boolean;
 };
 
 type AgentsUnbindOptions = {
   agent?: string;
   bind?: string[];
+  peerKind?: string;
+  peerId?: string;
+  teamsUserId?: string;
   all?: boolean;
   json?: boolean;
 };
@@ -94,6 +100,9 @@ async function resolveParsedBindingsOrExit(params: {
   cfg: NonNullable<Awaited<ReturnType<typeof requireValidConfig>>>;
   agentId: string;
   bindValues: string[] | undefined;
+  peerKind?: string;
+  peerId?: string;
+  teamsUserId?: string;
   emptyMessage: string;
 }): Promise<{
   bindings: AgentRouteBinding[];
@@ -107,7 +116,14 @@ async function resolveParsedBindingsOrExit(params: {
   }
 
   const { parseBindingSpecs } = await loadAgentBindingsModule();
-  const parsed = parseBindingSpecs({ agentId: params.agentId, specs, config: params.cfg });
+  const parsed = parseBindingSpecs({
+    agentId: params.agentId,
+    specs,
+    config: params.cfg,
+    peerKind: params.peerKind,
+    peerId: params.peerId,
+    teamsUserId: params.teamsUserId,
+  });
   if (parsed.errors.length > 0) {
     params.runtime.error(parsed.errors.join("\n"));
     params.runtime.exit(1);
@@ -191,7 +207,7 @@ export async function agentsBindingsCommand(
       runtime,
       filtered.map((binding) => ({
         agentId: normalizeAgentId(binding.agentId),
-        match: binding.match,
+        match: redactBindingMatchForOutput(binding),
         description: describeBinding(binding),
       })),
     );
@@ -232,6 +248,9 @@ export async function agentsBindCommand(
     cfg,
     agentId,
     bindValues: opts.bind,
+    peerKind: opts.peerKind,
+    peerId: opts.peerId,
+    teamsUserId: opts.teamsUserId,
     emptyMessage: "Provide at least one --bind <channel[:accountId]>.",
   });
   if (!parsed) {
@@ -367,6 +386,9 @@ export async function agentsUnbindCommand(
     cfg,
     agentId,
     bindValues: opts.bind,
+    peerKind: opts.peerKind,
+    peerId: opts.peerId,
+    teamsUserId: opts.teamsUserId,
     emptyMessage: "Provide at least one --bind <channel[:accountId]> or use --all.",
   });
   if (!parsed) {

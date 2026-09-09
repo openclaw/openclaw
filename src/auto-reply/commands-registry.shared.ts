@@ -219,14 +219,18 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("commands", "List all slash commands.", "status", "power"),
     defineBuiltinCommand("tools", "List available runtime tools.", "status", "standard", {
       args: [
-        defineCommandArgument("mode", "compact or verbose", { choices: ["compact", "verbose"] }),
+        defineCommandArgument("mode", "compact or verbose", {
+          choices: ["compact", "verbose"],
+        }),
       ],
       argsMenu: "auto",
     }),
     defineBuiltinCommand("skill", "Run a skill by name.", "tools", "standard", {
       args: [
         defineCommandArgument("name", "Skill name", { required: true }),
-        defineCommandArgument("input", "Skill input", { captureRemaining: true }),
+        defineCommandArgument("input", "Skill input", {
+          captureRemaining: true,
+        }),
       ],
     }),
     defineBuiltinCommand(
@@ -268,7 +272,9 @@ export function buildBuiltinChatCommands(
             choices: ["status", "start", "edit", "pause", "resume", "complete", "block", "clear"],
           },
         ),
-        defineCommandArgument("text", "Goal objective or note", { captureRemaining: true }),
+        defineCommandArgument("text", "Goal objective or note", {
+          captureRemaining: true,
+        }),
       ],
     }),
     defineBuiltinCommand(
@@ -285,9 +291,11 @@ export function buildBuiltinChatCommands(
       },
     ),
     defineBuiltinCommand("login", "Pair Codex login.", "management", "standard", {
-      nativeProviders: ["discord", "slack", "telegram"],
+      nativeProviders: ["discord", "msteams", "slack", "telegram"],
       args: [
-        defineCommandArgument("provider", "Provider to pair", { choices: ["codex", "openai"] }),
+        defineCommandArgument("provider", "Provider to pair", {
+          choices: ["codex", "openai"],
+        }),
       ],
     }),
     defineBuiltinCommand(
@@ -368,7 +376,9 @@ export function buildBuiltinChatCommands(
             { value: "help", label: "Help" },
           ],
         }),
-        defineCommandArgument("value", "Provider, limit, or text", { captureRemaining: true }),
+        defineCommandArgument("value", "Provider, limit, or text", {
+          captureRemaining: true,
+        }),
       ],
       argsMenu: {
         arg: "action",
@@ -392,8 +402,12 @@ export function buildBuiltinChatCommands(
       "power",
       {
         args: [
-          defineCommandArgument("action", "idle | max-age", { choices: ["idle", "max-age"] }),
-          defineCommandArgument("value", "Duration (24h, 90m) or off", { captureRemaining: true }),
+          defineCommandArgument("action", "idle | max-age", {
+            choices: ["idle", "max-age"],
+          }),
+          defineCommandArgument("value", "Duration (24h, 90m) or off", {
+            captureRemaining: true,
+          }),
         ],
         argsMenu: "auto",
       },
@@ -439,7 +453,9 @@ export function buildBuiltinChatCommands(
             "help",
           ],
         }),
-        defineCommandArgument("value", "Action arguments", { captureRemaining: true }),
+        defineCommandArgument("value", "Action arguments", {
+          captureRemaining: true,
+        }),
       ],
       argsMenu: "auto",
     }),
@@ -474,7 +490,11 @@ export function buildBuiltinChatCommands(
       "management",
       "standard",
       {
-        args: [defineCommandArgument("message", "Steering message", { captureRemaining: true })],
+        args: [
+          defineCommandArgument("message", "Steering message", {
+            captureRemaining: true,
+          }),
+        ],
       },
     ),
     defineBuiltinCommand("config", "Show or set config values.", "management", "power", {
@@ -483,7 +503,9 @@ export function buildBuiltinChatCommands(
           choices: ["show", "get", "set", "unset"],
         }),
         defineCommandArgument("path", "Config path"),
-        defineCommandArgument("value", "Value for set", { captureRemaining: true }),
+        defineCommandArgument("value", "Value for set", {
+          captureRemaining: true,
+        }),
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.config,
@@ -494,7 +516,9 @@ export function buildBuiltinChatCommands(
           choices: ["show", "get", "set", "unset"],
         }),
         defineCommandArgument("path", "MCP server name"),
-        defineCommandArgument("value", "JSON config for set", { captureRemaining: true }),
+        defineCommandArgument("value", "JSON config for set", {
+          captureRemaining: true,
+        }),
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.mcp,
@@ -522,7 +546,9 @@ export function buildBuiltinChatCommands(
           choices: ["show", "reset", "set", "unset"],
         }),
         defineCommandArgument("path", "Debug path"),
-        defineCommandArgument("value", "Value for set", { captureRemaining: true }),
+        defineCommandArgument("value", "Value for set", {
+          captureRemaining: true,
+        }),
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.debug,
@@ -539,7 +565,9 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
     defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       args: [
-        defineCommandArgument("mode", "mention or always", { choices: ["mention", "always"] }),
+        defineCommandArgument("mode", "mention or always", {
+          choices: ["mention", "always"],
+        }),
       ],
       argsMenu: "auto",
     }),
@@ -581,10 +609,18 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("verbose", "Toggle verbose mode.", "options", "standard", {
-      args: [defineCommandArgument("mode", "on, off, or full", { choices: ["on", "off", "full"] })],
+      args: [
+        defineCommandArgument("mode", "on, off, or full", {
+          choices: ["on", "off", "full"],
+        }),
+      ],
     }),
     defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
-      args: [defineCommandArgument("mode", "on, off, or raw", { choices: ["on", "off", "raw"] })],
+      args: [
+        defineCommandArgument("mode", "on, off, or raw", {
+          choices: ["on", "off", "raw"],
+        }),
+      ],
       argsMenu: "auto",
     }),
     defineBuiltinCommand("fast", "Toggle fast mode.", "options", "standard", {
@@ -596,7 +632,11 @@ export function buildBuiltinChatCommands(
             {
               value: "auto",
               label: formatFastModeAutoLabel({
-                fastAutoOnSeconds: resolveFastModeModelAutoOnSeconds({ cfg, provider, model }),
+                fastAutoOnSeconds: resolveFastModeModelAutoOnSeconds({
+                  cfg,
+                  provider,
+                  model,
+                }),
               }),
             },
             "default",
@@ -608,7 +648,9 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand("reasoning", "Toggle reasoning visibility.", "options", "standard", {
       args: [
-        defineCommandArgument("mode", "on, off, or stream", { choices: ["on", "off", "stream"] }),
+        defineCommandArgument("mode", "on, off, or stream", {
+          choices: ["on", "off", "stream"],
+        }),
       ],
       argsMenu: "auto",
     }),
@@ -655,14 +697,20 @@ export function buildBuiltinChatCommands(
         }),
         defineCommandArgument("debounce", "debounce duration (e.g. 500ms, 2s)"),
         defineCommandArgument("cap", "queue cap", { type: "number" }),
-        defineCommandArgument("drop", "drop policy", { choices: ["old", "new", "summarize"] }),
+        defineCommandArgument("drop", "drop policy", {
+          choices: ["old", "new", "summarize"],
+        }),
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.queue,
     }),
     defineBuiltinCommand("bash", "Run host shell commands (host-only).", "tools", "power", {
       nativeName: false,
-      args: [defineCommandArgument("command", "Shell command", { captureRemaining: true })],
+      args: [
+        defineCommandArgument("command", "Shell command", {
+          captureRemaining: true,
+        }),
+      ],
     }),
   ];
   const commands = definitions.map(defineBuiltinChatCommand);

@@ -8,9 +8,11 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -26,6 +28,10 @@ const mocks = getPreparedModelRuntimeMocks();
 describe("prepared model runtime owner selection", () => {
   beforeEach(() => {
     resetPreparedModelRuntimeHarness();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("serializes live catalog sources for owners sharing one agent directory", async () => {
@@ -128,6 +134,61 @@ describe("prepared model runtime owner selection", () => {
       loadPreparedModelRuntimeSnapshot({ ...request, allowGatewaySubagentBinding: true }),
     ).resolves.toMatchObject({ config });
     await expect(loadPreparedModelRuntimeSnapshot(request)).resolves.toMatchObject({ config });
+  });
+
+  it("resolves chat metadata owners by identity when published paths are router-safe", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/openclaw/.openclaw");
+    vi.stubEnv("HOME", "/home/openclaw");
+    mocks.configuredAgentIds = ["r-harris"];
+    mocks.configuredAgentDirs.set("r-harris", "/srv/openclaw/data/employee-agents/r-harris/agent");
+    mocks.configuredWorkspaces.set(
+      "r-harris",
+      "/srv/openclaw/data/employee-agents/r-harris/workspace",
+    );
+    const config = {
+      agents: {
+        entries: {
+          "r-harris": {
+            model: "openai/gpt-5.5",
+            agentDir: "/srv/openclaw/data/employee-agents/r-harris/agent",
+            workspace: "/srv/openclaw/data/employee-agents/r-harris/workspace",
+          },
+        },
+      },
+    };
+
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      gatewayLifecycle: true,
+    });
+
+    const snapshot = getPublishedPreparedModelCatalogOwnerSnapshot({
+      agentId: "r-harris",
+      config,
+    });
+    expect(snapshot).toMatchObject({
+      agentId: "r-harris",
+      agentDir: "/home/openclaw/.openclaw/agents/r-harris/agent",
+      workspaceDir: "/home/openclaw/.openclaw/agents/r-harris/workspace",
+    });
+
+    const runtime = createGatewayChatMetadataRuntime({
+      getConfig: () => config,
+      getContext: () => ({}) as never,
+      log: { warn: vi.fn() },
+      deps: {
+        buildCommands: async () => ({ commands: [] }),
+        buildProjection: async ({ facts }) => ({
+          modelCatalog: facts.owner.modelCatalog.entries,
+          models: facts.owner.modelCatalog.entries,
+        }),
+      },
+    });
+
+    await expect(runtime.refresh()).resolves.toBeUndefined();
+    expect(snapshot?.agentDir).not.toContain("/srv/openclaw");
+    expect(snapshot?.workspaceDir).not.toContain("/srv/openclaw");
   });
 
   it("does not resolve a binding-demanding reader against a non-binding owner", async () => {

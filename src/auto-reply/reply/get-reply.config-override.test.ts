@@ -272,6 +272,146 @@ describe("getReplyFromConfig configOverride", () => {
     );
   });
 
+  it("sanitizes host-only prepared runtime paths before workspace creation for Teams routed employee dispatch", async () => {
+    const agentScope = await import("../../agents/agent-scope.js");
+    const workspaceRuntime = await import("../../agents/workspace.js");
+    vi.mocked(agentScope.resolveSessionAgentId).mockReturnValueOnce("r-harris");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/openclaw/.openclaw");
+    const config = {
+      channels: {
+        msteams: {},
+      },
+      agents: {
+        list: [
+          {
+            id: "r-harris",
+            model: "openai/gpt-5.5",
+            workspace: "/srv/openclaw/data/employee-agents/r-harris/workspace",
+            agentDir: "/srv/openclaw/data/employee-agents/r-harris/agent",
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const preparedRuntime = createPreparedDispatchRuntime({
+      agentId: "r-harris",
+      workspaceDir: "/srv/openclaw/data/employee-agents/r-harris/workspace",
+      agentDir: "/srv/openclaw/data/employee-agents/r-harris/agent",
+      config,
+    });
+    const ctx = buildGetReplyCtx({
+      Provider: "msteams",
+      Surface: "msteams",
+      SessionKey: "agent:r-harris:msteams:direct:hash",
+      From: "msteams:direct:hash",
+      To: "msteams:bot",
+    });
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "hello",
+        abortKey: "agent:r-harris:msteams:direct:hash",
+        from: "msteams:direct:hash",
+        to: "msteams:bot",
+        senderId: "direct:sha256:4a7ebf15496588ef2baa09b8",
+        commandSource: "message",
+        senderIsOwner: false,
+      }),
+    );
+    vi.mocked(runPreparedReplyMock).mockResolvedValueOnce({ text: "ok" });
+
+    await bindPreparedReplyDispatchRuntime(preparedRuntime, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return await getReplyFromConfig(ctx);
+    })();
+
+    expect(workspaceRuntime.ensureAgentWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dir: "/home/openclaw/.openclaw/agents/r-harris/workspace",
+      }),
+    );
+    expect(workspaceRuntime.ensureAgentWorkspace).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        dir: expect.stringContaining("/srv/openclaw"),
+      }),
+    );
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "r-harris",
+        agentDir: "/home/openclaw/.openclaw/agents/r-harris/agent",
+        workspaceDir: "/home/openclaw/.openclaw/agents/r-harris/workspace",
+        preparedModelCatalog: preparedRuntime.modelCatalog,
+      }),
+    );
+  });
+
+  it("sanitizes replayed replyResolver prepared paths when Teams is only the originating channel", async () => {
+    const agentScope = await import("../../agents/agent-scope.js");
+    const workspaceRuntime = await import("../../agents/workspace.js");
+    vi.mocked(agentScope.resolveSessionAgentId).mockReturnValueOnce("r-harris");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/openclaw/.openclaw");
+    const config = {
+      channels: {
+        msteams: {},
+      },
+      agents: {
+        list: [
+          {
+            id: "r-harris",
+            model: "openai/gpt-5.5",
+            workspace: "/srv/openclaw/data/employee-agents/r-harris/workspace",
+            agentDir: "/srv/openclaw/data/employee-agents/r-harris/agent",
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const preparedRuntime = createPreparedDispatchRuntime({
+      agentId: "r-harris",
+      workspaceDir: "/srv/openclaw/data/employee-agents/r-harris/workspace",
+      agentDir: "/srv/openclaw/data/employee-agents/r-harris/agent",
+      config,
+    });
+    const ctx = buildGetReplyCtx({
+      Provider: undefined,
+      Surface: undefined,
+      OriginatingChannel: "msteams",
+      SessionKey: "agent:r-harris:msteams:direct:hash",
+      From: "msteams:direct:hash",
+      To: "msteams:bot",
+    });
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "hello",
+        abortKey: "agent:r-harris:msteams:direct:hash",
+        from: "msteams:direct:hash",
+        to: "msteams:bot",
+        senderId: "direct:sha256:4a7ebf15496588ef2baa09b8",
+        commandSource: "message",
+        senderIsOwner: false,
+      }),
+    );
+    vi.mocked(runPreparedReplyMock).mockResolvedValueOnce({ text: "ok" });
+
+    await bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(ctx);
+
+    expect(workspaceRuntime.ensureAgentWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dir: "/home/openclaw/.openclaw/agents/r-harris/workspace",
+      }),
+    );
+    expect(workspaceRuntime.ensureAgentWorkspace).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        dir: expect.stringContaining("/srv/openclaw"),
+      }),
+    );
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "r-harris",
+        agentDir: "/home/openclaw/.openclaw/agents/r-harris/agent",
+        workspaceDir: "/home/openclaw/.openclaw/agents/r-harris/workspace",
+        preparedModelCatalog: preparedRuntime.modelCatalog,
+      }),
+    );
+  });
+
   it("rejects a prepared dispatch runtime that crosses the admitted session agent", async () => {
     const preparedRuntime = createPreparedDispatchRuntime({
       agentId: "worker",

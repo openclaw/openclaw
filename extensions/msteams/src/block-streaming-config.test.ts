@@ -57,3 +57,34 @@ describe("MSTeamsConfigSchema block streaming", () => {
     },
   );
 });
+
+describe("MSTeamsConfigSchema employee self-service onboarding", () => {
+  const baseConfig = {
+    enabled: true,
+    dmPolicy: "open" as const,
+    allowFrom: ["*"],
+  };
+
+  it("accepts disabled-by-default employee self-service onboarding config", () => {
+    const result = MSTeamsConfigSchema.safeParse({
+      ...baseConfig,
+      employeeSelfServiceOnboarding: {
+        enabled: true,
+        acknowledgementText:
+          "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+        failureAcknowledgementText: "Your setup request could not be recorded.",
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.employeeSelfServiceOnboarding?.enabled).toBe(true);
+      expect(result.data.employeeSelfServiceOnboarding?.acknowledgementText).toBe(
+        "Your employee agent setup has started. Please be patient as your onboarding begins. This process may take several minutes on first setup.",
+      );
+      expect(result.data.employeeSelfServiceOnboarding?.failureAcknowledgementText).toBe(
+        "Your setup request could not be recorded.",
+      );
+    }
+  });
+});

@@ -264,6 +264,50 @@ type ResponsesTransportExecutorOptions = {
   ) => ResponsesPricingOptions;
 };
 
+export class OpenAIResponsesMissingProviderAuthError extends Error {
+  readonly provider: string;
+  readonly modelId: string;
+  readonly authSourceClass: "missing";
+  readonly credentialPresent = false;
+
+  constructor(model: Pick<Model, "provider" | "id" | "api">) {
+    super(
+      `ProviderAuthUnavailable: missing provider auth before OpenAI Responses egress ` +
+        `(provider=${model.provider}, api=${model.api}, model=${model.id}, ` +
+        `authSourceClass=missing, credentialPresent=false).`,
+    );
+    this.name = "OpenAIResponsesMissingProviderAuthError";
+    this.provider = model.provider;
+    this.modelId = model.id;
+    this.authSourceClass = "missing";
+  }
+}
+
+function shouldFailClosedOnMissingOpenAIResponsesAuth(model: Model): boolean {
+  if (getAiTransportHost().requiresManagedTransport(model)) {
+    return false;
+  }
+  return (
+    model.provider.trim().toLowerCase() === "openai" &&
+    supportsNativeOpenAIResponsesEndpoint({
+      provider: model.provider,
+      api: model.api,
+      baseUrl: model.baseUrl,
+    })
+  );
+}
+
+export function resolveOpenAIResponsesApiKeyForEgress(params: {
+  model: Model;
+  optionApiKey?: string;
+}): string {
+  const apiKey = (params.optionApiKey || getEnvApiKey(params.model.provider) || "").trim();
+  if (apiKey || !shouldFailClosedOnMissingOpenAIResponsesAuth(params.model)) {
+    return apiKey;
+  }
+  throw new OpenAIResponsesMissingProviderAuthError(params.model);
+}
+
 function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
@@ -274,7 +318,10 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       let continuationClaim: ReturnType<typeof claimOpenAIResponsesHttpContinuation>;
       try {
-        const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+        const apiKey = resolveOpenAIResponsesApiKeyForEgress({
+          model,
+          optionApiKey: options?.apiKey,
+        });
         const websocketMode = resolveNativeOpenAIResponsesWebSocketMode(
           model,
           responsesOptions?.transport,

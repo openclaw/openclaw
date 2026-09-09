@@ -25,6 +25,8 @@ import {
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  assertOpenAIGatewayRedirectUri,
+  createOpenAIGatewayAuthorizationFlow,
   createOpenAIAuthorizationFlow,
   resolveOpenAICallbackHost,
   resolveOpenAIRedirectUri,
@@ -175,6 +177,36 @@ describe("OpenAI Codex OAuth flow", () => {
   it("rejects non-loopback callback bind hosts", () => {
     expect(() => resolveOpenAICallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" })).toThrow(
       "callback host must be localhost, 127.0.0.1, or ::1",
+    );
+  });
+
+  it("creates gateway-hosted authorization URLs without changing local loopback flow", async () => {
+    const gatewayFlow = await createOpenAIGatewayAuthorizationFlow({
+      originator: "openclaw-gateway-enrollment",
+      redirectUri: "https://gateway.example/auth/enroll/openai/callback",
+      state: "opaque-state-from-enrollment-record",
+    });
+    const gatewayUrl = new URL(gatewayFlow.url);
+
+    expect(gatewayFlow.state).toBe("opaque-state-from-enrollment-record");
+    expect(gatewayFlow.redirectUri).toBe("https://gateway.example/auth/enroll/openai/callback");
+    expect(gatewayUrl.searchParams.get("redirect_uri")).toBe(
+      "https://gateway.example/auth/enroll/openai/callback",
+    );
+    expect(gatewayUrl.searchParams.get("state")).toBe("opaque-state-from-enrollment-record");
+    expect(gatewayUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(resolveOpenAIRedirectUri("localhost")).toBe("http://localhost:1455/auth/callback");
+  });
+
+  it.each([
+    "http://gateway.example/auth/enroll/openai/callback",
+    "https://localhost/auth/enroll/openai/callback",
+    "https://127.0.0.1/auth/enroll/openai/callback",
+    "https://gateway.example/auth/enroll/openai/callback?state=raw",
+    "https://user:pass@gateway.example/auth/enroll/openai/callback",
+  ])("rejects unsafe gateway redirect URI %s", (redirectUri) => {
+    expect(() => assertOpenAIGatewayRedirectUri(redirectUri)).toThrow(
+      "OpenAI gateway OAuth redirect URI",
     );
   });
 

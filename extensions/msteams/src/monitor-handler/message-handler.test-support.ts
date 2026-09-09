@@ -19,6 +19,7 @@ type MessageHandlerDepsOptions = {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   getTeamDetails?: ReturnType<typeof vi.fn>;
+  employeeOnboardingStore?: NonNullable<MSTeamsMessageHandlerDeps["employeeOnboardingStore"]>;
 };
 
 export function createMessageHandlerDeps(
@@ -78,6 +79,9 @@ export function createMessageHandlerDeps(
     textLimit: 4000,
     mediaMaxBytes: 1024 * 1024,
     conversationStore,
+    ...(options.employeeOnboardingStore
+      ? { employeeOnboardingStore: options.employeeOnboardingStore }
+      : {}),
     pollStore: {
       recordVote: vi.fn(async () => null),
     } as unknown as MSTeamsMessageHandlerDeps["pollStore"],

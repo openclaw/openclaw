@@ -6,6 +6,10 @@ import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import { executePreparedReplyRun } from "./get-reply-run-execute.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import {
+  resolveRoutedDispatchSurface,
+  resolveRouterSafeRoutedDispatchPaths,
+} from "./router-safe-routed-dispatch-paths.js";
 
 async function executePreparedReplyContext(
   context: Exclude<Awaited<ReturnType<typeof prepareReplyRunContext>>, { kind: "reply" }>,
@@ -34,12 +38,19 @@ export async function runPreparedReply(
 
   const { acquireAgentRunPreparedModelRuntime } =
     await import("../../agents/prepared-model-runtime.js");
+  const routerSafeDispatchPaths = resolveRouterSafeRoutedDispatchPaths({
+    cfg: dispatchRuntime.config,
+    agentId: dispatchRuntime.agentId,
+    surface: resolveRoutedDispatchSurface(context.promptSessionCtx ?? {}),
+    preparedWorkspaceDir: context.workspaceDir,
+    preparedAgentDir: dispatchRuntime.agentDir,
+  });
   const lease = await acquireAgentRunPreparedModelRuntime(
     {
       config: dispatchRuntime.config,
       agentId: dispatchRuntime.agentId,
-      agentDir: dispatchRuntime.agentDir,
-      workspaceDir: context.workspaceDir,
+      agentDir: routerSafeDispatchPaths?.agentDir ?? dispatchRuntime.agentDir,
+      workspaceDir: routerSafeDispatchPaths?.workspaceDir ?? context.workspaceDir,
     },
     { pluginGeneration: dispatchRuntime.pluginGeneration },
   );

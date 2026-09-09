@@ -37,6 +37,16 @@ export {
 } from "./model-auth-runtime.js";
 export type { RuntimeProviderAuthLookup } from "./model-auth-runtime.js";
 export {
+  buildEmployeeOpenAIAuthEnrollmentDesign,
+  createTeamsSmokeProofTrace,
+  summarizeProviderAuthRuntimeInjection,
+} from "./provider-auth-remediation-proof.js";
+export type {
+  ProviderAuthEnrollmentDesign,
+  ProviderAuthRuntimeInjectionProof,
+  TeamsSmokeProofTrace,
+} from "./provider-auth-remediation-proof.js";
+export {
   formatMissingAuthError,
   isMissingProviderAuthError,
   isProviderAuthError,

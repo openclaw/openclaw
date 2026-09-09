@@ -14,6 +14,12 @@ import {
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
+import { createMSTeamsEmployeeOnboardingRequestStoreState } from "./employee-onboarding-state.js";
+import type { MSTeamsEmployeeOnboardingRequestStore } from "./employee-onboarding.js";
+import {
+  registerMSTeamsEmployeeOpenAIAuthEnrollmentRoutes,
+  type MSTeamsEmployeeOpenAIAuthEnrollmentRouteDeps,
+} from "./employee-openai-auth-enrollment-routes.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
@@ -67,6 +73,8 @@ type MonitorMSTeamsOpts = {
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
   pollStore?: MSTeamsPollStore;
+  employeeOnboardingStore?: MSTeamsEmployeeOnboardingRequestStore;
+  employeeOpenAIAuthEnrollmentRoutes?: MSTeamsEmployeeOpenAIAuthEnrollmentRouteDeps;
   statusSink?: MSTeamsStatusSink;
 };
 
@@ -209,6 +217,8 @@ export async function monitorMSTeamsProvider(
     }) ?? 8 * 1024 * 1024;
   const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreState();
   const pollStore = opts.pollStore ?? createMSTeamsPollStoreState();
+  const employeeOnboardingStore =
+    opts.employeeOnboardingStore ?? createMSTeamsEmployeeOnboardingRequestStoreState();
 
   log.info(`starting provider (port ${port})`);
 
@@ -218,6 +228,13 @@ export async function monitorMSTeamsProvider(
   // Create Express server first, then wrap it with the SDK's ExpressAdapter
   // so the App registers its route handler on it (including JWT validation).
   const expressApp = express.default();
+
+  if (opts.employeeOpenAIAuthEnrollmentRoutes) {
+    registerMSTeamsEmployeeOpenAIAuthEnrollmentRoutes(
+      expressApp,
+      opts.employeeOpenAIAuthEnrollmentRoutes,
+    );
+  }
 
   // Cheap auth-presence gate: reject requests without a Bearer token before
   // JSON parsing. Bearer-shaped junk still hits the bounded parser below before
@@ -312,6 +329,7 @@ export async function monitorMSTeamsProvider(
     mediaMaxBytes,
     conversationStore,
     pollStore,
+    employeeOnboardingStore,
     log,
   };
   registerMSTeamsHandlers(handler, handlerDeps);

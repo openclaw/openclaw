@@ -128,6 +128,12 @@ export function registerAgentsCommands(program: Command): void {
       collectOption,
       [],
     )
+    .option("--peer-kind <kind>", "Peer kind for a peer-specific route: direct, group, or channel")
+    .option("--peer-id <id>", "Peer id for a peer-specific route")
+    .option(
+      "--teams-user-id <id>",
+      "Teams personal-DM sender id; shorthand for --peer-kind direct --peer-id <id>",
+    )
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
       await runAgentsCommandAction(async (runtime) => {
@@ -136,6 +142,9 @@ export function registerAgentsCommands(program: Command): void {
           {
             agent: opts.agent as string | undefined,
             bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
+            peerKind: opts.peerKind as string | undefined,
+            peerId: opts.peerId as string | undefined,
+            teamsUserId: opts.teamsUserId as string | undefined,
             json: Boolean(opts.json),
           },
           runtime,
@@ -148,6 +157,12 @@ export function registerAgentsCommands(program: Command): void {
     .description("Remove routing bindings for an agent")
     .option("--agent <id>", "Agent id (defaults to current default agent)")
     .option("--bind <channel[:accountId]>", "Binding to remove (repeatable)", collectOption, [])
+    .option("--peer-kind <kind>", "Peer kind for a peer-specific route: direct, group, or channel")
+    .option("--peer-id <id>", "Peer id for a peer-specific route")
+    .option(
+      "--teams-user-id <id>",
+      "Teams personal-DM sender id; shorthand for --peer-kind direct --peer-id <id>",
+    )
     .option("--all", "Remove all bindings for this agent", false)
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
@@ -157,6 +172,9 @@ export function registerAgentsCommands(program: Command): void {
           {
             agent: opts.agent as string | undefined,
             bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
+            peerKind: opts.peerKind as string | undefined,
+            peerId: opts.peerId as string | undefined,
+            teamsUserId: opts.teamsUserId as string | undefined,
             all: Boolean(opts.all),
             json: Boolean(opts.json),
           },

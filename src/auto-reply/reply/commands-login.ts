@@ -22,7 +22,8 @@ const activeCodexLoginFlows = codexChannelLoginRuntime.createFlowRegistry();
 
 type RunLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
 
-const LOGIN_COMPLETE_MESSAGE = "Codex login complete. Try your request again now.";
+const LOGIN_COMPLETE_MESSAGE =
+  "Codex login complete. Your main agent has been associated with your frontier provider. Try interacting with your agent, such as asking what its name is or what it knows.";
 const LOGIN_SESSION_SWITCH_FAILED_MESSAGE =
   "Codex login completed, but this session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.";
 

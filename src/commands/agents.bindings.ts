@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Pure helpers for parsing, adding, removing, and generating agent route bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
@@ -309,11 +310,22 @@ export function parseBindingSpecs(params: {
   agentId: string;
   specs?: string[];
   config: OpenClawConfig;
+  peerKind?: string;
+  peerId?: string;
+  teamsUserId?: string;
 }): { bindings: AgentRouteBinding[]; errors: string[] } {
   const bindings: AgentRouteBinding[] = [];
   const errors: string[] = [];
   const specs = params.specs ?? [];
   const agentId = normalizeAgentId(params.agentId);
+  const hasPeerOptions =
+    params.peerKind !== undefined ||
+    params.peerId !== undefined ||
+    params.teamsUserId !== undefined;
+  if (hasPeerOptions && specs.filter((spec) => spec?.trim()).length > 1) {
+    errors.push("Peer binding options can only be used with one --bind value.");
+    return { bindings, errors };
+  }
   for (const raw of specs) {
     const trimmed = raw?.trim();
     if (!trimmed) {
@@ -354,7 +366,51 @@ export function parseBindingSpecs(params: {
     if (accountId) {
       match.accountId = accountId;
     }
+    const peer = resolvePeerBindingMatch({
+      channel,
+      peerKind: params.peerKind,
+      peerId: params.peerId,
+      teamsUserId: params.teamsUserId,
+    });
+    if (peer.error) {
+      errors.push(peer.error);
+      continue;
+    }
+    if (peer.match) {
+      match.peer = peer.match;
+    }
     bindings.push({ type: "route", agentId, match });
   }
   return { bindings, errors };
+}
+
+function resolvePeerBindingMatch(params: {
+  channel: ChannelId;
+  peerKind?: string;
+  peerId?: string;
+  teamsUserId?: string;
+}): { match?: { kind: ChatType; id: string }; error?: string } {
+  const peerKindRaw = params.peerKind?.trim();
+  const peerIdRaw = params.peerId?.trim();
+  const teamsUserId = params.teamsUserId?.trim();
+  if (!peerKindRaw && !peerIdRaw && !teamsUserId) {
+    return {};
+  }
+  if (teamsUserId && params.channel !== "msteams") {
+    return { error: "--teams-user-id can only be used with --bind msteams[:accountId]." };
+  }
+  if (peerIdRaw && teamsUserId && peerIdRaw !== teamsUserId) {
+    return { error: "--peer-id and --teams-user-id must match when both are provided." };
+  }
+  const id = teamsUserId || peerIdRaw;
+  if (!id) {
+    return { error: "Provide --peer-id when using --peer-kind." };
+  }
+  const kind = normalizeChatType(peerKindRaw ?? (teamsUserId ? "direct" : undefined));
+  if (!kind) {
+    return {
+      error: 'Invalid --peer-kind. Use one of "direct", "group", or "channel".',
+    };
+  }
+  return { match: { kind, id } };
 }

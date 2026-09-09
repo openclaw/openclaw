@@ -55,6 +55,10 @@ import {
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import {
+  resolveRoutedDispatchSurface,
+  resolveRouterSafeRoutedDispatchPaths,
+} from "./router-safe-routed-dispatch-paths.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 
 export async function gatherDispatchRequest(
@@ -341,8 +345,19 @@ export async function gatherDispatchRequest(
         });
       })
     : undefined;
+  const routerSafePreparedDispatchPaths = preparedReplyDispatchRuntime
+    ? resolveRouterSafeRoutedDispatchPaths({
+        cfg,
+        agentId: preparedReplyDispatchRuntime.agentId,
+        surface: resolveRoutedDispatchSurface(ctx),
+        preparedWorkspaceDir: preparedReplyDispatchRuntime.workspaceDir,
+        preparedAgentDir: preparedReplyDispatchRuntime.agentDir,
+      })
+    : undefined;
   const workspaceDir =
-    preparedReplyDispatchRuntime?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
+    routerSafePreparedDispatchPaths?.workspaceDir ??
+    preparedReplyDispatchRuntime?.workspaceDir ??
+    resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const replyOperationCoordinator = createDispatchReplyOperationCoordinator({
     ctx,
     dispatcher,

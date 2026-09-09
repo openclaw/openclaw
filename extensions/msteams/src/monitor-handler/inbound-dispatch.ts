@@ -1,4 +1,5 @@
 // Msteams plugin module dispatches prepared inbound turns and owns reply lifecycle handling.
+import { readFile } from "node:fs/promises";
 import {
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
@@ -7,9 +8,12 @@ import {
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { codexChannelLoginRuntime } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { RuntimeEnv } from "../../runtime-api.js";
+import { setAuthProfileOrder } from "../../../../src/agents/auth-profiles.js";
+import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { resolveMSTeamsAllowlistMatch, resolveMSTeamsReplyPolicy } from "../policy.js";
@@ -20,11 +24,353 @@ import type { admitMSTeamsMessage } from "./access.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
 import type { prepareMSTeamsInboundContent } from "./inbound-content.js";
 import type { assembleMSTeamsInboundFacts } from "./inbound-facts.js";
+import { createMSTeamsSmokeProofTrace } from "./smoke-proof-trace.js";
 import type { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thread-context.js";
 
 type MSTeamsInboundDispatchResult =
   | { kind: "completed"; finalResponses: number }
   | { kind: "failed" };
+
+type MSTeamsEmployeeContainerDispatchConfig = {
+  enabled?: boolean;
+  gatewayUrlTemplate?: string;
+  tokenConfigPathTemplate?: string;
+  agentId?: string;
+  waitTimeoutMs?: number;
+};
+
+type GatewayAgentAccepted = {
+  runId?: string;
+};
+
+type GatewayAgentWaitResult = {
+  status?: string;
+  error?: string;
+  terminalReply?: {
+    text?: string;
+  };
+};
+
+type TeamsLoginDeviceCode = {
+  title: string;
+  code: string;
+  expiresInMinutes?: number;
+  message?: string;
+};
+
+function formatTeamsLoginDeviceCode(params: TeamsLoginDeviceCode): string {
+  return [
+    params.title,
+    "",
+    params.message?.trim(),
+    "Open https://auth.openai.com/codex/device and enter this code:",
+    params.code,
+    params.expiresInMinutes
+      ? `Code expires in ${params.expiresInMinutes} minutes. Never share it.`
+      : "Never share this code.",
+  ]
+    .filter((line): line is string => Boolean(line && line.trim()))
+    .join("\n");
+}
+
+type EmployeeContainerOpenClawConfig = OpenClawConfig & {
+  agents?: {
+    defaults?: { workspace?: string; model?: string };
+    entries?: Record<
+      string,
+      { workspace?: string; agentDir?: string; model?: string; name?: string }
+    >;
+  };
+};
+
+function readEmployeeContainerDispatchConfig(
+  cfg: OpenClawConfig,
+): MSTeamsEmployeeContainerDispatchConfig | undefined {
+  return cfg.channels?.msteams?.employeeContainerDispatch as
+    | MSTeamsEmployeeContainerDispatchConfig
+    | undefined;
+}
+
+function fillEmployeeTemplate(template: string, agentId: string): string {
+  return template.replaceAll("{agentId}", agentId);
+}
+
+function resolveEmployeeGatewayUrl(
+  dispatchCfg: MSTeamsEmployeeContainerDispatchConfig,
+  agentId: string,
+): string {
+  return fillEmployeeTemplate(
+    dispatchCfg.gatewayUrlTemplate ??
+      "ws://employee-agent-{agentId}_employee-agent-{agentId}:18789",
+    agentId,
+  );
+}
+
+function resolveEmployeeConfigPath(
+  dispatchCfg: MSTeamsEmployeeContainerDispatchConfig,
+  agentId: string,
+): string {
+  return fillEmployeeTemplate(
+    dispatchCfg.tokenConfigPathTemplate ??
+      "/srv/openclaw/data/employee-agents/{agentId}/config/openclaw.json",
+    agentId,
+  );
+}
+
+async function readEmployeeContainerConfig(
+  dispatchCfg: MSTeamsEmployeeContainerDispatchConfig,
+  agentId: string,
+): Promise<EmployeeContainerOpenClawConfig> {
+  return JSON.parse(
+    await readFile(resolveEmployeeConfigPath(dispatchCfg, agentId), "utf8"),
+  ) as EmployeeContainerOpenClawConfig;
+}
+
+async function readEmployeeGatewayToken(
+  dispatchCfg: MSTeamsEmployeeContainerDispatchConfig,
+  agentId: string,
+): Promise<string> {
+  const parsed = await readEmployeeContainerConfig(dispatchCfg, agentId);
+  const token = parsed.gateway?.auth?.token;
+  if (typeof token !== "string" || !token.trim()) {
+    throw new Error(`employee container gateway token missing for ${agentId}`);
+  }
+  return token;
+}
+
+function resolveEmployeeHostRoot(
+  dispatchCfg: MSTeamsEmployeeContainerDispatchConfig,
+  agentId: string,
+): string {
+  const configPath = resolveEmployeeConfigPath(dispatchCfg, agentId);
+  const suffix = "/config/openclaw.json";
+  if (!configPath.endsWith(suffix)) {
+    throw new Error(`employee container config path must end with ${suffix} to start Codex login`);
+  }
+  return configPath.slice(0, -suffix.length);
+}
+
+function prepareEmployeeCodexLoginConfig(params: {
+  cfg: EmployeeContainerOpenClawConfig;
+  hostRoot: string;
+  employeeAgentId: string;
+}): EmployeeContainerOpenClawConfig {
+  const cloned = JSON.parse(JSON.stringify(params.cfg)) as EmployeeContainerOpenClawConfig;
+  cloned.agents = cloned.agents ?? {};
+  cloned.agents.defaults = {
+    ...cloned.agents.defaults,
+    workspace: `${params.hostRoot}/workspace`,
+  };
+  cloned.agents.entries = cloned.agents.entries ?? {};
+  const entry = cloned.agents.entries[params.employeeAgentId] ?? {};
+  cloned.agents.entries[params.employeeAgentId] = {
+    ...entry,
+    workspace: `${params.hostRoot}/workspace`,
+    agentDir: `${params.hostRoot}/state/.openclaw/agents/${params.employeeAgentId}/agent`,
+  };
+  return cloned;
+}
+
+function resolveEmployeeContainerSessionKey(routeAgentId: string, sessionKey: string): string {
+  const prefix = `agent:${routeAgentId}:`;
+  return sessionKey.startsWith(prefix)
+    ? `agent:main:${sessionKey.slice(prefix.length)}`
+    : sessionKey;
+}
+
+function shouldDispatchToEmployeeContainer(params: {
+  cfg: OpenClawConfig;
+  isDirectMessage: boolean;
+  routeAgentId: string;
+}): MSTeamsEmployeeContainerDispatchConfig | undefined {
+  const dispatchCfg = readEmployeeContainerDispatchConfig(params.cfg);
+  if (dispatchCfg?.enabled !== true) {
+    return undefined;
+  }
+  if (!params.isDirectMessage) {
+    return undefined;
+  }
+  if (!params.routeAgentId || params.routeAgentId === "main") {
+    return undefined;
+  }
+  return dispatchCfg;
+}
+
+function isMissingOpenAIAuthError(err: unknown): boolean {
+  const message = formatUnknownError(err);
+  return /401 Unauthorized/u.test(message) && /Missing bearer/u.test(message);
+}
+
+function isEmployeeContainerAuthEnrollmentTriggerError(err: unknown): boolean {
+  return isMissingOpenAIAuthError(err);
+}
+
+export async function startEmployeeCodexDeviceLogin(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  routeAgentId: string;
+  delivery?: ReturnType<typeof createMSTeamsReplyDispatcher>["delivery"];
+  settleDelivery?: ReturnType<
+    typeof createMSTeamsReplyDispatcher
+  >["dispatcherOptions"]["onSettled"];
+  sendText?: (text: string) => Promise<void>;
+  log: MSTeamsMessageHandlerDeps["log"];
+}): Promise<MSTeamsInboundDispatchResult | undefined> {
+  const dispatchCfg = readEmployeeContainerDispatchConfig(params.cfg);
+  if (dispatchCfg?.enabled !== true) {
+    return undefined;
+  }
+  const employeeAgentId = dispatchCfg.agentId?.trim() || "main";
+  const hostRoot = resolveEmployeeHostRoot(dispatchCfg, params.routeAgentId);
+  const employeeCfg = prepareEmployeeCodexLoginConfig({
+    cfg: await readEmployeeContainerConfig(dispatchCfg, params.routeAgentId),
+    hostRoot,
+    employeeAgentId,
+  });
+  let finalResponses = 0;
+  const deliverText = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return;
+    }
+    if (params.sendText) {
+      await params.sendText(trimmed);
+    } else if (params.delivery) {
+      const delivered = await params.delivery.deliver({ text: trimmed }, {
+        kind: "final",
+        stage: "final",
+      } as never);
+      // Device-code prompts are produced before the login flow completes, so
+      // flush the queued Teams reply now instead of waiting for the final login
+      // completion path to settle the dispatcher.
+      await params.settleDelivery?.();
+      await delivered?.finalization;
+    } else {
+      throw new Error("employee Codex login delivery target missing");
+    }
+    finalResponses += 1;
+  };
+
+  const loginResult = await codexChannelLoginRuntime.runDeviceLoginFlow({
+    provider: "openai",
+    agentId: employeeAgentId,
+    config: employeeCfg,
+    runtime: params.runtime,
+    sendMessage: deliverText,
+    sendDeviceCode: async (deviceCode) => {
+      await deliverText(formatTeamsLoginDeviceCode(deviceCode));
+    },
+    unsupportedPromptMessage: "Teams onboarding supports only fixed Codex device-code auth.",
+  });
+  const hasOpenAIProfile = loginResult.profiles.some((profile) => profile.provider === "openai");
+  const openAIProfileId = loginResult.profiles.find(
+    (profile) => profile.provider === "openai",
+  )?.profileId;
+  if (!hasOpenAIProfile || !openAIProfileId) {
+    throw new Error("employee Codex login completed without an OpenAI auth profile");
+  }
+  const employeeAgentDir = employeeCfg.agents?.entries?.[employeeAgentId]?.agentDir;
+  if (!employeeAgentDir) {
+    throw new Error(
+      `employee Codex login cannot persist OpenAI auth order without an agentDir for ${employeeAgentId}`,
+    );
+  }
+  const updatedAuthStore = await setAuthProfileOrder({
+    agentDir: employeeAgentDir,
+    provider: "openai",
+    order: [openAIProfileId],
+  });
+  const persistedOrder = updatedAuthStore?.order?.openai;
+  if (!persistedOrder?.includes(openAIProfileId)) {
+    throw new Error("employee Codex login completed but OpenAI auth order was not persisted");
+  }
+  await deliverText(
+    "Codex login complete. Your main agent has been associated with your frontier provider. Try interacting with your agent, such as asking what its name is or what it knows.",
+  );
+  await params.settleDelivery?.();
+  params.log.info("msteams employee container Codex device-code login complete", {
+    routeAgentId: params.routeAgentId,
+    finalResponses,
+  });
+  return { kind: "completed", finalResponses };
+}
+
+async function dispatchViaEmployeeContainer(params: {
+  cfg: OpenClawConfig;
+  routeAgentId: string;
+  routeSessionKey: string;
+  message: string;
+  messageId?: string;
+  delivery: ReturnType<typeof createMSTeamsReplyDispatcher>["delivery"];
+  settleDelivery?: ReturnType<
+    typeof createMSTeamsReplyDispatcher
+  >["dispatcherOptions"]["onSettled"];
+  log: MSTeamsMessageHandlerDeps["log"];
+}): Promise<MSTeamsInboundDispatchResult | undefined> {
+  const dispatchCfg = readEmployeeContainerDispatchConfig(params.cfg);
+  if (dispatchCfg?.enabled !== true) {
+    return undefined;
+  }
+  const employeeAgentId = dispatchCfg.agentId?.trim() || "main";
+  const sessionKey = resolveEmployeeContainerSessionKey(
+    params.routeAgentId,
+    params.routeSessionKey,
+  );
+  const url = resolveEmployeeGatewayUrl(dispatchCfg, params.routeAgentId);
+  const token = await readEmployeeGatewayToken(dispatchCfg, params.routeAgentId);
+  const waitTimeoutMs = Math.max(1, Math.floor(dispatchCfg.waitTimeoutMs ?? 180_000));
+  const idempotencyKey = `msteams-employee-container:${params.routeAgentId}:${
+    params.messageId ?? sessionKey
+  }`;
+  params.log.info("dispatching msteams turn to employee container", {
+    routeAgentId: params.routeAgentId,
+    employeeAgentId,
+    sessionKey,
+  });
+  const accepted = (await callGatewayFromCli(
+    "agent",
+    { url, token, timeout: String(waitTimeoutMs) },
+    {
+      agentId: employeeAgentId,
+      sessionKey,
+      message: params.message,
+      idempotencyKey,
+      deliver: false,
+      timeout: Math.ceil(waitTimeoutMs / 1000),
+      sourceReplyDeliveryMode: "automatic",
+    },
+    { scopes: ["operator.write"] },
+  )) as GatewayAgentAccepted;
+  if (!accepted.runId) {
+    throw new Error("employee container agent run did not return a runId");
+  }
+  const waitResult = (await callGatewayFromCli(
+    "agent.wait",
+    { url, token, timeout: String(waitTimeoutMs + 10_000) },
+    { runId: accepted.runId, timeoutMs: waitTimeoutMs },
+    { scopes: ["operator.write"] },
+  )) as GatewayAgentWaitResult;
+  if (waitResult.status !== "ok") {
+    const errorDetail = waitResult.error?.trim();
+    throw new Error(
+      `employee container agent run ended with status ${waitResult.status ?? "unknown"}${
+        errorDetail ? `: ${errorDetail}` : ""
+      }`,
+    );
+  }
+  const text = waitResult.terminalReply?.text?.trim();
+  if (!text) {
+    return { kind: "completed", finalResponses: 0 };
+  }
+  const payload: ReplyPayload = { text };
+  const result = await params.delivery.deliver(payload, {
+    kind: "final",
+    stage: "final",
+  } as never);
+  await params.settleDelivery?.();
+  await result?.finalization;
+  return { kind: "completed", finalResponses: 1 };
+}
 
 export async function dispatchMSTeamsInboundTurn(params: {
   cfg: MSTeamsMessageHandlerDeps["cfg"];
@@ -100,7 +446,9 @@ export async function dispatchMSTeamsInboundTurn(params: {
   const isRoomish = !isDirectMessage;
   const historyKey = isRoomish ? conversationId : undefined;
   if (isRoomish && historyKey) {
-    const channelHistory = createChannelHistoryWindow({ historyMap: conversationHistories });
+    const channelHistory = createChannelHistoryWindow({
+      historyMap: conversationHistories,
+    });
     combinedBody = channelHistory.buildPendingContext({
       historyKey,
       limit: historyLimit,
@@ -118,7 +466,9 @@ export async function dispatchMSTeamsInboundTurn(params: {
 
   const inboundHistory =
     isRoomish && historyKey && historyLimit > 0
-      ? createChannelHistoryWindow({ historyMap: conversationHistories }).buildInboundHistory({
+      ? createChannelHistoryWindow({
+          historyMap: conversationHistories,
+        }).buildInboundHistory({
           historyKey,
           limit: historyLimit,
         })
@@ -231,6 +581,16 @@ export async function dispatchMSTeamsInboundTurn(params: {
 
   const preview = sliceUtf16Safe(rawBody.replace(/\s+/g, " "), 0, 160);
   logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
+  log.info(
+    "msteams inbound proof trace",
+    createMSTeamsSmokeProofTrace({
+      accountId: route.accountId,
+      conversationId,
+      messageId: activity.id,
+      route,
+      employeeIntakeSessionVisible: Boolean(ctxPayload.SessionKey && route.agentId),
+    }),
+  );
 
   const { dispatcherOptions, delivery, replyOptions } = createMSTeamsReplyDispatcher({
     cfg,
@@ -268,6 +628,60 @@ export async function dispatchMSTeamsInboundTurn(params: {
           },
         }
       : cfg;
+  const employeeContainerDispatch = shouldDispatchToEmployeeContainer({
+    cfg,
+    isDirectMessage,
+    routeAgentId: route.agentId,
+  });
+  if (employeeContainerDispatch) {
+    try {
+      const result = await dispatchViaEmployeeContainer({
+        cfg: turnConfig,
+        routeAgentId: route.agentId,
+        routeSessionKey: route.sessionKey,
+        message: bodyForAgent,
+        messageId: activity.id,
+        delivery,
+        settleDelivery: dispatcherOptions.onSettled,
+        log,
+      });
+      if (result) {
+        log.info("msteams employee container dispatch complete", {
+          routeAgentId: route.agentId,
+          finalResponses: result.kind === "completed" ? result.finalResponses : 0,
+        });
+        return result;
+      }
+    } catch (err) {
+      if (isEmployeeContainerAuthEnrollmentTriggerError(err)) {
+        log.info("msteams employee container needs auth enrollment; starting device-code login", {
+          routeAgentId: route.agentId,
+          trigger: formatUnknownError(err),
+        });
+        const result = await startEmployeeCodexDeviceLogin({
+          cfg: turnConfig,
+          runtime,
+          routeAgentId: route.agentId,
+          delivery,
+          settleDelivery: dispatcherOptions.onSettled,
+          log,
+        });
+        if (result) {
+          log.info("msteams employee container device-code login dispatched", {
+            routeAgentId: route.agentId,
+            finalResponses: result.kind === "completed" ? result.finalResponses : 0,
+          });
+          return result;
+        }
+      }
+      log.error("msteams employee container dispatch failed", {
+        routeAgentId: route.agentId,
+        error: formatUnknownError(err),
+      });
+      runtime.error(`msteams employee container dispatch failed: ${formatUnknownError(err)}`);
+      throw err;
+    }
+  }
   log.info("dispatching to agent", { sessionKey: route.sessionKey });
   try {
     const turnResult = await core.channel.inbound.run({
