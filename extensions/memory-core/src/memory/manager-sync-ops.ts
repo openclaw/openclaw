@@ -634,6 +634,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
+      // Cache-only rebuilds bypass insertion-time eviction; prune the canonical
+      // cache only after successful publication so failed rebuilds retain their work.
+      await this.pruneEmbeddingCacheIfNeeded();
     } catch (err) {
       this.restoreReindexRetryState(originalRetryState);
       this.markFailedFullReindexRetry({

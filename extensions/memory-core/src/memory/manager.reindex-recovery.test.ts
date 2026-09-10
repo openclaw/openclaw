@@ -450,6 +450,21 @@ describe("memory manager reindex recovery", () => {
     });
   });
 
+  it("bounds the canonical cache after a successful all-cache-hit rebuild", async () => {
+    const { memoryManager, harness, newest } = await createOversizedPublishedCache();
+    embeddingCalls = [];
+
+    await memoryManager.sync({ reason: "cli", force: true });
+
+    expect(embeddingCalls).toEqual([]);
+    expect(harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all()).toEqual(
+      newest,
+    );
+    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+      { text: "published alpha" },
+    ]);
+  });
+
   it("leaves even an oversized published cache untouched when a full rebuild fails", async () => {
     const { memoryManager, harness, before } = await createOversizedPublishedCache();
     harness.writeMeta = () => {
