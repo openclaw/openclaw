@@ -287,7 +287,7 @@ try {
                 await new Promise<void>((resolve) => {
                   setTimeout(resolve, 50);
                 });
-                await expectDefined(node).request("node.invoke.result", {
+                await expectDefined(node, "connected proof node").request("node.invoke.result", {
                   id: payload.id,
                   nodeId: payload.nodeId,
                   ok: true,

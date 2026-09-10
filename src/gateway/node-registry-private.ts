@@ -20,9 +20,9 @@ import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
+import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
-import type { NodeInvokeResult, NodeRegistry } from "./node-registry.js";
 import {
   normalizeSystemRunInvokeParams,
   resolvePendingSystemRunEvent,
@@ -55,8 +55,6 @@ type PairingLeaseResolution =
   | { status: "current"; session: PairingBoundNodeSession }
   | { status: "stale"; presenceInvalidated: boolean }
   | { status: "unavailable" };
-
-type NodeInvokeParams = Parameters<NodeRegistry["invoke"]>[0];
 
 type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
