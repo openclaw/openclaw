@@ -43,7 +43,9 @@ describe("runEmbeddedAttempt abort races", () => {
         sessionKey: "agent:main:telegram:direct:approval-clock-step",
         tempPaths,
         sessionPrompt: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 40));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 40);
+          });
           wallClockOffsetMs = 60_000;
           emitAgentEvent({
             runId: "run-context-engine-forwarding",
@@ -57,7 +59,9 @@ describe("runEmbeddedAttempt abort races", () => {
             stream: "lifecycle",
             data: { phase: "approval-resolved", approvalId: "clock-step" },
           });
-          await new Promise((resolve) => setTimeout(resolve, 80));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 80);
+          });
         },
         attemptOverrides: {
           timeoutMs: 250,
