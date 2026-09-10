@@ -105,4 +105,31 @@ describe("tool descriptions", () => {
       });
     },
   );
+
+  it("adds file-write guidance only when dedicated file-writing tools survive filtering", () => {
+    const fileWriteGuidance =
+      "File writes: prefer dedicated file-writing tools (write/edit/apply_patch) over shell heredocs or bash -c for multi-line content.";
+
+    const execOnly = finalizeAgentTools({
+      tools: [createExecTool({ ...execDefaults })],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    expect(execOnly[0]?.description).not.toContain(fileWriteGuidance);
+
+    const writeStub = {
+      name: "write",
+      label: "write",
+      description: "Write/overwrite file; creates parent directories.",
+      parameters: {},
+      execute: async () => "",
+    };
+    const withWrite = finalizeAgentTools({
+      tools: [createExecTool({ ...execDefaults }), writeStub],
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    const execDescription = withWrite.find((tool) => tool.name === "exec")?.description;
+    expect(execDescription).toContain(fileWriteGuidance);
+  });
 });
