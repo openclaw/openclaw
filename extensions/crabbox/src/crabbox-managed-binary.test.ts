@@ -70,7 +70,7 @@ async function fixture(version = "0.54.0") {
 }
 
 describe("managed Crabbox", () => {
-  it("probes the executable in the caller's supplied environment", async () => {
+  it("probes the executable in the caller's supplied environment and working directory", async () => {
     const root = tempDirs.make("crabbox-probe-env-");
     const binary = path.join(root, "crabbox");
     const env = { PATH: root, OPENCLAW_STATE_DIR: path.join(root, "state") };
@@ -83,13 +83,13 @@ describe("managed Crabbox", () => {
       termination: "exit",
     });
 
-    await expect(ensureManagedCrabboxBinary({ binary, env })).resolves.toEqual({
+    await expect(ensureManagedCrabboxBinary({ binary, env, cwd: root })).resolves.toEqual({
       binary,
       version: "0.56.0",
     });
     expect(command).toHaveBeenCalledExactlyOnceWith(
       [binary, "--version"],
-      expect.objectContaining({ baseEnv: env }),
+      expect.objectContaining({ baseEnv: env, cwd: root }),
     );
   });
 

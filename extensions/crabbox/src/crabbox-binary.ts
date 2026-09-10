@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 type CrabboxBinaryOptions = {
+  cwd?: string;
   explicit?: string;
   isExecutable?: (candidate: string) => boolean;
   openclawRoot?: string;
@@ -36,10 +37,15 @@ export function findCrabboxBinary(params: CrabboxBinaryOptions): string | undefi
   const isExecutable =
     params.isExecutable ?? ((candidate) => isExecutableFile(candidate, platform));
   if (params.explicit) {
-    return isExecutable(params.explicit) ? params.explicit : undefined;
+    const candidate = params.cwd ? path.resolve(params.cwd, params.explicit) : params.explicit;
+    return isExecutable(candidate) ? params.explicit : undefined;
   }
   if (params.openclawRoot) {
-    const siblingBase = path.resolve(params.openclawRoot, "../crabbox/bin/crabbox");
+    const siblingBase = path.resolve(
+      params.cwd ?? ".",
+      params.openclawRoot,
+      "../crabbox/bin/crabbox",
+    );
     for (const candidate of binaryCandidates(siblingBase, platform)) {
       if (isExecutable(candidate)) {
         return candidate;
@@ -53,7 +59,7 @@ export function findCrabboxBinary(params: CrabboxBinaryOptions): string | undefi
       continue;
     }
     for (const name of executableNames) {
-      const candidate = path.resolve(directory, name);
+      const candidate = path.resolve(params.cwd ?? ".", directory, name);
       if (isExecutable(candidate)) {
         return candidate;
       }

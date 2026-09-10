@@ -106,6 +106,7 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(result.status).toBe("pass");
     expect(ensureManagedCrabboxBinary).toHaveBeenCalledWith({
       binary: "/tmp/outdated-crabbox",
+      cwd: repoRoot,
       env: runtimeEnv,
     });
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([

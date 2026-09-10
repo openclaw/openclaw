@@ -79,11 +79,16 @@ export async function resolveCrabboxBin(params: {
   repoRoot: string;
 }) {
   const candidate = resolveCrabboxBinary({
+    cwd: params.repoRoot,
     explicit: trimToValue(params.explicit) ?? trimToValue(params.env[params.envName]),
     openclawRoot: params.repoRoot,
     pathEnv: params.env.PATH,
   });
-  const { binary } = await ensureManagedCrabboxBinary({ binary: candidate, env: params.env });
+  const { binary } = await ensureManagedCrabboxBinary({
+    binary: candidate,
+    cwd: params.repoRoot,
+    env: params.env,
+  });
   return binary;
 }
 

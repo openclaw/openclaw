@@ -879,7 +879,10 @@ describe("scripts/crabbox-wrapper", () => {
     });
 
     expect(result.status, result.stderr).toBe(0);
-    const binary = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox");
+    const binary = path.join(
+      makeFakeCrabbox(defaultProviderHelp),
+      process.platform === "win32" ? "crabbox.cmd" : "crabbox",
+    );
     expect(JSON.parse(result.stdout)).toEqual({ binary, version: "0.56.0" });
     expect(readFileSync(githubPath, "utf8")).toBe(`${path.dirname(binary)}\n`);
     expect(readInvocations(invocationLog)).toEqual([["--version"]]);

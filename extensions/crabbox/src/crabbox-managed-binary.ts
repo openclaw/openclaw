@@ -336,6 +336,7 @@ const acquisitions = new Map<string, Acquisition>();
 export async function ensureManagedCrabboxBinary(
   params: {
     binary?: string;
+    cwd?: string;
     runCommand?: CrabboxCommandRunner;
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
@@ -344,10 +345,11 @@ export async function ensureManagedCrabboxBinary(
   const { signal } = params;
   const runCommand: CrabboxCommandRunner =
     params.runCommand ??
-    ((argv, options) => runCommandWithTimeout(argv, { ...options, baseEnv: params.env }));
+    ((argv, options) =>
+      runCommandWithTimeout(argv, { ...options, baseEnv: params.env, cwd: params.cwd }));
   const candidate = params.binary ?? "crabbox";
   const binary = resolveManagedCrabboxBinaryPath(params.env);
-  if (path.resolve(candidate) === binary) {
+  if (path.resolve(params.cwd ?? ".", candidate) === binary) {
     await inspectInstallationDirectory(path.dirname(binary));
   }
   const preferred = await probeCrabboxVersion(candidate, runCommand, signal);
