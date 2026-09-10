@@ -8,6 +8,8 @@ title: "Plugins CLI"
 sidebarTitle: "Plugins"
 ---
 
+# `openclaw plugins`
+
 Manage Gateway plugins, hook packs, and compatible bundles.
 
 <CardGroup cols={2}>

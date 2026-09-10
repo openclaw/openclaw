@@ -15,17 +15,6 @@ Reasons to prefer it over a one-off provider wrapper:
 - Runs the normal local path without the gateway for most subcommands.
 - For end-to-end provider checks, it exercises the shipped CLI, config loading, default-agent resolution, bundled plugin activation, and the shared capability runtime before the provider request goes out.
 
-## Turn infer into a skill
-
-Copy and paste this to an agent:
-
-```text
-Read https://docs.openclaw.ai/cli/infer, then create a skill that routes my common workflows to `openclaw infer`.
-Focus on model runs, image generation, video generation, audio transcription, TTS, web search, and embeddings.
-```
-
-A good infer-based skill maps common user intents to the right subcommand, includes a few canonical examples per workflow, prefers `openclaw infer ...` over lower-level alternatives, and does not re-document the entire infer surface in the skill body.
-
 ## Command tree
 
 ```text
@@ -332,6 +321,17 @@ openclaw infer audio transcribe --file ./memo.m4a --model whisper-1 --json
 # Good
 openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --json
 ```
+
+## Turn infer into a skill
+
+Copy and paste this to an agent:
+
+```text
+Read https://docs.openclaw.ai/cli/infer, then create a skill that routes my common workflows to `openclaw infer`.
+Focus on model runs, image generation, video generation, audio transcription, TTS, web search, and embeddings.
+```
+
+A good infer-based skill maps common user intents to the right subcommand, includes a few canonical examples per workflow, prefers `openclaw infer ...` over lower-level alternatives, and does not re-document the entire infer surface in the skill body.
 
 ## Related
 

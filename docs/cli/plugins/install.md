@@ -88,80 +88,7 @@ that are bound to the current OpenClaw release cohort; an existing exact npm
 pin becomes the exact replacement version on the same registry.
 </Note>
 
-<AccordionGroup>
-  <Accordion title="Config includes and invalid-config repair">
-    If your `plugins` section, or the `plugins.entries.<id>` entry being changed, is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to the deepest included file that owns the change and leave `openclaw.json` untouched. Root includes (every section of a config whose root object authors `$include`), include arrays, includes with sibling overrides, changes spanning several include files, and an include whose own file still authors a nested `$include` fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
-
-    If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Gateway startup can apply [safe legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale), but plugin config that remains invalid still fails closed; hot reload also rejects invalid plugin config. `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
-
-    When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
-
-  </Accordion>
-  <Accordion title="--force confirmation and reinstall vs update">
-    `--force` confirms a non-ClawHub source without prompting. It does not bypass `security.installPolicy` or remaining install safety checks. When the plugin or hook pack is already installed, it also permits replacing the existing install. Use it after reviewing an arbitrary npm, local, archive, git, or marketplace source, or when intentionally reinstalling the same id. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
-
-    Managed npm installs prepare the package and its dependencies in a private staging directory. Integrity and platform-package checks, install policy, and artifact consent finish before the installed directory is replaced. Rejection or cancellation before publication leaves the previous project unchanged. Upgrades retain generation paths that running plugins may still need for later imports.
-
-    If installation ownership ends during a backup copy, cleanup stops and preserves the complete backup and remaining original files. Failed restoration reports the recovery path. Keep those files until you have checked the current install; an older transaction cannot restore over a newer install or use a substituted backup.
-
-    For recognized npm project corruption or incomplete install metadata, OpenClaw quarantines the affected `node_modules`, lockfile, and shrinkwrap files outside the staging directory and attempts one rebuild. The reported quarantine path remains available after failure; failed recovery leaves the previous project unchanged.
-
-    Reinstalling preserves an authored `plugins.entries.<id>.enabled: false`. `--force` does not approve capabilities: when no valid prior acceptance can be reused, review and accept them before the install commits. Use `openclaw plugins enable <id>` to activate the plugin afterward. See [Capability consent](/plugins/manage-plugins#capability-consent).
-
-    If you run `plugins install` for a plugin id that is already installed, OpenClaw stops and points you at `plugins update <id-or-npm-spec>` for a normal upgrade, or at `plugins install <package> --force` when you genuinely want to overwrite the current install from a different source. Arbitrary sources still show the interactive provenance warning; noninteractive installs must pass `--force` after review. Trusted ClawHub and OpenClaw-catalog sources do not need it. With `--link`, `--force` confirms the source but does not change the linked-path install mode.
-
-  </Accordion>
-  <Accordion title="--pin scope">
-    `--pin` applies to npm installs only and records the resolved exact `<name>@<version>`. It is not supported with `git:` installs (pin the ref in the spec instead, e.g. `git:github.com/acme/plugin@v1.2.3`) or with `--marketplace` (marketplace installs persist marketplace source metadata instead of an npm spec).
-  </Accordion>
-  <Accordion title="--acknowledge-install-policy-warning">
-    When `security.installPolicy` returns `warn` in an interactive terminal, OpenClaw prints the reason and findings, then uses the same acknowledgement copy as a suspicious ClawHub release: `type: '<plugin>' to install anyway`. If the fully rendered review exceeds 4,000 characters, OpenClaw fails closed before prompting; reduce or coalesce the policy output first. A matching answer re-evaluates the staged source before continuing. A declined or non-interactive direct CLI install stops before commit; after review, `--acknowledge-install-policy-warning` explicitly approves every warning for that command invocation. Automatic and managed install surfaces cannot use that flag themselves; rerun the equivalent direct CLI command when one exists, or change `security.installPolicy` to return `allow` for the reviewed request before retrying the managed flow. Every approved warning is re-evaluated before continuing. Neither acknowledgement nor `--force` overrides `block` or a policy failure.
-
-    If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). This flag does not ask ClawHub to rescan the plugin or make a blocked release public. The deprecated `--dangerously-force-unsafe-install` flag remains a no-op.
-
-  </Accordion>
-  <Accordion title="ClawHub Security Audit">
-    Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check.
-  </Accordion>
-  <Accordion title="Hook packs and npm specs">
-    `plugins install` is also the install surface for hook packs that expose `openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook visibility and per-hook enablement, not package installation.
-
-    Npm specs are **registry-only** (package name plus optional **exact version** or **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency installs run in one managed npm project per plugin with `--ignore-scripts` for safety, even when your shell has global npm install settings. Managed plugin npm projects inherit the npm-compatible parts of OpenClaw's dependency overrides. pnpm parent-child selectors are skipped; npm aliases remain unless the installed npm version rejects them.
-
-    Use `npm:<package>` to make npm resolution explicit. Bare package specs also install directly from npm during the launch cutover unless they match an official plugin id.
-
-    Raw `@openclaw/*` specs that match bundled plugins resolve to the image-owned bundled copy before npm fallback. For example, `openclaw plugins install @openclaw/discord@2026.5.20 --pin` uses the bundled Discord plugin from the current OpenClaw build instead of creating a managed npm override. To force the external npm package, use `openclaw plugins install npm:@openclaw/discord@2026.5.20 --pin`.
-
-    Bare specs and `@latest` stay on the stable track. OpenClaw date-stamped correction versions such as `2026.5.3-1` count as stable for this check. If npm resolves either form to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag (`@beta`/`@rc`) or an exact prerelease version (`@1.2.3-beta.4`).
-
-    For npm installs without an exact version (`npm:<package>` or `npm:<package>@latest`), OpenClaw checks the resolved package metadata before install. If the latest stable package requires a newer OpenClaw plugin API or minimum host version, OpenClaw inspects older stable versions and installs the newest compatible release instead. Exact versions and explicit non-`latest` dist-tags stay strict: an incompatible selection fails and asks you to upgrade OpenClaw or choose a compatible version.
-
-    If a bare install spec matches an official plugin id (for example `diffs`), OpenClaw installs the catalog entry directly. To install an npm package with the same name, use an explicit scoped spec (for example `@scope/diffs`).
-
-  </Accordion>
-  <Accordion title="Git repositories">
-    Use `git:<repo>` to install directly from a git repository. Supported forms: `git:github.com/owner/repo`, `git:owner/repo`, full `https://`, `ssh://`, `git://`, `file://`, and `git@host:owner/repo.git` clone URLs. Add `@<ref>` or `#<ref>` to check out a branch, tag, or commit before install.
-
-    Git installs clone into a temporary directory, check out the requested ref when present, then use the normal plugin directory installer, so manifest validation, operator install policy, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
-
-    Reinstalling the same Git source and ref without `--force` refuses an existing managed checkout, even if the repository now declares a different plugin id. Use `openclaw plugins update <id>` for a tracked upgrade, or `openclaw plugins install git:<repo>@<ref> --force` to intentionally reinstall the same plugin id. `--force` does not migrate an existing install record to a different plugin id.
-
-    After installing from git, use `openclaw plugins inspect <id> --runtime --json` to verify runtime registrations such as gateway methods and CLI commands. If the plugin registered a CLI root with `api.registerCli`, run that command directly through the OpenClaw root CLI, for example `openclaw demo-plugin ping`.
-
-  </Accordion>
-  <Accordion title="Archives">
-    Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`. Native OpenClaw plugin archives must contain a valid `openclaw.plugin.json` at the extracted plugin root; archives that only contain `package.json` are rejected before OpenClaw writes install records.
-
-    Use `npm-pack:<path.tgz>` when the file is an npm-pack tarball and you want
-    the same per-plugin managed npm project path used by registry installs,
-    including `package-lock.json` verification, hoisted dependency scanning,
-    and npm install records. Plain archive paths still install as local
-    archives under the plugin extensions root.
-
-    Claude marketplace installs are also supported.
-
-  </Accordion>
-</AccordionGroup>
+### Sources and locators
 
 ClawHub installs use an explicit `clawhub:<package>` locator:
 
@@ -186,6 +113,80 @@ openclaw plugins install npm:@scope/plugin-name@1.0.1
 
 OpenClaw checks the advertised plugin API / minimum gateway compatibility before install. When the selected ClawHub version publishes a ClawPack artifact, OpenClaw downloads the versioned npm-pack `.tgz`, verifies the ClawHub digest header and the artifact digest, then installs it through the normal archive path. Older ClawHub versions without ClawPack metadata still install through the legacy package archive verification path. Recorded installs keep their ClawHub source metadata, artifact kind, npm integrity, npm shasum, tarball name, and ClawPack digest facts for later updates.
 Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `clawhub:pkg@1.2.3` and `clawhub:pkg@beta` remain pinned to that selector.
+
+### Config includes and invalid-config repair
+
+If your `plugins` section, or the `plugins.entries.<id>` entry being changed, is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to the deepest included file that owns the change and leave `openclaw.json` untouched. Root includes (every section of a config whose root object authors `$include`), include arrays, includes with sibling overrides, changes spanning several include files, and an include whose own file still authors a nested `$include` fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
+
+If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. Gateway startup can apply [safe legacy-key migrations](/gateway/doctor#detailed-behavior-and-rationale), but plugin config that remains invalid still fails closed; hot reload also rejects invalid plugin config. `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception for plugin installation is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+
+When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
+
+### --force confirmation and reinstall vs update
+
+`--force` confirms a non-ClawHub source without prompting. It does not bypass `security.installPolicy` or remaining install safety checks. When the plugin or hook pack is already installed, it also permits replacing the existing install. Use it after reviewing an arbitrary npm, local, archive, git, or marketplace source, or when intentionally reinstalling the same id. For routine upgrades of an already tracked npm plugin, prefer `openclaw plugins update <id-or-npm-spec>`.
+
+Managed npm installs prepare the package and its dependencies in a private staging directory. Integrity and platform-package checks, install policy, and artifact consent finish before the installed directory is replaced. Rejection or cancellation before publication leaves the previous project unchanged. Upgrades retain generation paths that running plugins may still need for later imports.
+
+If installation ownership ends during a backup copy, cleanup stops and preserves the complete backup and remaining original files. Failed restoration reports the recovery path. Keep those files until you have checked the current install; an older transaction cannot restore over a newer install or use a substituted backup.
+
+For recognized npm project corruption or incomplete install metadata, OpenClaw quarantines the affected `node_modules`, lockfile, and shrinkwrap files outside the staging directory and attempts one rebuild. The reported quarantine path remains available after failure; failed recovery leaves the previous project unchanged.
+
+Reinstalling preserves an authored `plugins.entries.<id>.enabled: false`. `--force` does not approve capabilities: when no valid prior acceptance can be reused, review and accept them before the install commits. Use `openclaw plugins enable <id>` to activate the plugin afterward. See [Capability consent](/plugins/manage-plugins#capability-consent).
+
+If you run `plugins install` for a plugin id that is already installed, OpenClaw stops and points you at `plugins update <id-or-npm-spec>` for a normal upgrade, or at `plugins install <package> --force` when you genuinely want to overwrite the current install from a different source. Arbitrary sources still show the interactive provenance warning; noninteractive installs must pass `--force` after review. Trusted ClawHub and OpenClaw-catalog sources do not need it. With `--link`, `--force` confirms the source but does not change the linked-path install mode.
+
+### --pin scope
+
+`--pin` applies to npm installs only and records the resolved exact `<name>@<version>`. It is not supported with `git:` installs (pin the ref in the spec instead, e.g. `git:github.com/acme/plugin@v1.2.3`) or with `--marketplace` (marketplace installs persist marketplace source metadata instead of an npm spec).
+
+### --acknowledge-install-policy-warning
+
+When `security.installPolicy` returns `warn` in an interactive terminal, OpenClaw prints the reason and findings, then uses the same acknowledgement copy as a suspicious ClawHub release: `type: '<plugin>' to install anyway`. If the fully rendered review exceeds 4,000 characters, OpenClaw fails closed before prompting; reduce or coalesce the policy output first. A matching answer re-evaluates the staged source before continuing. A declined or non-interactive direct CLI install stops before commit; after review, `--acknowledge-install-policy-warning` explicitly approves every warning for that command invocation. Automatic and managed install surfaces cannot use that flag themselves; rerun the equivalent direct CLI command when one exists, or change `security.installPolicy` to return `allow` for the reviewed request before retrying the managed flow. Every approved warning is re-evaluated before continuing. Neither acknowledgement nor `--force` overrides `block` or a policy failure.
+
+If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). This flag does not ask ClawHub to rescan the plugin or make a blocked release public. The deprecated `--dangerously-force-unsafe-install` flag remains a no-op.
+
+### ClawHub security audit
+
+Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust check.
+
+### Hook packs and npm specs
+
+`plugins install` is also the install surface for hook packs that expose `openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook visibility and per-hook enablement, not package installation.
+
+Npm specs are **registry-only** (package name plus optional **exact version** or **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency installs run in one managed npm project per plugin with `--ignore-scripts` for safety, even when your shell has global npm install settings. Managed plugin npm projects inherit the npm-compatible parts of OpenClaw's dependency overrides. pnpm parent-child selectors are skipped; npm aliases remain unless the installed npm version rejects them.
+
+Use `npm:<package>` to make npm resolution explicit. Bare package specs also install directly from npm during the launch cutover unless they match an official plugin id.
+
+Raw `@openclaw/*` specs that match bundled plugins resolve to the image-owned bundled copy before npm fallback. For example, `openclaw plugins install @openclaw/discord@2026.5.20 --pin` uses the bundled Discord plugin from the current OpenClaw build instead of creating a managed npm override. To force the external npm package, use `openclaw plugins install npm:@openclaw/discord@2026.5.20 --pin`.
+
+Bare specs and `@latest` stay on the stable track. OpenClaw date-stamped correction versions such as `2026.5.3-1` count as stable for this check. If npm resolves either form to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag (`@beta`/`@rc`) or an exact prerelease version (`@1.2.3-beta.4`).
+
+For npm installs without an exact version (`npm:<package>` or `npm:<package>@latest`), OpenClaw checks the resolved package metadata before install. If the latest stable package requires a newer OpenClaw plugin API or minimum host version, OpenClaw inspects older stable versions and installs the newest compatible release instead. Exact versions and explicit non-`latest` dist-tags stay strict: an incompatible selection fails and asks you to upgrade OpenClaw or choose a compatible version.
+
+If a bare install spec matches an official plugin id (for example `diffs`), OpenClaw installs the catalog entry directly. To install an npm package with the same name, use an explicit scoped spec (for example `@scope/diffs`).
+
+### Git repositories
+
+Use `git:<repo>` to install directly from a git repository. Supported forms: `git:github.com/owner/repo`, `git:owner/repo`, full `https://`, `ssh://`, `git://`, `file://`, and `git@host:owner/repo.git` clone URLs. Add `@<ref>` or `#<ref>` to check out a branch, tag, or commit before install.
+
+Git installs clone into a temporary directory, check out the requested ref when present, then use the normal plugin directory installer, so manifest validation, operator install policy, package-manager install work, and install records behave like npm installs. Recorded git installs include the source URL/ref plus the resolved commit so `openclaw plugins update` can re-resolve the source later.
+
+Reinstalling the same Git source and ref without `--force` refuses an existing managed checkout, even if the repository now declares a different plugin id. Use `openclaw plugins update <id>` for a tracked upgrade, or `openclaw plugins install git:<repo>@<ref> --force` to intentionally reinstall the same plugin id. `--force` does not migrate an existing install record to a different plugin id.
+
+After installing from git, use `openclaw plugins inspect <id> --runtime --json` to verify runtime registrations such as gateway methods and CLI commands. If the plugin registered a CLI root with `api.registerCli`, run that command directly through the OpenClaw root CLI, for example `openclaw demo-plugin ping`.
+
+### Archives
+
+Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`. Native OpenClaw plugin archives must contain a valid `openclaw.plugin.json` at the extracted plugin root; archives that only contain `package.json` are rejected before OpenClaw writes install records.
+
+Use `npm-pack:<path.tgz>` when the file is an npm-pack tarball and you want
+the same per-plugin managed npm project path used by registry installs,
+including `package-lock.json` verification, hoisted dependency scanning,
+and npm install records. Plain archive paths still install as local
+archives under the plugin extensions root.
+
+Claude marketplace installs are also supported.
 
 ### Marketplace shorthand
 
@@ -218,6 +219,8 @@ openclaw plugins install <plugin-name> --marketplace ./my-marketplace
     For remote marketplaces loaded from GitHub or git, plugin entries must stay inside the cloned marketplace repo. OpenClaw accepts relative path sources from that repo and rejects HTTP(S), absolute-path, git, GitHub, and other non-path plugin sources from remote manifests.
   </Tab>
 </Tabs>
+
+### Local paths and bundle formats
 
 For local paths and archives, OpenClaw auto-detects:
 

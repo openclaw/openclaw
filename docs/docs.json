@@ -2056,13 +2056,13 @@
                         "pages": [
                           "tools/browser/setup",
                           "tools/browser/profiles",
+                          "tools/browser/existing-session",
                           "tools/browser/configuration",
                           "tools/browser/remote",
                           "tools/browser/security",
-                          "tools/browser/existing-session",
                           "tools/browser/isolation",
-                          "tools/browser/troubleshooting",
-                          "tools/browser/agent-tools"
+                          "tools/browser/agent-tools",
+                          "tools/browser/troubleshooting"
                         ]
                       },
                       "tools/browser-control",
@@ -2675,8 +2675,7 @@
                       "nodes/media-playback",
                       "nodes/images",
                       "nodes/audio",
-                      "nodes/camera",
-                      "tools/tts"
+                      "nodes/camera"
                     ]
                   },
                   {
@@ -2740,7 +2739,6 @@
                   {
                     "group": "Running the service",
                     "pages": [
-                      "cli/openclaw",
                       "cli/daemon",
                       "cli/fleet",
                       "cli/gateway",
@@ -2765,6 +2763,7 @@
                       "cli/backup",
                       "cli/migrate",
                       "cli/onboard",
+                      "cli/openclaw",
                       "cli/reset",
                       "cli/setup",
                       "cli/uninstall",
@@ -2811,7 +2810,8 @@
                       "cli/models",
                       "cli/promos",
                       "cli/sessions",
-                      "cli/tasks"
+                      "cli/tasks",
+                      "cli/wiki"
                     ]
                   },
                   {
@@ -2916,8 +2916,7 @@
                           "cli/mcp/apps"
                         ]
                       },
-                      "cli/proxy",
-                      "cli/wiki"
+                      "cli/proxy"
                     ]
                   }
                 ]

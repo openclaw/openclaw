@@ -88,6 +88,8 @@ publisher-qualified recommendation ID and its JSON output reports
 proof of a local install. Otherwise keep that ID pending with `--retry` and do
 not overwrite the existing skill.
 
+## Flags
+
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
 - `--agent-name <name>`: names the first agent when no roster exists. Interactive
@@ -407,7 +409,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```
 
-## Additional non-interactive flags
+### Additional non-interactive flags
 
 Token-based model auth (used with `--auth-choice token`):
 

@@ -216,6 +216,8 @@ polling cadence. Explicit foreground updates, bare foreground updates with
 stored `update.channel: "extended-stable"`, on-demand status, and their managed
 Gateway handoff remain supported.
 
+#### Candidate validation and service definitions
+
 With a local managed service and restart enabled, candidate validation precedes
 the stop as described above. The updater reports `Gateway: restarted and verified.`
 only after the restarted service passes verification. Plugin-owned readiness
@@ -237,9 +239,13 @@ Run `openclaw gateway status --deep` and ask the deployment owner to restart it
 through its native manager or repair stale metadata; do not retry without the
 preservation option unless definition repair is intended.
 
+#### Shell installers
+
 Shell installers do not establish the same service ownership proof. If their
 service refresh is denied, they report code installation success, leave the
 service untouched, and print guidance to inspect ownership and restart manually.
+
+#### Linux without a service manager
 
 On Linux without a service manager, updates proceed when native inspection proves
 the service is absent and the selected Gateway has no active lock or listener.
@@ -257,12 +263,16 @@ The published 2026.8.2 CLI also refuses updates on service-less Linux installs.
 Use `openclaw update --no-restart` for that upgrade after confirming that no Gateway
 is running; the new CLI cannot fix the old CLI's pre-update inspection.
 
+#### Node runtime for package-manager updates
+
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current
 CLI Node can and the service is proven to belong to the package being updated,
 a restart-enabled update uses the current Node for finalization and rewrites
 the service metadata to that runtime. `--no-restart` cannot repair service
 metadata, so the same runtime mismatch stops before package mutation.
+
+#### macOS LaunchAgent verification
 
 On macOS, the post-update check also verifies the LaunchAgent is
 loaded/running for the active profile and the configured loopback port is
@@ -275,6 +285,8 @@ a failed native activation or health check does not trigger a later plist rewrit
 the Gateway still does not become healthy, the command exits non-zero and
 prints the restart log path plus restart, reinstall, and package rollback
 instructions.
+
+#### When restart is skipped or fails
 
 If restart cannot run, the command prints `Gateway: restart skipped (...)` or
 `Gateway: restart failed: ...` with guidance to inspect the service and restart manually.
@@ -361,7 +373,7 @@ the sentinel.
   </Step>
 </Steps>
 
-### Plugin sync details
+## Plugin sync details
 
 On stable updates, a configured OpenClaw-owned official plugin with no install
 record is repaired from the selected core release cohort. This also applies to
@@ -416,6 +428,8 @@ version. For default/`latest` intent, OpenClaw does not query plugin
 `@extended-stable` or fall back to npm `latest`; it derives the package version
 from the installed core. Explicit version pins, explicit non-`latest` tags,
 third-party packages, custom registries, and other sources keep their existing intent.
+
+## Package-manager installs
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
