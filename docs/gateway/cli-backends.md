@@ -411,6 +411,10 @@ A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
 exceeds its deadline, OpenClaw refuses replacement, including from a later run.
 Check the cleanup error and the backend's remaining processes before retrying.
 Command output and process exit alone do not confirm that descendants stopped.
+A plugin transport that finds no current live session joins that retained cleanup
+through the capability's `settleRetired()` before it registers a replacement, so a
+turn that arrives while the previous one is still shutting down waits instead of
+failing with "Previous CLI live session cleanup has not settled."
 
 For `claude-cli`, the installed Claude Code process uses its current native
 login. OpenClaw uses a non-secret route marker and never reads, persists,

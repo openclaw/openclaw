@@ -548,6 +548,62 @@ describe("generic plugin-owned live session registry", () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
+  it("settleRetired joins the retired owner's cleanup so a successor can register", async () => {
+    const held = createDeferred();
+    const cleanup = vi.fn(async () => {
+      await held.promise;
+    });
+    const original = await createOwner({ cleanup });
+    original.register();
+    // A steered turn closes its process; the child exits before its artifacts are cleaned.
+    original.capability.remove(original.session);
+    original.exited.resolve();
+    const successor = await createOwner({ sessionId: original.sessionId });
+    expect(() => successor.register()).toThrow("cleanup has not settled");
+    const settled = vi.fn();
+    const settling = successor.capability.settleRetired().then(settled);
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+    expect(settled).not.toHaveBeenCalled();
+    held.resolve();
+    await settling;
+    expect(settled).toHaveBeenCalledOnce();
+    expect(() => successor.register()).not.toThrow();
+    expect(successor.capability.current()).toBe(successor.session);
+  });
+
+  it("settleRetired resolves immediately without a retiring predecessor", async () => {
+    const owner = await createOwner();
+    await expect(owner.capability.settleRetired()).resolves.toBeUndefined();
+    owner.register();
+    await expect(owner.capability.settleRetired()).resolves.toBeUndefined();
+    expect(owner.capability.current()).toBe(owner.session);
+  });
+
+  it("settleRetired refuses replacement when the retired cleanup failed", async () => {
+    const failure = new Error("artifact cleanup failed");
+    const cleanup = vi.fn(async () => {
+      throw failure;
+    });
+    const original = await createOwner({ cleanup });
+    original.register();
+    original.capability.remove(original.session);
+    original.exited.resolve();
+    const successor = await createOwner({ sessionId: original.sessionId });
+    await expect(successor.capability.settleRetired()).rejects.toBe(failure);
+    expect(hasModelFallbackStop(failure)).toBe(true);
+    expect(() => successor.register()).toThrow("cleanup has not settled");
+  });
+
+  it("settleRetired stops once the caller is no longer active", async () => {
+    const original = await createOwner({ cleanup: vi.fn(async () => {}), deferExit: true });
+    original.register();
+    original.capability.remove(original.session);
+    const successor = await createOwner({ sessionId: original.sessionId });
+    successor.revokeCaller();
+    await expect(successor.capability.settleRetired()).rejects.toThrow("no longer active");
+    original.exited.resolve();
+  });
+
   it.each([false, true])(
     "retains natural cleanup until replacement is safe (fails=%s)",
     async (fails) => {

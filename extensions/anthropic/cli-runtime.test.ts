@@ -81,6 +81,7 @@ function createLiveSession(): CliBackendLiveSessionCapability {
         current = undefined;
       }
     },
+    settleRetired: async () => {},
   };
 }
 
@@ -166,6 +167,64 @@ describe("Claude native stdio boundary", () => {
       appendSystemPrompt: "changed authoritative instructions",
     });
     expect(() => process.kill(Number(first.pid), 0)).toThrow();
+  });
+
+  it("waits for the retired predecessor's cleanup before registering a replacement", async () => {
+    const liveSession = createLiveSession();
+    const registered = vi.fn((handle: CliBackendLiveSessionHandle) => {
+      handles.add(handle);
+      registeredHandle = handle;
+    });
+    let registeredHandle: CliBackendLiveSessionHandle | undefined;
+    liveSession.register = registered;
+    liveSession.current = () => registeredHandle;
+    liveSession.remove = (handle) => {
+      if (registeredHandle === handle) {
+        registeredHandle = undefined;
+      }
+    };
+    const context = await createContext("normal", { liveSession });
+    const first = resultDetail(await collect(context));
+    expect(registered).toHaveBeenCalledOnce();
+
+    // A drifted fingerprint retires the first process; the host keeps the owner key
+    // retired until that child's artifacts are cleaned, so the replacement must wait.
+    const retired = createDeferred();
+    const settleRetired = vi.fn(() => retired.promise);
+    liveSession.settleRetired = settleRetired;
+    liveSession.fingerprint = "changed-authoritative-prompt";
+    const replacement = collect({
+      ...context,
+      useResume: true,
+      systemPrompt: "changed authoritative instructions",
+    });
+    await vi.waitFor(() => expect(settleRetired).toHaveBeenCalledOnce());
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(registered).toHaveBeenCalledOnce();
+    expect(() => process.kill(Number(first.pid), 0)).toThrow();
+
+    retired.resolve();
+    const second = resultDetail(await replacement);
+    expect(registered).toHaveBeenCalledTimes(2);
+    expect(second.pid).not.toBe(first.pid);
+    expect(second.turn).toBe(1);
+  });
+
+  it("refuses replacement when the retired predecessor's cleanup failed", async () => {
+    const liveSession = createLiveSession();
+    const context = await createContext("normal", { liveSession });
+    resultDetail(await collect(context));
+    const failure = new Error("artifact cleanup failed");
+    liveSession.settleRetired = vi.fn(async () => {
+      throw failure;
+    });
+    liveSession.fingerprint = "changed-authoritative-prompt";
+    await expect(
+      collect({ ...context, useResume: true, systemPrompt: "changed authoritative instructions" }),
+    ).rejects.toBe(failure);
+    expect(liveSession.current()).toBeUndefined();
   });
 
   it("refuses process startup when the admitted owner rejects capture activation", async () => {

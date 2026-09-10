@@ -230,6 +230,13 @@ export type CliBackendLiveSessionCapability = {
   /** Rebinds this exact admitted turn to the registered process's stable capture. */
   activate(handle: CliBackendLiveSessionHandle): void;
   remove(handle: CliBackendLiveSessionHandle): void;
+  /**
+   * Joins the retired predecessor's retained cleanup before a replacement process
+   * registers. Resolves immediately when no predecessor is retiring; rejects when
+   * that cleanup failed or exceeded its deadline, in which case replacement stays
+   * refused. Call it before `register` whenever `current()` returned nothing.
+   */
+  settleRetired(): Promise<void>;
 };
 
 /** Turn-only context that must not become an operator-authored native transcript row. */

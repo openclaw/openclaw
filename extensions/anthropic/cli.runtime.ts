@@ -270,6 +270,12 @@ export async function* executeClaudeCli(
     await existing.waitForExit();
     existing = undefined;
   }
+  if (!existing) {
+    // The predecessor (drifted above, or closed by an earlier turn's abort) stays
+    // retired until its child exits and its artifacts are cleaned. Registering a
+    // replacement before that settles is refused by the host registry.
+    await capability?.settleRetired();
+  }
   context.assertCurrent?.();
   const session = (existing ? sessions.get(existing) : undefined) ?? createSession(capability);
   session.capability = capability;
