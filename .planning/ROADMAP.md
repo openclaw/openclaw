@@ -10,7 +10,7 @@
 | ----- | ------------------ | -------------------------------------- | ------------------------------------------------------------------ |
 | 1     | Fix Implementation | Core talk/queue fix, type safety, CI   | TALK-01 through TALK-06, TYPE-01 through TYPE-03, CI-01 → complete |
 | 2     | Verification       | Run full test suite, type checks, lint | All requirements verified ✅                                       |
-| 3     | Landing            | Final review, commit staging, PR ready | All checks green ✅                                                | (active) |
+| 3     | Landing            | Final review, commit staging, PR ready | All checks green ✅ ✇ committed                                    |
 
 ## Phase 1: Fix Implementation
 
