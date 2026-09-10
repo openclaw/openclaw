@@ -173,6 +173,28 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).toContain(requiredScopedInstruction);
     expect(result?.content).toContain("[...truncated, read AGENTS.md for full content...]");
   });
+  it("keeps non-Latin mandatory policy lines from oversized AGENTS.md middle content", () => {
+    const mandatory = "禁止在此子树使用共享账号";
+    const ordinary = "请保持本段内容简洁";
+    const content = [
+      "# Root policy",
+      "A".repeat(900),
+      "",
+      mandatory,
+      "",
+      ordinary,
+      "B".repeat(700),
+      "tail marker",
+    ].join("\n");
+    const [result] = buildBootstrapContextFiles([makeFile({ content })], {
+      maxChars: 600,
+    });
+
+    expect(result?.content).toContain("[Policy digest from AGENTS.md]");
+    expect(result?.content).toContain(mandatory);
+    expect(result?.content).not.toContain(ordinary);
+    expect(result?.content.length).toBeLessThanOrEqual(600);
+  });
   it("keeps the quoted heartbeat example with its framing", () => {
     const frame = "Example heartbeat prompt:";
     const [result] = buildBootstrapContextFiles(
@@ -278,6 +300,21 @@ describe("buildBootstrapContextFiles", () => {
     const earlyShort = "- Early normal ".padEnd(20, "a");
     const earlyLong = "- Normal payload ".padEnd(70, "b");
     const urgent = "Never ".padEnd(140, "c");
+    const lateShort = "- Late normal ".padEnd(20, "d");
+    const [result] = buildBootstrapContextFiles(
+      [makeMiddleBootstrapFile([earlyShort, "", earlyLong, "", urgent, "", lateShort])],
+      { maxChars: 600 },
+    );
+
+    expect(result?.content).toContain([earlyShort, urgent, lateShort].join("\n"));
+    expect(result?.content).not.toContain(earlyLong);
+    expect(result?.content).toContain("[...1 more policy lines omitted...]");
+    expect(result?.content.length).toBeLessThanOrEqual(600);
+  });
+  it("prioritizes Traditional Chinese mandatory bullets", () => {
+    const earlyShort = "- Early normal ".padEnd(20, "a");
+    const earlyLong = "- Normal payload ".padEnd(70, "b");
+    const urgent = "- 嚴禁共用登入帳號 ".padEnd(140, "字");
     const lateShort = "- Late normal ".padEnd(20, "d");
     const [result] = buildBootstrapContextFiles(
       [makeMiddleBootstrapFile([earlyShort, "", earlyLong, "", urgent, "", lateShort])],

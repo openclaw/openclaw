@@ -1,4 +1,5 @@
 import type { OAuthCredentials } from "../../llm/utils/oauth/types.js";
+import type { AuthProfileCredentialSource } from "../auth-profiles/types.js";
 
 export type ApiKeyCredential = {
   type: "api_key";
@@ -25,7 +26,10 @@ export type LockResult<T> = {
 };
 
 export interface AuthStorageBackend {
-  readonly migrationOwnerAgentDir?: string;
+  read?(): string | undefined;
+  assertProviderReady?(provider?: string, baseUrl?: string): void;
+  getCredentialSource?(provider: string): AuthProfileCredentialSource | undefined;
+  assertCredentialReady?(source: AuthProfileCredentialSource, baseUrl?: string): void;
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
   withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
 }

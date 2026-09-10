@@ -86,7 +86,7 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
 const { inspectManagedPlugin, listManagedPlugins } = await import("./management-service.js");
 const { setManagedPluginEnabled } = await import("./management-mutations.js");
 
@@ -156,7 +156,7 @@ describe("managed plugin capability consent", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     clearPluginMetadataLifecycleCaches();
     mocks.records = {};
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });

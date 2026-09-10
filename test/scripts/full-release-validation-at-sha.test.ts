@@ -238,7 +238,8 @@ module.exports = async () => {
   const accepted = JSON.parse(fs.readFileSync(${JSON.stringify(acceptedRunPath)}, "utf8"));
   const inputs = { ...accepted.inputs, ...${JSON.stringify(options.witnessInputs ?? {})} };
   const canonicalInputs = JSON.stringify(Object.fromEntries(
-    Object.entries(inputs).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+    Object.entries(inputs).filter(([, value]) => String(value) !== "")
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
       .map(([key, value]) => [key, String(value)]),
   ));
   const witness = {
@@ -699,12 +700,12 @@ function dispatchedInputs(args: string[]): Record<string, string> {
 }
 
 describe("full-release-validation-at-sha", () => {
-  it("normalizes full wire inputs without depending on key order or Boolean event representation", () => {
+  it("normalizes GitHub witness inputs without depending on omitted blanks, order, or Boolean representation", () => {
     expect(dispatchInputsDigest({ text: "a=b\n$()", count: 3, flag: false, empty: "" })).toBe(
       dispatchInputsDigest({ empty: "", flag: "false", count: "3", text: "a=b\n$()" }),
     );
     expect(dispatchInputsDigest({ flag: true })).not.toBe(dispatchInputsDigest({ flag: false }));
-    expect(dispatchInputsDigest({ flag: "" })).not.toBe(dispatchInputsDigest({}));
+    expect(dispatchInputsDigest({ flag: "" })).toBe(dispatchInputsDigest({}));
   });
 
   it("parses release validation dispatch args", () => {

@@ -36,6 +36,8 @@ import {
 import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
+// These checks remain bounded even when repair Doctor has no automatic deadline.
+const POST_PLUGIN_CHECK_TIMEOUT_MS = 180_000;
 
 export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
   const previousValues = [
@@ -100,7 +102,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   yes: boolean;
   json: boolean;
   workspaceSuggestions?: boolean;
-  timeoutMs: number;
+  timeoutMs?: number;
   nodeRunner?: string;
   entryPath?: string;
   onWarnings?: (warnings: string[]) => void;
@@ -227,7 +229,7 @@ async function completePostPluginInFreshProcess(params: {
   pluginUpdate: PostCorePluginUpdateResult;
   yes: boolean;
   json: boolean;
-  timeoutMs: number;
+  timeoutMs?: number;
   nodeRunner?: string;
   beforeDoctor?: () => Promise<void>;
   freshDoctorRequired: boolean;
@@ -264,13 +266,18 @@ async function completePostPluginInFreshProcess(params: {
   } catch (err) {
     pluginUpdate = createPostPluginDoctorExecutionFailure(params.pluginUpdate, String(err));
   }
-  const configValid = await validatePostPluginConfigInFreshProcess({ ...params, entryPath });
+  const checkTimeoutMs = params.timeoutMs ?? POST_PLUGIN_CHECK_TIMEOUT_MS;
+  const configValid = await validatePostPluginConfigInFreshProcess({
+    ...params,
+    entryPath,
+    timeoutMs: checkTimeoutMs,
+  });
   if (configValid) {
     pluginUpdate = await applyPostPluginUpdateReadiness({
       root: params.root,
       entryPath,
       pluginUpdate,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: checkTimeoutMs,
       ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
     });
   }
@@ -283,7 +290,7 @@ export async function completePostCorePluginUpdate(params: {
   freshDoctorRequired: boolean;
   yes: boolean;
   json: boolean;
-  timeoutMs: number;
+  timeoutMs?: number;
   nodeRunner?: string;
   beforeDoctor?: () => Promise<void>;
   onWarnings?: (warnings: string[]) => void;

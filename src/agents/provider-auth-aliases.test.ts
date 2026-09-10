@@ -51,7 +51,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
 }));
 
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import {
+  makeEmptyPluginMetadataOwners,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -127,17 +130,7 @@ function createPluginMetadataSnapshot(params: {
     byPluginId: new Map(params.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.plugins),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
+    owners: makeEmptyPluginMetadataOwners(),
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,

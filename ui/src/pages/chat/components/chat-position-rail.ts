@@ -10,6 +10,7 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { normalizeMessage, resolveMessageRole } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
@@ -248,7 +249,13 @@ class ChatPositionRailDirective extends AsyncDirective {
       const marker = this.markerElements.get(previewId ?? "");
       if (marker) {
         const center = marker.offsetTop + marker.offsetHeight / 2 - scroller.scrollTop;
-        const description = `${preview.textContent?.trim() ?? ""}. ${t("chat.thread.positionMarkerHint")}`;
+        const label = preview
+          .querySelector(".chat-position-rail__preview-label")
+          ?.textContent?.trim();
+        const copy = preview
+          .querySelector(".chat-position-rail__preview-copy")
+          ?.textContent?.trim();
+        const description = `${label ?? ""} ${copy ?? ""}. ${t("chat.thread.positionMarkerHint")}`;
         if (marker.getAttribute("aria-description") !== description) {
           marker.setAttribute("aria-description", description);
         }
@@ -376,15 +383,17 @@ class ChatPositionRailDirective extends AsyncDirective {
       ? undefined
       : markers.find((marker) => marker.id === (interaction.hoveredId ?? interaction.focusedId));
     // Parse message content only for the open preview, even in long sessions.
-    const previewText = previewMarker
-      ? truncateUtf16Safe(
-          resolveMessageDisplayMarkdown(
-            previewMarker.message,
-            normalizeMessage(previewMarker.message),
-          ).trim(),
-          PREVIEW_LENGTH,
-        )
-      : "";
+    const previewMessage = previewMarker ? normalizeMessage(previewMarker.message) : undefined;
+    const previewSender = previewMessage?.role === "user" ? previewMessage.sender : undefined;
+    const previewLabel =
+      (previewSender ? previewMessage?.senderLabel : null) ?? previewMarker?.label;
+    const previewText =
+      previewMarker && previewMessage
+        ? truncateUtf16Safe(
+            resolveMessageDisplayMarkdown(previewMarker.message, previewMessage).trim(),
+            PREVIEW_LENGTH,
+          )
+        : "";
     const rovingId = interaction.rovingId ?? this.activeId ?? markers[0]!.id;
     const moveFocus = (event: KeyboardEvent, index: number) => {
       const nextIndex =
@@ -492,7 +501,10 @@ class ChatPositionRailDirective extends AsyncDirective {
                     class="chat-position-rail__preview"
                     aria-hidden="true"
                   >
-                    <span class="chat-position-rail__preview-label">${previewMarker.label}</span>
+                    <div class="chat-position-rail__preview-header">
+                      ${renderChatAuthorAvatar(previewSender)}
+                      <span class="chat-position-rail__preview-label">${previewLabel}</span>
+                    </div>
                     <!-- Preview links remain non-interactive; the marker owns keyboard navigation. -->
                     <div class="chat-position-rail__preview-copy" inert>
                       ${previewText ? unsafeHTML(toSanitizedMarkdownHtml(previewText, { codeBlockChrome: "none" })) : t("chat.attachments.previewUnavailable")}

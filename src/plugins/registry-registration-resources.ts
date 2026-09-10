@@ -13,6 +13,7 @@ type RegistrationResources = {
 export class PluginRegistrationResourceSource {
   readonly #registrations = new Map<string, RegistrationResources>();
   readonly #pending = new Set<Promise<void>>();
+  readonly #dependencies: Array<() => Promise<void>> = [];
   #claims = 0;
   #closed = false;
 
@@ -37,6 +38,33 @@ export class PluginRegistrationResourceSource {
             }
             const disposals = entries.map(([pluginId, entry]) => this.#dispose(pluginId, entry));
             await this.#waitForRegistrations();
+            if (last && this.#dependencies.length > 0) {
+              const outcomes = await Promise.allSettled(disposals);
+              // Rollback failures belong to construction, but their actual cleanup still
+              // needs borrowed sources even when this last borrower does not report them.
+              await Promise.allSettled(
+                [...this.#registrations.values()].flatMap((entry) =>
+                  entry.disposal ? [entry.disposal] : [],
+                ),
+              );
+              const failures = outcomes.flatMap((outcome) =>
+                outcome.status === "fulfilled"
+                  ? outcome.value
+                  : [new Error("Plugin inspection disposal failed", { cause: outcome.reason })],
+              );
+              for (const releaseDependency of this.#dependencies.splice(0)) {
+                try {
+                  await releaseDependency();
+                } catch (cause) {
+                  failures.push(
+                    new Error("Borrowed plugin registration resources could not be disposed", {
+                      cause,
+                    }),
+                  );
+                }
+              }
+              return failures;
+            }
             const results = await Promise.all(disposals);
             return results.flat();
           });
@@ -44,6 +72,14 @@ export class PluginRegistrationResourceSource {
         return release;
       },
     };
+  }
+
+  /** Acquires custody before publication and relinquishes it after final physical disposal. */
+  retainDependency(acquire: () => { release: () => Promise<void> }): void {
+    if (this.#closed) {
+      throw new Error("Plugin registration resources have been released");
+    }
+    this.#dependencies.push(acquire().release);
   }
 
   #registration(pluginId: string): RegistrationResources {

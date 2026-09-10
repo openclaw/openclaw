@@ -172,3 +172,4 @@ resolve here.
 - [Text-to-speech](/tools/tts)
 - [Voice wake](/nodes/voicewake)
 - [Google Meet plugin](/plugins/google-meet) - Meet calls, including Twilio sessions delegated through Voice Call
+- [`openclaw voicecall`](/cli/voicecall) - the plugin-provided CLI command, which appears only when this plugin is installed

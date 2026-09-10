@@ -2208,8 +2208,8 @@ describe("initSessionState RawBody", () => {
       slug: "label",
       sessionKey: "agent:main:dashboard:8c0b2b68-05e1-4b25-a8c2-ef6f43a01f77",
       chatType: "direct",
-      entry: { label: "Other", displayName: "Dashboard Chat" },
-      expected: { label: "Other", displayName: "Dashboard Chat" },
+      entry: { label: "Other", autoLabel: "Device", displayName: "Dashboard Chat" },
+      expected: { label: "Other", autoLabel: "Device", displayName: "Dashboard Chat" },
       persisted: true,
     },
     {

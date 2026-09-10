@@ -14,11 +14,12 @@ import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
 describe("resolveLogicalVisibleModelCatalog", () => {
   it.each(["all", "configured", "default"] as const)(
-    "keeps case-distinct configured identities in the %s view",
+    "keeps case-distinct and literal provider-prefixed identities in the %s view",
     async (view) => {
       const catalog: ModelCatalogEntry[] = [
         { provider: "fixture", id: "MixedCase", name: "Large", contextWindow: 64_000 },
         { provider: "fixture", id: "mixedcase", name: "Small", contextWindow: 16_000 },
+        { provider: "fixture", id: "fixture/MixedCase", name: "Namespaced", contextWindow: 32_000 },
       ];
       const result = await resolveLogicalVisibleModelCatalog({
         cfg: { agents: { defaults: { modelPolicy: { allow: ["fixture/*"] } } } },
@@ -34,7 +35,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       });
 
       expect(result).toEqual(expect.arrayContaining(catalog));
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(3);
     },
   );
 

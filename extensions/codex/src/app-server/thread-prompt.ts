@@ -39,15 +39,16 @@ export function buildDeveloperInstructions(
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
   const deferredToolNames = new Set<string>();
-  let secretsToolName: string | undefined;
   let showWidgetToolName: string | undefined;
   let dashboardToolName: string | undefined;
   let portalToolName: string | undefined;
+  let messageTool: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
   let hasSkillWorkshop = false;
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
   let hasSubagentsList = false;
   let hasSessionsSend = false;
+  let hasControlTools = false;
   let hasSeenDirectNamespace = false;
   for (const spec of options.dynamicTools ?? []) {
     const isDirectNamespace =
@@ -63,9 +64,6 @@ export function buildDeveloperInstructions(
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
       }
-      if (name === "secrets" && params.disableTools !== true) {
-        secretsToolName ??= qualifiedName;
-      }
       if (name === "show_widget") {
         showWidgetToolName ??= qualifiedName;
       }
@@ -75,11 +73,15 @@ export function buildDeveloperInstructions(
       if (name === "portal") {
         portalToolName ??= qualifiedName;
       }
+      if (name === "message") {
+        messageTool ??= { name: qualifiedName, parameters: tool.inputSchema };
+      }
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
       hasSubagentsList ||= name === "subagents";
       hasSessionsSend ||= name === "sessions_send";
+      hasControlTools ||= name === "openclaw" || name === "gateway";
     }
   }
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
@@ -137,9 +139,16 @@ export function buildDeveloperInstructions(
         }).join("\n")
       : undefined,
     params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"
-      ? buildUiPresentationPrompt({ showWidgetToolName, dashboardToolName, portalToolName })
+      ? buildUiPresentationPrompt({
+          showWidgetToolName,
+          dashboardToolName,
+          portalToolName,
+          messageTool,
+        })
       : undefined,
-    buildCredentialSafetyPrompt(secretsToolName),
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable: params.disableTools !== true && hasControlTools,
+    }),
     nativeCommandGuidance,
     params.gitCoauthorPrompt,
     params.extraSystemPrompt,

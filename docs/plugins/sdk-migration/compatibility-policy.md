@@ -189,20 +189,22 @@ diagnostics say otherwise. New code should prefer the documented replacement;
 existing plugins should not break during ordinary minor releases.
 
 The dated compatibility registry also tracks shipped annotations that do not
-belong to one legacy subpath. These records use 2026-10-01 as the earliest
-review date; removal still requires the reader condition in the final column.
+belong to one legacy subpath. Unless a later date is listed below, these records
+use 2026-10-01 as the earliest review date; removal still requires the reader
+condition in the final column.
 
-| Compatibility code                        | Replacement                                                                                    | Removal condition                                                                            |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `plugin-sdk-broad-runtime-barrels`        | Focused capability subpaths                                                                    | No bundled or published imports of the seven enumerated broad barrels remain.                |
-| `plugin-sdk-provider-owned-helper-shims`  | Provider-local auth/model/replay/OAuth/stream APIs                                             | Every enumerated helper is migrated in official providers and absent from published plugins. |
-| `message-presentation-legacy-bridges`     | `MessagePresentation` and channel presentation renderers                                       | Producers and official channel packages no longer emit or read legacy interactive replies.   |
-| `plugin-sdk-focused-compat-aliases`       | The focused replacement named by each `@deprecated` annotation                                 | Every enumerated alias has zero bundled and published readers.                               |
-| `agent-harness-terminal-result-aliases`   | `AgentHarnessAttemptResult.terminal` and `visibleReplies`                                      | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.           |
-| `official-plugin-export-aliases`          | Canonical Google Meet testing, presentation renderers, and host-owned Discord timeout behavior | Minimum supported official plugin packages no longer import the aliases.                     |
-| `memory-host-compatibility-aliases`       | Canonical memory tables and prepared runtime config                                            | Memory integrations no longer pass table overrides or call legacy `loadConfig`.              |
-| `plugin-runtime-api-compat-aliases`       | Namespaced plugin APIs and focused runtime methods                                             | All enumerated flat API/runtime aliases have no readers.                                     |
-| `plugin-provider-manifest-compat-aliases` | Manifest-owned kind/setup metadata and model catalog registration                              | Providers no longer publish runtime kind or legacy catalog hooks.                            |
+| Compatibility code                                | Replacement                                                                                    | Removal condition                                                                                                    |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk-broad-runtime-barrels`                | Focused capability subpaths                                                                    | No bundled or published imports of the seven enumerated broad barrels remain.                                        |
+| `plugin-sdk-provider-owned-helper-shims`          | Provider-local auth/model/replay/OAuth/stream APIs                                             | Every enumerated helper is migrated in official providers and absent from published plugins.                         |
+| `message-presentation-legacy-bridges`             | `MessagePresentation` and channel presentation renderers                                       | Producers and official channel packages no longer emit or read legacy interactive replies.                           |
+| `plugin-sdk-focused-compat-aliases`               | The focused replacement named by each `@deprecated` annotation                                 | Every enumerated alias has zero bundled and published readers.                                                       |
+| `agent-harness-terminal-result-aliases`           | `AgentHarnessAttemptResult.terminal` and `visibleReplies`                                      | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.                                   |
+| `official-plugin-export-aliases`                  | Canonical Google Meet testing, presentation renderers, and host-owned Discord timeout behavior | Minimum supported official plugin packages no longer import the aliases.                                             |
+| `memory-host-compatibility-aliases`               | Canonical memory tables and prepared runtime config                                            | Memory integrations no longer pass table overrides or call legacy `loadConfig`.                                      |
+| `plugin-runtime-api-compat-aliases`               | Namespaced plugin APIs and focused runtime methods                                             | All enumerated flat API/runtime aliases have no readers.                                                             |
+| `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration                              | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
+| `agent-harness-credential-prompt-string-argument` | Options object `{ controlToolsAvailable }`                                                     | Deprecated and warnings start 2026-09-09; supported through 2026-11-30. Remove after that date once callers migrate. |
 
 ### Published channel setup compatibility
 

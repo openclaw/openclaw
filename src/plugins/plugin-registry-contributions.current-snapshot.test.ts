@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
+import {
+  makeEmptyPluginMetadataOwners,
+  setCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
@@ -84,17 +87,7 @@ function createSnapshot(params: {
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId: string) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
+    owners: makeEmptyPluginMetadataOwners(),
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,

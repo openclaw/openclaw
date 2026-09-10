@@ -3,10 +3,7 @@
  */
 import { afterEach, vi, type Mock } from "vitest";
 import type {
-  fetchProviderDownloadResponse,
-  fetchProviderOperationResponse,
   fetchWithTimeoutGuarded,
-  pollProviderOperationJson,
   postMultipartRequest,
   resolveProviderHttpRequestConfig,
   resolveProviderRequestHeaders,
@@ -18,10 +15,7 @@ type ResolveProviderHttpRequestConfigParams = Parameters<
 >[0];
 type FetchWithTimeoutGuardedParams = Parameters<typeof fetchWithTimeoutGuarded>;
 type ResolveProviderRequestHeadersParams = Parameters<typeof resolveProviderRequestHeaders>[0];
-type PollProviderOperationJsonParams = Parameters<typeof pollProviderOperationJson>[0];
 type PostMultipartRequestParams = Parameters<typeof postMultipartRequest>[0];
-type FetchProviderOperationResponseParams = Parameters<typeof fetchProviderOperationResponse>[0];
-type FetchProviderDownloadResponseParams = Parameters<typeof fetchProviderDownloadResponse>[0];
 type SanitizeConfiguredModelProviderRequestParams = Parameters<
   typeof sanitizeConfiguredModelProviderRequest
 >[0];
@@ -73,48 +67,8 @@ const providerHttpMocks = vi.hoisted(() => ({
   pollProviderOperationJsonMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   assertOkOrThrowProviderErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
-  readProviderJsonResponseMock: vi.fn(
-    async <T>(response: Response, label: string, opts?: { maxBytes?: number }): Promise<T> => {
-      const maxBytes = opts?.maxBytes ?? 16 * 1024 * 1024;
-      if (!response.body) {
-        try {
-          return (await response.json()) as T;
-        } catch (cause) {
-          throw new Error(`${label}: malformed JSON response`, { cause });
-        }
-      }
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let totalBytes = 0;
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
-          totalBytes += value.byteLength;
-          if (totalBytes > maxBytes) {
-            await reader.cancel();
-            throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
-          }
-          chunks.push(value);
-        }
-      } finally {
-        reader.releaseLock();
-      }
-      const body = new Uint8Array(totalBytes);
-      let offset = 0;
-      for (const chunk of chunks) {
-        body.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      try {
-        return JSON.parse(new TextDecoder().decode(body)) as T;
-      } catch (cause) {
-        throw new Error(`${label}: malformed JSON response`, { cause });
-      }
-    },
-  ),
+  readProviderJsonResponseMock:
+    vi.fn<<T>(response: Response, label: string, opts?: { maxBytes?: number }) => Promise<T>>(),
   sanitizeConfiguredModelProviderRequestMock: vi.fn(
     (request: SanitizeConfiguredModelProviderRequestParams) => request,
   ),
@@ -140,36 +94,6 @@ const providerHttpMocks = vi.hoisted(() => ({
 const providerHttpMockKeys = vi.hoisted(() => ({
   sanitizeConfiguredModelProviderRequest: "sanitizeConfiguredModelProviderRequest",
 }));
-
-providerHttpMocks.executeProviderOperationWithRetryMock.mockImplementation(
-  async (params: {
-    stage?: string;
-    retry?: boolean | { attempts?: number; sleep?: (ms: number) => Promise<void> };
-    operation: () => Promise<unknown>;
-  }) => {
-    const attempts =
-      typeof params.retry === "object"
-        ? Math.max(1, Math.round(params.retry.attempts ?? 1))
-        : params.retry === false || params.stage === "create"
-          ? 1
-          : 2;
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      try {
-        return await params.operation();
-      } catch (error) {
-        lastError = error;
-        if (attempt >= attempts) {
-          throw error;
-        }
-        if (typeof params.retry === "object") {
-          await params.retry.sleep?.(0);
-        }
-      }
-    }
-    throw lastError;
-  },
-);
 
 providerHttpMocks.fetchWithTimeoutGuardedMock.mockImplementation(
   async (...args: FetchWithTimeoutGuardedParams) => {
@@ -207,140 +131,82 @@ providerHttpMocks.postMultipartRequestMock.mockImplementation(
   },
 );
 
-function resolveMockProviderTimeoutMs(
-  timeoutMs: FetchProviderOperationResponseParams["timeoutMs"],
-) {
-  return typeof timeoutMs === "function" ? timeoutMs() : (timeoutMs ?? 60_000);
-}
-
-function resolveMockProviderDownloadTimeoutMs(params: FetchProviderDownloadResponseParams) {
-  if (!params.deadline) {
-    return resolveMockProviderTimeoutMs(params.timeoutMs);
-  }
-  return params.deadline.deadlineAtMs === undefined
-    ? (params.deadline.timeoutMs ?? 60_000)
-    : Math.max(1, params.deadline.deadlineAtMs - Date.now());
-}
-
-providerHttpMocks.fetchProviderOperationResponseMock.mockImplementation(
-  async (params: FetchProviderOperationResponseParams) => {
-    const response = await providerHttpMocks.fetchWithTimeoutMock(
-      params.url,
-      params.init ?? {},
-      resolveMockProviderTimeoutMs(params.timeoutMs),
-      params.fetchFn,
-    );
-    if (params.requestFailedMessage) {
-      await providerHttpMocks.assertOkOrThrowHttpErrorMock(response, params.requestFailedMessage);
-    }
-    return response;
-  },
-);
-
-providerHttpMocks.fetchProviderDownloadResponseMock.mockImplementation(
-  async (params: FetchProviderDownloadResponseParams) => {
-    const response = await providerHttpMocks.fetchWithTimeoutMock(
-      params.url,
-      params.init ?? {},
-      resolveMockProviderDownloadTimeoutMs(params),
-      params.fetchFn,
-    );
-    await providerHttpMocks.assertOkOrThrowHttpErrorMock(response, params.requestFailedMessage);
-    return response;
-  },
-);
-
-providerHttpMocks.pollProviderOperationJsonMock.mockImplementation(
-  async (params: PollProviderOperationJsonParams) => {
-    for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
-      const headers = typeof params.headers === "function" ? params.headers() : params.headers;
-      const response = await providerHttpMocks.fetchWithTimeoutMock(
-        params.url,
-        {
-          method: "GET",
-          headers,
-        },
-        params.defaultTimeoutMs,
-        params.fetchFn,
-      );
-      await providerHttpMocks.assertOkOrThrowHttpErrorMock(response, params.requestFailedMessage);
-      const payload = await response.json();
-      if (params.isComplete(payload)) {
-        return payload;
-      }
-      const failureMessage = params.getFailureMessage?.(payload);
-      if (failureMessage) {
-        throw new Error(failureMessage);
-      }
-    }
-    throw new Error(params.timeoutMessage);
-  },
-);
-
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: providerHttpMocks.resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => ({
-  assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
-  assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
-  assertProviderBinaryResponseContent: (
-    await importActual<typeof import("openclaw/plugin-sdk/provider-http")>()
-  ).assertProviderBinaryResponseContent,
-  createProviderOperationDeadline: ({
-    label,
-    timeoutMs,
-  }: {
-    label: string;
-    timeoutMs?: number | (() => number);
-  }) => {
-    const resolvedTimeoutMs = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-    return {
-      label,
-      timeoutMs: resolvedTimeoutMs,
-      deadlineAtMs:
-        typeof resolvedTimeoutMs === "number" ? Date.now() + resolvedTimeoutMs : undefined,
-    };
-  },
-  createProviderOperationTimeoutResolver:
-    ({
-      deadline,
-      defaultTimeoutMs,
-    }: {
-      deadline: { deadlineAtMs?: number; label: string; timeoutMs?: number };
-      defaultTimeoutMs: number;
-    }) =>
-    () => {
-      if (typeof deadline.deadlineAtMs !== "number") {
-        return defaultTimeoutMs;
-      }
-      const remainingMs = deadline.deadlineAtMs - Date.now();
-      if (remainingMs <= 0) {
-        throw new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`);
-      }
-      return Math.min(defaultTimeoutMs, remainingMs);
+vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
+  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
+  const timeoutTransport = await vi.importActual<typeof import("../../utils/fetch-timeout.js")>(
+    "../../utils/fetch-timeout.js",
+  );
+  const guardedTransport = await vi.importActual<typeof import("../../infra/net/fetch-guard.js")>(
+    "../../infra/net/fetch-guard.js",
+  );
+  const { resolveTransientProviderRetryOptions } =
+    await import("../../provider-runtime/operation-retry.js");
+  // Earlier SDK imports can retain the actual transport namespace; bind it at each call
+  // so both those imports and tests that restore spies use the fixture transport.
+  const installTransportMocks = () => {
+    vi.spyOn(timeoutTransport, "fetchWithTimeout").mockImplementation((...args) =>
+      providerHttpMocks.fetchWithTimeoutMock(...args),
+    );
+    vi.spyOn(guardedTransport, "fetchWithSsrFGuard").mockImplementation(async (params) => ({
+      response: await providerHttpMocks.fetchWithTimeoutMock(
+        params.url,
+        params.init ?? {},
+        params.timeoutMs,
+        params.fetchImpl,
+      ),
+      finalUrl: params.url,
+      release: async () => {},
+    }));
+  };
+  providerHttpMocks.readProviderJsonResponseMock.mockImplementation(
+    actual.readProviderJsonResponse,
+  );
+  providerHttpMocks.pollProviderOperationJsonMock.mockImplementation((params) => {
+    installTransportMocks();
+    return actual.pollProviderOperationJson(params);
+  });
+  providerHttpMocks.fetchProviderOperationResponseMock.mockImplementation((params) => {
+    installTransportMocks();
+    return actual.fetchProviderOperationResponse(params);
+  });
+  providerHttpMocks.fetchProviderDownloadResponseMock.mockImplementation((params) => {
+    installTransportMocks();
+    return actual.fetchProviderDownloadResponse(params);
+  });
+  providerHttpMocks.executeProviderOperationWithRetryMock.mockImplementation(
+    (params: Parameters<typeof actual.executeProviderOperationWithRetry>[0]) => {
+      const retry = resolveTransientProviderRetryOptions(
+        actual.providerOperationRetryConfig(params.stage, params.retry),
+      );
+      return actual.executeProviderOperationWithRetry({
+        ...params,
+        ...(retry ? { retry: { ...retry, sleep: retry.sleep ?? (async () => {}) } } : {}),
+      });
     },
-  executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
-  fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
-  fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
-  fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
-  fetchWithTimeoutGuarded: providerHttpMocks.fetchWithTimeoutGuardedMock,
-  pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
-  postJsonRequest: providerHttpMocks.postJsonRequestMock,
-  postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
-  providerOperationRetryConfig: (_stage: string) => true,
-  readProviderBinaryResponse: (
-    await importActual<typeof import("openclaw/plugin-sdk/provider-http")>()
-  ).readProviderBinaryResponse,
-  readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
-  resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-    defaultTimeoutMs,
-  resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
-  resolveProviderRequestHeaders: providerHttpMocks.resolveProviderRequestHeadersMock,
-  [providerHttpMockKeys.sanitizeConfiguredModelProviderRequest]:
-    providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
-  waitProviderOperationPollInterval: async () => {},
-}));
+  );
+  return {
+    ...actual,
+    assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
+    assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
+    executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
+    fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
+    fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
+    fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
+    fetchWithTimeoutGuarded: providerHttpMocks.fetchWithTimeoutGuardedMock,
+    pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
+    postJsonRequest: providerHttpMocks.postJsonRequestMock,
+    postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
+    readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
+    resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
+    resolveProviderRequestHeaders: providerHttpMocks.resolveProviderRequestHeadersMock,
+    [providerHttpMockKeys.sanitizeConfiguredModelProviderRequest]:
+      providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
+  };
+});
 
 export function getProviderHttpMocks(): ProviderHttpMocks {
   return providerHttpMocks;

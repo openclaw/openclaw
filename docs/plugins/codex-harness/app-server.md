@@ -270,7 +270,7 @@ Malformed or unknown options and code-loading options such as `--require` or
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`
 
-`OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed. Use
+`OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed in 2026.4.22. Use
 `plugins.entries.codex.config.appServer.mode: "guardian"` instead, or
 `OPENCLAW_CODEX_APP_SERVER_MODE=guardian` for one-off local testing. Config
 is preferred for repeatable deployments because it keeps the plugin

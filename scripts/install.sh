@@ -1803,11 +1803,27 @@ node_binary_has_safe_sqlite() {
                         (minor === 51 && patch >= 3) ||
                         (minor === 50 && patch >= 7) ||
                         (minor === 44 && patch >= 6)));
-            if (!safe) process.exitCode = 1;
+            const text = "a\u0000b\u0000";
+            const bytes = Buffer.from(text, "utf8");
+            const json = JSON.stringify({ value: text });
+            db.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
+            db.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
+            const row = db.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+            const textSafe = typeof row?.text_value === "string" && row.text_value.length === text.length && Buffer.from(row.text_value, "utf8").equals(bytes);
+            const blobSafe = row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
+            const jsonSafe = row?.json_value === json && JSON.parse(row.json_value).value === text;
+            if (!textSafe) {
+                console.error("Node " + process.versions.node + ": node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix");
+            } else if (!blobSafe || !jsonSafe) {
+                console.error("Node " + process.versions.node + ": node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix");
+            } else if (!safe) {
+                console.error("Node " + process.versions.node + ": SQLite " + value + " is not WAL-reset-safe");
+            }
+            if (!safe || !textSafe || !blobSafe || !jsonSafe) process.exitCode = 1;
         } finally {
             db.close();
         }
-    ' >/dev/null 2>&1
+    ' --no-warnings >/dev/null
 }
 
 node_binary_sqlite_version() {
@@ -1836,7 +1852,7 @@ node_version_is_supported() {
 }
 
 node_is_supported() {
-    node_version_is_supported && node_binary_has_safe_sqlite node
+    node_binary_is_supported node
 }
 
 node_binary_is_supported() {

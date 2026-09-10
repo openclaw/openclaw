@@ -454,6 +454,15 @@ vi.mock("../infra/command-analysis/inline-eval.js", async (importOriginal) => ({
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
 type GatewayAllowlistParams = Parameters<typeof processGatewayAllowlist>[0];
 
+function createAllowlistOnMissContext(): MockExecHostApprovalContext {
+  return {
+    approvals: { allowlist: [], file: { version: 1, agents: {} } },
+    hostSecurity: "allowlist",
+    hostAsk: "on-miss",
+    askFallback: "deny",
+  };
+}
+
 function requireBuildFollowupTargetInput(callIndex: number): ExecApprovalFollowupTarget {
   const call = buildExecApprovalFollowupTargetMock.mock.calls[callIndex];
   if (!call) {
@@ -858,12 +867,7 @@ describe("processGatewayAllowlist", () => {
   );
 
   it("still requires approval for unavailable allowlist plans when ask is on-miss", async () => {
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
+    resolveExecHostApprovalContextMock.mockReturnValue(createAllowlistOnMissContext());
 
     const result = await runGatewayAllowlist({
       command: "echo ok",
@@ -1673,12 +1677,7 @@ Command: ${command}`;
       segmentSatisfiedBy: [],
       authorizationPlan,
     });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
+    resolveExecHostApprovalContextMock.mockReturnValue(createAllowlistOnMissContext());
 
     const result = await runGatewayAllowlist({
       command,
@@ -1988,12 +1987,7 @@ Command: ${command}`;
       segmentSatisfiedBy: ["allowlist"],
       authorizationPlan,
     });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
+    resolveExecHostApprovalContextMock.mockReturnValue(createAllowlistOnMissContext());
 
     const result = await runGatewayAllowlist({
       approvalFollowupMode: "agent",
@@ -2164,12 +2158,7 @@ Command: ${command}`;
       segmentSatisfiedBy: [null],
       authorizationPlan,
     });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
+    resolveExecHostApprovalContextMock.mockReturnValue(createAllowlistOnMissContext());
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
     createExecApprovalDecisionStateMock.mockReturnValue({
       baseDecision: { timedOut: false },
@@ -3756,12 +3745,7 @@ EOF`,
       segmentSatisfiedBy: [null],
       authorizationPlan,
     });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
+    resolveExecHostApprovalContextMock.mockReturnValue(createAllowlistOnMissContext());
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
     createExecApprovalDecisionStateMock.mockReturnValue({
       baseDecision: { timedOut: false },
@@ -4166,12 +4150,7 @@ EOF`,
       // any JSON allowlist digest can satisfy the command.
       requiresExecApprovalMock.mockReturnValue(true);
       hasDurableExecApprovalMock.mockReturnValue(false);
-      resolveExecHostApprovalContextMock.mockReturnValue({
-        approvals: { allowlist: [], file: { version: 1, agents: {} } },
-        hostSecurity: "allowlist",
-        hostAsk: "on-miss",
-        askFallback: "deny",
-      });
+      resolveExecHostApprovalContextMock.mockReturnValue(createAllowlistOnMissContext());
     });
 
     afterEach(() => {

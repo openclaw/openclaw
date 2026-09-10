@@ -1,6 +1,7 @@
 // Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as nodeSqlite from "../../../node-sqlite.mjs";
 import { ExitError } from "../../runtime.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
@@ -89,6 +90,10 @@ function jsonFailure(message: string) {
 }
 
 describe("registerMaintenanceCommands doctor action", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
   async function runMaintenanceCli(args: string[]) {
     const program = new Command();
     registerMaintenanceCommands(program);
@@ -104,6 +109,19 @@ describe("registerMaintenanceCommands doctor action", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each(["22.23.2", "26.0.0"])("keeps plain doctor read-only on Node %s", async (node) => {
+    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
+    vi.spyOn(nodeSqlite, "detectCurrentSqliteCapabilities").mockReturnValue({
+      ...nodeSqlite.detectCurrentSqliteCapabilities(),
+      text: false,
+    });
+    runDoctorLintCli.mockResolvedValue(1);
+    await runMaintenanceCli(["doctor"]);
+    expect(runDoctorLintCli).toHaveBeenCalledOnce();
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("exits with code 0 after successful doctor run", async () => {

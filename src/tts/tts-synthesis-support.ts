@@ -1,15 +1,18 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString as readTtsResultString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
+import {
+  acquirePluginCapabilityProviders,
+  finishCapabilityOperation,
+} from "../plugins/capability-provider-acquisition.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import {
   createSpeechProviderRegistry,
   normalizeSpeechProviderId,
 } from "./provider-registry-core.js";
-import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
 import type { SpeechProviderConfig, SpeechProviderOverrides } from "./provider-types.js";
 import {
   getResolvedSpeechProviderConfigForVoiceModel,
@@ -23,7 +26,6 @@ import {
 } from "./tts-provider-resolution.js";
 import type { TtsProviderAttempt } from "./tts-runtime-types.js";
 import {
-  getTtsPersona,
   readTtsPrefs,
   normalizeConfiguredSpeechProviderId,
   resolveTtsPersonaFromPrefs,
@@ -58,6 +60,18 @@ export function sanitizeTtsErrorForLog(err: unknown): string {
   return redactSensitiveText(raw).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 
+/** Projection diagnostics remain primary when releasing an already-created synthesis also fails. */
+export async function throwTtsProjectionError(
+  error: unknown,
+  cleanup: () => void | Promise<void>,
+): Promise<never> {
+  const [result] = await Promise.allSettled([Promise.resolve().then(cleanup)]);
+  if (result.status === "rejected") {
+    throw new AggregateError([error, result.reason], formatErrorMessage(error), { cause: error });
+  }
+  throw error;
+}
+
 function buildTtsFailureResult(
   errors: string[],
   attemptedProviders?: string[],
@@ -82,7 +96,7 @@ function buildTtsFailureResult(
 type TtsProviderReadyResolution =
   | {
       kind: "ready";
-      provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
+      provider: SpeechProviderPlugin;
       providerConfig: SpeechProviderConfig;
       personaProviderConfig?: SpeechProviderConfig;
       synthesisPersona?: ResolvedTtsPersona;
@@ -102,12 +116,9 @@ function resolveReadySpeechProvider(params: {
   persona?: ResolvedTtsPersona;
   voiceModel?: VoiceModelRef;
   requireTelephony?: boolean;
-  providerRegistry?: TtsProviderRegistry;
+  providerRegistry: TtsProviderRegistry;
 }): TtsProviderReadyResolution {
-  const resolvedProvider = (params.providerRegistry?.getSpeechProvider ?? getSpeechProvider)(
-    params.provider,
-    params.cfg,
-  );
+  const resolvedProvider = params.providerRegistry.getSpeechProvider(params.provider, params.cfg);
   if (!resolvedProvider) {
     return {
       kind: "skip",
@@ -172,7 +183,7 @@ function resolveReadySpeechProvider(params: {
 }
 
 async function prepareSpeechSynthesis(params: {
-  provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
+  provider: SpeechProviderPlugin;
   text: string;
   cfg: OpenClawConfig;
   providerConfig: SpeechProviderConfig;
@@ -244,55 +255,29 @@ function resolveTtsRequestConfig(
   return { cfg, config, prefsPath };
 }
 
-export function resolveTtsRequestSetup(params: TtsRequestSetupParams):
+type OwnedTtsRequestSetup =
+  | { error: string }
   | {
       cfg: OpenClawConfig;
       config: ResolvedTtsConfig;
       persona?: ResolvedTtsPersona;
       providers: VoiceProviderCandidate[];
-    }
-  | {
-      error: string;
-    } {
+      prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
+    };
+
+/** Keeps catalog and direct lookup selections in one explicit speech request owner. */
+export async function acquireTtsRequest(params: TtsRequestSetupParams) {
   const facts = resolveTtsRequestConfig(params);
   if ("error" in facts) {
     return facts;
   }
   const { cfg, config, prefsPath } = facts;
-
-  const userProvider = resolveTtsProvider(config, prefsPath);
-  const provider = canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
-  return {
-    cfg,
-    config,
-    persona: getTtsPersona(config, prefsPath),
-    providers: params.disableFallback
-      ? [resolvePrimaryTtsProviderCandidate(provider, cfg)]
-      : resolveTtsProviderCandidates(provider, cfg),
-  };
-}
-
-type OwnedTtsRequestSetup =
-  | { error: string }
-  | (Exclude<ReturnType<typeof resolveTtsRequestSetup>, { error: string }> & {
-      prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
-    });
-
-/** Keeps catalog and direct lookup selections separate for one finite speech request. */
-export async function withOwnedTtsRequest<T>(
-  params: TtsRequestSetupParams,
-  run: (setup: OwnedTtsRequestSetup) => T | Promise<T>,
-): Promise<T> {
-  const facts = resolveTtsRequestConfig(params);
-  if ("error" in facts) {
-    return await run(facts);
-  }
-  const { cfg, config, prefsPath } = facts;
   const prefs = readTtsPrefs(prefsPath);
   const persona = resolveTtsPersonaFromPrefs(config, prefs);
-  return await withAcquiredPluginCapabilityProviders(
-    { key: "speechProviders", cfg },
-    async (catalog, queries) => {
+  const queries = await acquirePluginCapabilityProviders({ key: "speechProviders", cfg });
+  try {
+    const setup = await queries.run(async () => {
+      const catalog = queries.providers;
       const defaultLookups = new Map<string, SpeechProviderPlugin | undefined>();
       let defaultCatalog: SpeechProviderPlugin[] = [];
       const preferred = normalizeSpeechProviderId(prefs.tts?.provider);
@@ -371,7 +356,7 @@ export async function withOwnedTtsRequest<T>(
       const userProvider = resolveTtsProvider(config, prefsPath, providerRegistry, prefs);
       const provider =
         providerRegistry.canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
-      return await run({
+      return {
         cfg,
         config,
         persona,
@@ -379,9 +364,30 @@ export async function withOwnedTtsRequest<T>(
           ? [resolvePrimaryTtsProviderCandidate(provider, cfg, providerRegistry)]
           : resolveTtsProviderCandidates(provider, cfg, providerRegistry),
         prepareProviderRegistry,
-      });
-    },
-  );
+      };
+    });
+    return { setup, run: queries.run, release: queries.release };
+  } catch (error) {
+    return await finishCapabilityOperation<never>({ ok: false, error }, queries.release);
+  }
+}
+
+/** Finite speech calls finish their work before returning a materialized result. */
+export async function withOwnedTtsRequest<T>(
+  params: TtsRequestSetupParams,
+  run: (setup: OwnedTtsRequestSetup) => T | Promise<T>,
+): Promise<T> {
+  const acquired = await acquireTtsRequest(params);
+  if ("error" in acquired) {
+    return await run(acquired);
+  }
+  let outcome: Result<T, unknown>;
+  try {
+    outcome = { ok: true, value: await acquired.run(() => run(acquired.setup)) };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+  return await finishCapabilityOperation(outcome, acquired.release);
 }
 
 type ReadySpeechProvider = Extract<TtsProviderReadyResolution, { kind: "ready" }>;
@@ -395,6 +401,7 @@ type TtsProviderOperation<TSynthesis> =
         target: "audio-file" | "voice-note" | "telephony";
         timeoutMs: number;
       }) => Promise<TSynthesis>;
+      cleanupFailedProjection?: (synthesis: TSynthesis) => Promise<void>;
     }
   | {
       kind: "skip";
@@ -424,7 +431,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   target: "audio-file" | "voice-note" | "telephony";
   logLabel: string;
   requireTelephony?: boolean;
-  prepareProviderRegistry?: () => Promise<TtsProviderRegistry>;
+  prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
   selectOperation: (params: {
     provider: TtsProvider;
     resolvedProvider: ReadySpeechProvider;
@@ -449,9 +456,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
-      const providerRegistry = params.prepareProviderRegistry
-        ? await params.prepareProviderRegistry()
-        : undefined;
+      const providerRegistry = await params.prepareProviderRegistry();
       const resolvedProvider = resolveReadySpeechProvider({
         provider,
         cfg,
@@ -516,26 +521,32 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         target: params.target,
         timeoutMs,
       });
-      const latencyMs = Date.now() - providerStart;
-      attempts.push({
-        provider,
-        outcome: "success",
-        reasonCode: "success",
-        persona: persona?.id,
-        personaBinding: resolvedProvider.personaBinding,
-        latencyMs,
-      });
-      return params.buildSuccess({
-        synthesis,
-        latencyMs,
-        provider,
-        providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
-        providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
-        persona: persona?.id,
-        fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
-        attemptedProviders,
-        attempts,
-      });
+      try {
+        const latencyMs = Date.now() - providerStart;
+        attempts.push({
+          provider,
+          outcome: "success",
+          reasonCode: "success",
+          persona: persona?.id,
+          personaBinding: resolvedProvider.personaBinding,
+          latencyMs,
+        });
+        return params.buildSuccess({
+          synthesis,
+          latencyMs,
+          provider,
+          providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
+          providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
+          persona: persona?.id,
+          fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
+          attemptedProviders,
+          attempts,
+        });
+      } catch (error) {
+        return await throwTtsProjectionError(error, () =>
+          operation.cleanupFailedProjection?.(synthesis),
+        );
+      }
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
       const latencyMs = Date.now() - providerStart;

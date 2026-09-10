@@ -229,40 +229,56 @@ describe("conversation position rail", () => {
     }
   });
 
-  it.each(["user", "assistant"])("renders safe Markdown in %s previews", (role) => {
-    const messages = [
-      message(
-        "formatted",
-        role,
-        "**Important** *detail* `code`\n\n- [Guide](https://example.com)\n<script>alert(1)</script>",
-        1,
-      ),
-      message("next", role === "user" ? "assistant" : "user", "Next turn", 2),
-    ];
-    const props = threadProps("rail-markdown", "agent:main:markdown", messages);
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const rerender = () => {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    };
-    props.onRequestUpdate = rerender;
-    try {
-      rerender();
-      transcript.hostConnected();
-      container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
-      const preview = container.querySelector(".chat-position-rail__preview-copy")!;
-      expect(preview.querySelector("strong")?.textContent).toBe("Important");
-      expect(preview.querySelector("em")?.textContent).toBe("detail");
-      expect(preview.querySelector("code")?.textContent).toBe("code");
-      expect(preview.querySelector("li a")?.textContent).toBe("Guide");
-      expect(preview.querySelector("script")).toBeNull();
-      expect(preview.closest("[inert]")).not.toBeNull();
-    } finally {
-      render(nothing, container);
-      transcript.hostDisconnected();
-    }
-  });
+  it.each([
+    { role: "user", senderName: undefined, label: "User message" },
+    { role: "user", senderName: "Alice Example", label: "Alice Example" },
+    { role: "assistant", senderName: "Alice Example", label: "Assistant message" },
+  ])(
+    "renders safe Markdown and attribution in $role previews ($label)",
+    ({ role, senderName, label }) => {
+      const messages = [
+        message(
+          "formatted",
+          role,
+          "**Important** *detail* `code`\n\n- [Guide](https://example.com)\n<script>alert(1)</script>",
+          1,
+        ),
+        message("next", role === "user" ? "assistant" : "user", "Next turn", 2),
+      ];
+      Object.assign(messages[0]!["__openclaw"], { senderName });
+      const props = threadProps("rail-markdown", "agent:main:markdown", messages);
+      props.userName = "Local Viewer";
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+      props.onRequestUpdate = rerender;
+      try {
+        rerender();
+        transcript.hostConnected();
+        container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
+        const preview = container.querySelector(".chat-position-rail__preview-copy")!;
+        expect(container.querySelector(".chat-position-rail__preview-label")?.textContent).toBe(
+          label,
+        );
+        const avatar = container.querySelector(".chat-position-rail__preview .chat-author-avatar");
+        expect(avatar?.getAttribute("aria-label") ?? null).toBe(
+          role === "user" ? (senderName ?? null) : null,
+        );
+        expect(preview.querySelector("strong")?.textContent).toBe("Important");
+        expect(preview.querySelector("em")?.textContent).toBe("detail");
+        expect(preview.querySelector("code")?.textContent).toBe("code");
+        expect(preview.querySelector("li a")?.textContent).toBe("Guide");
+        expect(preview.querySelector("script")).toBeNull();
+        expect(preview.closest("[inert]")).not.toBeNull();
+      } finally {
+        render(nothing, container);
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   it("uses the visible completed answer and keeps attachment-only user landmarks", () => {
     const messages = [

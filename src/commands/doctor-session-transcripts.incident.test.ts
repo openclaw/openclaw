@@ -179,16 +179,12 @@ describe("doctor incident-scale Codex binding repair", () => {
       noteSessionTranscriptHealth({
         cfg: config,
         env,
-        sessionDirs: [],
-        sessionSqlite: true,
         shouldRepair: true,
       });
 
     await noteSessionTranscriptHealth({
       cfg: config,
       env,
-      sessionDirs: [],
-      sessionSqlite: true,
       shouldRepair: false,
     });
     expect(note.mock.calls.flat().join("\n")).toContain("orphaned session ownership");

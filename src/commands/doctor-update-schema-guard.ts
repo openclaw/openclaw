@@ -2,7 +2,7 @@ import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {

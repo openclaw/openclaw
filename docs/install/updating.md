@@ -26,15 +26,18 @@ the old Gateway serves, then activates and verifies the update.
 openclaw update
 ```
 
-An already-installed package version or Git target SHA still runs plugin convergence, preserves exact pins with retained-pin advisories, and restarts a running managed Gateway only when plugins change and `--no-restart` is not set; unchanged runs finish as `skipped` / `already-current`.
+An already-installed registry package version or Git target SHA still runs plugin convergence, preserves exact pins with retained-pin advisories, and restarts a running managed Gateway only when plugins change and `--no-restart` is not set; unchanged runs finish as `skipped` / `already-current`.
+An explicit package artifact (for example, a tarball path or URL) is validated
+and installed even when its version matches; matching versions do not prove
+that two artifacts contain the same code.
 An explicit `--channel` choice still becomes the saved update channel.
 For targets that support candidate validation, Doctor lint, config and plugin planning, and a
-canary boot on copied state finish before the service stops. The first activation
-window contains the swap, required migrations, and service start. Plugin packages
-download and sync while the core Gateway serves. A changed plugin snapshot then
-requires a second measured activation window for full Doctor migrations under
-exclusive maintenance, restart, and verification. Unchanged plugins do not run
-another full Doctor pass. The final report records downtime and verification
+canary boot on copied state finish before the service stops. The stopped interval
+contains the swap, required migrations, plugin downloads and convergence, and
+service start. Plugin work uses the installed target without requiring a serving
+Gateway. A changed plugin snapshot runs fresh Doctor migrations before restart;
+unchanged plugins do not run another full Doctor pass. The final report records
+downtime through convergence and final verification, plus verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
@@ -199,6 +202,12 @@ from a chat shell; use the update action so restart and notification stay coordi
 
 ## Stale update history
 
+Untouched, identityless legacy admissions older than 24 hours can
+[expire automatically](/cli/update/status-and-history#run-history-and-reports)
+during Gateway startup or a status check. The row is retained as `failed` with
+reason `legacy-driver-expired` and retry advice; no explicit repair is needed
+for that shape.
+
 If update status stays in progress while the Gateway is healthy, check that no
 update is still running. On the updated installation, run:
 
@@ -211,8 +220,9 @@ For an inactive legacy row older than 30 minutes, repair verifies that the
 running Gateway matches the installed version and build, then clears the stale
 run without maintenance or a service restart. A new explicit `openclaw update`
 can also supersede a single stale identityless row. Recent rows and recorded
-live drivers are protected. Identityless rows are never cleared automatically;
-the Control UI's configuration-write suspension clears after reconciliation.
+live drivers are protected. Identityless rows outside the legacy-expiry shape
+require explicit recovery; the Control UI's configuration-write suspension clears
+after reconciliation.
 
 OpenClaw 2026.9.2 does not reject a new CLI update because an older running row
 exists: its [admission path](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/cli/update-cli/update-command-run.ts#L77)
@@ -315,6 +325,7 @@ openclaw health
 - <a id="auto-updater" />[Auto-updater](/install/updating/automatic-updates#auto-updater)
   - <a id="update-campaigns" />[Update campaigns](/install/updating/automatic-updates#update-campaigns)
 - <a id="downgrade" />[Downgrade](/install/updating/rollback-and-recovery#downgrade)
+  - <a id="automatic-checkpoint-recovery" />[Full-state recovery requires a backup](/install/updating/rollback-and-recovery#automatic-checkpoint-recovery)
   - <a id="automatic-schema-neutral-rollback" />[Automatic schema-neutral rollback](/install/updating/rollback-and-recovery#automatic-schema-neutral-rollback)
   - <a id="before-updating%3A-create-a-verified-backup" /><a id="before-updating-create-a-verified-backup" />[Before updating: create a verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
 - <a id="if-you-are-stuck" />[If you are stuck](/install/updating/rollback-and-recovery#if-you-are-stuck)

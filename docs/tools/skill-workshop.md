@@ -17,7 +17,7 @@ metadata) that becomes a live skill only when applied.
 Automatic background learning and weekly collection review instead maintain the
 Workshop directory with normal agent file tools. These direct edits do not create
 proposals or automatic rollback snapshots. Choose `propose` mode when each new
-capture needs review before publication.
+skill change needs review before publication.
 
 By default, Skill Workshop writes only under the active agent's
 `<state-dir>/agents/<agentId>/agent/workshop-skills`. When `agents.entries.<id>.agentDir` is
@@ -25,12 +25,12 @@ configured, it writes under `<agentDir>/workshop-skills` instead. Operators edit
 bundled, plugin, ClawHub, extra-root, managed, personal-agent, project, and
 workspace skills through their owning tools or files. The same authoring tool
 also supports [personal library skills](/tools/skills#personal-skills-on-a-shared-gateway)
-when the Gateway supplies an authorized library target; those operations publish
+when the Gateway supplies an authorized library target. Those operations publish
 managed revisions rather than Workshop proposals.
 
 Workshop storage is installation-managed and separate from the session
 workspace and managed skill library. `OPENCLAW_STATE_DIR` selects the state
-directory; `~/.openclaw` is the default.
+directory. `~/.openclaw` is the default.
 
 This page is an index. Skill Workshop is documented on eight pages, one per
 reader job. Open the page that matches your task.

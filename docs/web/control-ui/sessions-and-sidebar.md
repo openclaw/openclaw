@@ -92,6 +92,13 @@ Opening a read-only or suggestion session as a viewer leaves its unread marker i
 
 **New group** from the sidebar, chat header, or Sessions page keeps the original session selection while the dialog is open and the group is being saved. A deleted or replaced session is not moved; an error is shown and the new group remains available. For a sidebar multi-selection, sessions that still exist can move even if another target fails. Paging a selected session out of the visible list does not cancel its move.
 
+Your saved custom name always takes precedence over an automatic title, even if
+it resembles an Android device label such as `OpenClaw App · Phone · abc123`.
+Older device labels saved as custom names keep that precedence until you clear
+or replace them explicitly. New Android device labels are stored separately, so
+a generated conversation title can replace the device label without changing
+your custom name.
+
 ### Session menu
 
 Only root sessions can be pinned; child/subagent sessions live in their parent's tree and reject pin requests, including when they appear as top-level threads.
@@ -121,6 +128,8 @@ backup behavior, and login-proxy configuration, see
 [Public session transcripts](/web/urls#public-session-transcripts).
 
 ### Session placement
+
+Hover a cloud session in the sidebar to see its provider and profile. When known, a compact line below them shows the operating system, machine class, vCPU count, and memory in GB. The placement badge tooltip includes the same machine details; unavailable fields are omitted.
 
 A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud worker…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Cloud rows are filtered against all execution modes advertised by each profile: the same bundled Crabbox profile is selectable for OpenClaw `worker-turn` and Codex `remote-exec`, while a genuinely single-mode profile stays disabled for the other runtime. Profiles with multiple machine classes show a machine picker; choosing the default omits an override, while choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
 
@@ -192,6 +201,8 @@ Attributed submissions show your avatar immediately, in the same position as the
 The project picker refreshes after sign-in and reconnects. Gateway reconnects and Git verification retries preserve your edited base branch and worktree name. Choosing another folder or project clears those repository-specific details.
 
 For local worktree sessions, sending the first message opens the admitted session before naming, checkout, and setup finish. The chat shows the submitted message and preparation stages. A generated title is saved as soon as naming completes, independently of checkout and setup. Setup failures remain visible in that session; send a retry there after correcting the problem. The retry reuses the saved title. If naming itself fails, another attempt uses the original first prompt, including text attachments. Stopping during setup cancels preparation without starting the agent. Steering an active run keeps its progress visible, and delayed history cannot replace a newer startup stage or restore startup labels after activity begins.
+
+For device and cloud sessions, the submitted prompt also starts background naming as soon as the session is created. The sidebar can show its topic while the worker is still provisioning; the first task turn waits until placement is ready. A prepared title or custom session name keeps precedence. Incognito sessions skip this early naming step.
 
 For a remote target, the Control UI creates the repository or managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same idempotency key used by recovery. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
 

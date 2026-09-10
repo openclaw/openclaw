@@ -18,6 +18,8 @@ export const AgentControlProtocolSchemas = {
   EnvironmentSummary: environments.EnvironmentSummarySchema,
   EnvironmentsCreateParams: environments.EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResult: environments.EnvironmentsCreateResultSchema,
+  EnvironmentsPrepareParams: environments.EnvironmentsPrepareParamsSchema,
+  EnvironmentsPrepareResult: environments.EnvironmentsPrepareResultSchema,
   EnvironmentsDestroyParams: environments.EnvironmentsDestroyParamsSchema,
   EnvironmentsDestroyResult: environments.EnvironmentsDestroyResultSchema,
   EnvironmentsListParams: environments.EnvironmentsListParamsSchema,

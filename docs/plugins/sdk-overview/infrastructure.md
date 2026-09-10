@@ -35,7 +35,6 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
 | `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
-| `api.registerNodeHostCommand(command)`            | Command handler exposed to paired nodes                                |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 
@@ -110,6 +109,7 @@ that detached work onto its own tracked admission root:
 ```typescript
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 
+// processWebhookEvent, event, and runtime are your plugin's own handler, payload, and logger.
 void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
   runtime.error?.(`webhook dispatch failed: ${String(error)}`);
 });
@@ -134,6 +134,7 @@ api.registerMcpServerConnectionResolver({
   serverName: "user-email",
   resolve: async (ctx) => {
     // ctx.requesterSenderId is host-trusted; never invent sender identity here.
+    // lookupUserToken is your plugin's own credential-store lookup, not an SDK export.
     const token = await lookupUserToken(ctx.requesterSenderId);
     if (!token) {
       return null; // omit this server for the current run

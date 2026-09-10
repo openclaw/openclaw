@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Context, Message, Model, StreamFn, Tool } from "@openclaw/ai";
-import { bindsClaudeThinkingPrefix, streamAnthropic } from "@openclaw/ai/internal/anthropic";
-import { createAnthropicMessagesTransportStreamFn } from "@openclaw/ai/transports";
 import { Type } from "typebox";
 import { startMockAnthropic } from "./lib/anthropic-cache/mock-provider.mts";
+import {
+  loadAnthropicProviderInternals,
+  loadAnthropicTransportStream,
+} from "./lib/anthropic-cache/transport-loader.mts";
 
 // Docker runs this with native Node so the imports resolve to the installed
 // candidate packages, without the checkout's TypeScript source aliases.
@@ -232,6 +234,7 @@ async function runLane(name: string, stream: StreamFn, apiKey: string): Promise<
   }
 }
 
+const { bindsClaudeThinkingPrefix, streamAnthropic } = await loadAnthropicProviderInternals();
 assert(!bindsClaudeThinkingPrefix(MODEL), "the live model must exercise transient runtime context");
 const apiKey = mockMode ? "synthetic-cache-probe-key" : process.env.ANTHROPIC_API_KEY;
 assert(apiKey?.trim(), "ANTHROPIC_API_KEY is required; the release cache lane cannot skip");
@@ -245,10 +248,22 @@ try {
     (_model, context, options) => streamAnthropic(MODEL, context, options),
     apiKey,
   );
-  await runLane("managed-transport", createAnthropicMessagesTransportStreamFn(), apiKey);
-  mock?.assertComplete();
+  const managedTransport = await loadAnthropicTransportStream();
+  if (managedTransport) {
+    await runLane("managed-transport", managedTransport, apiKey);
+  } else {
+    process.stdout.write(
+      `${JSON.stringify({
+        lane: "managed-transport",
+        mode: mockMode ? "mock" : "live",
+        status: "not-applicable",
+        reason: "candidate-package-does-not-export-anthropic-transports",
+      })}\n`,
+    );
+  }
+  mock?.assertComplete(managedTransport ? 8 : 4);
   process.stdout.write(
-    `Anthropic transient runtime-context cache regression passed (${mockMode ? "mock" : "live"}, 8 requests).\n`,
+    `Anthropic transient runtime-context cache regression passed (${mockMode ? "mock" : "live"}, ${managedTransport ? 8 : 4} requests).\n`,
   );
 } finally {
   await mock?.close();

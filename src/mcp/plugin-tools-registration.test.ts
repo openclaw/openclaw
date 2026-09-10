@@ -3,14 +3,18 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { mcpProviderCatalogEntrypoint } from "../plugins/loader-sdk-bridge-artifacts.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { markPluginRegistryActive } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { acquireStandalonePluginToolRegistry } from "../plugins/tools.js";
@@ -19,6 +23,20 @@ import { createCodexSupervisionToolsMcpServer } from "./codex-supervision-tools-
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 let sequence = 0;
+const sdkHostDirs = createTempDirTracker();
+let sdkHost: string | undefined;
+let beforeLoad: ReturnType<typeof getPluginModuleLoaderStats>;
+beforeAll(() => {
+  sdkHost = createCompiledSdkHost(mcpProviderCatalogEntrypoint, (prefix) =>
+    sdkHostDirs.make(prefix),
+  );
+});
+beforeEach(() => {
+  if (sdkHost) {
+    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", sdkHost);
+  }
+  beforeLoad = getPluginModuleLoaderStats();
+});
 function nativePlugin(options: { failDisposal?: boolean; abortSdk?: boolean } = {}) {
   useNoBundledPlugins();
   const key = `__mcp_registration_native_${sequence++}`;
@@ -117,10 +135,21 @@ module.exports = { id: "mcp-native", register(api) {
 }
 
 afterEach(() => {
-  vi.restoreAllMocks();
-  resetPluginLoaderTestStateForTest();
+  try {
+    if (sdkHost) {
+      const afterLoad = getPluginModuleLoaderStats();
+      expect(afterLoad.nativeHits).toBeGreaterThan(beforeLoad.nativeHits);
+      expect(afterLoad.sourceTransformForced).toBe(beforeLoad.sourceTransformForced);
+      expect(afterLoad.sourceTransformFallbacks).toBe(beforeLoad.sourceTransformFallbacks);
+    }
+  } finally {
+    vi.restoreAllMocks();
+    resetPluginLoaderTestStateForTest();
+    vi.unstubAllEnvs();
+  }
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+afterAll(sdkHostDirs.cleanup);
 
 function causes(error: unknown): unknown[] {
   if (error instanceof AggregateError) {

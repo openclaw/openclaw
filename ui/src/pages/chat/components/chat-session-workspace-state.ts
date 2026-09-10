@@ -69,6 +69,7 @@ function createSessionWorkspaceState(
     agentId: resolvePaneAgent(state),
     browserPath: "",
     browserSearch: "",
+    filter: "all",
     browserSearchTimer: null,
     collapsed: previous?.collapsed ?? true,
     connectionEpoch: state.connectionEpoch,

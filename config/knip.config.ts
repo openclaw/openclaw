@@ -131,8 +131,12 @@ const repositoryScriptEntries = [
   "scripts/mantis/observe-request-web-ui.mts!",
   "scripts/mantis/telegram-proof-bridge.mjs!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
+  // Existing explicit Linux proof driver imports the inactive capsule adapter.
+  // Reachability for auditing is not registration or permission to execute it.
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
+  // Protected preparation/button workflows invoke this coordinator by path.
+  "scripts/openclaw-release-ready.mjs!",
   // Plugin Prerelease builds immutable package artifacts, then scans them in a bounded child.
   "scripts/plugin-npm-security-prepare.mts!",
   "scripts/plugin-npm-security-scan-runner.mjs!",
@@ -141,6 +145,8 @@ const repositoryScriptEntries = [
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
+  // Frozen-target contract admission is invoked as a standalone Node CLI.
+  "scripts/preflight-frozen-target-contracts.mjs!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-lib/ci-dispatch.mjs!",

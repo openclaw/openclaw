@@ -262,6 +262,36 @@ describe("AppSidebar agent chip", () => {
     });
   });
 
+  it("switches the Skills owner without opening an agent conversation", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const onNavigate = vi.fn();
+    sidebar.activeRouteId = "skills";
+    sidebar.connected = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+    await sidebar.updateComplete;
+    sidebar
+      .querySelector<HTMLElement>('.sidebar-agent-menu wa-dropdown-item[value="agent:research"]')!
+      .click();
+    await sidebar.updateComplete;
+
+    expect(context.agentSelection.state).toEqual({
+      selectedId: "research",
+      scopeId: "research",
+    });
+    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent).toContain("research");
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
   it("keeps agent ids distinct from utility command values", async () => {
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKey = vi.fn();

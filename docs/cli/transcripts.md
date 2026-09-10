@@ -11,8 +11,9 @@ title: "Transcripts CLI"
 
 # `openclaw transcripts`
 
-Inspector and export command for durable meeting transcripts. Google Meet,
-Microsoft Teams, and Zoom browser participants capture notes automatically;
+Inspector and export command for durable meeting transcripts.
+[Google Meet](/plugins/google-meet), [Microsoft Teams](/plugins/teams-meetings),
+and [Zoom](/plugins/zoom-meetings) browser participants capture notes automatically;
 the `transcripts` agent tool also supports provider capture and manual import.
 
 Canonical transcript state lives in the shared SQLite database at
@@ -479,3 +480,8 @@ The meeting provider ids are `google-meet`, `teams`, and `zoom`. Their aliases
 are `googlemeet`/`meet`, `teams-meetings`/`microsoft-teams`/`msteams`, and
 `zoom-meetings`, respectively. Meeting providers attach to an already-active
 meeting bot session; normal meeting joins do not need an `autoStart` entry.
+
+## Related
+
+- [CLI reference](/cli)
+- [Meeting plugins](/plugins/meeting-plugins) — the plugins that capture these transcripts

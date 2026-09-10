@@ -1,5 +1,6 @@
 {
   "id": "kimi",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

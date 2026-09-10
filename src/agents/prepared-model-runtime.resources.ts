@@ -5,6 +5,7 @@ import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.li
 import type {
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeResourceClaim,
+  PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 import {
   acquireAgentRuntimePluginRegistry,
@@ -44,10 +45,14 @@ class PreparedRegistryResources {
     return this.acquired.primaryRegistry;
   }
 
-  retain(): PreparedModelRuntimeResourceClaim {
+  assertOpen(): void {
     if (this.closed) {
       throw new Error("Prepared plugin registry resources have been released");
     }
+  }
+
+  retain(): PreparedModelRuntimeResourceClaim {
+    this.assertOpen();
     const claim = this.acquired.resources.retain();
     this.claims++;
     let released = false;
@@ -74,8 +79,6 @@ class PreparedRegistryResources {
     }
     if (this.claims === 0 && !this.finishing) {
       this.finishing = true;
-      // Copied donor callbacks keep their existing physical claim until actual work ends.
-      this.trackRelease(this.acquired.releaseBorrowedSources);
       void (async () => {
         while (this.releases.size > 0) {
           await Promise.all(this.releases);
@@ -159,6 +162,18 @@ export function retainPreparedModelRuntimeGenerationResources(
   generation: PreparedModelRuntimePluginGeneration | undefined,
 ): PreparedModelRuntimeResourceClaim | undefined {
   return generation && state.generations.get(generation)?.retain();
+}
+
+/** Borrow the immutable view's prepared owner, including its adopted donor registrations. */
+export function retainPreparedModelRuntimeSnapshotResources(
+  snapshot: Pick<PreparedModelRuntimeSnapshot, "pluginRegistry">,
+): (PreparedModelRuntimeResourceClaim & { assertOpen: () => void }) | undefined {
+  const resources = snapshot.pluginRegistry && state.registries.get(snapshot.pluginRegistry);
+  if (!resources) {
+    return undefined;
+  }
+  const claim = resources.retain();
+  return { release: claim.release, assertOpen: () => resources.assertOpen() };
 }
 
 /** Fence owned views before joining builds or the callers that still hold physical claims. */

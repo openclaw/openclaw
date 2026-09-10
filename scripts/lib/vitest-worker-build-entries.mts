@@ -20,7 +20,10 @@ import {
   triageMaintenanceRuntimeEntrypoints,
 } from "../../src/infra/triage-runtime.test-support.ts";
 import { nodeHostConfigRuntimeEntrypoint } from "../../src/node-host/config-runtime.test-support.ts";
-import { publishedSdkBridgeEntrypoints } from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
+import {
+  mcpProviderCatalogEntrypoint,
+  publishedSdkBridgeEntrypoints,
+} from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
@@ -41,6 +44,7 @@ export const vitestWorkerBuildEntries = {
       codeModeDescriptionRetentionEntrypoint,
       ...cliCompactionBackendEntrypoints,
       ...publishedSdkBridgeEntrypoints,
+      mcpProviderCatalogEntrypoint,
       ...Object.values(cliRecoveryEntrypoints),
       ...Object.values(gatewayDirectStopEntrypoints),
       stateDirGatewayFixtureEntrypoint,
@@ -64,7 +68,7 @@ export const vitestWorkerBuildEntries = {
   // The retention fixture executes the real nested QuickJS worker.
   "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
   // The real ulimit fixture must import its parent before imposing a file-size limit.
-  "infra/sqlite-readonly-location": "src/infra/sqlite-readonly-location.ts",
+  "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
   // Keep provider preparation in the same compiled graph as payload rendering;
   // a source-injected plugin would miss duplicated registry scope state.
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",

@@ -23,6 +23,7 @@ current Gateway ports and non-secret TXT hint data, and calls the returned
 api.registerGatewayDiscoveryService({
   id: "my-discovery",
   async advertise(ctx) {
+    // startMyAdvertiser is your plugin's own mDNS/Bonjour helper, not an SDK export.
     const handle = await startMyAdvertiser({
       gatewayPort: ctx.gatewayPort,
       tls: ctx.gatewayTlsEnabled,

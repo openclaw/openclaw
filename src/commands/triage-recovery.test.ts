@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   collectDoctorFindings: vi.fn(),
   writeDiagnosticSupportExport: vi.fn(),
   resolveExecutablePath: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
   spawn: vi.fn(),
 }));
 
@@ -32,6 +33,10 @@ vi.mock("../logging/diagnostic-support-export.js", () => ({
 vi.mock("../infra/executable-path.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/executable-path.js")>()),
   resolveExecutablePath: mocks.resolveExecutablePath,
+}));
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
 }));
 
 const agents = ["claude", "codex", "opencode", "pi"] as const;
@@ -70,6 +75,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.collectDoctorFindings.mockResolvedValue([]);
   mocks.resolveExecutablePath.mockImplementation((agent: string) => `/usr/local/bin/${agent}`);
+  mocks.runUtf8CommandWithTimeout.mockImplementation(async (argv, options) => {
+    if (argv.at(-1) === "--help") {
+      return { stdout: "--safe-mode", stderr: "", code: 0, termination: "exit" };
+    }
+    const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    return await actual.runUtf8CommandWithTimeout(argv, options);
+  });
   mocks.spawn.mockImplementation(() => {
     const child = new EventEmitter();
     queueMicrotask(() => child.emit("exit", 0, null));
@@ -100,7 +112,11 @@ describe("triage external recovery handoff", () => {
     });
     expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
       `/usr/local/bin/${agent}`,
-      agent === "opencode" ? ["--prompt", expect.any(String)] : [expect.any(String)],
+      agent === "claude"
+        ? ["--safe-mode", expect.any(String)]
+        : agent === "opencode"
+          ? ["--prompt", expect.any(String)]
+          : [expect.any(String)],
       expect.objectContaining({ stdio: "inherit" }),
     );
   });
@@ -129,6 +145,58 @@ describe("triage external recovery handoff", () => {
       });
     },
   );
+
+  it("prints a manual handoff instead of launching Claude without safe-mode support", async () => {
+    mocks.resolveExecutablePath.mockImplementation((binary: string) =>
+      binary === "claude" ? "/usr/local/bin/claude" : undefined,
+    );
+    mocks.runUtf8CommandWithTimeout.mockResolvedValue({
+      stdout: "Usage: claude [options]",
+      stderr: "",
+      code: 0,
+      termination: "exit",
+    });
+    const runtime = createTriageRuntime();
+
+    await withOpenClawTestState({ layout: "split" }, async () => {
+      await withTriageTerminal(true, async () => {
+        await expect(triageCommand(runtime, { noExport: true })).rejects.toMatchObject({ code: 1 });
+      });
+    });
+
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.runUtf8CommandWithTimeout).toHaveBeenCalledWith(
+      ["/usr/local/bin/claude", "--help"],
+      expect.objectContaining({ timeoutMs: 10_000, killProcessTree: true }),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Claude Code 2.1.169+"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Run without safe mode:"));
+  });
+
+  it("redacts a rejected Claude capability probe and prints the manual handoff", async () => {
+    mocks.resolveExecutablePath.mockImplementation((binary: string) =>
+      binary === "claude" ? "/usr/local/bin/claude" : undefined,
+    );
+    mocks.runUtf8CommandWithTimeout.mockRejectedValue(
+      new Error(`missing interpreter; Authorization: Bearer ${secret}`),
+    );
+    const runtime = createTriageRuntime();
+
+    await withOpenClawTestState({ layout: "split" }, async () => {
+      await withTriageTerminal(true, async () => {
+        await expect(triageCommand(runtime, { noExport: true })).rejects.toMatchObject({ code: 1 });
+      });
+    });
+
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to check Claude safe-mode support: missing interpreter"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Run manually:"));
+    expect(JSON.stringify([runtime.error.mock.calls, runtime.log.mock.calls])).not.toContain(
+      secret,
+    );
+  });
 
   it("reports a missing explicit agent without falling back to an available agent", async () => {
     mocks.resolveExecutablePath.mockImplementation((agent: string) =>
@@ -185,7 +253,7 @@ describe("triage external recovery handoff", () => {
       );
       expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
         "/usr/local/bin/claude",
-        [expect.any(String)],
+        ["--safe-mode", expect.any(String)],
         expect.objectContaining({
           cwd: state.workspaceDir,
           stdio: "inherit",
@@ -196,7 +264,7 @@ describe("triage external recovery handoff", () => {
           }),
         }),
       );
-      const prompt = String(mocks.spawn.mock.calls[0]?.[1]?.[0]);
+      const prompt = String(mocks.spawn.mock.calls[0]?.[1]?.[1]);
       expect(prompt).toContain("injected-doctor-failure");
       expect(prompt).toContain("2026.8.25");
       expect(prompt).toContain("2026.8.26");
@@ -266,7 +334,7 @@ describe("triage external recovery handoff", () => {
 
         expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
           "/usr/local/bin/claude",
-          [expect.stringContaining("injected-doctor-failure")],
+          ["--safe-mode", expect.stringContaining("injected-doctor-failure")],
           expect.objectContaining({ cwd: state.workspaceDir, stdio: "inherit" }),
         );
         const output = JSON.stringify([runtime.log.mock.calls, runtime.error.mock.calls]);

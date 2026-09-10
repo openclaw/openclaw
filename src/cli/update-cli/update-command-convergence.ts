@@ -4,7 +4,9 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
-import { recordUpdateRunPhase, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { normalizeUpdatePostInstallDoctorWarnings } from "../../infra/update-doctor-result.js";
+import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -53,11 +55,13 @@ export async function convergeUpdatePlugins(params: {
       }
     : undefined;
 
-  const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
-    result: params.result,
-    downgradeRisk: params.downgradeRisk,
-    installKindChanged: params.installKindChanged,
-  });
+  const shouldResumePostCoreInFreshProcess =
+    !params.coreAlreadyCurrent &&
+    shouldResumePostCoreUpdateInFreshProcess({
+      result: params.result,
+      downgradeRisk: params.downgradeRisk,
+      installKindChanged: params.installKindChanged,
+    });
 
   let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
   if (
@@ -71,17 +75,14 @@ export async function convergeUpdatePlugins(params: {
   }
 
   if (params.opts.run) {
-    // Plugin mutations require the installed root; keep them outside the
-    // service outage and verify their fresh runtime after convergence.
-    recordUpdateRunPhase(
+    // Track convergence without advancing the monotonic run phase past restart.
+    // The service verifier owns "verifying" after the final activation.
+    recordUpdateRunStep(
       params.opts.run.runId,
-      "verifying",
       {
-        step: {
-          step: "post-update verification",
-          status: "in_progress",
-          startedAtMs: Date.now(),
-        },
+        step: "post-update verification",
+        status: "in_progress",
+        startedAtMs: Date.now(),
       },
       { env: params.opts.run.env },
     );
@@ -103,6 +104,7 @@ export async function convergeUpdatePlugins(params: {
     }
     try {
       let postCorePluginUpdate;
+      const doctorWarnings: string[] = [];
       let pluginsUpdatedInFreshProcess = false;
       if (shouldResumePostCoreInFreshProcess) {
         const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
@@ -152,17 +154,20 @@ export async function convergeUpdatePlugins(params: {
         });
       }
 
-      if (postCorePluginUpdate) {
-        // Both package paths release the plugin lease before Doctor; the parent
-        // owns the service boundary after package and network work has finished.
+      if (postCorePluginUpdate && (!params.coreAlreadyCurrent || postCorePluginUpdate.changed)) {
+        // Release the plugin lease before fresh Doctor. The finalizer either
+        // retains its stopped interval or parks an already-current core here.
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
           pluginUpdate: postCorePluginUpdate,
           freshDoctorRequired: postCorePluginUpdate.changed,
+          beforeDoctor: params.beforeDoctor,
           yes: params.opts.yes === true,
           json: params.opts.json === true,
           timeoutMs: params.updateStepTimeoutMs,
-          beforeDoctor: params.beforeDoctor,
+          onWarnings: (warnings) => {
+            doctorWarnings.push(...warnings);
+          },
           ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
         });
         postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
@@ -180,6 +185,22 @@ export async function convergeUpdatePlugins(params: {
             },
           }
         : params.result;
+      if (doctorWarnings.length) {
+        resultWithPostUpdate = {
+          ...resultWithPostUpdate,
+          steps: [
+            ...resultWithPostUpdate.steps,
+            ...normalizeUpdatePostInstallDoctorWarnings(doctorWarnings).map((message, index) => ({
+              name: `post-plugin doctor warning ${index + 1}`,
+              command: "openclaw doctor --fix",
+              cwd: postUpdateRoot,
+              durationMs: 0,
+              exitCode: 0,
+              advisory: { kind: "package-post-install-doctor" as const, message },
+            })),
+          ],
+        };
+      }
       if (
         params.coreAlreadyCurrent &&
         resultWithPostUpdate.status !== "error" &&
@@ -190,6 +211,11 @@ export async function convergeUpdatePlugins(params: {
         delete resultWithPostUpdate.reason;
       }
       if (params.opts.run) {
+        for (const step of resultWithPostUpdate.steps.flatMap(updateRunStepsFromResultStep)) {
+          if (step.step.startsWith("warning:")) {
+            recordUpdateRunStep(params.opts.run.runId, step, { env: params.opts.run.env });
+          }
+        }
         recordUpdateRunStep(
           params.opts.run.runId,
           {

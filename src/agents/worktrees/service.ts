@@ -648,7 +648,13 @@ async function snapshotWorktree(
       throw new Error("nested git repositories cannot be snapshotted losslessly");
     }
     commitGuard?.();
-    await prepareSnapshotIndex(stateEnv, record, snapshotPaths, provisionedPaths, env);
+    const { missing, tracked } = await prepareSnapshotIndex(
+      stateEnv,
+      record,
+      snapshotPaths,
+      provisionedPaths,
+      env,
+    );
     const provisionedState = await snapshotProvisionedFiles(
       stateEnv,
       record.id,
@@ -656,6 +662,21 @@ async function snapshotWorktree(
       provisionedPaths,
       commitGuard,
     );
+    const missingPaths: Buffer[] = [];
+    const trackedPaths: Buffer[] = [];
+    const addedPaths: Buffer[] = [];
+    for (const [key, entry] of snapshotPaths) {
+      if (missing.has(key)) {
+        missingPaths.push(entry);
+      } else if (tracked.has(key)) {
+        trackedPaths.push(entry);
+      } else {
+        addedPaths.push(entry);
+      }
+    }
+    // Update indexed paths before additions that can replace their file/directory shape.
+    // Missing entries are processed from the index tail to avoid shifting later entries.
+    missingPaths.sort((left, right) => Buffer.compare(right, left));
     // This index came from a tree, so it has no checkout-local skip-worktree
     // bits and update-index is independent of the source worktree's sparse cone.
     commitGuard?.();
@@ -667,7 +688,10 @@ async function snapshotWorktree(
         input:
           snapshotPaths.size > 0
             ? Buffer.concat(
-                [...snapshotPaths.values()].flatMap((entry) => [entry, Buffer.from([0])]),
+                [...missingPaths, ...trackedPaths, ...addedPaths].flatMap((entry) => [
+                  entry,
+                  Buffer.from([0]),
+                ]),
               )
             : Buffer.alloc(0),
       },
@@ -722,7 +746,7 @@ async function prepareSnapshotIndex(
   snapshotPaths: ReadonlyMap<string, Buffer>,
   provisioned: readonly string[],
   indexEnv: NodeJS.ProcessEnv,
-): Promise<void> {
+): Promise<{ missing: ReadonlySet<string>; tracked: ReadonlySet<string> }> {
   const headPaths = splitNullBuffer(
     await requireGitBuffer(record.path, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]),
   );
@@ -736,6 +760,11 @@ async function prepareSnapshotIndex(
     true,
   );
   await requireGit(record.path, ["read-tree", "HEAD"], { env: indexEnv });
+  const tracked = new Set(
+    splitNullBuffer(
+      await requireGitBuffer(record.path, ["ls-files", "--cached", "-z"], { env: indexEnv }),
+    ).map(gitPathKey),
+  );
   // Compare against the same fresh index used by the writer: source-index flags
   // can hide edits, while an unrefreshed HEAD index falsely marks unchanged blobs.
   const changed = new Set(
@@ -757,7 +786,6 @@ async function prepareSnapshotIndex(
       ),
     ).map(gitPathKey),
   );
-  const tracked = new Set(headPaths.map(gitPathKey));
   const unique = new Map(
     [...snapshotPaths].filter(([key]) => changed.has(key) || !tracked.has(key)),
   );
@@ -765,6 +793,7 @@ async function prepareSnapshotIndex(
     unique.set(gitPathKey(Buffer.from(value)), Buffer.from(value));
   }
   const provisionedKeys = new Set(provisioned.map((value) => gitPathKey(Buffer.from(value))));
+  const missing = new Set<string>();
   let gitBytes = 0,
     provisionedBytes = 0;
   for (const [key, value] of unique) {
@@ -778,6 +807,9 @@ async function prepareSnapshotIndex(
     } catch (error) {
       if (!isMissingPathError(error)) {
         throw error;
+      }
+      if (tracked.has(key)) {
+        missing.add(key);
       }
     }
   }
@@ -793,6 +825,7 @@ async function prepareSnapshotIndex(
     "worktree safety snapshot",
     true,
   );
+  return { missing, tracked };
 }
 
 export class ManagedWorktreeService {

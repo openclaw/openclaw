@@ -83,10 +83,14 @@ describe("managed post-core root handoff", () => {
                 childMeta = await readControlPlaneUpdateSentinelMeta();
                 await prepareUpdateCommand({ json: true });
               }).then(
-                () => child.emit("exit", 0, null),
+                () => {
+                  child.emit("exit", 0, null);
+                  child.emit("close", 0, null);
+                },
                 (error: unknown) => {
                   childError = error;
                   child.emit("exit", 1, null);
+                  child.emit("close", 1, null);
                 },
               );
               return child;

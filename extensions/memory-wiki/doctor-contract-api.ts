@@ -195,13 +195,17 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           } catch (error) {
             if (!isMissingPathError(error)) {
               warnings.push(
-                `Failed removing rebuildable Memory Wiki compiled cache ${filePath}: ${String(error)}`,
+                `Skipped rebuildable Memory Wiki compiled cache cleanup. Run openclaw doctor --fix to retry. ${filePath}: ${String(error)}`,
               );
             }
           }
         }
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+      };
     },
   },
   {

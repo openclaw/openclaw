@@ -24,6 +24,52 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+const PACKAGE_BUILDER_NODE_SCRIPT = `node() {
+  local script="$1"
+  shift
+  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
+    command node "$script" "$@"
+    return
+  fi
+
+  local output_dir=""
+  local output_name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output-dir)
+        output_dir="$2"
+        shift 2
+        ;;
+      --output-name)
+        output_name="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  mkdir -p "$output_dir"
+  printf fixture >"$output_dir/$output_name"
+  printf "%s\\n" "$output_dir/$output_name"
+}
+export -f node`;
+
+const PASSTHROUGH_TIMEOUT_SCRIPT = `#!/usr/bin/env bash
+case "$1" in
+  --kill-after=1s)
+    exit 0
+    ;;
+  --kill-after=30s)
+    shift 2
+    ;;
+  *)
+    shift
+    ;;
+esac
+"$@"`;
+
 const HELPER_PATH = "scripts/lib/docker-build.sh";
 const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mts";
 const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
@@ -1582,37 +1628,7 @@ stderr="$(<"$TMPDIR/stderr")"
       tempPrefix: "openclaw-docker-build-cleanup-",
       scriptSource: (workDir: string) => repoShell(workDir)`
 
-node() {
-  local script="$1"
-  shift
-  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
-    command node "$script" "$@"
-    return
-  fi
-
-  local output_dir=""
-  local output_name=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --output-dir)
-        output_dir="$2"
-        shift 2
-        ;;
-      --output-name)
-        output_name="$2"
-        shift 2
-        ;;
-      *)
-        shift
-        ;;
-    esac
-  done
-
-  mkdir -p "$output_dir"
-  printf fixture >"$output_dir/$output_name"
-  printf "%s\\n" "$output_dir/$output_name"
-}
-export -f node
+${PACKAGE_BUILDER_NODE_SCRIPT}
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
@@ -1725,37 +1741,7 @@ SH
 chmod +x "$TMPDIR/bin/timeout"
 export PATH="$TMPDIR/bin:$PATH"
 
-node() {
-  local script="$1"
-  shift
-  if [[ "$script" != "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" ]]; then
-    command node "$script" "$@"
-    return
-  fi
-
-  local output_dir=""
-  local output_name=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --output-dir)
-        output_dir="$2"
-        shift 2
-        ;;
-      --output-name)
-        output_name="$2"
-        shift 2
-        ;;
-      *)
-        shift
-        ;;
-    esac
-  done
-
-  mkdir -p "$output_dir"
-  printf fixture >"$output_dir/$output_name"
-  printf "%s\\n" "$output_dir/$output_name"
-}
-export -f node
+${PACKAGE_BUILDER_NODE_SCRIPT}
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
@@ -1898,19 +1884,7 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
 
 mkdir -p "$TMPDIR/bin"
 cat >"$TMPDIR/bin/timeout" <<'SH'
-#!/usr/bin/env bash
-case "$1" in
-  --kill-after=1s)
-    exit 0
-    ;;
-  --kill-after=30s)
-    shift 2
-    ;;
-  *)
-    shift
-    ;;
-esac
-"$@"
+${PASSTHROUGH_TIMEOUT_SCRIPT}
 SH
 chmod +x "$TMPDIR/bin/timeout"
 export PATH="$TMPDIR/bin:$PATH"
@@ -1934,19 +1908,7 @@ docker_e2e_run_detached_with_harness image-name
 
 mkdir -p "$TMPDIR/bin"
 cat >"$TMPDIR/bin/timeout" <<'SH'
-#!/usr/bin/env bash
-case "$1" in
-  --kill-after=1s)
-    exit 0
-    ;;
-  --kill-after=30s)
-    shift 2
-    ;;
-  *)
-    shift
-    ;;
-esac
-"$@"
+${PASSTHROUGH_TIMEOUT_SCRIPT}
 SH
 chmod +x "$TMPDIR/bin/timeout"
 export PATH="$TMPDIR/bin:$PATH"
@@ -2057,19 +2019,7 @@ exit 1
 
 mkdir -p "$TMPDIR/bin"
 cat >"$TMPDIR/bin/timeout" <<'SH'
-#!/usr/bin/env bash
-case "$1" in
-  --kill-after=1s)
-    exit 0
-    ;;
-  --kill-after=30s)
-    shift 2
-    ;;
-  *)
-    shift
-    ;;
-esac
-"$@"
+${PASSTHROUGH_TIMEOUT_SCRIPT}
 SH
 chmod +x "$TMPDIR/bin/timeout"
 export PATH="$TMPDIR/bin:$PATH"
@@ -3003,10 +2953,7 @@ docker_e2e_docker_run_cmd run demo
     const runner = readFileSync("scripts/e2e/release-typed-onboarding-docker.sh", "utf8");
 
     expect(runner).toContain(
-      'scripts/e2e/lib/release-scenarios/assertions.mjs \\\n  "$ROOT_DIR/scripts/e2e/lib/release-scenarios/assertions.mjs"',
-    );
-    expect(runner).toContain(
-      'scripts/e2e/lib/fixtures/mock-openai-config.mjs \\\n  "$ROOT_DIR/scripts/e2e/lib/fixtures/mock-openai-config.mjs"',
+      'openclaw_resolve_frozen_typed_onboarding_contract "$TARGET_ROOT_DIR" "$ROOT_DIR"',
     );
     expect(runner).toContain(
       '-v "$ONBOARD_ASSERTIONS:/app/scripts/e2e/lib/release-scenarios/assertions.mjs:ro"',
@@ -3049,8 +2996,7 @@ outer
     const runner = readFileSync(RELEASE_TYPED_ONBOARDING_DOCKER_E2E_PATH, "utf8");
 
     expectTextToIncludeAll(runner, [
-      'openclaw_resolve_frozen_core_harness_capabilities "$TARGET_ROOT_DIR"',
-      'openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR"',
+      'openclaw_resolve_frozen_typed_onboarding_contract "$TARGET_ROOT_DIR" "$ROOT_DIR"',
       "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
       '-v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro"',
     ]);
@@ -5668,19 +5614,7 @@ export ROOT_DIR TMPDIR
 
 mkdir -p "$TMPDIR/bin"
 cat >"$TMPDIR/bin/timeout" <<'SH'
-#!/usr/bin/env bash
-case "$1" in
-  --kill-after=1s)
-    exit 0
-    ;;
-  --kill-after=30s)
-    shift 2
-    ;;
-  *)
-    shift
-    ;;
-esac
-"$@"
+${PASSTHROUGH_TIMEOUT_SCRIPT}
 SH
 chmod +x "$TMPDIR/bin/timeout"
 export PATH="$TMPDIR/bin:$PATH"

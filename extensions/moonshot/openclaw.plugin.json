@@ -1,5 +1,6 @@
 {
   "id": "moonshot",
+  "categories": ["models", "media", "web"],
   "activation": {
     "onStartup": false
   },

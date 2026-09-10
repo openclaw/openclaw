@@ -3,9 +3,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  matchesProviderScopedModelId,
+  findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
-  resolveMergedModelProviderModels,
 } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
@@ -70,21 +69,15 @@ export function resolveConfiguredModelCatalogOverrides(params: {
   }
   const surface = resolveProviderModelPolicySurface(provider);
   const normalizeConfiguredModelId = (modelId: string) =>
-    params.policy?.resolveIdentity({ provider: params.entry.provider, id: modelId })?.key ??
+    params.policy?.resolveIdentity({ provider: params.entry.provider, id: modelId })?.id ??
     resolveProviderModelCatalogId({ provider, modelId, surface }) ??
     modelId.trim();
-  const modelId =
-    params.policy?.resolveIdentity(params.entry)?.id ??
-    resolveProviderModelCatalogId({ provider, modelId: params.entry.id, surface }) ??
-    params.entry.id.trim();
-  const exactModels = providerConfig.models.filter((candidate) =>
-    matchesProviderScopedModelId({ candidateId: candidate.id, provider, modelId }),
+  const model = findConfiguredProviderModel(
+    providerConfig,
+    provider,
+    normalizeConfiguredModelId(params.entry.id),
+    normalizeConfiguredModelId,
   );
-  // Match the row group execution will use, then retain same-spelling duplicate merges.
-  const model = resolveMergedModelProviderModels({
-    models: exactModels.length > 0 ? exactModels : providerConfig.models,
-    normalizeModelId: normalizeConfiguredModelId,
-  }).get(normalizeConfiguredModelId(modelId));
   const overrides: ModelCatalogLogicalOverrides = {
     ...(model?.name ? { name: model.name } : {}),
     ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),

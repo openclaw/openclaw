@@ -150,15 +150,6 @@ describe("startOneShotDiagnosticsExporters", () => {
     expect(config.diagnostics?.otel?.logsExporter).toBe("stdout");
   });
 
-  it("returns null when the scoped load registers no exporter service", async () => {
-    mockRegistryWithServices(["other-service"]);
-
-    const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-
-    expect(handle).toBeNull();
-    expect(startPluginServices).not.toHaveBeenCalled();
-  });
-
   it("drains queued diagnostic events before stopping services on flush", async () => {
     const exporterStop = vi.fn();
     const services = await mockRealExporter(

@@ -405,7 +405,7 @@ describe("resolveConfigEnvVars", () => {
       const warnings: EnvSubstitutionWarning[] = [];
       const result = resolveConfigEnvVars(
         { key: "${MISSING_VAR}", present: "${PRESENT}" },
-        { PRESENT: "ok" } as NodeJS.ProcessEnv,
+        { PRESENT: "ok" },
         { onMissing: (w) => warnings.push(w) },
       );
       expect(result).toEqual({ key: "${MISSING_VAR}", present: "ok" });
@@ -422,7 +422,7 @@ describe("resolveConfigEnvVars", () => {
           },
           gateway: { token: "${GW_TOKEN}" },
         },
-        { GW_TOKEN: "secret" } as NodeJS.ProcessEnv,
+        { GW_TOKEN: "secret" },
         { onMissing: (w) => warnings.push(w) },
       );
       expect(result).toEqual({
@@ -438,9 +438,7 @@ describe("resolveConfigEnvVars", () => {
     });
 
     it("still throws when onMissing is not set", () => {
-      expect(() => resolveConfigEnvVars({ key: "${MISSING}" }, {} as NodeJS.ProcessEnv)).toThrow(
-        MissingEnvVarError,
-      );
+      expect(() => resolveConfigEnvVars({ key: "${MISSING}" }, {})).toThrow(MissingEnvVarError);
     });
   });
 

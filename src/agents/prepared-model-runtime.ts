@@ -31,13 +31,11 @@ import {
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
   ownerKey,
-  preparedModelRuntimeConfigsMatch,
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolvePreparedModelRuntimeOwnerBySnapshot,
   resolveConfiguredOwnerPublication,
-  resolvePublishedOwner,
   readPublishedModelRuntimeSnapshot,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
@@ -52,6 +50,10 @@ import {
   notifyPreparedModelRuntimePublication,
   resetPreparedModelRuntimePublicationListenersForTest,
 } from "./prepared-model-runtime.publication-events.js";
+import {
+  projectPublishedModelRuntimeOwner,
+  retainPublishedModelRuntimeOwner,
+} from "./prepared-model-runtime.published-owner.js";
 import {
   isPreparedModelRuntimeOwnerInRefreshScope,
   listConfiguredRefreshInputs,
@@ -166,6 +168,31 @@ export function advancePreparedModelRuntimeConfig(config: OpenClawConfig): void 
 export async function loadPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
 ): Promise<PreparedModelRuntimeSnapshot> {
+  return await loadPreparedModelRuntimeOwner(rawInput, (_owner, snapshot) => snapshot);
+}
+
+/** Borrows the selected publication without changing its activation or retention policy. */
+export async function acquirePublishedPreparedModelRuntime(
+  rawInput: PreparedModelRuntimeInput,
+): Promise<PreparedModelRuntimeLease> {
+  return await loadPreparedModelRuntimeOwner(rawInput, retainPublishedModelRuntimeOwner);
+}
+
+/** Retains the selected publication without activating an unpublished owner. */
+export async function acquirePreparedModelRuntimeSnapshot(
+  rawInput: PreparedModelRuntimeInput,
+): Promise<PreparedModelRuntimeLease> {
+  return await projectPublishedModelRuntimeOwner(
+    rawInput,
+    preparedModelRuntimeLeaseContext,
+    retainPublishedModelRuntimeOwner,
+  );
+}
+
+async function loadPreparedModelRuntimeOwner<T>(
+  rawInput: PreparedModelRuntimeInput,
+  project: (owner: PreparedModelRuntimeOwner, snapshot: PreparedModelRuntimeSnapshot) => T,
+): Promise<T> {
   const assertLifetime = captureModelRuntimeLifetime();
   let input = normalizePreparedModelRuntimeInput({
     ...rawInput,
@@ -184,7 +211,11 @@ export async function loadPreparedModelRuntimeSnapshot(
       continue;
     }
     try {
-      return await prepareModelRuntimeSnapshot(input);
+      return await projectPublishedModelRuntimeOwner(
+        input,
+        preparedModelRuntimeLeaseContext,
+        project,
+      );
     } catch (error) {
       if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
         throw error;
@@ -199,10 +230,18 @@ export async function loadPreparedModelRuntimeSnapshot(
       continue;
     }
     if (!activated) {
-      return await prepareModelRuntimeSnapshot(input);
+      return await projectPublishedModelRuntimeOwner(
+        input,
+        preparedModelRuntimeLeaseContext,
+        project,
+      );
     }
     try {
-      return await prepareModelRuntimeSnapshot(input);
+      return await projectPublishedModelRuntimeOwner(
+        input,
+        preparedModelRuntimeLeaseContext,
+        project,
+      );
     } catch (error) {
       if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
         throw error;
@@ -371,50 +410,10 @@ export async function acquireReadOnlyPreparedModelRuntime(
 export async function prepareModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
 ): Promise<PreparedModelRuntimeSnapshot> {
-  const assertLifetime = captureModelRuntimeLifetime();
-  const replacement = pendingModelRuntimeReplacement;
-  if (replacement) {
-    // Individual owners may finish before a multi-owner publication commits. The lifecycle gate
-    // makes the generation visible atomically only after every owner and auth mutation is ready.
-    await replacement.promise;
-    assertLifetime();
-    return await prepareModelRuntimeSnapshot(rawInput);
-  }
-  const input = normalizePreparedModelRuntimeInput(rawInput);
-  const existing = resolvePublishedOwner(owners, input, {
-    allowConfiguredWorkspaceFallback:
-      rawInput.workspaceDir === undefined ||
-      rawInput.agentId === undefined ||
-      rawInput.runtimePluginSelections === undefined,
-  });
-  if (
-    input.readOnly &&
-    existing &&
-    !preparedModelRuntimeConfigsMatch(existing.input.config, input.config)
-  ) {
-    throw new PreparedModelRuntimeOwnerNotPublishedError(
-      `prepared read-only model runtime owner was not published for the requested config (${input.agentDir})`,
-    );
-  }
-  // Generated catalogs are lifecycle artifacts, not a live-edit surface. Config/plugin reload,
-  // doctor/auth repair, and auth publication replace owners; external edits require restart.
-  if (existing?.pending) {
-    try {
-      await existing.pending;
-    } catch {
-      // Re-read the owner below so a superseding generation wins over this result or error.
-    }
-    assertLifetime();
-    return await prepareModelRuntimeSnapshot(rawInput);
-  }
-  if (existing?.needsRefresh) {
-    throw existing.refreshError ?? new Error("prepared model runtime refresh is pending");
-  }
-  if (existing?.snapshot) {
-    return existing.snapshot;
-  }
-  throw new PreparedModelRuntimeOwnerNotPublishedError(
-    `prepared model runtime owner was not published for ${input.agentDir}`,
+  return await projectPublishedModelRuntimeOwner(
+    rawInput,
+    preparedModelRuntimeLeaseContext,
+    (_owner, snapshot) => snapshot,
   );
 }
 

@@ -16,6 +16,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement",
@@ -45,42 +46,35 @@ describe("worker session placement store", () => {
     identity: WorkerSessionPlacementIdentity = SESSION,
     executionMode: WorkerPlacementExecutionMode = "worker-turn",
   ) {
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: `environment-${identity.sessionId}`,
+      sessionId: identity.sessionId,
+      ownerEpoch: 7,
+    });
     let placement = store.startDispatch({ ...identity, executionMode });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: `environment-${identity.sessionId}` },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+    for (const step of [
+      { to: "provisioning", patch: { environmentId: `environment-${identity.sessionId}` } },
+      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+      {
+        to: "starting",
+        patch: {
+          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+          remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+        },
       },
-    });
-    const active = store.transition({
-      sessionId: identity.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
-    });
-    if (active.state !== "active") {
+      { to: "active", patch: { activeOwnerEpoch: 7 } },
+    ] as const) {
+      placement = store.transition({
+        sessionId: identity.sessionId,
+        from: placement.state,
+        expectedGeneration: placement.generation,
+        ...step,
+      });
+    }
+    if (placement.state !== "active") {
       throw new Error("expected active worker placement");
     }
-    return active;
+    return placement;
   }
 
   it("persists the placement lifecycle and rejects stale transition generations", () => {

@@ -1,5 +1,5 @@
 // Commander registration for device pairing and auth-token commands.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { runDevicesListCommand } from "./devices-cli.runtime.js";
 import { isDevicesMachineOutput } from "./devices-output-mode.js";
@@ -119,6 +119,7 @@ export function registerDevicesCli(program: Command) {
       .requiredOption("--device <id>", "Device id")
       .requiredOption("--role <role>", "Role name")
       .option("--scope <scope...>", "Scopes to attach to the token (repeatable)")
+      .addOption(new Option("--no-scopes", "Rotate with an empty scope set").conflicts("scope"))
       .action(async (opts: DevicesRpcOpts) => {
         const { runDevicesRotateCommand } = await loadDevicesRuntime();
         await runDevicesRotateCommand(opts);

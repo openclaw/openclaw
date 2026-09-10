@@ -280,45 +280,92 @@ describe("Control UI performance budgets", () => {
   });
 
   it.each([
-    { name: "accepts a capped deferred locale catalog", gzipBytes: 300 * 1024, violations: [] },
     {
-      name: "rejects locale catalog growth above its cap",
-      gzipBytes: 300 * 1024 + 1,
-      violations: ["largest locale catalog JS gzip"],
+      name: "accepts a capped deferred locale pair",
+      baseGzipBytes: 200 * 1024,
+      configHintsGzipBytes: 100 * 1024,
+      violations: [],
     },
     {
-      name: "rejects duplicate locale catalog artifacts",
-      gzipBytes: 200_000,
-      duplicateCount: 20,
-      violations: ["locale catalog JS assets"],
+      name: "rejects combined locale pair growth above its cap",
+      baseGzipBytes: 200 * 1024,
+      configHintsGzipBytes: 100 * 1024 + 1,
+      violations: ["largest locale catalog pair JS gzip"],
     },
     {
-      name: "rejects a locale catalog in startup preloads",
-      gzipBytes: 200_000,
-      startup: true,
+      name: "rejects duplicate base chunks for one locale",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
+      duplicateBase: true,
+      violations: ["locale catalog base JS assets per locale"],
+    },
+    {
+      name: "rejects duplicate config-hint chunks for one locale",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
+      duplicateConfigHints: true,
+      violations: ["locale config-hint JS assets per locale"],
+    },
+    {
+      name: "rejects a base locale chunk in startup preloads",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
+      startupAsset: "ru-a.js",
       violations: ["startup locale catalog JS assets"],
     },
     {
-      name: "retains the ordinary chunk cap beside locale catalogs",
-      gzipBytes: 200_000,
+      name: "rejects a config-hint chunk in startup preloads",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
+      startupAsset: "locale-config-hints-ru-a.js",
+      violations: ["startup locale catalog JS assets"],
+    },
+    {
+      name: "does not combine mismatched locale chunks",
+      baseGzipBytes: 200_000,
+      configHintsGzipBytes: 200_000,
+      configHintsName: "locale-config-hints-de-a.js",
+      violations: [],
+    },
+    {
+      name: "retains the ordinary chunk cap beside locale pairs",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 100_000,
       ordinaryGzipBytes: 215 * 1024 + 1,
       violations: ["largest JS gzip"],
     },
     {
-      name: "does not exempt unsupported locale chunks",
-      gzipBytes: 300 * 1024,
-      localeName: "en-a.js",
+      name: "does not exempt unsupported config-hint chunks",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 300 * 1024,
+      configHintsName: "locale-config-hints-en-a.js",
+      violations: ["largest JS gzip"],
+    },
+    {
+      name: "does not exempt config-hint chunks without a suffix",
+      baseGzipBytes: 100_000,
+      configHintsGzipBytes: 300 * 1024,
+      configHintsName: "locale-config-hints-ru-.js",
       violations: ["largest JS gzip"],
     },
   ])(
     "$name",
-    ({ gzipBytes, duplicateCount, startup, ordinaryGzipBytes, localeName, violations }) => {
+    ({
+      baseGzipBytes,
+      configHintsGzipBytes,
+      duplicateBase,
+      duplicateConfigHints,
+      startupAsset,
+      ordinaryGzipBytes,
+      configHintsName,
+      violations,
+    }) => {
       const { distDir, writeAsset } = createDistFixture();
       fs.writeFileSync(
         path.join(distDir, "index.html"),
         '<script type="module" src="./assets/index-a.js"></script>\n' +
           '<link rel="stylesheet" href="./assets/index-c.css">\n' +
-          (startup ? '<link rel="modulepreload" href="./assets/ru-a.js">\n' : ""),
+          (startupAsset ? `<link rel="modulepreload" href="./assets/${startupAsset}">\n` : ""),
       );
       writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
       writeAsset("lazy-b.js", {
@@ -327,13 +374,25 @@ describe("Control UI performance budgets", () => {
         brotliBytes: 55,
       });
       writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
-      writeAsset(localeName ?? "ru-a.js", {
+      writeAsset("ru-a.js", {
         rawBytes: 200,
-        gzipBytes,
+        gzipBytes: baseGzipBytes,
         brotliBytes: 100,
       });
-      for (let index = 0; index < (duplicateCount ?? 0); index += 1) {
-        writeAsset(`ru-duplicate-${index}.js`, {
+      writeAsset(configHintsName ?? "locale-config-hints-ru-a.js", {
+        rawBytes: 200,
+        gzipBytes: configHintsGzipBytes,
+        brotliBytes: 100,
+      });
+      if (duplicateBase) {
+        writeAsset("ru-duplicate.js", {
+          rawBytes: 200,
+          gzipBytes: 100,
+          brotliBytes: 50,
+        });
+      }
+      if (duplicateConfigHints) {
+        writeAsset("locale-config-hints-ru-duplicate.js", {
           rawBytes: 200,
           gzipBytes: 100,
           brotliBytes: 50,
@@ -345,9 +404,13 @@ describe("Control UI performance budgets", () => {
         violations,
       );
       expect(metrics.total.js.gzipBytes).toBe(
-        40 + (ordinaryGzipBytes ?? 70) + gzipBytes + (duplicateCount ?? 0) * 100,
+        40 +
+          (ordinaryGzipBytes ?? 70) +
+          baseGzipBytes +
+          configHintsGzipBytes +
+          (duplicateBase || duplicateConfigHints ? 100 : 0),
       );
-      if (!localeName) {
+      if (!configHintsName) {
         expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
         expect(formatControlUiPerformanceReport(metrics)).toContain("locale catalog JS:");
       }

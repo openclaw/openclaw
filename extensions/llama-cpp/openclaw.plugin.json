@@ -1,5 +1,6 @@
 {
   "id": "llama-cpp",
+  "categories": ["models", "memory"],
   "name": "llama.cpp Provider",
   "description": "Managed and external llama.cpp servers for GGUF chat and embeddings.",
   "activation": {

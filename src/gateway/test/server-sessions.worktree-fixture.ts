@@ -16,7 +16,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-export async function initializeRemoteBackedGitWorkspace(root: string): Promise<string> {
+async function initializeRemoteBackedGitSeed(root: string): Promise<void> {
   const workspace = path.join(root, "workspace");
   const remote = path.join(root, "remote.git");
   await fs.mkdir(workspace, { recursive: true });
@@ -35,11 +35,27 @@ export async function initializeRemoteBackedGitWorkspace(root: string): Promise<
   await execFileAsync("git", ["clone", "--bare", workspace, remote]);
   await execFileAsync("git", ["-C", workspace, "remote", "add", "origin", remote]);
   await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
-  return await fs.realpath(workspace);
 }
 
 export function setupGatewaySessionsWorktreeTestHarness() {
-  const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+  let seedRoot: string;
+  const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness(async (makeTempDir) => {
+    seedRoot = makeTempDir("openclaw-worktree-seed-");
+    await initializeRemoteBackedGitSeed(seedRoot);
+  });
+
+  async function initializeRemoteBackedGitWorkspace(root: string): Promise<string> {
+    const workspace = path.join(root, "workspace");
+    const remote = path.join(root, "remote.git");
+    // Only pristine contents are shared. Each case owns its Git metadata, remote,
+    // and later managed worktrees; suite cleanup owns the never-mutated seed.
+    await Promise.all([
+      fs.cp(path.join(seedRoot, "workspace"), workspace, { recursive: true }),
+      fs.cp(path.join(seedRoot, "remote.git"), remote, { recursive: true }),
+    ]);
+    await execFileAsync("git", ["-C", workspace, "remote", "set-url", "origin", remote]);
+    return await fs.realpath(workspace);
+  }
 
   async function createArchiveWorktreeFixture() {
     const state = await createOpenClawTestState({
@@ -83,5 +99,9 @@ export function setupGatewaySessionsWorktreeTestHarness() {
     return { key, sessionId, storePath, transcriptScope, worktree, workspace };
   }
 
-  return { createSessionStoreDir, createArchiveWorktreeFixture };
+  return {
+    createSessionStoreDir,
+    createArchiveWorktreeFixture,
+    initializeRemoteBackedGitWorkspace,
+  };
 }

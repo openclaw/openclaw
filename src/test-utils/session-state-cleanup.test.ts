@@ -116,6 +116,7 @@ describe("cleanupSessionStateForTest", () => {
         await release.promise;
         database = openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       },
+      "session.transcript.batch",
     );
     try {
       await started.promise;

@@ -13,7 +13,7 @@ title: "Database layout"
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
-The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
+The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
 ### Plugin state listing index
 
@@ -205,8 +205,24 @@ the inactivity window. It cannot override a live or inconclusive recorded driver
 [2026.9.2 updater](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/cli/update-cli/update-command.ts#L465)
 does not record adoption: package-manager and registry preflight can
 leave a live updater at its single `requested/in_progress` step. Older writers
-may drop unknown driver JSON fields; identityless rows require explicit recovery.
-`update status` only reports classification and never commits reconciliation.
+may drop unknown driver JSON fields; identityless rows normally require explicit recovery.
+
+An untouched legacy admission expires automatically after more than 24 hours:
+it is still `requested` / `running`, has identical creation and update timestamps,
+no finish timestamp, no recorded driver, and only its initial `requested` step.
+The ledger retains it as `failed` with reason `legacy-driver-expired` and a
+`reconcile:abandoned` step. Startup, `update status`, `status`, and the Control UI's
+update reads reconcile this shape through the same transaction. Status and failure
+reports explain that the update never progressed and recommend `openclaw update`
+to retry. Status retains the latest such advisory even after a newer update finishes.
+This fixed legacy expiry does not establish process death. It is the bounded
+recovery policy for 2026.9.2-era orphan admissions. Younger rows, progressed rows,
+recorded drivers, and retained recovery descriptors keep their existing protections.
+Recording `driver:identity-unavailable` is itself a mutation, so that adoption
+cannot match an untouched admission. All other `update status` history remains
+read-only; the existing 30-minute inactivity window is unchanged.
+Gateway update reads also run the existing automatic dead-driver reconciliation,
+so Control UI admission uses the same recovery decision as its startup watcher.
 
 Explicit new CLI update admission can supersede a legacy row only when it is
 the sole running row, has no current or previous driver identity, and exceeds

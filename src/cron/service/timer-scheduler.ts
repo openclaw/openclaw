@@ -258,6 +258,15 @@ async function onAdmittedTimer(state: CronServiceState) {
           }),
           releaseAdmission: admissionReleases[index]!,
         }));
+        if (reservedDue.length === 0 && allowEmptyCapacityRecheck) {
+          // Releasing an unused slot is not progress. Retry immediately only
+          // when the refreshed store removed a candidate from the due set;
+          // otherwise child ticks retain their parents and starve the event loop.
+          const stillDue = new Set(
+            collectRunnableJobs(state, state.deps.nowMs()).map((job) => job.id),
+          );
+          allowEmptyCapacityRecheck = admittedDue.some((job) => !stillDue.has(job.id));
+        }
         for (const releaseAdmission of admissionReleases.slice(reservedDue.length)) {
           releaseAdmission();
         }

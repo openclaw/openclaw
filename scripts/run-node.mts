@@ -123,6 +123,7 @@ type SpawnedProcessResult = {
   exitSignal: NodeJS.Signals | null;
   forwardedSignal: NodeJS.Signals | null;
 };
+type RunNodeExit = number | NodeJS.Signals;
 
 function asRunNodeChild(value: unknown): RunNodeChild {
   if (!value || typeof value !== "object" || !("on" in value) || typeof value.on !== "function") {
@@ -1174,7 +1175,7 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
         settle({ exitCode: 1, exitSignal: null, forwardedSignal });
       };
       const handleExit = (exitCode: number | null, exitSignal: NodeJS.Signals | null) => {
-        if (forwardedSignal && !cleanedForwardedSignalGroup) {
+        if ((forwardedSignal || exitSignal) && !cleanedForwardedSignalGroup) {
           cleanedForwardedSignalGroup = true;
           signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
         }
@@ -1193,9 +1194,14 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
   }
 };
 
-const getInterruptedSpawnExitCode = (res: SpawnedProcessResult) => {
+const getInterruptedSpawnOutcome = (
+  res: SpawnedProcessResult,
+  platform: NodeJS.Platform,
+): RunNodeExit | null => {
   if (res.exitSignal) {
-    return getSignalExitCode(res.exitSignal);
+    // The child did not acknowledge completion. A numeric exit could let the
+    // watch parent retry after the owner of detached workers has disappeared.
+    return platform === "win32" ? getSignalExitCode(res.exitSignal) : res.exitSignal;
   }
   if (res.forwardedSignal) {
     return getSignalExitCode(res.forwardedSignal);
@@ -1215,9 +1221,9 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
   );
   pipeSpawnedOutput(nodeProcess, deps);
   const res = await waitForSpawnedProcess(nodeProcess, deps);
-  const interruptedExitCode = getInterruptedSpawnExitCode(res);
-  if (interruptedExitCode !== null) {
-    return interruptedExitCode;
+  const interrupted = getInterruptedSpawnOutcome(res, deps.platform);
+  if (interrupted !== null) {
+    return interrupted;
   }
   return res.exitCode ?? 1;
 };
@@ -1313,7 +1319,7 @@ const createSyncIoTraceStderrFilter = (deps: RunNodeDeps) => {
   };
 };
 
-const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: number) => {
+const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: RunNodeExit) => {
   if (!deps.outputTee) {
     return exitCode;
   }
@@ -1599,7 +1605,7 @@ function createRunNodeDeps(params: RunNodeMainParams) {
 }
 
 /** Runs the dev build/watch loop and keeps the child CLI in sync with changes. */
-export async function runNodeMain(params: RunNodeMainParams = {}): Promise<number> {
+export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNodeExit> {
   const deps = createRunNodeDeps(params);
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
@@ -1609,7 +1615,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
   deps.outputTee = createRunNodeOutputTee(deps);
 
   try {
-    let exitCode = 1;
+    let exitCode: RunNodeExit = 1;
     if (shouldFastPathExistingDistForGatewayClient(deps)) {
       exitCode = await runOpenClaw(deps);
       return await closeRunNodeOutputTee(deps, exitCode);
@@ -1700,7 +1706,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
         );
         pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
         const result = await waitForSpawnedProcess(build, deps);
-        return getInterruptedSpawnExitCode(result) ?? result.exitCode ?? 1;
+        return getInterruptedSpawnOutcome(result, deps.platform) ?? result.exitCode ?? 1;
       });
     });
     if (buildExitCode !== 0) {
@@ -1716,7 +1722,13 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runNodeMain()
-    .then((code) => process.exit(code))
+    .then((outcome) => {
+      if (typeof outcome === "string") {
+        process.kill(process.pid, outcome);
+        return;
+      }
+      process.exit(outcome);
+    })
     .catch((err: unknown) => {
       console.error(err);
       process.exit(1);

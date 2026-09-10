@@ -6,6 +6,7 @@ import {
   assertSqliteSchemaTablesPresent,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
+import { splitSqlList } from "../infra/sqlite-schema-sql.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -17,7 +18,12 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
-import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import {
+  hasDanglingSkillWorkshopCollectionReviewIndex,
+  LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
+  withSqliteWritableSchema,
+} from "./openclaw-state-db-dangling-workshop-index.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import {
   assertSupportedStateSchemaVersion,
@@ -26,7 +32,10 @@ import {
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { OpenClawStateOwnershipError } from "./openclaw-state-ownership.js";
+import {
+  assertOpenClawStateWriteAllowed,
+  OpenClawStateOwnershipError,
+} from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
@@ -37,6 +46,96 @@ import {
 } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
+
+/**
+ * Make the known malformed index parseable, then let SQLite drop and reclaim it
+ * in the caller's transaction. A failed repair rolls both catalog edits back.
+ */
+function repairDanglingSkillWorkshopCollectionReviewIndex(database: DatabaseSync): boolean {
+  if (!hasDanglingSkillWorkshopCollectionReviewIndex(database)) {
+    return false;
+  }
+  return withSqliteWritableSchema(database, () => {
+    database
+      .prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'index' AND name = ?")
+      .run(
+        `CREATE INDEX ${LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX} ON skill_workshop_collection_reviews(create_time DESC, review_id DESC)`,
+        LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
+      );
+    // SAFETY: the pragma result is treated as unknown and validated before arithmetic.
+    const row = database.prepare("PRAGMA schema_version").get() as {
+      schema_version?: unknown;
+    };
+    const schemaVersion = typeof row.schema_version === "number" ? row.schema_version : 0;
+    database.exec(`PRAGMA schema_version = ${schemaVersion + 1}; PRAGMA writable_schema = OFF;`);
+    database.exec(`DROP INDEX ${LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX};`);
+    return true;
+  });
+}
+
+function repairDanglingSkillWorkshopCollectionReviewIndexChanges(database: DatabaseSync): string[] {
+  return repairDanglingSkillWorkshopCollectionReviewIndex(database)
+    ? ["Removed dangling legacy Skill Workshop review index"]
+    : [];
+}
+
+/** Run read-only schema admission while SQLite ignores malformed catalog rows. */
+function admitStateDatabaseWithDanglingWorkshopIndex<T>(
+  database: DatabaseSync,
+  operation: () => T,
+): T {
+  return withSqliteWritableSchema(database, operation);
+}
+
+/** Admit the schema before Doctor begins its write transaction. */
+function admitStateDatabaseForSchemaRepair(
+  database: DatabaseSync,
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
+  const admit = () => {
+    assertSupportedStateSchemaVersion(database, pathname);
+    if (danglingWorkshopIndex) {
+      assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
+    }
+  };
+  if (danglingWorkshopIndex) {
+    admitStateDatabaseWithDanglingWorkshopIndex(database, admit);
+  } else {
+    admit();
+  }
+  return danglingWorkshopIndex;
+}
+
+/** Recheck write ownership after BEGIN IMMEDIATE and before catalog mutation. */
+function assertStateDatabaseSchemaRepairWriteAllowed(
+  database: DatabaseSync,
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+  danglingWorkshopIndex: boolean,
+): void {
+  const assertAllowed = () =>
+    assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
+  if (danglingWorkshopIndex) {
+    admitStateDatabaseWithDanglingWorkshopIndex(database, assertAllowed);
+  } else {
+    assertAllowed();
+  }
+}
+
+/** Admit Doctor repair, then return the ownership-rechecked catalog repair operation. */
+export function prepareStateDatabaseSchemaRepair(
+  database: DatabaseSync,
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): () => string[] {
+  const danglingWorkshopIndex = admitStateDatabaseForSchemaRepair(database, pathname, env);
+  return () => {
+    assertStateDatabaseSchemaRepairWriteAllowed(database, pathname, env, danglingWorkshopIndex);
+    return repairDanglingSkillWorkshopCollectionReviewIndexChanges(database);
+  };
+}
 
 const STATE_V6_ADDITIVE_TABLES = [
   // v6-v12 databases may predate this former same-version lazy table.
@@ -76,6 +175,7 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   13: LAZY_ADDITIVE_STATE_TABLES,
   14: LAZY_ADDITIVE_STATE_TABLES,
   15: LAZY_ADDITIVE_STATE_TABLES,
+  16: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -248,6 +348,11 @@ export const openClawStateMigrationAssertions = new Map([
     (database: DatabaseSync, options: { pathname: string }) =>
       assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 15 }),
   ],
+  [
+    16,
+    (database: DatabaseSync, options: { pathname: string }) =>
+      assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 16 }),
+  ],
 ]);
 
 export function markCurrentStateSchemaVersion(
@@ -324,6 +429,31 @@ function migrateConversationBindingTargets(db: DatabaseSync, previousVersion: nu
     db.exec(`ALTER TABLE current_conversation_bindings DROP COLUMN ${column};`);
   }
   return true;
+}
+
+/** Add preparation and activation facts without rebuilding the referenced environment table. */
+function migratePreparedWorkerOwnership(db: DatabaseSync, previousVersion: number): boolean {
+  if (previousVersion >= 17 || !tableExists(db, "worker_environments")) {
+    return false;
+  }
+  const marker = "CREATE TABLE IF NOT EXISTS worker_environments (";
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf("\n) STRICT;", start);
+  if (start < 0 || end < start) {
+    throw new Error("OpenClaw worker environment schema marker is missing.");
+  }
+  const columns = splitSqlList(OPENCLAW_STATE_SCHEMA_SQL.slice(start + marker.length, end))
+    .map((column) => column.trim())
+    .filter(
+      (column) => column.startsWith("last_activated_at_ms ") || column.startsWith("preparation_"),
+    );
+  let changed = false;
+  // The final column carries the cross-column CHECK. All additions and schema
+  // markers commit together, preserving inbound foreign keys and cleanup rows.
+  for (const column of columns) {
+    changed = ensureColumn(db, "worker_environments", column) || changed;
+  }
+  return changed;
 }
 
 // v15 collection cleanup released a dropped skill's claim so a path recreated by hand
@@ -480,6 +610,10 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migrateSkillWorkshopDirectoryOwnership,
     applied: "Moved Skill Workshop ownership to per-agent directories (v16)",
+  },
+  {
+    migrate: migratePreparedWorkerOwnership,
+    applied: "Recorded prepared worker ownership and one-use lifecycle (v17)",
   },
 ];
 

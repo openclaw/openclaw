@@ -26,7 +26,7 @@ const createExecTool = (
 const optionalRuntimeImports = vi.hoisted(() => ({ reviewer: 0, followup: 0 }));
 const reviewerRuntime = vi.hoisted(() => ({
   prepare:
-    vi.fn<typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent>(),
+    vi.fn<typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent>(),
   complete:
     vi.fn<
       typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel
@@ -34,7 +34,7 @@ const reviewerRuntime = vi.hoisted(() => ({
 }));
 
 vi.mock("./simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: reviewerRuntime.prepare,
+  acquireSimpleCompletionModelForAgent: reviewerRuntime.prepare,
   completeWithPreparedSimpleCompletionModel: reviewerRuntime.complete,
 }));
 
@@ -710,6 +710,7 @@ describe("exec security floor", () => {
         baseUrl: "https://example.invalid",
       }),
       auth: { source: "synthetic", mode: "aws-sdk" },
+      release: () => {},
     });
     const completion = createDeferred<never>();
     const completionEntered = createDeferred();

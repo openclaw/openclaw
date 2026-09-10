@@ -466,9 +466,11 @@ function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
 
 function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   params: Parameters<typeof prepareCapabilityProviderLoad<K>>[0],
+  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
 ): PluginRegistry[K] {
-  const load = prepareCapabilityProviderLoad(params);
+  const load = prepareCapabilityProviderLoad(params, onSelectedRegistry);
   const registry = load.loadedRegistry ?? resolveRuntimePluginRegistry(load.resolveLoadOptions());
+  onSelectedRegistry?.(registry);
   const { entries, pluginIds } = load.fallback(registry);
   if (pluginIds.length === 0) {
     return entries;
@@ -482,13 +484,14 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   return entries.length > 0 ? mergeCapabilityProviderEntries(entries, captured) : captured;
 }
 
-export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegistryKey>(params: {
-  key: K;
-  providerId: string;
-  cfg?: OpenClawConfig;
-}): CapabilityProviderFor<K> | undefined {
-  const resolution = preparePluginCapabilityProviderLookup(params);
-  return resolution.resolve(resolution.load ? loadCapabilityProviderEntries(resolution.load) : []);
+export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegistryKey>(
+  params: { key: K; providerId: string; cfg?: OpenClawConfig },
+  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
+): CapabilityProviderFor<K> | undefined {
+  const resolution = preparePluginCapabilityProviderLookup(params, onSelectedRegistry);
+  return resolution.resolve(
+    resolution.load ? loadCapabilityProviderEntries(resolution.load, onSelectedRegistry) : [],
+  );
 }
 
 export function preparePluginCapabilityProviderLookup<K extends CapabilityProviderRegistryKey>(
@@ -664,13 +667,14 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
   };
 }
 
-export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
-  key: K;
-  cfg?: OpenClawConfig;
-  additionalProviderIds?: readonly string[];
-}): CapabilityProviderFor<K>[] {
-  const resolution = preparePluginCapabilityProviderResolution(params);
-  return resolution.resolve(resolution.load ? loadCapabilityProviderEntries(resolution.load) : []);
+export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(
+  params: { key: K; cfg?: OpenClawConfig; additionalProviderIds?: readonly string[] },
+  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
+): CapabilityProviderFor<K>[] {
+  const resolution = preparePluginCapabilityProviderResolution(params, onSelectedRegistry);
+  return resolution.resolve(
+    resolution.load ? loadCapabilityProviderEntries(resolution.load, onSelectedRegistry) : [],
+  );
 }
 
 export function prepareMediaCapabilityProviders(params: {

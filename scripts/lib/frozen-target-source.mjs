@@ -85,6 +85,7 @@ export function createFrozenTargetSource(root, sha) {
     throw new Error("invalid selected source commit tree");
   }
   const rootEntries = readTree(rootTree);
+  const blobs = new Map();
   const lookup = (relativePath, type) => {
     const parts = relativePath.split("/");
     if (
@@ -111,13 +112,61 @@ export function createFrozenTargetSource(root, sha) {
         );
       }
       if (index === parts.length - 1) {
-        return readObject(entry.oid, expectedType);
+        const content = readObject(entry.oid, expectedType);
+        if (expectedType === "blob") {
+          blobs.set(relativePath, entry.oid);
+        }
+        return content;
       }
       entries = readTree(entry.oid);
     }
     return null;
   };
   return {
+    blobIdentities() {
+      return [...blobs]
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([path, oid]) => ({ path, oid }));
+    },
+    readDirectory(relativePath) {
+      const content = lookup(relativePath, "tree");
+      if (content === null) {
+        return null;
+      }
+      const oid = createHash("sha1")
+        .update(`tree ${content.length}\0`)
+        .update(content)
+        .digest("hex");
+      const paths = [];
+      const visit = (tree, prefix, depth) => {
+        if (depth > 64 || paths.length > 4096) {
+          throw new Error("source directory limit exceeded");
+        }
+        for (const entry of readTree(tree)) {
+          const path = `${prefix}/${entry.name}`;
+          if (entry.type === "tree" && entry.mode === "040000") {
+            visit(entry.oid, path, depth + 1);
+          } else {
+            lookup(path, "blob");
+            paths.push(path);
+          }
+        }
+      };
+      visit(oid, relativePath, 0);
+      return paths.toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    },
+    containingBranches(prefix) {
+      if (!/^refs\/remotes\/origin\/[a-z0-9/-]+$/.test(prefix)) {
+        throw new Error("invalid frozen ancestry scope");
+      }
+      if (textDecoder.decode(git("rev-parse", "--is-shallow-repository")).trim() !== "false") {
+        throw new Error("frozen ancestry requires already-acquired history");
+      }
+      return textDecoder
+        .decode(git("for-each-ref", "--format=%(refname:short)", "--contains", sha, prefix))
+        .split("\n")
+        .filter(Boolean);
+    },
     readText(relativePath) {
       const content = lookup(relativePath, "blob");
       return content === null ? null : textDecoder.decode(content);

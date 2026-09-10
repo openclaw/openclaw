@@ -8,6 +8,7 @@ import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/c
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
 import {
   getLoadedRuntimePluginRegistry,
   createRuntimePluginManifestLookup,
@@ -115,12 +116,16 @@ function wrapPluginToolCallbacks(
     signal?: AbortSignal,
     onUpdate?: unknown,
   ) =>
-    runScoped(
-      () =>
-        Reflect.apply(tool.execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
-          AnyAgentTool["execute"]
-        >,
-    );
+    runScoped(() => {
+      const execute = (executionSignal?: AbortSignal) =>
+        Reflect.apply(tool.execute, tool, [
+          toolCallId,
+          params,
+          executionSignal,
+          onUpdate,
+        ]) as ReturnType<AnyAgentTool["execute"]>;
+      return signal ? runWithTrackedCancellation(signal, execute) : execute();
+    });
   const wrapped = new Proxy<AnyAgentTool>(tool, {
     get(target, prop) {
       if (prop === "prepareArguments" && scopedPrepareArguments) {
@@ -1017,6 +1022,24 @@ function resolvePluginToolsFromRegistry(
         continue;
       }
       const tool = toolRaw as AnyAgentTool;
+      // The pre-factory gate narrows on registration names, but a factory can
+      // return any tool in its declared contract. Re-check actual factory
+      // output so a non-bundled factory returning a host-restricted
+      // conversation-read tool (e.g. feishu_chat) is blocked in delegated
+      // runs, mirroring the pre-factory denial.
+      if (
+        blocksHostRestrictedConversationReadTool({
+          pluginId: entry.pluginId,
+          toolNames: [tool.name],
+          bundledOwner: isBundledConversationReadToolRegistration({
+            entry,
+            manifestPlugin,
+          }),
+          ctx: params.context,
+        })
+      ) {
+        continue;
+      }
       const undeclared = entry.declaredNames
         ? findUndeclaredPluginToolNames({
             declaredNames: entry.declaredNames,

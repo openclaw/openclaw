@@ -23,9 +23,12 @@ import type {
   SessionsCompactionRestoreResult as ProtocolSessionsCompactionRestoreResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
-import type { GatewaySessionRow as GatewayWireSessionRow } from "../../../src/gateway/session-utils.types.js";
 import type {
-  GatewayAgentRuntime,
+  GatewaySessionRow as GatewayWireSessionRow,
+  GatewaySessionsDefaults as GatewayWireSessionsDefaults,
+  SessionsPatchResult as GatewayWireSessionsPatchResult,
+} from "../../../src/gateway/session-utils.types.js";
+import type {
   GatewayAgentRow as SharedGatewayAgentRow,
   GatewayContextWindowOption,
   GatewayThinkingLevelOption,
@@ -206,19 +209,7 @@ export type ConfigSnapshot = {
 
 export type PresenceEntry = ProtocolPresenceEntry;
 
-export type GatewaySessionsDefaults = {
-  modelProvider: string | null;
-  model: string | null;
-  contextTokens: number | null;
-  contextWindow?: string;
-  contextWindows?: GatewayContextWindowOption[];
-  contextWindowDefault?: string;
-  agentRuntime?: GatewayAgentRuntime;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-  modelSelectionTarget?: "session" | "agent" | "global";
-};
+export type GatewaySessionsDefaults = GatewayWireSessionsDefaults;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
@@ -303,17 +294,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-}> & {
-  resolved?: {
-    modelProvider?: string;
-    model?: string;
-    agentRuntime?: GatewayAgentRuntime;
-    contextWindow?: string;
-    contextWindows?: GatewayContextWindowOption[];
-    thinkingLevel?: string;
-    thinkingLevels?: GatewayThinkingLevelOption[];
-  };
-};
+}> &
+  Pick<GatewayWireSessionsPatchResult, "resolved">;
 
 export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
 

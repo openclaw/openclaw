@@ -219,8 +219,8 @@ backend intentionally needs its own watchdog policy.
   clear-and-reseed behavior. OpenClaw clears the persisted binding and retries
   with a fresh session when the failure is eligible for recovery.
 - Set it to `"invalidated-only"` to suppress fresh replacement unless the
-  canonical invalidation predicate proves the old session is dead. Currently,
-  only `session_expired` does so.
+  canonical invalidation predicate proves the old session is dead. Only
+  `session_expired` does so.
 
 Choose the value from the CLI or SDK session contract, not from a provider id
 or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;

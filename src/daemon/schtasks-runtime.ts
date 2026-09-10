@@ -47,6 +47,18 @@ import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract
 export const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 export const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
+/** Read policy independently of runtime state; unavailable policy is not disabled. */
+export async function isScheduledTaskEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
+  const observed = probeScheduledTaskState(
+    resolveTaskName(args.env ?? process.env),
+    args.timeoutMs,
+  );
+  if (observed.status !== "found" || typeof observed.enabled !== "boolean") {
+    throw new Error("Scheduled Task enable policy could not be inspected.");
+  }
+  return observed.enabled;
+}
+
 export async function assertSchtasksAvailable(): Promise<void> {
   const res = await execSchtasks(["/Query"]);
   if (res.code !== 0) {
@@ -120,6 +132,7 @@ export async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise
 export async function launchFallbackTaskScript(
   env: GatewayServiceEnv,
   installedCommand?: GatewayServiceCommandConfig | null,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const scriptPath = resolveTaskScriptPath(env);
   const command =
@@ -133,6 +146,7 @@ export async function launchFallbackTaskScript(
         ? [...command.programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
         : command.programArguments;
     const { child } = await spawnWithFallback({
+      assertCurrent,
       argv: programArguments,
       options: {
         cwd: command.workingDirectory || undefined,
@@ -172,6 +186,7 @@ export async function launchFallbackTaskScript(
     throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
   }
   const { child } = await spawnWithFallback({
+    assertCurrent,
     // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
     argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
     options: {
@@ -367,22 +382,26 @@ export async function stopStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
   onMutation?: () => void,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300);
+    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
   }
   onMutation?.();
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
 }
 
-export async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise<void> {
+export async function terminateInstalledStartupRuntime(
+  env: GatewayServiceEnv,
+  assertCurrent?: () => void,
+): Promise<void> {
   if (!(await isStartupEntryInstalled(env))) {
     return;
   }
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300);
+    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
   }
 }
 
@@ -406,8 +425,9 @@ export async function startStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
   onMutation?: () => void,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  await launchFallbackTaskScript(env);
+  await launchFallbackTaskScript(env, undefined, assertCurrent);
   onMutation?.();
   stdout.write(`${formatLine("Started Windows login item", resolveTaskName(env))}\n`);
 }

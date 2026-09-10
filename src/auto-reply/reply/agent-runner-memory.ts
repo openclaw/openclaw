@@ -1737,6 +1737,7 @@ export async function runMemoryFlushIfNeeded(params: {
           allowEmptyAssistantReplyAsSilent: true,
           terminalReplyExpectation: "optional",
           trigger: "memory",
+          contextTokenBudget: contextWindowTokens,
           memoryFlushWritePath,
           initialTurnTainted:
             !params.followupRun.run.senderIsOwner || sessionLogSnapshot?.turnTainted === true,

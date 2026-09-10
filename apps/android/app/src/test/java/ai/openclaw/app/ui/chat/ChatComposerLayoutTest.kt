@@ -189,6 +189,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowDialog
 import org.robolectric.shadows.ShadowSpeechRecognizer
+import java.io.IOException
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -1265,8 +1267,8 @@ class ChatComposerLayoutTest {
         val close = composeRule.onNodeWithContentDescription(nativeString("Close")).assertIsDisplayed().getUnclippedBoundsInRoot()
         assertTrue("Close must remain a complete action target", close.bottom - close.top >= 48.dp && close.right - close.left >= 48.dp)
       }
-      composeRule.onNodeWithContentDescription(nativeString("Dismiss shared-image warning")).performScrollTo().performClick()
-      composeRule.onNodeWithContentDescription(nativeString("Dismiss shared-image warning")).assertDoesNotExist()
+      composeRule.onNodeWithContentDescription(nativeString("Dismiss attachment warning")).performScrollTo().performClick()
+      composeRule.onNodeWithContentDescription(nativeString("Dismiss attachment warning")).assertDoesNotExist()
       composeRule.onNodeWithContentDescription(nativeString("Remove attachment")).performScrollTo().performClick()
       composeRule.onNodeWithText("draft-note.txt").assertDoesNotExist()
       composeRule.onNodeWithContentDescription(nativeString("Expand progress card")).performScrollTo().performClick()
@@ -3749,6 +3751,53 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun pickerImportKeepsSendDisabledUntilCaptionAndAttachmentAreReady() {
+    val caption = "Caption for the picked note"
+    withDeferredPickerAttachment(caption) { model, attachment, release ->
+      val owner = model.captureChatShareOwner()
+      val editor = composeRule.onNode(hasSetTextAction())
+      editor.assertTextEquals(caption)
+      composeRule.onNodeWithContentDescription("Send").assertIsDisplayed().assertIsNotEnabled()
+      composeRule.runOnIdle {
+        assertEquals(ChatComposerSendStartResult.Unavailable, model.chatComposerState.beginSend(owner).result)
+      }
+
+      release.complete(listOf(attachment))
+      composeRule.waitUntil {
+        composeRule.runOnIdle { model.chatComposerState.attachments.value[owner] == listOf(attachment) }
+      }
+      composeRule.onNodeWithText(attachment.fileName).assertIsDisplayed()
+      editor.assertTextEquals(caption)
+      composeRule.onNodeWithContentDescription("Send").assertIsDisplayed().assertIsEnabled()
+      composeRule.runOnIdle {
+        val request = requireNotNull(model.chatComposerState.beginSend(owner).request)
+        try {
+          assertEquals(caption, request.message)
+          assertEquals(listOf(attachment), request.attachments)
+        } finally {
+          model.chatComposerState.completeSend(request, accepted = false)
+        }
+      }
+    }
+  }
+
+  @Test
+  fun pickedDocumentReadFailureKeepsCaptionAndReportsAnAttachmentFailure() {
+    val caption = "Keep this caption if the document is unavailable"
+    withDeferredPickerAttachment(caption) { model, attachment, release ->
+      val owner = model.captureChatShareOwner()
+      release.completeExceptionally(IOException("Synthetic document temporarily unavailable"))
+      composeRule.waitUntil {
+        composeRule.runOnIdle { owner in model.chatComposerState.attachmentNotices.value }
+      }
+      composeRule.onNodeWithText(nativeString("Could not stage an attachment for sending.")).assertIsDisplayed()
+      composeRule.onNodeWithText(attachment.fileName).assertDoesNotExist()
+      composeRule.onNode(hasSetTextAction()).assertTextEquals(caption)
+      composeRule.onNodeWithContentDescription("Send").assertIsDisplayed().assertIsEnabled()
+    }
+  }
+
+  @Test
   fun attachmentMenuDoesNotRestoreWhileDraftAndExplicitReopeningRemainUsable() {
     val restoration = StateRestorationTester(composeRule)
     showChat(viewportHeight = { 640.dp }, restorationTester = restoration)
@@ -4227,6 +4276,46 @@ class ChatComposerLayoutTest {
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(if (expectedSends == 0) draft else "")))
     } finally {
       requestField.set(controller, originalRequest)
+    }
+  }
+
+  private fun withDeferredPickerAttachment(
+    caption: String,
+    assertions: (MainViewModel, PendingAttachment, CompletableDeferred<List<PendingAttachment>>) -> Unit,
+  ) {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = AndroidScreenshotFixture.gatewayId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = "Test gateway",
+      ),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val model = showChat(viewportHeight = { 640.dp })
+    val owner = model.captureChatShareOwner()
+    val attachment =
+      PendingAttachment(
+        id = "picked-note",
+        fileName = "picked-note.md",
+        mimeType = "text/markdown",
+        base64 = Base64.getEncoder().encodeToString("# Picked note".toByteArray()),
+      )
+    val entered = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<List<PendingAttachment>>()
+    composeRule.onNode(hasSetTextAction()).performTextReplacement(caption)
+    composeRule.onNodeWithContentDescription("Send").assertIsDisplayed().assertIsEnabled()
+    try {
+      composeRule.runOnIdle {
+        val authorization = requireNotNull(model.chatComposerState.beginMediaAcquisition(owner))
+        model.importChatComposerAttachments(owner, authorization, model.mainSessionKey.value, expectedCount = 1) {
+          entered.complete(Unit)
+          release.await()
+        }
+      }
+      composeRule.waitUntil { entered.isCompleted }
+      assertions(model, attachment, release)
+    } finally {
+      release.complete(emptyList())
     }
   }
 

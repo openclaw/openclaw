@@ -23,6 +23,7 @@ import {
 } from "./artifacts.js";
 import type {
   SessionLifecycleArchivedTranscript,
+  SqliteSessionReclamationAdmissionDiagnostics,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import {
@@ -308,6 +309,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
   onCommitRequest?: () => void;
   withWriteAdmission?: (
     run: (refusal?: { error: unknown }) => Promise<Result[] | undefined>,
+    diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
   ) => Promise<void>;
   transferList?: ArrayBuffer[];
   workerData: object;
@@ -338,7 +340,13 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
   const operation = new Promise<Result[]>((resolve, reject) => {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
-    let admission: { id: number; released: Deferred } | undefined;
+    let admission:
+      | {
+          id: number;
+          released: Deferred;
+          diagnostics: SqliteSessionReclamationAdmissionDiagnostics;
+        }
+      | undefined;
     let admissionId = 0;
     let exited = false;
     const admissionTasks: Promise<void>[] = [];
@@ -358,7 +366,11 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
           void worker.terminate();
           return;
         }
-        const requested = { id: ++admissionId, released: createDeferredCore() };
+        const requested = {
+          id: ++admissionId,
+          released: createDeferredCore(),
+          diagnostics: { admissionId } satisfies SqliteSessionReclamationAdmissionDiagnostics,
+        };
         admission = requested;
         const task = withWriteAdmission(async (refusal) => {
           if (exited) {
@@ -382,7 +394,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
             return results;
           }
           return undefined;
-        }).catch(async (error: unknown) => {
+        }, requested.diagnostics).catch(async (error: unknown) => {
           workerError ??= toStringifiedError(error);
           if (!exited && admission === requested) {
             try {
@@ -414,6 +426,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
         }
         const released = admission;
         admission = undefined;
+        released.diagnostics.releaseCause = "worker-release";
         released.released.resolve();
       } else if (message.type === params.expectedMessageType) {
         (results ??= []).push(...message.results);
@@ -427,7 +440,10 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
     worker.once("exit", (code) => {
       exited = true;
       exitCode = code;
-      admission?.released.resolve();
+      if (admission) {
+        admission.diagnostics.releaseCause = "worker-exit";
+        admission.released.resolve();
+      }
       worker.removeAllListeners();
       void Promise.all(admissionTasks).then(() => {
         if (workerError) {
@@ -482,6 +498,7 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
   onCommitRequest?: () => void;
   withWriteAdmission?: (
     run: (refusal?: { error: unknown }) => Promise<Result[] | undefined>,
+    diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
   ) => Promise<void>;
   transferList?: ArrayBuffer[];
   workerData: object;

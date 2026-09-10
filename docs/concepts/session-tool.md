@@ -232,15 +232,14 @@ tool clamp stays limited to its spawn subtree. Incognito sessions remain hidden
 from every cross-session tool. Ambient group watches still add activity notices
 and prompt hints; they do not grant access.
 
-## Further reading
-
-- [Session Management](/concepts/session): routing, lifecycle, maintenance
-- [Sub-agents](/tools/subagents): child-session lifecycle and delivery
-- [ACP Agents](/tools/acp-agents): external harness spawning
-- [Multi-agent](/concepts/multi-agent): multi-agent architecture
-- [Gateway Configuration](/gateway/configuration): session tool config knobs
+<a id="further-reading" />
 
 ## Related
 
-- [Session management](/concepts/session)
+- [Session Management](/concepts/session): routing, lifecycle, maintenance
 - [Session pruning](/concepts/session-pruning)
+- [Sub-agents](/tools/subagents): child-session lifecycle and delivery
+- [ACP Agents](/tools/acp-agents): external harness spawning
+- [Multi-agent](/concepts/multi-agent): multi-agent architecture
+- [Goal](/tools/goal) — durable per-session objectives, read and updated through the dedicated `get_goal`, `create_goal`, and `update_goal` tools
+- [Gateway Configuration](/gateway/configuration): session tool config knobs

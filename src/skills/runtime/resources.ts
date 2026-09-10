@@ -124,10 +124,12 @@ export async function prepareSkillResourceDelivery(
     try {
       files = pin
         ? await readSelectedSkillLibraryFiles(pin)
-        : await readSkillBundleTree(skill.baseDir, shouldSyncSkillPath);
+        : await readSkillBundleTree(skill.baseDir, shouldSyncSkillPath, {
+            symlinks: "follow-within-root",
+          });
     } catch (error) {
       // Only a vanished catalog root is stale discovery state. Nested disappearance, explicit
-      // selection, permissions, integrity failures, and special entries remain fail-closed.
+      // selection, permissions, integrity failures, and unsafe entries remain fail-closed.
       if (!pin && !explicitlySelected && isMissingDiscoveredSkillRoot(error)) {
         assertCurrent();
         log.warn("Skipping stale discovered skill during worker resource preparation.", {

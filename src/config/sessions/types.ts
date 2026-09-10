@@ -587,6 +587,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
+    /** Automatic device name; never claims a custom label or overrides a generated title. */
+    autoLabel?: string;
     /** Persistent operator/agent-set sidebar emoji icon (single grapheme). */
     icon?: string;
     /** Named sidebar tint (SESSION_COLOR_IDS); palette mirrors Claude Code /color for import. */

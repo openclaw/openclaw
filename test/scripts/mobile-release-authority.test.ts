@@ -3141,7 +3141,7 @@ fi
     ]);
   });
 
-  it("owns the iOS signing keychain through trusted authority code", () => {
+  it("runs the iOS signing proof through the prepared Fastlane environment", () => {
     const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
     const workflow = parse(source) as {
       jobs: {
@@ -3188,10 +3188,115 @@ fi
     expect(releaseSteps[signingProofIndex]?.env).toEqual({
       MATCH_PASSWORD: "${{ secrets.MATCH_PASSWORD }}",
     });
-    expect(releaseSteps[signingProofIndex]?.run).toContain("pnpm ios:release:signing:check");
-    expect(releaseSteps[signingProofIndex]?.run).toContain(
-      "authority/.github/actions/ios-signing-keychain/keychain.mjs probe",
+    const signingProof = releaseSteps[signingProofIndex]?.run;
+    expect(signingProof).toBeTruthy();
+    const fixtureRoot = tempRoots.make("openclaw-ios-signing-proof-");
+    const workspace = path.join(fixtureRoot, "workspace");
+    const home = path.join(fixtureRoot, "home");
+    const preparedBin = path.join(fixtureRoot, "prepared-bin");
+    const loginBin = path.join(fixtureRoot, "login-bin");
+    const eventsPath = path.join(fixtureRoot, "events");
+    for (const directory of [
+      home,
+      preparedBin,
+      loginBin,
+      path.join(workspace, "scripts/lib"),
+      path.join(workspace, "apps/ios"),
+    ]) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
+    fs.copyFileSync(
+      "scripts/lib/ios-fastlane.sh",
+      path.join(workspace, "scripts/lib/ios-fastlane.sh"),
     );
+    fs.copyFileSync("apps/ios/Gemfile", path.join(workspace, "apps/ios/Gemfile"));
+    fs.writeFileSync(
+      path.join(home, ".bash_profile"),
+      'export PATH="$FIXTURE_LOGIN_BIN:/usr/bin:/bin"\n',
+    );
+    fs.writeFileSync(
+      path.join(preparedBin, "pnpm"),
+      [
+        "#!/bin/bash",
+        'printf "pnpm:%s\\n" "$*" >>"$FIXTURE_EVENTS"',
+        "exec /bin/bash -lc 'source ./scripts/lib/ios-fastlane.sh && cd apps/ios && run_ios_fastlane ios signing_check'",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(loginBin, "bundle"),
+      ["#!/bin/bash", 'printf "login-bundle:%s\\n" "$*" >>"$FIXTURE_EVENTS"', "exit 42", ""].join(
+        "\n",
+      ),
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(preparedBin, "bundle"),
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        '[[ "$BUNDLE_GEMFILE" == "$FIXTURE_WORKSPACE/apps/ios/Gemfile" ]]',
+        '[[ "$PWD" == "$FIXTURE_WORKSPACE/apps/ios" ]]',
+        'printf "bundle:%s\\n" "$*" >>"$FIXTURE_EVENTS"',
+        'if [[ "$2" == "check" ]]; then',
+        '  [[ "${FIXTURE_FAIL_CHECK:-0}" != "1" ]] || exit 42',
+        'elif [[ "$2" != "exec" || "$3" != "fastlane" || "$4" != "ios" || "$5" != "signing_check" ]]; then',
+        "  exit 43",
+        "fi",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(preparedBin, "node"),
+      [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        '[[ "$PWD" == "$FIXTURE_WORKSPACE" ]]',
+        '[[ "$*" == "apps/ios/build/mobile-release-ci/authority/.github/actions/ios-signing-keychain/keychain.mjs probe" ]]',
+        'printf "probe:root-cwd\\n" >>"$FIXTURE_EVENTS"',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const runSigningProof = (extraEnv: NodeJS.ProcessEnv = {}) => {
+      fs.writeFileSync(eventsPath, "");
+      const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-c", signingProof ?? ""], {
+        cwd: workspace,
+        encoding: "utf8",
+        env: {
+          FIXTURE_EVENTS: eventsPath,
+          FIXTURE_LOGIN_BIN: loginBin,
+          FIXTURE_WORKSPACE: workspace,
+          HOME: home,
+          MATCH_PASSWORD: "fixture-password",
+          PATH: `${preparedBin}:/usr/bin:/bin`,
+          ...extraEnv,
+        },
+        timeout: 5_000,
+      });
+      return {
+        events: fs.readFileSync(eventsPath, "utf8").trim().split("\n").filter(Boolean),
+        result,
+      };
+    };
+
+    const prepared = runSigningProof();
+    expect(prepared.result.status, prepared.result.stderr).toBe(0);
+    expect(prepared.events).toEqual([
+      "bundle:_2.6.9_ check",
+      "bundle:_2.6.9_ exec fastlane ios signing_check",
+      "probe:root-cwd",
+    ]);
+    expect(signingProof).toContain("source ./scripts/lib/ios-fastlane.sh");
+    expect(signingProof).toContain("(cd apps/ios && run_ios_fastlane ios signing_check)");
+
+    const failedCheck = runSigningProof({ FIXTURE_FAIL_CHECK: "1" });
+    expect(failedCheck.result.status).not.toBe(0);
+    expect(failedCheck.events).toEqual(["bundle:_2.6.9_ check"]);
+
     const authorityCheckout = releaseSteps.find(
       (step) => step.name === "Checkout trusted mobile release authority",
     );

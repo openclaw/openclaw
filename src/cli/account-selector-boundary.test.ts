@@ -14,7 +14,6 @@ type AccountOptions = {
 
 const context: ProgramContext = {
   programVersion: "test",
-  channelOptions: ["discord"],
   messageChannelOptions: "discord",
   agentChannelOptions: "last|discord",
 };

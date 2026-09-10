@@ -33,7 +33,8 @@ exposing it in message context fields. The standalone public builder is not an
 authoritative substitute. Never reconstruct evidence from sender, route, room,
 account, thread, message, transport, or session values. Legacy adapters can explicitly pass
 `channelIngress: "unsupported"` only when the path is source-proven to lack an
-authoritative Phase 0 integration. Supported paths must pass the exact result;
+authoritative ingress-resolver integration. Supported paths must pass the exact
+result;
 omission is invalid production wiring. Missing, fake, stale, reused, or mixed
 supported evidence projects as unknown, never as an allow signal.
 

@@ -290,6 +290,7 @@ export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-trans
 export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
+  readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,

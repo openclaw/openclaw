@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Context, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
@@ -36,7 +37,8 @@ import {
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
+import { resolveProviderTransportTurnState } from "./provider-transport-turn-state.js";
+import { hasOpencodeSessionHeader, resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
@@ -201,6 +203,16 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+        const turnState = resolveProviderTransportTurnState(model, {
+          sessionId: options?.sessionId,
+          turnId: randomUUID(),
+          attempt: 1,
+          transport: "stream",
+        });
+        const optionHeaders = resolveOpencodeSessionHeaders(model, options);
+        const turnHeaders = hasOpencodeSessionHeader(model, options)
+          ? undefined
+          : turnState?.headers;
         // The OpenAI SDK consumes the SSE terminal without yielding it. Observe
         // the raw body so native tool calls can distinguish clean DONE from EOF.
         const doneDetector = createSseDoneDetector();
@@ -234,7 +246,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           model,
           context,
           apiKey,
-          resolveOpencodeSessionHeaders(model, options),
+          { ...turnHeaders, ...optionHeaders },
           {
             fetch: doneDetectingFetch,
           },

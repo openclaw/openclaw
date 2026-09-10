@@ -39,7 +39,7 @@ import {
 } from "./doctor-state-integrity.test-support.js";
 
 const WORKSPACE_BACKUP_TIP =
-  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
+  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
 
 describe("workspace backup tip", () => {
   it("recognizes direct, deeply nested, and symlinked Git workspaces without duplicate tips", async () => {

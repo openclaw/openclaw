@@ -1215,7 +1215,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/clawhub-parent-authorization.test.ts",
         "test/scripts/clawhub-postpublish.test.ts",
         "test/scripts/frv.test.ts",
+        "test/scripts/openclaw-release-ready.test.ts",
         "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
+        "test/scripts/release-beta-verifier.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
@@ -1413,6 +1415,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-platform-checkout.test.ts",
         "src/scripts/ci-changed-scope.git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        ...(workflow === "docs-sync-publish" ? ["test/scripts/docs-mirror-freshness.test.ts"] : []),
       ],
     );
     const plans = buildVitestRunPlans(["test/scripts/ci-linux-git.test.ts"]);
@@ -2481,6 +2484,7 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [
           "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
           "test/scripts/mcp-channels-seed.built-cli.e2e.test.ts",
+          "test/scripts/node-runtime-recovery.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -4238,6 +4242,17 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(orderFullSuiteSpecsForParallelRun([runtime, tooling])).toEqual([tooling, runtime]);
   });
 
+  it("prices expanded chunk files without enabling include-file filtering", () => {
+    const chunk = {
+      config: "test/vitest/vitest.tooling.config.ts",
+      includePatterns: null,
+      timingTargets: ["test/scripts/vitest-worker-artifacts.test.ts"],
+    };
+    const whole = { config: "test/vitest/vitest.runtime-config.config.ts", includePatterns: null };
+
+    expect(orderFullSuiteSpecsForParallelRun([whole, chunk])).toEqual([chunk, whole]);
+  });
+
   it("uses observed selection timings without substituting a whole-config sample", () => {
     const fastTooling = {
       config: "test/vitest/vitest.tooling.config.ts",
@@ -4547,6 +4562,10 @@ describe("scripts/test-projects full-suite sharding", () => {
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
         expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+        for (const plan of plans.filter((entry) => entry.forwardedArgs.length > 0)) {
+          expect(plan.timingTargets).toEqual(plan.forwardedArgs);
+          expect(plan.includePatterns).toBeNull();
+        }
       },
     );
   });

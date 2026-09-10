@@ -139,3 +139,4 @@ the page that now holds the content.
 - [Agent send](/tools/agent-send)
 - [Background tasks](/automation/tasks)
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+- [Steer](/tools/steer) — redirect a running agent mid-task

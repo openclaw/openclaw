@@ -28,6 +28,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -302,7 +303,12 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat
-            ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
+            ? {
+                provenance: resolveInternalTurnTranscript({
+                  InputProvenance: inputProvenance,
+                  InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
+                }).provenance,
+              }
             : {}),
           ...(transport ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),

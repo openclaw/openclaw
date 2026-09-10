@@ -38,13 +38,22 @@ admission. Publish live session changes and other dependent effects only after
 the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
-Explicit session deletion and lifecycle-artifact cleanup prepare their plans
-inside the session writer queue. When the parent database handle is cold, its
+Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
+eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its
 existing asynchronous admission owner runs the full integrity and foreign-key
 checks in a read-only child, moving those full checks off the main thread while
 retaining that queue position. A supplied caller guard is rechecked before the open
 resumes into index repair, schema work, or registration, and before that caller
-uses the admitted handle. Coalesced callers retain their own guards.
+uses the admitted handle. Coalesced callers retain their own guards. History
+eviction also uses this admission when reopening after archive materialization,
+then rereads candidate protection before preparing reclamation.
+
+Prepared session-store updates, entry replacements, and lifecycle upserts use
+the same admission for cold snapshot reads and actual commits, retaining their
+existing writer position. Warm update callbacks remain direct. Result-only
+no-op commits do not reopen a disposed handle. Native deletion and archive
+preparation still run outside the writer; the subsequent commit rechecks its
+native owner's authority after any awaited admission.
 
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
@@ -86,6 +95,14 @@ preserves physical checkpointing before measuring pressure, so unreclaimed pages
 do not cause unnecessary archive deletion. Full logical deletion with resumable
 physical cleanup remains a separate design; existing deletion visibility and rollback
 semantics are unchanged.
+
+Queued archive pruning prepares cold connections through the same asynchronous
+admission owner while retaining its existing writer section. Each page-drain
+pass keeps its checkpoints, freelist reads, and bounded vacuum in one synchronous
+phase on the admitted connection. Archive-row and unpublished-name reads follow
+validation. After removing a derived archive file, pruning reacquires before the
+canonical row-deletion transaction; an acquisition failure propagates without
+deleting that recovery row.
 
 ### Preserve the data and concurrency contracts
 
@@ -165,3 +182,24 @@ JSON output is identified by `schema: "openclaw.state-schema-preflight.v1"`.
 Use a SQLite online backup or another WAL-aware snapshot produced while the source is safely coordinated. The resulting preflight input must be one consolidated file with no sibling `-wal`, `-shm`, or `-journal`; sidecars make the result `indeterminate`. Do not copy only the main `.sqlite` file from an active WAL database. Preflight the exact runtime that will be activated; a package version or numeric schema version alone does not prove same-version shape compatibility.
 
 Diagnostic paths that prepare their own private read-only snapshots use the size-derived child-process budget described under [Integrity checks](/reference/database-schemas#integrity-checks).
+
+### Preflight an explicit agent copy
+
+Runtimes that provide the agent reader also support:
+
+```bash
+openclaw database preflight-agent <copied-agent.sqlite> --agent-id main --json
+```
+
+Use the exact canonical agent ID and a canonical regular-file path. This command
+validates integrity, both schema version markers, schema shape, and agent ownership
+through that release's maintenance reader, without creating, registering, migrating,
+or repairing any store. The supplied file must be consolidated with no WAL, SHM,
+or journal siblings. JSON uses `openclaw.agent-schema-preflight.v1`; only `exact`
+is compatibility proof. Other outcomes exit nonzero and require no writes.
+
+Shared-state preflight cannot validate agent databases. Older retained payloads
+without `preflight-agent` remain unsupported; installing a newer CLI elsewhere
+does not make those payloads compatible. Runtime/package identity and serving
+health are separate checks from database compatibility. A successful read-only
+preflight does not authorize checkpoint replay or replacement of live databases.

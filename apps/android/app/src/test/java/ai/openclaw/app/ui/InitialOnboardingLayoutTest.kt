@@ -1,12 +1,16 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.bindNodeRuntimeTestFixture
 import ai.openclaw.app.closeNodeRuntimeTestFixture
+import ai.openclaw.app.drainWithMainLooper
+import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -16,6 +20,7 @@ import android.provider.Settings
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.testTag
@@ -54,9 +59,28 @@ import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.google.mlkit.common.sdkinternal.MlKitContext
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.job
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -66,6 +90,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
+import java.net.InetAddress
 import java.util.UUID
 
 private const val OnboardingViewportTag = "initial-onboarding-viewport"
@@ -77,8 +102,9 @@ class InitialOnboardingLayoutTest {
   val composeRule = createComposeRule()
 
   @Before
-  fun disableMascotAnimations() {
+  fun setUp() {
     val context = ApplicationProvider.getApplicationContext<Context>()
+    MlKitContext.initializeIfNeeded(context)
     Settings.Global.putFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
   }
 
@@ -193,6 +219,105 @@ class InitialOnboardingLayoutTest {
         models.clear()
       } finally {
         closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+  }
+
+  @Test
+  fun dismissedNodeApprovalDialogStaysClosedAcrossBackgroundRefreshes() {
+    val app = ApplicationProvider.getApplicationContext<NodeApp>()
+    val prefs = SecurePrefs(app, app.getSharedPreferences("onboarding-approval-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    prefs.setOnboardingCompleted(false)
+    prefs.setManualTls(false)
+    val previousRuntime = app.peekRuntime()
+    val gateway = OnboardingApprovalGateway(DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId)
+    var ownedRuntime: NodeRuntime? = null
+    val models = ViewModelStore()
+    val mounted = mutableStateOf(true)
+    var viewModelJob: Job? = null
+    try {
+      val runtime = NodeRuntime(app, prefs).also { ownedRuntime = it }
+      bindNodeRuntimeTestFixture(app, runtime)
+      val viewModel = MainViewModel(app, prefs, SavedStateHandle())
+      models.put("onboarding", viewModel)
+      viewModelJob = viewModel.viewModelScope.coroutineContext.job
+      setContent(fontScale = 1f, viewportHeight = 720.dp) {
+        if (mounted.value) OnboardingFlow(viewModel)
+      }
+
+      fun awaitUnapprovedRefreshCompletion() {
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+          runtime.gatewayConnectionDisplay.value.isConnected &&
+            runtime.nodeCapabilityApproval.value == GatewayNodeCapabilityApproval.Unapproved &&
+            !runtime.nodesDevicesRefreshing.value
+        }
+      }
+
+      composeRule.onNodeWithText("Continue").performClick()
+      composeRule.onNodeWithText("Set up manually").performClick()
+      composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("127.0.0.1")
+      composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement(gateway.port.toString())
+      composeRule.onNodeWithText("Test connection").performClick()
+      awaitUnapprovedRefreshCompletion()
+      composeRule.onNodeWithText("Continue").assertIsEnabled().performClick()
+
+      fun awaitHeldRefresh() {
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+          gateway.hasHeldNodeLists && runtime.nodesDevicesRefreshing.value
+        }
+        composeRule.onNodeWithText("Checking approval…").assertIsDisplayed()
+      }
+
+      fun checkUnapprovedNode() {
+        gateway.holdNodeLists()
+        composeRule
+          .onNodeWithText("I have approved")
+          .assertIsEnabled()
+          .performSemanticsAction(SemanticsActions.OnClick) { click -> assertTrue(click()) }
+        awaitHeldRefresh()
+        gateway.releaseNodeLists()
+        awaitUnapprovedRefreshCompletion()
+        composeRule.onNodeWithText("Still waiting for approval").assertIsDisplayed()
+      }
+
+      checkUnapprovedNode()
+      composeRule.onNodeWithText("OK").performClick()
+      composeRule.onNodeWithText("Still waiting for approval").assertDoesNotExist()
+
+      repeat(2) {
+        gateway.holdNodeLists()
+        composeRule.runOnIdle { runtime.refreshNodesDevices() }
+        awaitHeldRefresh()
+        gateway.releaseNodeLists()
+        awaitUnapprovedRefreshCompletion()
+        composeRule.onNodeWithText("Still waiting for approval").assertDoesNotExist()
+        composeRule.onNodeWithText("I have approved").assertIsDisplayed().assertIsEnabled()
+      }
+
+      // A new user check can report waiting again; dismissal does not suppress later feedback.
+      checkUnapprovedNode()
+      composeRule.onNodeWithText("OK").performClick()
+      composeRule.onNodeWithText("Still waiting for approval").assertDoesNotExist()
+    } finally {
+      gateway.releaseNodeLists()
+      try {
+        composeRule.runOnIdle { mounted.value = false }
+        composeRule.waitForIdle()
+      } finally {
+        try {
+          models.clear()
+          drainWithMainLooper { withTimeout(10_000) { viewModelJob?.cancelAndJoin() } }
+        } finally {
+          try {
+            ownedRuntime?.let(::closeNodeRuntimeTestFixture)
+          } finally {
+            try {
+              bindNodeRuntimeTestFixture(app, previousRuntime)
+            } finally {
+              gateway.close()
+            }
+          }
+        }
       }
     }
   }
@@ -440,5 +565,181 @@ class InitialOnboardingLayoutTest {
     focusedInput.assert(
       if (secret) SemanticsMatcher.keyIsDefined(SemanticsProperties.Password) else SemanticsMatcher.keyNotDefined(SemanticsProperties.Password),
     )
+  }
+}
+
+private class OnboardingApprovalGateway(
+  private val selfNodeId: String,
+) : AutoCloseable {
+  private val server = MockWebServer()
+  private val nodeListLock = Any()
+  private var holdNodeListResponses = false
+  private val heldNodeLists = mutableListOf<Pair<WebSocket, JsonElement>>()
+  val port: Int get() = server.port
+  val hasHeldNodeLists: Boolean get() = synchronized(nodeListLock) { heldNodeLists.isNotEmpty() }
+
+  init {
+    server.dispatcher =
+      object : Dispatcher() {
+        override fun dispatch(request: RecordedRequest): MockResponse =
+          if (request.getHeader("Upgrade").equals("websocket", ignoreCase = true)) {
+            MockResponse().withWebSocketUpgrade(listener())
+          } else {
+            MockResponse().setResponseCode(404)
+          }
+      }
+    server.start(InetAddress.getByName("127.0.0.1"), 0)
+  }
+
+  fun holdNodeLists() {
+    synchronized(nodeListLock) {
+      check(!holdNodeListResponses && heldNodeLists.isEmpty())
+      holdNodeListResponses = true
+    }
+  }
+
+  fun releaseNodeLists() {
+    val responses =
+      synchronized(nodeListLock) {
+        holdNodeListResponses = false
+        heldNodeLists.toList().also { heldNodeLists.clear() }
+      }
+    responses.forEach { (socket, id) -> reply(socket, id, nodeList()) }
+  }
+
+  private fun nodeList() =
+    buildJsonObject {
+      put(
+        "nodes",
+        buildJsonArray {
+          add(
+            buildJsonObject {
+              put("nodeId", selfNodeId)
+              put("paired", false)
+              put("connected", false)
+              put("approvalState", "unapproved")
+            },
+          )
+        },
+      )
+    }
+
+  private fun listener() =
+    object : WebSocketListener() {
+      override fun onOpen(
+        webSocket: WebSocket,
+        response: Response,
+      ) {
+        webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"onboarding-approval","ts":${System.currentTimeMillis()}}}""")
+      }
+
+      override fun onMessage(
+        webSocket: WebSocket,
+        text: String,
+      ) {
+        val frame = Json.parseToJsonElement(text).jsonObject
+        if (frame["type"]?.jsonPrimitive?.content != "req") return
+        val id = frame.getValue("id")
+        val method = frame.getValue("method").jsonPrimitive.content
+        if (method == "node.list") {
+          // Keep the listener free for reconnect traffic while the current refresh is held.
+          val held =
+            synchronized(nodeListLock) {
+              if (holdNodeListResponses) {
+                heldNodeLists.add(webSocket to id)
+                true
+              } else {
+                false
+              }
+            }
+          if (!held) reply(webSocket, id, nodeList())
+          return
+        }
+        val payload =
+          when (method) {
+            "connect" -> {
+              val role =
+                frame
+                  .getValue("params")
+                  .jsonObject
+                  .getValue("role")
+                  .jsonPrimitive.content
+              if (role == "node") {
+                reply(
+                  webSocket,
+                  id,
+                  Json.parseToJsonElement("""{"code":"NOT_PAIRED","message":"pairing required","details":{"code":"PAIRING_REQUIRED"}}"""),
+                  ok = false,
+                )
+                return
+              }
+              check(role == "operator")
+              Json.parseToJsonElement("""{"type":"hello-ok","server":{"host":"onboarding-approval"},"features":{"methods":["node.list","health","chat.history","chat.metadata","sessions.list","sessions.subscribe","sessions.observer.visibility"]},"auth":{"role":"operator","scopes":["operator.read","operator.write"]},"snapshot":{}}""")
+            }
+
+            "health" -> {
+              Json.parseToJsonElement("""{"ok":true}""")
+            }
+
+            "chat.history" -> {
+              Json.parseToJsonElement("""{"sessionId":"onboarding-approval","messages":[]}""")
+            }
+
+            "chat.metadata" -> {
+              Json.parseToJsonElement("""{"models":[],"commands":[]}""")
+            }
+
+            "sessions.list" -> {
+              Json.parseToJsonElement("""{"sessions":[]}""")
+            }
+
+            "sessions.subscribe", "sessions.observer.visibility" -> {
+              buildJsonObject {}
+            }
+
+            else -> {
+              reply(webSocket, id, Json.parseToJsonElement("""{"code":"UNSUPPORTED_METHOD","message":"Read-only onboarding fixture"}"""), ok = false)
+              return
+            }
+          }
+        reply(webSocket, id, payload)
+      }
+
+      override fun onClosing(
+        webSocket: WebSocket,
+        code: Int,
+        reason: String,
+      ) {
+        webSocket.close(code, reason)
+      }
+
+      override fun onClosed(
+        webSocket: WebSocket,
+        code: Int,
+        reason: String,
+      ) {
+        synchronized(nodeListLock) { heldNodeLists.removeAll { it.first === webSocket } }
+      }
+    }
+
+  private fun reply(
+    socket: WebSocket,
+    id: JsonElement,
+    value: JsonElement,
+    ok: Boolean = true,
+  ) {
+    socket.send(
+      buildJsonObject {
+        put("type", "res")
+        put("id", id)
+        put("ok", ok)
+        put(if (ok) "payload" else "error", value)
+      }.toString(),
+    )
+  }
+
+  override fun close() {
+    releaseNodeLists()
+    server.shutdown()
   }
 }

@@ -23,6 +23,8 @@ const targets = [
   "skills",
   "config",
   "node-runtime-update.mjs",
+  "node-runtime-recovery.mjs",
+  "node-sqlite.mjs",
   "node-version.mjs",
   "openclaw.mjs",
   "tsdown.ai.config.ts",

@@ -10,20 +10,20 @@ import {
   APP_ROUTE_IDS,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   inferBasePathFromPathname,
+  isLegacyPluginsDiscoveryPath,
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
+  pathForPluginSettings,
   pathForRoute,
-  pathForPluginsHubTab,
   pathForWorkboardBoard,
-  pluginsHubTabFromPath,
+  pluginSettingsIdFromPath,
   restoreBridgedRouteLocation,
   routeIdFromPath,
   routePageSpec,
   setPluginTabSlugs,
   type RouteId,
   type MemoryRouteTab,
-  type PluginsHubRouteTab,
 } from "./app-route-paths.ts";
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import type { ApplicationContext } from "./app/context.ts";
@@ -116,12 +116,21 @@ const DYNAMIC_STARTUP_CASES = [
     },
   },
   {
-    label: "Plugins tab",
+    label: "legacy Plugins discovery route",
     routeId: "plugins",
     location: {
-      pathname: pathForPluginsHubTab("discover"),
+      pathname: "/settings/plugins/discover",
       search: "?query=calendar",
       hash: "#featured",
+    },
+  },
+  {
+    label: "Plugin Settings detail",
+    routeId: "plugin-settings",
+    location: {
+      pathname: pathForPluginSettings("@openclaw/calendar"),
+      search: "?probe=1",
+      hash: "#configuration",
     },
   },
 ] as const satisfies readonly {
@@ -686,31 +695,43 @@ describe("Memory tab route paths", () => {
   });
 });
 
-describe("Plugins hub tab route paths", () => {
-  it.each([
-    ["installed", "/settings/plugins"],
-    ["discover", "/settings/plugins/discover"],
-  ] as const)("round-trips %s through its canonical path", (tab, pathname) => {
-    expect(pathForPluginsHubTab(tab)).toBe(pathname);
-    expect(pluginsHubTabFromPath(pathname)).toBe(tab);
-    expect(routeIdFromPath(pathname)).toBe("plugins");
+describe("legacy Plugins discovery route", () => {
+  it("parses the retired discovery path only for inbound compatibility", () => {
+    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/discover")).toBe(true);
+    expect(isLegacyPluginsDiscoveryPath("/ui/settings/plugins/discover", "/ui")).toBe(true);
   });
 
-  it.each(["installed", "discover"] as const)(
-    "round-trips %s under a configured base path",
-    (tab: PluginsHubRouteTab) => {
-      const pathname = pathForPluginsHubTab(tab, "/ui");
-      expect(pluginsHubTabFromPath(pathname, "/ui")).toBe(tab);
-      expect(routeIdFromPath(pathname, "/ui")).toBe("plugins");
-      expect(inferBasePathFromPathname(pathname)).toBe("/ui");
-    },
-  );
-
-  it("rejects unknown and nested Plugins hub tab segments", () => {
-    expect(pluginsHubTabFromPath("/settings/plugins//")).toBeNull();
-    expect(pluginsHubTabFromPath("/settings/plugins/unknown")).toBeNull();
-    expect(pluginsHubTabFromPath("/settings/plugins/discover/extra")).toBeNull();
-    expect(routeIdFromPath("/settings/plugins/unknown")).toBeNull();
+  it("keeps settings detail paths out of the legacy discovery matcher", () => {
+    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/unknown")).toBe(false);
+    expect(isLegacyPluginsDiscoveryPath("/settings/plugins/discover/extra")).toBe(false);
+    expect(routeIdFromPath("/settings/plugins/unknown")).toBe("plugin-settings");
     expect(routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
+  });
+});
+
+describe("Plugin Settings route paths", () => {
+  it("separates the installed inventory from Plugins discovery", () => {
+    expect(pathForRoute("plugins")).toBe("/plugins");
+    expect(pathForRoute("plugin-settings")).toBe("/settings/plugins");
+    expect(routeIdFromPath("/plugins")).toBe("plugins");
+    expect(routeIdFromPath("/settings/plugins")).toBe("plugin-settings");
+  });
+
+  it("round-trips encoded plugin ids under a configured base path", () => {
+    const pathname = pathForPluginSettings("@openclaw/calendar", "/ui");
+    expect(pathname).toBe("/ui/settings/plugins/%40openclaw%2Fcalendar");
+    expect(pluginSettingsIdFromPath(pathname, "/ui")).toBe("@openclaw/calendar");
+    expect(routeIdFromPath(pathname, "/ui")).toBe("plugin-settings");
+    expect(inferBasePathFromPathname(pathname)).toBe("/ui");
+  });
+
+  it("keeps the retired discover path out of the plugin-id namespace", () => {
+    expect(pluginSettingsIdFromPath("/settings/plugins/discover")).toBeNull();
+    expect(routeIdFromPath("/settings/plugins/discover")).toBe("plugins");
+    const reservedIdPath = pathForPluginSettings("discover");
+    expect(reservedIdPath).toBe("/settings/plugins/%64iscover");
+    expect(pluginSettingsIdFromPath(reservedIdPath)).toBe("discover");
+    expect(routeIdFromPath(reservedIdPath)).toBe("plugin-settings");
+    expect(pluginSettingsIdFromPath("/settings/plugins/calendar/extra")).toBeNull();
   });
 });
