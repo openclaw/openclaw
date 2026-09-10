@@ -36,6 +36,7 @@ import {
 } from "./main-session-restart-dispatch.js";
 import {
   hasCompletionReportUserTail,
+  hasInterSessionRecoverySource,
   hasOnlyAnnounceRecoveryRuns,
   markSessionCompletedAfterRecoveryCheckpoint,
   reconcileInterruptedCompletionReport,
@@ -493,7 +494,7 @@ export async function recoverStore(params: {
       sessionKey: dispatchSessionKey,
       sessionEntry: entry,
     });
-    const fullAccess =
+    const configuredFullAccess =
       execPolicy.mode === "full" &&
       execPolicy.security === "full" &&
       execPolicy.ask === "off" &&
@@ -501,6 +502,8 @@ export async function recoverStore(params: {
       entry.restartRecoveryDisableMessageTool !== true &&
       entry.restartRecoverySuppressTextDelivery !== true;
     let replaySafeCheckpoint = false;
+    let interSessionSource: boolean;
+    let fullAccess: boolean;
     let messages: unknown[];
     try {
       const transcriptScope = {
@@ -513,6 +516,8 @@ export async function recoverStore(params: {
         maxMessages: 20,
         maxBytes: 256 * 1024,
       });
+      interSessionSource = hasInterSessionRecoverySource(messages);
+      fullAccess = configuredFullAccess && !interSessionSource;
       if (fullAccess && !entry.pendingFinalDelivery) {
         replaySafeCheckpoint = await readMainSessionReplaySafeCheckpoint(transcriptScope);
       }
@@ -578,7 +583,9 @@ export async function recoverStore(params: {
     }
 
     const retainedSafeTools =
-      replaySafeCheckpoint || (entry.restartRecoveryForceSafeTools === true && !fullAccess);
+      interSessionSource ||
+      replaySafeCheckpoint ||
+      (entry.restartRecoveryForceSafeTools === true && !fullAccess);
     const resumePolicy = resolveMainSessionResumePolicy(
       messages,
       retainedSafeTools,

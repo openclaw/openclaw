@@ -8,6 +8,8 @@ import {
 
 describe("agent tool replay safety", () => {
   it("allows only audited unconditional core tools", () => {
+    expect(isAgentToolRestartSafe({ name: "read" })).toBe(true);
+    expect(isAgentToolRestartSafe({ name: "write" })).toBe(false);
     expect(isAgentToolReplaySafe({ name: "search" })).toBe(true);
     expect(isAgentToolReplaySafe({ name: "progress_card" })).toBe(false);
     expect(isAgentToolReplaySafe({ name: "process" })).toBe(false);

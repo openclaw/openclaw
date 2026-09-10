@@ -11,6 +11,7 @@ import { buildRestartRecoveryExpectedState } from "../../config/sessions/session
 import {
   hasInterSessionUserProvenance,
   isCompletionReportInputProvenance,
+  isMainSessionRestartRecoveryInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
 import { isAnnounceRunId } from "../announce-idempotency.js";
@@ -42,6 +43,21 @@ export function hasCompletionReportUserTail(messages: readonly unknown[]): boole
     hasInterSessionUserProvenance(userMessage) &&
     isCompletionReportInputProvenance(userMessage.provenance)
   );
+}
+
+/** Resolve the original user turn beneath any restart-recovery continuation prompts. */
+export function hasInterSessionRecoverySource(messages: readonly unknown[]): boolean {
+  for (const message of messages.toReversed()) {
+    if (getMessageRole(message) !== "user" || !message || typeof message !== "object") {
+      continue;
+    }
+    const userMessage = message as { role?: unknown; provenance?: unknown };
+    if (isMainSessionRestartRecoveryInputProvenance(userMessage.provenance)) {
+      continue;
+    }
+    return hasInterSessionUserProvenance(userMessage);
+  }
+  return false;
 }
 
 export async function reconcileInterruptedCompletionReport(

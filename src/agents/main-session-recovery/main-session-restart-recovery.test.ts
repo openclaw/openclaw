@@ -6080,43 +6080,63 @@ describe("main-session-restart-recovery", () => {
   it.each([
     { label: "inherited full access", mode: "full", permissionMode: undefined, restricted: false },
     { label: "explicit full access", mode: "ask", permissionMode: "full", restricted: false },
+    {
+      label: "delegated full access",
+      mode: "full",
+      permissionMode: "full",
+      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      recoveryPrompt: true,
+      restricted: true,
+    },
     { label: "inherited approvals", mode: "ask", permissionMode: undefined, restricted: true },
     { label: "explicit guarded access", mode: "full", permissionMode: "guarded", restricted: true },
-  ] as const)(
-    "continues interrupted work with $label",
-    async ({ mode, permissionMode, restricted }) => {
-      const sessionsDir = await writeMainSessionTranscript(
-        [
-          { role: "user", content: "do the thing" },
-          createAssistantToolCallMessage([
-            { type: "text", text: "Running the check now." },
-            {
-              type: "toolCall",
-              id: "call-exec-1",
-              name: "exec",
-              arguments: { code: "await shell({command: 'true'})" },
-            },
-          ]),
-        ],
-        { permissionMode, restartRecoveryForceSafeTools: true },
-      );
+  ] as const)("continues interrupted work with $label", async (testCase) => {
+    const { mode, permissionMode, restricted } = testCase;
+    const provenance = "provenance" in testCase ? testCase.provenance : undefined;
+    const recoveryPrompt = "recoveryPrompt" in testCase && testCase.recoveryPrompt;
+    const sessionsDir = await writeMainSessionTranscript(
+      [
+        { role: "user", content: "do the thing", provenance },
+        ...(recoveryPrompt
+          ? [
+              {
+                role: "user",
+                content: "continue after restart",
+                provenance: {
+                  kind: "internal_system",
+                  sourceTool: "main_session_restart_recovery",
+                },
+              },
+            ]
+          : []),
+        createAssistantToolCallMessage([
+          { type: "text", text: "Running the check now." },
+          {
+            type: "toolCall",
+            id: "call-exec-1",
+            name: "exec",
+            arguments: { code: "await shell({command: 'true'})" },
+          },
+        ]),
+      ],
+      { permissionMode, restartRecoveryForceSafeTools: true },
+    );
 
-      await expectRecovery(
-        { started: 1, settled: 0, failed: 0, skipped: 0 },
-        { tools: { exec: { mode } } },
-      );
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(gatewayParams().forceRestartSafeTools === true).toBe(restricted);
-      expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
-      expect(gatewayParams().message).toContain("unknown outcome");
-      expect(
-        loadSessionEntry({
-          storePath: path.join(sessionsDir, "sessions.json"),
-          sessionKey: "agent:main:main",
-        })?.restartRecoveryForceSafeTools === true,
-      ).toBe(restricted);
-    },
-  );
+    await expectRecovery(
+      { started: 1, settled: 0, failed: 0, skipped: 0 },
+      { tools: { exec: { mode } } },
+    );
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(gatewayParams().forceRestartSafeTools === true).toBe(restricted);
+    expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+    expect(gatewayParams().message).toContain("unknown outcome");
+    expect(
+      loadSessionEntry({
+        storePath: path.join(sessionsDir, "sessions.json"),
+        sessionKey: "agent:main:main",
+      })?.restartRecoveryForceSafeTools === true,
+    ).toBe(restricted);
+  });
 
   it("reports an interrupted native tool outcome as unknown", async () => {
     await writeMainSessionTranscript([
