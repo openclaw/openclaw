@@ -37,6 +37,7 @@ export async function runStatusJsonCommand(params: {
     { timeoutMs: params.opts.timeoutMs, all: params.opts.all },
     params.runtime,
   );
+  const updateRunStatus = readUpdateRunStatus();
   writeRuntimeJson(params.runtime, {
     ...(await resolveStatusJsonOutput({
       scan,
@@ -45,6 +46,6 @@ export async function runStatusJsonCommand(params: {
       includePluginCompatibility: params.includePluginCompatibility,
       suppressHealthErrors: params.suppressHealthErrors,
     })),
-    updateRunStatus: readUpdateRunStatus(),
+    ...(Object.keys(updateRunStatus).length ? { updateRunStatus } : {}),
   });
 }

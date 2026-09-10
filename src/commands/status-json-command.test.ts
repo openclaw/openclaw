@@ -71,7 +71,6 @@ describe("runStatusJsonCommand", () => {
     });
     expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(runtime, {
       built: true,
-      updateRunStatus: {},
       input: {
         scan,
         opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234, all: true },
