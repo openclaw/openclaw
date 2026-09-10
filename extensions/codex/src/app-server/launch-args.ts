@@ -68,6 +68,15 @@ function readCodexArgs(args: readonly string[]): CodexArg[] {
   return tokens;
 }
 
+/** Uses the native CLI configuration for status without starting its transport. */
+export function buildCodexLoginStatusArgs(args: readonly string[]): string[] {
+  const options = new Set(["-c", "--config", "-p", "--profile", "--enable", "--disable"]);
+  const configArgs = readCodexArgs(args)
+    .filter(({ name }) => options.has(name))
+    .flatMap(({ index, end }) => args.slice(index, end));
+  return [...configArgs, "login", "status"];
+}
+
 export function readCodexAppServerConfigOptions(args: readonly string[]) {
   return readCodexArgs(args).filter(
     ({ name }) => name === "-c" || name === "--config" || name === "-p" || name === "--profile",

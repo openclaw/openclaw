@@ -223,7 +223,7 @@ describe("models.list native account catalog", () => {
                   provider: "openai",
                   modelId: "synthetic-opaque",
                 });
-              expect(readiness()).toEqual({ accountType: "apiKey" });
+              expect(readiness()).toEqual({ accountType: "apiKey", authMode: "api_key" });
               const configured = (cfg = config) =>
                 listModels({
                   ...scope,
@@ -344,7 +344,10 @@ describe("models.list native account catalog", () => {
                   view: "configured",
                   refresh: true,
                 });
-                expect(readiness(hostConfig)).toEqual({ accountType: "apiKey" });
+                expect(readiness(hostConfig)).toEqual({
+                  accountType: "apiKey",
+                  authMode: "api_key",
+                });
                 expect(host.models[0]?.available, `host route ${routeIndex}`).toBe(false);
               }
               expect(requests).not.toContain("account/login/start");

@@ -35,6 +35,68 @@ describe("Codex native login discovery", () => {
     expect(await probeCodexNativeAuth({ config })).toBeUndefined();
   });
 
+  it.each(["config", "env"] as const)(
+    "uses the effective %s arguments and environment",
+    async (source) => {
+      run.mockResolvedValue({
+        termination: "exit",
+        code: 0,
+        stdout: "",
+        stderr: "Logged in using ChatGPT",
+      });
+      const args = [
+        "-c",
+        'cli_auth_credentials_store="keyring"',
+        "app-server",
+        "--listen",
+        "stdio://",
+        '--config=log_dir="app-server"',
+        "--enable",
+        "fixture_feature",
+      ];
+      const env = {
+        CODEX_HOME: "/fixture/native-home",
+        CODEX_API_KEY: "must-be-cleared",
+        ...(source === "env"
+          ? {
+              OPENCLAW_CODEX_APP_SERVER_ARGS:
+                "-c 'cli_auth_credentials_store=\"keyring\"' app-server --listen stdio:// --config='log_dir=\"app-server\"' --enable fixture_feature",
+            }
+          : {}),
+      };
+      expect(
+        await probeCodexNativeAuth({
+          pluginConfig: {
+            appServer: {
+              command: "native-codex-fixture",
+              mode: "yolo",
+              clearEnv: ["CODEX_API_KEY"],
+              ...(source === "config" ? { args } : {}),
+            },
+          },
+          env,
+        }),
+      ).toMatchObject({ mode: "oauth" });
+      expect(run).toHaveBeenCalledWith(
+        [
+          "native-codex-fixture",
+          "-c",
+          'cli_auth_credentials_store="keyring"',
+          '--config=log_dir="app-server"',
+          "--enable",
+          "fixture_feature",
+          "login",
+          "status",
+        ],
+        expect.objectContaining({
+          baseEnv: expect.objectContaining({ CODEX_HOME: "/fixture/native-home" }),
+        }),
+      );
+      expect(run.mock.calls[0]?.[1].baseEnv).not.toHaveProperty("CODEX_API_KEY");
+      expect(env.CODEX_API_KEY).toBe("must-be-cleared");
+    },
+  );
+
   it("does not borrow the user login for an explicitly isolated home", async () => {
     expect(
       await probeCodexNativeAuth({

@@ -8,7 +8,9 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
+import { buildCodexLoginStatusArgs } from "./launch-args.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
+import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const OPENAI_LOGIN_MODES: Readonly<Record<string, "oauth" | "token">> = {
   "Logged in using ChatGPT": "oauth",
@@ -29,7 +31,7 @@ export async function probeCodexNativeAuth(params: {
     const pluginConfig = readCodexPluginConfig(
       params.pluginConfig ?? params.config?.plugins?.entries?.codex?.config,
     );
-    const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+    const options = resolveCodexAppServerRuntimeOptions({ pluginConfig, env: params.env });
     // An explicitly isolated home or remote endpoint cannot borrow the operator's login.
     if (options.start.transport !== "stdio" || pluginConfig.appServer?.homeScope === "agent") {
       return undefined;
@@ -40,16 +42,17 @@ export async function probeCodexNativeAuth(params: {
     if (start.transport !== "stdio") {
       return undefined;
     }
+    const env = resolveCodexAppServerSpawnEnv(start, params.env ?? process.env);
     const invocation = materializeWindowsSpawnProgram(
       resolveWindowsSpawnProgram({
         command: start.command,
-        env: params.env ?? process.env,
+        env,
         packageName: "@openai/codex",
       }),
-      ["login", "status"],
+      buildCodexLoginStatusArgs(start.args),
     );
     const result = await runUtf8CommandWithTimeout([invocation.command, ...invocation.argv], {
-      baseEnv: params.env ?? process.env,
+      baseEnv: env,
       timeoutMs: 3_000,
       signal: params.signal,
       killProcessTree: true,

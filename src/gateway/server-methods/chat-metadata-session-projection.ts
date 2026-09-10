@@ -84,7 +84,11 @@ export async function prepareChatMetadataModelProjection(params: {
   };
 }
 
-export function resolveSessionCatalogProfiles(sessionEntry: ChatMetadataSessionEntry | undefined): {
+export function resolveSessionCatalogProfiles(
+  sessionEntry: ChatMetadataSessionEntry | undefined,
+  config: OpenClawConfig,
+  agentId: string,
+): {
   preferredProfileId?: string;
   pinnedProfileId?: string;
   profileProvider?: string;
@@ -92,8 +96,15 @@ export function resolveSessionCatalogProfiles(sessionEntry: ChatMetadataSessionE
 } {
   const profileId = sessionEntry?.authProfileOverride?.trim();
   const runtime = sessionEntry?.agentRuntimeOverride?.trim();
+  const provider =
+    sessionEntry?.providerOverride ??
+    (runtime
+      ? resolveSessionModelRef(config, sessionEntry, agentId, {
+          allowPluginNormalization: false,
+        }).provider
+      : undefined);
   const context = {
-    ...(sessionEntry?.providerOverride ? { profileProvider: sessionEntry.providerOverride } : {}),
+    ...(provider ? { profileProvider: provider } : {}),
     ...(runtime ? { runtimeOverride: runtime } : {}),
   };
   if (!profileId) {
