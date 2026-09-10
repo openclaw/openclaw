@@ -39,6 +39,7 @@ import {
   groupPromotionCandidatesByProjectKey,
 } from "./short-term-promotion-metadata.js";
 import {
+  isCurrentRelocatedRangeUntrusted,
   isRelocatedRangeUntrusted,
   withAuthoritativeProvenance,
   withDailyRangeQuarantine,
@@ -281,6 +282,7 @@ export async function applyShortTermPromotions(
 
   const rehydratedSelected: PromotionCandidate[] = [];
   const plannedSourceFingerprints = new Map<string, string>();
+  const plannedSourceRanges = new Map<string, readonly { startLine: number; endLine: number }[]>();
   for (const candidate of selected) {
     const sourceFingerprintBefore = await promotionSourceFingerprint(workspaceDir, candidate);
     const rehydratedResult = await rehydratePromotionCandidate(workspaceDir, candidate);
@@ -309,6 +311,7 @@ export async function applyShortTermPromotions(
     ) {
       rehydratedSelected.push(rehydrated);
       plannedSourceFingerprints.set(candidate.key, sourceFingerprintAfter);
+      plannedSourceRanges.set(candidate.key, rehydratedResult.sourceRanges);
     } else {
       rejectionReasons.set(
         candidate.key,
@@ -408,9 +411,15 @@ export async function applyShortTermPromotions(
           const sourceUnchanged =
             plannedSourceFingerprints.get(candidate.key) ===
             (await promotionSourceFingerprint(workspaceDir, candidate));
+          const trustIsCurrent = !(await isCurrentRelocatedRangeUntrusted({
+            workspaceDir,
+            candidate,
+            ranges: plannedSourceRanges.get(candidate.key),
+          }));
           if (
             wasDirectCandidate &&
             sourceUnchanged &&
+            trustIsCurrent &&
             !isContaminatedDreamingSnippet(candidate.snippet)
           ) {
             authoritativeSelected.push(candidate);
@@ -425,7 +434,12 @@ export async function applyShortTermPromotions(
         const sourceChanged =
           plannedSourceFingerprints.get(candidate.key) !==
           (await promotionSourceFingerprint(workspaceDir, candidate));
-        if (storeChanged || sourceChanged) {
+        const trustInvalidated = await isCurrentRelocatedRangeUntrusted({
+          workspaceDir,
+          candidate,
+          ranges: plannedSourceRanges.get(candidate.key),
+        });
+        if (storeChanged || sourceChanged || trustInvalidated) {
           continue;
         }
         const currentCandidate = withAuthoritativeProvenance(candidate, entry.provenance);

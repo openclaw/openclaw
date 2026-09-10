@@ -1,5 +1,7 @@
+import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveDailyRangeProvenance, type DailyProvenanceRecord } from "./daily-provenance.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import { readPromotionSourceText } from "./short-term-promotion-rehydrate.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
 
 export function withAuthoritativeProvenance(
@@ -66,4 +68,22 @@ export function isRelocatedRangeUntrusted(params: {
         defaultObservedAt: record.observedAt,
       }).originClass === "untrusted",
   );
+}
+
+export async function isCurrentRelocatedRangeUntrusted(params: {
+  workspaceDir: string;
+  candidate: Pick<PromotionCandidate, "path">;
+  ranges: readonly { startLine: number; endLine: number }[] | undefined;
+}): Promise<boolean> {
+  const normalizedPath = params.candidate.path.replaceAll("\\", "/");
+  const [entries, content] = await Promise.all([
+    listMemoryArtifactProvenance({ workspaceDir: params.workspaceDir }),
+    readPromotionSourceText(params.workspaceDir, params.candidate.path),
+  ]);
+  return isRelocatedRangeUntrusted({
+    record: entries.find((entry) => entry.relativePath.replaceAll("\\", "/") === normalizedPath)
+      ?.provenance,
+    content,
+    ranges: params.ranges,
+  });
 }
