@@ -1,5 +1,6 @@
 {
   "id": "vercel-ai-gateway",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

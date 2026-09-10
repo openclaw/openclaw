@@ -1,5 +1,6 @@
 {
   "id": "gradium",
+  "categories": ["voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false

@@ -93,6 +93,7 @@ local proof.
   "id": "my-plugin",
   "name": "My Plugin",
   "description": "Adds a custom tool to OpenClaw",
+  "categories": ["tools"],
   "contracts": {
     "tools": ["my_tool"]
   },

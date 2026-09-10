@@ -1,5 +1,6 @@
 {
   "id": "meta",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

@@ -1,5 +1,6 @@
 {
   "id": "matrix",
+  "categories": ["channels", "tools"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [

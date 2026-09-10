@@ -1,5 +1,6 @@
 {
   "id": "reef",
+  "categories": ["channels", "tools"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [

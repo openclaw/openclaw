@@ -1,6 +1,8 @@
 // Shared Control UI plugin catalog Gateway contracts.
 import type {
   PluginCatalogEntry,
+  PluginDiscoveryCategory as ProtocolPluginDiscoveryCategory,
+  PluginDiscoveryEntry as ProtocolPluginDiscoveryEntry,
   PluginDeclaredSurface as ProtocolPluginDeclaredSurface,
   PluginHookGrant as ProtocolPluginHookGrant,
   PluginInspectSource as ProtocolPluginInspectSource,
@@ -8,8 +10,10 @@ import type {
   PluginsInspectResult as ProtocolPluginsInspectResult,
   PluginsInstallParams,
   PluginsInstallResult,
+  PluginsCatalogBrowseResult as ProtocolPluginsCatalogBrowseResult,
+  PluginsCatalogCategoriesResult as ProtocolPluginsCatalogCategoriesResult,
+  PluginsCatalogGetResult as ProtocolPluginsCatalogGetResult,
   PluginsListResult as ProtocolPluginsListResult,
-  PluginsSearchResult as ProtocolPluginsSearchResult,
   PluginsSetEnabledParams,
   PluginsSetEnabledResult,
   PluginsUninstallResult,
@@ -18,41 +22,36 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 
 export type PluginCatalogItem = PluginCatalogEntry;
+export type PluginDiscoveryCategory = ProtocolPluginDiscoveryCategory;
+export type PluginDiscoveryEntry = ProtocolPluginDiscoveryEntry;
+export type PluginDiscoveryResult = ProtocolPluginsCatalogBrowseResult;
+export type PluginDiscoveryCategoriesResult = ProtocolPluginsCatalogCategoriesResult;
+export type PluginDiscoveryDetailResult = ProtocolPluginsCatalogGetResult;
 export type PluginDeclaredSurface = ProtocolPluginDeclaredSurface;
 export type PluginHookGrant = ProtocolPluginHookGrant;
 export type PluginInspectSource = ProtocolPluginInspectSource;
 export type PluginOperatorGrants = ProtocolPluginOperatorGrants;
 export type PluginsInspectResult = ProtocolPluginsInspectResult;
 export type PluginListResult = ProtocolPluginsListResult;
-export type PluginSearchResult = ProtocolPluginsSearchResult["results"][number];
 export type PluginInstallRequest = PluginsInstallParams;
 export type PluginMutationResult = PluginsInstallResult | PluginsSetEnabledResult;
 type PluginUninstallResult = PluginsUninstallResult;
 
-export function resolvePluginInstallIdentity(
-  request: PluginInstallRequest,
-  plugins: readonly PluginCatalogItem[],
-  runtimeId?: string,
-): string {
-  if (request.source === "official") {
-    return `plugin:${request.pluginId}`;
-  }
-  const catalogEntry =
-    plugins.find(
-      (plugin) =>
-        plugin.packageName === request.packageName ||
-        (plugin.install?.source === "clawhub" &&
-          plugin.install.packageName === request.packageName),
-    ) ?? (runtimeId ? plugins.find((plugin) => plugin.id === runtimeId) : undefined);
-  return catalogEntry || runtimeId
-    ? `plugin:${catalogEntry?.id ?? runtimeId}`
-    : `clawhub:${request.packageName}`;
-}
-
-export const CLAWHUB_BROWSE_URL = "https://clawhub.ai/plugins";
-
 export function loadPluginCatalog(client: GatewayBrowserClient): Promise<PluginListResult> {
   return client.request<PluginListResult>("plugins.list", {});
+}
+
+export function loadPluginDiscoveryDetail(
+  client: GatewayBrowserClient,
+  id: string,
+  signal?: AbortSignal,
+  version?: string,
+): Promise<PluginDiscoveryDetailResult> {
+  return client.request<PluginDiscoveryDetailResult>(
+    "plugins.catalog.get",
+    { id, ...(version ? { version } : {}) },
+    signal ? { signal } : undefined,
+  );
 }
 
 export function installPlugin(

@@ -1,5 +1,6 @@
 {
   "id": "lobster",
+  "categories": ["tools"],
   "activation": {
     "onStartup": true
   },

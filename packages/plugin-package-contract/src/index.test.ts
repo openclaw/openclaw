@@ -2,12 +2,43 @@
 import { describe, expect, it } from "vitest";
 import {
   EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS,
+  PLUGIN_CATEGORY_SLUGS,
   listMissingExternalCodePluginFieldPaths,
   normalizeExternalPluginCompatibility,
+  validatePluginCategories,
   validateExternalCodePluginPackageJson,
 } from "./index.js";
 
 describe("@openclaw/plugin-package-contract", () => {
+  it("publishes the controlled plugin category taxonomy", () => {
+    expect(PLUGIN_CATEGORY_SLUGS).toEqual([
+      "channels",
+      "models",
+      "memory",
+      "context",
+      "voice",
+      "media",
+      "web",
+      "tools",
+      "runtime",
+      "gateway",
+      "security",
+      "other",
+    ]);
+  });
+
+  it("validates ordered package-owned plugin categories", () => {
+    expect(validatePluginCategories(undefined)).toEqual({ ok: true });
+    expect(validatePluginCategories(["web", "tools", "runtime"])).toEqual({
+      ok: true,
+      categories: ["web", "tools", "runtime"],
+    });
+    expect(validatePluginCategories(["web", "web"])).toEqual({
+      ok: false,
+      error: "must not contain duplicates",
+    });
+  });
+
   it("normalizes the OpenClaw compatibility block for external plugins", () => {
     expect(
       normalizeExternalPluginCompatibility({

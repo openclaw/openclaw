@@ -971,6 +971,21 @@ openclaw-session-owner-chip {
   line-height: 1.5;
 }
 
+.plugin-official-badge {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  color: var(--info);
+}
+
+.plugin-official-badge svg {
+  width: 15px;
+  height: 15px;
+}
+
 /* ===========================================
    Stats - Bold values, subtle labels
    =========================================== */

@@ -9,6 +9,7 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
@@ -23,6 +24,28 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+
+function readUpdateRunStatus() {
+  try {
+    const activeRun = findActiveUpdateRun();
+    const lastRun = listUpdateRuns({ limit: 1 })[0];
+    const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
+    const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
+    return {
+      ...(activeRun ? { activeRun } : {}),
+      ...(lastRun ? { lastRun } : {}),
+      ...(staleGuidance && activeRun
+        ? { staleRun: { runId: activeRun.runId, guidance: staleGuidance } }
+        : {}),
+      ...(abandonment && activeRun
+        ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
+        : {}),
+    };
+  } catch (error) {
+    // History is optional diagnostic context; an unavailable read is not an empty ledger.
+    return { runStatusError: formatErrorMessage(error) };
+  }
+}
 
 /** Print update status in JSON or table form for scripts and humans. */
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
@@ -63,10 +86,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const updateAvailability = resolveUpdateAvailability(update);
 
-  const activeRun = findActiveUpdateRun();
-  const lastRun = listUpdateRuns({ limit: 1 })[0];
-  const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
-  const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
+  const runStatus = readUpdateRunStatus();
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -79,14 +99,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       },
       availability: updateAvailability,
       ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
-      ...(activeRun ? { activeRun } : {}),
-      ...(lastRun ? { lastRun } : {}),
-      ...(staleGuidance && activeRun
-        ? { staleRun: { runId: activeRun.runId, guidance: staleGuidance } }
-        : {}),
-      ...(abandonment && activeRun
-        ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
-        : {}),
+      ...runStatus,
     });
     return;
   }
@@ -138,24 +151,30 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   );
   defaultRuntime.log("");
 
-  const run = activeRun ?? lastRun;
-  if (run) {
-    if (staleGuidance) {
-      defaultRuntime.log(`Update ${run.runId}: ${staleGuidance}`);
-    }
-    if (abandonment) {
-      defaultRuntime.log(
-        "Abandoned update detected; the Gateway will reconcile its recorded outcome. Run openclaw update repair to reconcile it now.",
-      );
-    }
-    const report = renderUpdateRunReport(run);
-    if (!abandonment && !staleGuidance) {
-      defaultRuntime.log(report.headline);
-    }
-    for (const line of report.lines) {
-      defaultRuntime.log(line);
-    }
+  if ("runStatusError" in runStatus) {
+    defaultRuntime.log(theme.warn(`Update run status unavailable: ${runStatus.runStatusError}`));
     defaultRuntime.log("");
+  } else {
+    const { activeRun, lastRun, staleRun, abandonedRun } = runStatus;
+    const run = activeRun ?? lastRun;
+    if (run) {
+      if (staleRun) {
+        defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);
+      }
+      if (abandonedRun) {
+        defaultRuntime.log(
+          "Abandoned update detected; the Gateway will reconcile its recorded outcome. Run openclaw update repair to reconcile it now.",
+        );
+      }
+      const report = renderUpdateRunReport(run);
+      if (!abandonedRun && !staleRun) {
+        defaultRuntime.log(report.headline);
+      }
+      for (const line of report.lines) {
+        defaultRuntime.log(line);
+      }
+      defaultRuntime.log("");
+    }
   }
 
   const updateHint = formatUpdateAvailableHint(update);
