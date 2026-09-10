@@ -251,10 +251,12 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
     // Seal synchronously, then retry retired IDs without deleting the current/final preview.
     // Even a failed flush must join earlier deletions before a later clear starts.
     const previousClear = clearTail.catch(() => {});
-    const stopRun = controls
-      .stop()
-      .finally(() => previousClear)
-      .then(() => drainDeletes(params, params.readMessageId()));
+    const stopRun = Promise.allSettled([controls.stop(), previousClear]).then(([stopped]) => {
+      if (stopped.status === "rejected") {
+        throw stopped.reason;
+      }
+      return drainDeletes(params, params.readMessageId());
+    });
     clearTail = stopRun;
     return stopRun;
   };
