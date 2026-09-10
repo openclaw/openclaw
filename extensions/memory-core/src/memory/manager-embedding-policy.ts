@@ -110,7 +110,11 @@ function resolveMemoryEmbeddingRetryBudget(
   );
   const permanentQuota = [fields?.errorCode, fields?.code, fields?.errorType].some((value) => {
     const code = normalizeOptionalString(value)?.toLowerCase();
-    return code === "quota_exceeded" || code === "insufficient_quota";
+    return (
+      code === "quota_exceeded" ||
+      code === "insufficient_quota" ||
+      code === "credit_balance_exhausted"
+    );
   });
   if (permanentQuota && retryAfterMs === undefined) {
     return undefined;
