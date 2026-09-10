@@ -1,7 +1,7 @@
 // QA Lab static-SSH worker provider for cloud-worker feature development.
 import type {
   WorkerProfile,
-  WorkerProvider,
+  WorkerProviderV1 as WorkerProvider,
   WorkerSshEndpoint,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
@@ -76,11 +76,15 @@ export function createStaticSshWorkerProvider(): WorkerProvider {
   };
   return {
     id: STATIC_SSH_WORKER_PROVIDER_ID,
+    liveAuthorityVersion: 1,
     supportedExecutionModes: ["remote-exec"],
     resolveAllocation,
-    async provision(profile, opId) {
+    async provision(profile, opId, context) {
+      context.assertCurrent();
+      const allocation = await resolveAllocation(profile, opId);
+      context.assertCurrent();
       return {
-        ...(await resolveAllocation(profile, opId)),
+        ...allocation,
         ssh: parseStaticSshWorkerSettings(profile),
       };
     },

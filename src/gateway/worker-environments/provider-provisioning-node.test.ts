@@ -5,7 +5,7 @@ import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner
 import type {
   WorkerNodeEnrollment,
   WorkerNodeRuntimePreparation,
-  WorkerProvider,
+  WorkerProviderV1,
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type {
@@ -116,7 +116,7 @@ describe("node worker provider provisioning", () => {
     const closeNodeEnrollment = vi.fn();
     const retireNodeEnrollment = vi.fn(async () => {});
     let begin: (() => Promise<WorkerNodeEnrollment>) | undefined;
-    const provision = vi.fn<WorkerProvider["provision"]>(
+    const provision = vi.fn<WorkerProviderV1["provision"]>(
       async (_profile, _operationId, options) => {
         begin = options?.beginNodeEnrollment;
         await expect(options?.beginNodeEnrollment?.()).resolves.toMatchObject({

@@ -353,30 +353,9 @@ export function createGatewayWorkerPlacementRuntime(
           sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
           getConfig: getRuntimeConfig,
           ...identity,
-          action: "activation",
           run: () => {
             authorize?.();
             return activate();
-          },
-        }),
-      runRecoveryBarrier: async ({ environmentId, expectedGeneration, run, ...identity }) =>
-        await runWorkerPlacementSessionBarrier({
-          sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
-          getConfig: getRuntimeConfig,
-          ...identity,
-          action: "recovery",
-          run: async (workspace) => {
-            const placement = params.placements.get(identity.sessionId);
-            if (
-              placement?.state !== "provisioning" ||
-              placement.generation !== expectedGeneration ||
-              placement.environmentId !== environmentId
-            ) {
-              throw new WorkerDispatchTargetChangedError(
-                `Session ${identity.sessionKey} placement changed before cloud worker recovery. Retry.`,
-              );
-            }
-            await run(workspace);
           },
         }),
       onActivated: ({ sessionId }) => {
@@ -590,7 +569,7 @@ export function createGatewayWorkerPlacementRuntime(
         }
         if (!stopped) {
           stopped = true;
-          // Cancel enrollment; admitted recovery keeps its own bootstrap owner.
+          // Cancel enrollment before draining the environment service.
           params.environments.stopNodeEnrollmentWaits?.();
           clearInterval(placementReconcileInterval);
           placementReconcileInterval = undefined;

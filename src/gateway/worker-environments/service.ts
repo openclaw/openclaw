@@ -100,6 +100,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
 export type WorkerEnvironmentReconcileCore = (
   signal?: AbortSignal,
   retainProviderSettlement?: (settled: Promise<void>) => void,
+  authorize?: () => void,
 ) => Promise<void>;
 type WorkerEnvironmentReconcileGuard = (
   environmentId: string,
@@ -341,6 +342,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     environmentId: string,
     signal?: AbortSignal,
     retainProviderSettlement?: (settled: Promise<void>) => void,
+    authorize?: () => void,
   ) => {
     if (stopping) {
       return;
@@ -350,7 +352,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (!current || inState(current, "destroyed", "failed", "orphaned")) {
         return;
       }
-      await providerLifecycle.reconcileRecord(current, signal, retainProviderSettlement);
+      await providerLifecycle.reconcileRecord(
+        current,
+        signal,
+        retainProviderSettlement,
+        undefined,
+        authorize,
+      );
     });
   };
 
@@ -371,8 +379,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       await active;
       return;
     }
-    const operation = guard(environmentId, async (signal, retainProviderSettlement) => {
-      await reconcileEnvironmentCore(environmentId, signal, retainProviderSettlement);
+    const operation = guard(environmentId, async (signal, retainProviderSettlement, authorize) => {
+      await reconcileEnvironmentCore(environmentId, signal, retainProviderSettlement, authorize);
     });
     guardedReconcileInFlight.set(environmentId, operation);
     try {
@@ -624,6 +632,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       os?: string,
       runSetupScript?: boolean,
       admittedIntent?: WorkerProviderPreparedIntent,
+      context?: { assertCurrent: () => void },
     ) => {
       providerLifecycle.warmMachineShape(profileId);
       if (executionMode) {
@@ -640,6 +649,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
             projectPath,
             runSetupScript,
             signal,
+            context,
           },
           admittedIntent,
         ),
@@ -655,6 +665,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       os?: string,
       runSetupScript?: boolean,
       admittedIntent?: WorkerProviderPreparedIntent,
+      context?: { assertCurrent: () => void },
     ) => {
       providerLifecycle.warmMachineShape(profile.profileId);
       requireProviderExecutionMode(profile.providerId, executionMode);
@@ -673,6 +684,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
             projectPath,
             runSetupScript,
             signal,
+            context,
           },
           admittedIntent,
         ),
@@ -704,24 +716,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,
     hasInferenceForSession: turnRpc.hasInferenceForSession,
     resolveInferenceSessionForRunId: turnRpc.resolveInferenceSessionForRunId,
-    resolveSshIdentity: async (environmentId: string) => {
-      const record = store.get(environmentId);
-      if (!record) {
-        throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
-      }
-      if (!record.leaseId || !record.sshEndpoint) {
-        throw serviceError(
-          "invalid_state",
-          `Worker environment ${environmentId} has no active SSH endpoint`,
-        );
-      }
-      const provider = providerLifecycle.providerFor(record.providerId);
-      return await providerLifecycle.identityResolverFor(
-        record,
-        provider,
-        record.leaseId,
-      )(record.sshEndpoint.keyRef);
-    },
+    resolveSshIdentity: environmentAccess.resolveSshIdentity,
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,

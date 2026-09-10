@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import type { WorkerProvisionOptionsV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -23,7 +23,7 @@ import {
   type CommandCall,
 } from "./crabbox-worker-warm-image.test-support.js";
 
-type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
+type ProvisionOptions = WorkerProvisionOptionsV1;
 
 function notSubmittedReceipt(leaseId: string) {
   return {
@@ -37,6 +37,36 @@ function notSubmittedReceipt(leaseId: string) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
+  it("stops its allocated lease when initiating authority closes during project preparation", async () => {
+    const controller = new AbortController();
+    const { options, sourceAuthority } = projectOptions([], controller);
+    const { provider, calls } = createWarmProvider();
+    const operation = "revoked-project-preparation";
+    const leaseId = operationLeaseId(operation);
+    const closed = new Error("initiating authority closed");
+    await expect(
+      provider.provision(PROFILE, operation, {
+        ...options,
+        signal: controller.signal,
+        project: {
+          ...options.project,
+          prepare: async () => {
+            await Promise.resolve();
+            sourceAuthority.abort(closed);
+            throw new Error("project preparation interrupted");
+          },
+        },
+      }),
+    ).rejects.toBe(closed);
+
+    expect(controller.signal.aborted).toBe(false);
+    const stops = calls.filter(({ argv }) => argv[1] === "stop");
+    expect(stops).toHaveLength(1);
+    expect(stops[0]?.argv).toContain(leaseId);
+    expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+    expect(listCrabboxWarmImages()[0]?.allocations[leaseId]).toBeUndefined();
+  });
+
   it.each([false, true])(
     "clears only its own rejected capture and still stops the source (replaced=%s)",
     async (replaced) => {
@@ -635,6 +665,7 @@ describe("Crabbox project snapshot provisioning", () => {
     });
     await expect(
       provider.provision({ ...PROFILE, warmImage: false }, "closed-enrollment", {
+        assertCurrent: () => {},
         beginNodeEnrollment,
       }),
     ).rejects.toMatchObject({ name: "AbortError" });

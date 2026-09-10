@@ -6,7 +6,7 @@ import {
   type WorkerLease,
   type WorkerMachineOption,
   type WorkerProfile,
-  type WorkerProvider,
+  type WorkerProviderV1,
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -28,14 +28,19 @@ describe("worker environment service", () => {
       expect(support.testState.store.list()[0]).toMatchObject({ state: "provisioning" });
       return { leaseId: "lease-prepared", ssh: support.SSH_ENDPOINT };
     });
-    const prepareProvision = vi.fn<NonNullable<WorkerProvider["prepareProvision"]>>(
+    const prepareProvision = vi.fn<NonNullable<WorkerProviderV1["prepareProvision"]>>(
       async (profile, operationId, options) => {
         expect(support.testState.store.list()[0]).toMatchObject({
           state: "requested",
           provisionOperationId: operationId,
         });
         expect(profile).toEqual({ region: "test" });
-        expect(options).toEqual({ profileId: "development", machineClass: "large", os: "os-a" });
+        expect(options).toEqual({
+          profileId: "development",
+          machineClass: "large",
+          os: "os-a",
+          assertCurrent: expect.any(Function),
+        });
         return allocate;
       },
     );
@@ -164,7 +169,12 @@ describe("worker environment service", () => {
         });
         support.getDevelopmentProfile().settings = { region: "mutated" };
         expect(profile).toEqual({ region: "test" });
-        expect(options).toEqual({ profileId: "development", machineClass: "beast", os: "os-a" });
+        expect(options).toEqual({
+          profileId: "development",
+          machineClass: "beast",
+          os: "os-a",
+          assertCurrent: expect.any(Function),
+        });
         return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
       },
     });
@@ -262,7 +272,7 @@ describe("worker environment service", () => {
     expect(provision).toHaveBeenCalledWith(
       { region: "test" },
       expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-      { profileId: "development" },
+      { profileId: "development", assertCurrent: expect.any(Function) },
     );
   });
 
@@ -289,7 +299,7 @@ describe("worker environment service", () => {
     expect(provision).toHaveBeenCalledWith(
       { region: "test" },
       expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-      { profileId: "development" },
+      { profileId: "development", assertCurrent: expect.any(Function) },
     );
   });
 
@@ -355,7 +365,7 @@ describe("worker environment service", () => {
       expect(provision).toHaveBeenCalledWith(
         { region: "test" },
         expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-        { profileId: "development", executionMode: mode },
+        { profileId: "development", executionMode: mode, assertCurrent: expect.any(Function) },
       );
       expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(transport === "SSH" ? 1 : 0);
     },

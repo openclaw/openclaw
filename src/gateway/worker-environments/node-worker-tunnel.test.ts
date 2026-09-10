@@ -45,19 +45,59 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
 describe("node worker tunnel manager", () => {
+  it("does not expose a tunnel after authority closes during workspace binding", async () => {
+    const record = environment();
+    const binding = createDeferred<undefined>();
+    const transfer = workspaceTransfer();
+    const prepareSync = vi.fn();
+    transfer.prepareSync = prepareSync;
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      listEnvironments: () => [record],
+      getTransport: transport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: transfer,
+    });
+    const resolveBinding = vi.fn(async () => await binding.promise);
+    manager.bindWorkspaceBindingResolver(resolveBinding);
+    let authorized = true;
+    const starting = manager.start({
+      ...startRequest(),
+      authorize: () => {
+        if (!authorized) {
+          throw new Error("session dispatch authority closed");
+        }
+      },
+    });
+    await vi.waitFor(() => expect(resolveBinding).toHaveBeenCalledOnce());
+    authorized = false;
+    binding.resolve(undefined);
+
+    await expect(starting).rejects.toThrow("session dispatch authority closed");
+    expect(prepareSync).not.toHaveBeenCalled();
+    expect(manager.status(record.environmentId)).toBe("stopped");
+  });
+
   it.each([
     ["gateway-push", true],
     ["published-origin", false],
     ["prepared-project", false],
   ])("preserves the Gateway Git author through %s workspaces", async (syncPath, dirty) => {
+    // Scope the synthetic repository to its own author config, not injected host identity.
+    vi.stubEnv("GIT_CONFIG_COUNT", "0");
     const localPath = tempDirs.make("node-worker-git-author-gateway-");
     const remoteWorkspaceDir = path.join(tempDirs.make("node-worker-git-author-remote-"), "worker");
     const gitEnv: NodeJS.ProcessEnv = {
       ...process.env,
       GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
+      // This synthetic repository proves persisted Git config, not host-injected identity.
+      GIT_CONFIG_COUNT: "0",
     };
     delete gitEnv.GIT_AUTHOR_NAME;
     delete gitEnv.GIT_AUTHOR_EMAIL;
@@ -211,11 +251,24 @@ describe("node worker tunnel manager", () => {
     const first = manager.start(startRequest());
     await vi.waitFor(() => expect(resolveWorkspaceBinding).toHaveBeenCalledOnce());
     const second = manager.start(startRequest());
+    let authorized = true;
+    const closed = new Error("joining source closed");
+    const authorize = () => {
+      if (!authorized) {
+        throw closed;
+      }
+    };
+    const joining = manager.start({ ...startRequest(), authorize });
+    const rejected = expect(joining).rejects.toBe(closed);
+    authorized = false;
     workspaceBinding.resolve(undefined);
 
     const [firstHandle, secondHandle] = await Promise.all([first, second]);
+    await rejected;
     expect(resolveWorkspaceBinding).toHaveBeenCalledOnce();
     expect(secondHandle).toBe(firstHandle);
+    await expect(manager.start({ ...startRequest(), authorize })).rejects.toBe(closed);
+    expect(manager.status(record.environmentId)).toBe("connected");
   });
 
   it.each(["stop", "stopAll"] as const)(

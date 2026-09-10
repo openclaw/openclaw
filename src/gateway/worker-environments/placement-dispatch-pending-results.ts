@@ -534,16 +534,20 @@ export async function recoverPendingWorkspaceResults(
         }
         continue;
       }
-      const tunnel = await environments.startTunnel({
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      });
-      await deps.workspaceOperations.run(active.environmentId, async () => {
+      const assertCurrent = () => {
         assertPreservedEnvironment();
         if (!placements.validateWorkspaceResultClaim(turnClaim)) {
           throw new Error("Recovered workspace result lost its placement owner");
         }
-        const quiescence = await tunnel.quiesceWorkspace(active.remoteWorkspaceDir);
+      };
+      const tunnel = await environments.startTunnel({
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        authorize: assertCurrent,
+      });
+      await deps.workspaceOperations.run(active.environmentId, async () => {
+        assertCurrent();
+        const quiescence = await tunnel.quiesceWorkspace(active.remoteWorkspaceDir, assertCurrent);
         let quiescenceHandled = false;
         try {
           const reconciliation = await tunnel.reconcileWorkspace(
@@ -561,11 +565,7 @@ export async function recoverPendingWorkspaceResults(
                     workspace.kind === "repository" ? workspace.repository.workspaceId : undefined,
                   ),
               },
-              assertCurrent: () => {
-                if (!placements.validateWorkspaceResultClaim(turnClaim)) {
-                  throw new Error("Recovered workspace result lost its placement owner");
-                }
-              },
+              assertCurrent,
             }),
           );
           const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);

@@ -37,6 +37,7 @@ type WorkerEnvironmentAccessOptions = {
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     leaseId: string,
+    authorize?: () => void,
   ) => Parameters<WorkerTunnelManager["start"]>[0]["resolveIdentity"];
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   isStopping: () => boolean;
@@ -232,6 +233,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
       }
+      request.authorize?.();
       const nodeDeviceId = record.nodeDeviceId;
       const nodeBundle =
         typeof nodeDeviceId === "string" &&
@@ -259,6 +261,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
             openclawVersion: currentBundle.openclawVersion,
             protocolFeatures: [...currentBundle.protocolFeatures],
           },
+          authorize: request.authorize,
         });
         stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
         return;
@@ -273,11 +276,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       // Workspace ownership is registered synchronously by the manager. Release the durable-state
       // lock while SSH identity material is prepared so drain/destroy can fence initialization.
       startup = tunnels.start({
-        ...request,
+        environmentId: request.environmentId,
+        ownerEpoch: request.ownerEpoch,
         bundleHash: currentBundle.bundleHash,
         ssh: record.sshEndpoint,
         sharedHost: record.sharedHost,
-        resolveIdentity: identityResolverFor(record, provider, record.leaseId),
+        resolveIdentity: identityResolverFor(record, provider, record.leaseId, request.authorize),
+        authorize: request.authorize,
       });
       stopStartup = async () => await tunnels.stop(record.environmentId, record.ownerEpoch);
     });
@@ -499,6 +504,31 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     list: () => store.list().map(project),
     observeDesktop,
     project,
+    resolveSshIdentity: async (environmentId: string) => {
+      const record = store.get(environmentId);
+      if (!record) {
+        throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
+      }
+      if (!record.leaseId || !record.sshEndpoint) {
+        throw serviceError(
+          "invalid_state",
+          `Worker environment ${environmentId} has no active SSH endpoint`,
+        );
+      }
+      const provider = providerFor(record.providerId);
+      return await identityResolverFor(
+        record,
+        provider,
+        record.leaseId,
+      )(record.sshEndpoint.keyRef, {
+        // Direct lookup has no initiating turn; retain service and exact resolver ownership.
+        assertCurrent: () => {
+          if (options.isStopping()) {
+            throw serviceError("invalid_state", "Worker environment service is stopping");
+          }
+        },
+      });
+    },
     startTunnel,
     stopAllTunnels: () =>
       stopTunnelOwners([tunnels?.stopAll(), nodeTunnels?.stopAll(), nodeDesktop?.stopAll()]),

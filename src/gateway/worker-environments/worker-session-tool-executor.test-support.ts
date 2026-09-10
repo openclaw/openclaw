@@ -20,6 +20,9 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
+import type { WorkerEnvironmentService } from "./service.js";
+import { createWorkerEnvironmentStore } from "./store.js";
 import { createWorkerSessionToolExecutor } from "./worker-session-tool-executor.js";
 
 const sharedMocks = vi.hoisted(() => ({
@@ -129,12 +132,14 @@ export const CHILD = {
   agentId: "main",
   sessionId: "spawned-child-session",
   environmentId: "spawned-child-environment",
+  provisionOperationId: "child-provision",
   ownerEpoch: 5,
 };
 export const GRANDCHILD = {
   agentId: "main",
   sessionId: "spawned-grandchild-session",
   environmentId: "spawned-grandchild-environment",
+  provisionOperationId: "grandchild-provision",
   ownerEpoch: 6,
 };
 export const PARENT_EXECUTION_IDENTITY_TOKEN = {
@@ -236,6 +241,10 @@ async function createWorkerSessionToolTestFixture(
   gatewayCreate.mockReset();
   gatewayRuntimeIdentity.mockReset();
   dispatchChild.mockReset();
+  CHILD.environmentId = "spawned-child-environment";
+  CHILD.provisionOperationId = "child-provision";
+  GRANDCHILD.environmentId = "spawned-grandchild-environment";
+  GRANDCHILD.provisionOperationId = "grandchild-provision";
   spawnCallerIdentity.mockReset();
   spawnArgs.mockReset();
   // Shared mocks must discard unused once overrides before the next fixture starts.
@@ -256,15 +265,18 @@ async function createWorkerSessionToolTestFixture(
       return { ok: true, key: spawnState.childSessionKey, sessionId: CHILD.sessionId };
     },
   );
-  dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
-    spawnState.order.push("dispatch");
-    expect(placements.get(CHILD.sessionId)).toBeUndefined();
-    activate({
-      ...CHILD,
-      sessionKey: request.sessionKey,
-    });
-    return placements.get(CHILD.sessionId);
-  });
+  dispatchChild.mockImplementation(
+    async (request: { sessionKey: string; idempotencyKey: string }) => {
+      Object.assign(CHILD, deriveEnvironmentIntent(request.idempotencyKey));
+      spawnState.order.push("dispatch");
+      expect(placements.get(CHILD.sessionId)).toBeUndefined();
+      activate({
+        ...CHILD,
+        sessionKey: request.sessionKey,
+      });
+      return placements.get(CHILD.sessionId);
+    },
+  );
   gatewayRequest.mockImplementation(
     async (request: { method: string; params: Record<string, unknown> }) => {
       if (request.method === "agent") {
@@ -275,6 +287,28 @@ async function createWorkerSessionToolTestFixture(
       throw new Error(`Unexpected gateway request: ${request.method}`);
     },
   );
+  const environmentStore = createWorkerEnvironmentStore({ database });
+  const environments = {
+    get: vi.fn<WorkerEnvironmentService["get"]>((environmentId) => {
+      const record = environmentStore.get(environmentId);
+      if (!record) {
+        return undefined;
+      }
+      return {
+        ...record,
+        ...(environmentId === CHILD.environmentId
+          ? { provisionOperationId: CHILD.provisionOperationId }
+          : environmentId === GRANDCHILD.environmentId
+            ? { provisionOperationId: GRANDCHILD.provisionOperationId }
+            : {}),
+        profileId: "cloud-profile",
+        profileSnapshot: { install: "bundle", settings: { region: "source" } },
+        desktopAvailable: false,
+        desktopApps: [],
+        tunnelStatus: "stopped",
+      };
+    }),
+  };
   const execute = createWorkerSessionToolExecutor({
     resolveGatewayContext,
     placements,
@@ -284,41 +318,7 @@ async function createWorkerSessionToolTestFixture(
       carrier: { open: vi.fn() },
       onChanged: vi.fn(),
     },
-    environments: {
-      get: (environmentId: string) => {
-        if (environmentId === SOURCE.environmentId) {
-          return {
-            state: "attached",
-            ownerEpoch: SOURCE.ownerEpoch,
-            attachedSessionIds: [SOURCE.sessionId],
-            providerId: "fake",
-            profileId: "cloud-profile",
-            profileSnapshot: { install: "bundle", settings: { region: "source" } },
-          };
-        }
-        if (environmentId === CHILD.environmentId) {
-          return {
-            state: "attached",
-            ownerEpoch: CHILD.ownerEpoch,
-            attachedSessionIds: [CHILD.sessionId],
-            providerId: "fake",
-            profileId: "cloud-profile",
-            profileSnapshot: { install: "bundle", settings: { region: "source" } },
-          };
-        }
-        if (environmentId === GRANDCHILD.environmentId) {
-          return {
-            state: "attached",
-            ownerEpoch: GRANDCHILD.ownerEpoch,
-            attachedSessionIds: [GRANDCHILD.sessionId],
-            providerId: "fake",
-            profileId: "cloud-profile",
-            profileSnapshot: { install: "bundle", settings: { region: "source" } },
-          };
-        }
-        return undefined;
-      },
-    } as never,
+    environments,
   });
   function activate(session: {
     agentId: string;
@@ -397,9 +397,11 @@ async function createWorkerSessionToolTestFixture(
 
   return {
     root,
+    database,
     placements,
     identity,
     execute,
+    environments,
     sourceClaim,
     delegatedAuthorities,
     closeSourceRun: () => {

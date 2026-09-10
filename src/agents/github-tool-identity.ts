@@ -567,14 +567,18 @@ export async function prepareGitHubReadIdentity(
       throw new GitHubIdentityError("changed");
     }
   };
-  assertSelected();
+  const assertPreparing = () => {
+    params.assertPreparing?.();
+    assertSelected();
+  };
+  assertPreparing();
   await params.refresh();
-  assertSelected();
+  assertPreparing();
   const { token, readToken, prepared } = await prepareSharedGitHubIdentity({
     ...params,
-    assertCurrent: assertSelected,
+    assertCurrent: assertPreparing,
   });
-  assertSelected();
+  assertPreparing();
   return createGitHubReadIdentity({
     assertSelected,
     readToken,

@@ -44,6 +44,36 @@ function createOwner(id: string, workerProviders: string[] = []) {
 }
 
 describe("worker provider registry", () => {
+  it.each([
+    { version: undefined, accepted: true },
+    { version: 1, accepted: true },
+    { version: 0, accepted: false },
+    { version: 2, accepted: false },
+    { version: "1", accepted: false },
+    { version: null, accepted: false },
+  ])(
+    "validates live authority version $version without removing legacy modes",
+    ({ version, accepted }) => {
+      const pluginRegistry = createTestRegistry();
+      const provider = createWorkerProvider("static-ssh");
+      Object.assign(provider, {
+        liveAuthorityVersion: version,
+        supportedExecutionModes: ["remote-exec"],
+      });
+      pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+      expect(pluginRegistry.registry.workerProviders.size).toBe(accepted ? 1 : 0);
+      if (accepted) {
+        expect(provider.supportedExecutionModes).toEqual(["remote-exec"]);
+      } else {
+        expect(pluginRegistry.registry.diagnostics).toContainEqual(
+          expect.objectContaining({
+            message: "worker provider registration has an unsupported liveAuthorityVersion",
+          }),
+        );
+      }
+    },
+  );
+
   it("rejects registrations missing manifest ownership", () => {
     const pluginRegistry = createTestRegistry();
 

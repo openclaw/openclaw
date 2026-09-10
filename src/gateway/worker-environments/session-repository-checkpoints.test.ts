@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import * as processExec from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
@@ -17,6 +19,7 @@ import {
 } from "./session-repository-checkpoints.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
+import * as workspaceResultGit from "./workspace-result-git.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import {
   hasWorkerWorkspaceResultRef,
@@ -81,6 +84,85 @@ async function fixture() {
   };
   return { root, remote, database, store, workspace, stage };
 }
+
+it.each([false, true])(
+  "fences Git initialization after checkpoint directory creation (revoked=%s)",
+  async (revoke) => {
+    const { store, workspace, stage } = await fixture();
+    const artifact = store.artifactPath(workspace.workspaceId);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const mkdir = fs.mkdir.bind(fs);
+    let current = true;
+    let held = false;
+    vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+      const result = await mkdir(...args);
+      if (!held && String(args[0]) === artifact) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+    const pending = stage("directory-authority", {
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("checkpoint authority closed");
+        }
+      },
+    }).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    await entered.promise;
+    current = !revoke;
+    release.resolve();
+    const outcome = await pending;
+    expect(outcome.ok).toBe(!revoke);
+    if (revoke) {
+      await expect(fs.stat(path.join(artifact, "HEAD"))).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await expect(fs.stat(path.join(artifact, "HEAD"))).resolves.toBeDefined();
+    }
+    if (outcome.ok) {
+      await outcome.value.discard();
+    }
+  },
+);
+
+it("does not dispatch fast-import after a queued checkpoint stage loses authority", async () => {
+  const { store, workspace, stage } = await fixture();
+  const artifact = store.artifactPath(workspace.workspaceId);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const mutate = workspaceResultGit.withWorkspaceResultRefMutation;
+  let current = true;
+  let held = false;
+  vi.spyOn(workspaceResultGit, "withWorkspaceResultRefMutation").mockImplementation(
+    async (root, operation) => {
+      if (!held && root === artifact) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return await mutate(root, operation);
+    },
+  );
+  const buffered = vi.spyOn(processExec, "runCommandBuffered");
+  const pending = stage("queue-authority", {
+    assertCurrent: () => {
+      if (!current) {
+        throw new Error("checkpoint authority closed");
+      }
+    },
+  }).catch((error: unknown) => error);
+  await entered.promise;
+  current = false;
+  release.resolve();
+  expect(await pending).toBeInstanceOf(Error);
+  expect(buffered.mock.calls.filter(([argv]) => argv.includes("fast-import"))).toHaveLength(0);
+  expect(store.get(workspace.workspaceId)?.checkpointRef).toBeNull();
+});
 
 it("retains cumulative multi-turn files, deletions and executable modes in a bare artifact repo", async () => {
   const { remote, store, workspace, stage } = await fixture();

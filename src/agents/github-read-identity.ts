@@ -168,6 +168,8 @@ export type GitHubIdentityPreparation = {
 export type GitHubReadIdentityPreparation = GitHubIdentityPreparation & {
   getCurrentConfig: () => OpenClawConfig;
   assertActive: () => void;
+  /** Admission-only authority; not retained by reusable identity selection facts. */
+  assertPreparing?: () => void;
   refresh: () => Promise<void>;
 };
 

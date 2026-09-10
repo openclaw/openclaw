@@ -13,7 +13,6 @@ import {
   createWorkerPlacementDispatchStartup,
   type WorkerDevicePlacementRequirementResolver,
   type WorkerNodePlacementAuthority,
-  type WorkerPlacementRecoveryBarrier,
 } from "./placement-dispatch-startup.js";
 import { createWorkerPlacementMoveAbandonment } from "./placement-move-abandon.js";
 import {
@@ -40,7 +39,10 @@ import type {
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import { deriveEnvironmentIntent } from "./service-contract.js";
+import {
+  composeWorkerPlacementAuthorization,
+  deriveEnvironmentIntent,
+} from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
@@ -70,7 +72,6 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     isShuttingDown?: () => boolean;
     runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
     runLocalBarrier: WorkerLocalDispatchBarrier;
-    runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
     runActivationBarrier: WorkerActivationBarrier;
     runMoveBarrier: WorkerPlacementMoveBarrier;
     resolveMoveDestination: (
@@ -89,7 +90,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
 
   const startup = createWorkerPlacementDispatchStartup({
     ...options,
-    failure,
     reportTransition: reportPlacementTransition,
   });
 
@@ -109,10 +109,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
   ): Promise<WorkerActiveDispatchPlacement> => {
-    const assertCurrent = () => {
-      signal?.throwIfAborted();
-      authorize?.();
-    };
+    const assertCurrent = composeWorkerPlacementAuthorization(
+      () => signal?.throwIfAborted(),
+      authorize,
+    );
     let placement: WorkerDispatchPlacement | undefined;
     try {
       signal?.throwIfAborted();
@@ -186,6 +186,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 }
               : {}),
             inherited: request.inheritedProfile,
+            context: { assertCurrent },
             signal,
             os: request.os,
             runSetupScript:
@@ -238,6 +239,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               request.os,
               request.runSetupScript,
               preparedIntent,
+              { assertCurrent },
             )
           : await environments.create(
               request.profileId,
@@ -249,6 +251,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               request.os,
               request.runSetupScript,
               preparedIntent,
+              { assertCurrent },
             );
       return await startup.continueProvisionedDispatch({
         request,
@@ -440,7 +443,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     reclaim,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
-    resumeProvisioning: startup.resumeProvisioning,
   };
 }
 

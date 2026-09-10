@@ -350,6 +350,7 @@ describe("prepared worker dispatch", () => {
       undefined,
       undefined,
       intent,
+      { assertCurrent: expect.any(Function) },
     );
     expect(store.get(ready.environmentId)?.preparation).toBeNull();
     expect(harness.environments.bindPreparedWorkspace).toHaveBeenCalledOnce();
@@ -673,6 +674,7 @@ describe("prepared worker dispatch", () => {
         inherited: undefined,
         signal: undefined,
         setupAuthorized: true,
+        context: { assertCurrent: expect.any(Function) },
       });
       expect(active).toMatchObject({
         state: "active",

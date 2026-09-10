@@ -297,6 +297,61 @@ describe("repository workspace result ownership", () => {
     },
   );
 
+  it("fences completed-turn quiescence when workspace-result custody closes", async () => {
+    const f = await fixture("worker-turn");
+    const owned = f.beginTurn("quiescence-custody");
+    let remoteEffects = 0;
+    const validate = vi.spyOn(placements, "validateWorkspaceResultClaim");
+    vi.spyOn(f.tunnel, "quiesceWorkspace").mockImplementationOnce(async (_dir, authorize) => {
+      validate.mockReturnValue(false);
+      authorize?.();
+      remoteEffects += 1;
+      return { assertActive: async () => {}, resume: async () => {} };
+    });
+
+    await expect(f.finishTurn(owned)).rejects.toThrow(
+      "Cloud worker workspace result lost its placement owner",
+    );
+    expect(remoteEffects).toBe(0);
+  });
+
+  it.each(["tunnel startup", "quiescence"] as const)(
+    "fences repository editor capture during %s when its caller authority closes",
+    async (boundary) => {
+      const f = await fixture("worker-turn");
+      let current = true;
+      let remoteEffects = 0;
+      if (boundary === "tunnel startup") {
+        vi.mocked(f.environments.startTunnel).mockImplementationOnce(async (request) => {
+          current = false;
+          request.authorize?.();
+          remoteEffects += 1;
+          return f.tunnel;
+        });
+      } else {
+        vi.spyOn(f.tunnel, "quiesceWorkspace").mockImplementationOnce(async (_dir, authorize) => {
+          current = false;
+          authorize?.();
+          remoteEffects += 1;
+          return { assertActive: async () => {}, resume: async () => {} };
+        });
+      }
+
+      await expect(
+        f.mutations.mutate({
+          ...sessionTarget,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("repository editor authority closed");
+            }
+          },
+          mutate: async () => ({ changed: true, value: "unaccepted" }),
+        }),
+      ).rejects.toThrow("repository editor authority closed");
+      expect(remoteEffects).toBe(0);
+    },
+  );
+
   it.each(["worker-turn", "remote-exec"] as const)(
     "recovers unknown %s editor writes through pending result custody",
     async (executionMode) => {

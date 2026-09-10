@@ -237,8 +237,7 @@ describe("worker environment service", () => {
       runnerAvailability: { read: () => undefined, version: () => 0 },
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) =>
-        await run({ kind: "local", path: "/gateway/workspace" }),
+
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
@@ -340,7 +339,10 @@ describe("worker environment service", () => {
     });
     support.testState.bootstrapWorker = vi.fn(async ({ installation, resolveIdentity, signal }) => {
       signal.addEventListener("abort", () => void events.push("abort"), { once: true });
-      await resolveIdentity(support.SSH_ENDPOINT.keyRef);
+      // Match the SSH preparation owner: identity work must revalidate this bootstrap.
+      await resolveIdentity(support.SSH_ENDPOINT.keyRef, {
+        assertCurrent: () => signal.throwIfAborted(),
+      });
       return {
         bundleHash: installation.bundleHash,
         openclawVersion: installation.openclawVersion,
@@ -363,6 +365,7 @@ describe("worker environment service", () => {
     const creation = workerService.create("development", "request-identity-timeout");
     const creationResult = expect(creation).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: expect.stringContaining("Worker provider operation timed out"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     try {
       await support.waitForFast(() =>
@@ -372,9 +375,8 @@ describe("worker environment service", () => {
       expect(destroy).not.toHaveBeenCalled();
     } finally {
       finishIdentity?.();
+      await creationResult;
     }
-
-    await creationResult;
     expect(destroy).toHaveBeenCalledOnce();
     expect(events).toEqual(["identity:start", "abort", "identity:end", "destroy"]);
     expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });

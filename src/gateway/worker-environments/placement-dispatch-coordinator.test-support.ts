@@ -7,32 +7,6 @@ import type {
 
 type DispatchService = WorkerPlacementDispatchService;
 
-export function admittedRecovery(
-  run: (
-    placement: Parameters<DispatchService["resumeProvisioning"]>[0],
-    core: Parameters<DispatchService["resumeProvisioning"]>[1],
-  ) => Promise<void>,
-): DispatchService["resumeProvisioning"] {
-  return async (placement, core, _onTransition, admit) => {
-    if (!admit) {
-      throw new Error("Recovery fixture requires the coordinator admission owner");
-    }
-    return await admit(async (signal) => {
-      await run(placement, async () => await core(signal));
-      return undefined;
-    });
-  };
-}
-
-export function preparedReclaim(run: () => Promise<unknown>) {
-  return async (
-    _request: unknown,
-    _authorize: unknown,
-    _beforeDrain: unknown,
-    serialize: (operation: () => Promise<unknown>) => Promise<unknown>,
-  ) => await serialize(run);
-}
-
 export const REQUEST: WorkerPlacementDispatchRequest = {
   sessionId: "session-1",
   sessionKey: "agent:main:session-1",
@@ -74,7 +48,7 @@ export const PROVISIONING_PLACEMENT = {
   state: "provisioning",
   sessionId: "cloud",
   environmentId: "worker-cloud",
-} satisfies Parameters<DispatchService["resumeProvisioning"]>[0];
+} satisfies WorkerDispatchPlacement;
 
 export const ACTIVE_PLACEMENT = {
   ...LOCAL_PLACEMENT,
@@ -97,7 +71,6 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
     forceDestroyEnvironment: unexpected,
     reconcile: unexpected,
     reconcileActive: unexpected,
-    resumeProvisioning: unexpected,
     ...overrides,
   };
 }

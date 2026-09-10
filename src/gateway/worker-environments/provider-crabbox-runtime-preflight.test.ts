@@ -1,11 +1,12 @@
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { OpenClawPluginService, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
+import type { RegisteredWorkerProvider } from "../../plugins/capability-provider.types.js";
 import { resolvePluginModuleExport } from "../../plugins/loader-module-runtime.js";
 import * as support from "./service.test-support.js";
 
@@ -35,8 +36,8 @@ function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
 describe("Crabbox runtime preflight cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
   const pluginServices: OpenClawPluginService[] = [];
-  async function registerProvider(): Promise<WorkerProvider> {
-    let registered: WorkerProvider | undefined;
+  async function registerProvider(): Promise<RegisteredWorkerProvider> {
+    let registered: RegisteredWorkerProvider | undefined;
     const { register } = resolvePluginModuleExport(
       await importFreshModule<unknown>(import.meta.url, "../../../extensions/crabbox/index.ts"),
     );
@@ -285,7 +286,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       });
     });
     const prepareNodeEnrollment = vi.fn();
-    const makeProvider = async (): Promise<WorkerProvider> => {
+    const makeProvider = async (): Promise<RegisteredWorkerProvider> => {
       const provider = await registerProvider();
       if (changed && scenario.kind === "modes") {
         provider.supportedExecutionModes = ["remote-exec"];

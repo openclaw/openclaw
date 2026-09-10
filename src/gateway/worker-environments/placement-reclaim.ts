@@ -195,34 +195,36 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
             journal.abort();
           }
           reauthorize?.();
+          const assertCurrent = () => {
+            reauthorize?.();
+            const owned = placements.get(current.sessionId);
+            if (
+              owned?.state !== "draining" ||
+              owned.generation !== current.generation ||
+              owned.environmentId !== current.environmentId ||
+              owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
+              owned.turnClaim?.claimId !== reclaimClaim.claimId ||
+              !placements.validateWorkspaceResultClaim(reclaimClaim)
+            ) {
+              throw new Error("Cloud worker stop lost its placement owner before reconciliation");
+            }
+          };
           const tunnel = await environments.startTunnel({
             environmentId: current.environmentId,
             ownerEpoch: current.activeOwnerEpoch,
+            authorize: assertCurrent,
           });
           const reclaimed = await options.workspaceOperations.run(
             current.environmentId,
             async () => {
               // Lock acquisition and every remote/filesystem step may yield; stale callers must
               // fail before the next reclaim effect, not only after teardown has completed.
-              const assertCurrent = () => {
-                reauthorize?.();
-                const owned = placements.get(current.sessionId);
-                if (
-                  owned?.state !== "draining" ||
-                  owned.generation !== current.generation ||
-                  owned.environmentId !== current.environmentId ||
-                  owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
-                  owned.turnClaim?.claimId !== reclaimClaim.claimId ||
-                  !placements.validateWorkspaceResultClaim(reclaimClaim)
-                ) {
-                  throw new Error(
-                    "Cloud worker stop lost its placement owner before reconciliation",
-                  );
-                }
-              };
               assertCurrent();
               reauthorize?.();
-              const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
+              const quiescence = await tunnel.quiesceWorkspace(
+                current.remoteWorkspaceDir,
+                assertCurrent,
+              );
               try {
                 reauthorize?.();
                 const reconciliation = await tunnel.reconcileWorkspace(

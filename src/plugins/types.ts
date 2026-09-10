@@ -129,7 +129,10 @@ export type {
   WorkerMachineOption,
   WorkerOperatingSystem,
   WorkerProfile,
-  WorkerProvider,
+  RegisteredWorkerProvider as WorkerProvider,
+  WorkerProviderV1,
+  WorkerProvisionOptionsV1,
+  WorkerSshIdentityRequestV1,
   WorkerSshEndpoint,
   WorkerSshIdentity,
 } from "./capability-provider.types.js";

@@ -241,3 +241,30 @@ export function requireWorkerLease(value: unknown): WorkerLease {
   }
   return { ...common, node: { deviceId: deviceId.trim() } };
 }
+
+export function requireWorkerInstallationMethod(
+  value: unknown,
+  serviceError: (code: "invalid_profile", message: string) => Error,
+): "bundle" | "npm" {
+  if (value === undefined || value === "bundle") {
+    return "bundle";
+  }
+  if (value === "npm") {
+    return "npm";
+  }
+  throw serviceError("invalid_profile", "Worker profile has an invalid install method");
+}
+
+export function requireWorkerLiveProvisioning(
+  provider: WorkerProvider,
+  serviceError: (code: "invalid_profile", message: string) => Error,
+): void {
+  if (provider.liveAuthorityVersion !== 1) {
+    throw serviceError(
+      "invalid_profile",
+      "Worker provider " +
+        provider.id +
+        " must implement live authority version 1 before new delegated provisioning",
+    );
+  }
+}
