@@ -168,6 +168,15 @@ describe("secret egress registration lifecycle", () => {
     ).not.toThrow();
   });
 
+  it("exposes the trust bundle to git via GIT_SSL_CAINFO", () => {
+    expect(proxyEnv.GIT_SSL_CAINFO).toBe(proxyEnv.NODE_EXTRA_CA_CERTS);
+    expect(proxyEnv.GIT_SSL_CAINFO).toBe(proxyEnv.SSL_CERT_FILE);
+    expect(proxyEnv.GIT_SSL_CAINFO).toContain("trust-bundle.pem");
+    expect(fs.readFileSync(proxyEnv.GIT_SSL_CAINFO!)).toEqual(
+      fs.readFileSync(proxyEnv.NODE_EXTRA_CA_CERTS!),
+    );
+  });
+
   it("renews cached leaves without replacing client trust or established connections", async () => {
     const issued: X509Certificate[] = [];
     const issueLeaf = proxyCa.generateLocalProxyLeaf;
