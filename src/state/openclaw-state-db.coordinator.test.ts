@@ -10,6 +10,7 @@ import {
   acquireStateDatabaseCoordinator,
   acquireStateDatabaseHandleExclusion,
 } from "../infra/state-database-coordinator.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import {
   closeOpenClawStateDatabase,
@@ -83,9 +84,13 @@ function sqliteBytes(databasePath: string) {
 }
 
 describe("shared-state transaction lifecycle participation", () => {
-  it.each(["path", "all"] as const)(
-    "refuses %s retirement before checkpoint or close while another process owns lifecycle exclusion",
-    async (scope) => {
+  it.each(
+    ["path", "all"].flatMap((scope) =>
+      ["cached", "retained"].map((custody) => ({ scope, custody })),
+    ),
+  )(
+    "refuses $scope retirement of a $custody handle before checkpoint or close while another process owns lifecycle exclusion",
+    async ({ scope, custody }) => {
       const root = tempDirs.make("openclaw-state-close-coordinator-");
       const options = { path: path.join(root, "openclaw.sqlite") };
       const database = openOpenClawStateDatabase(options);
@@ -100,6 +105,17 @@ describe("shared-state transaction lifecycle participation", () => {
         scope === "path"
           ? closeOpenClawStateDatabaseByPath(database.path)
           : closeOpenClawStateDatabase();
+      if (custody === "retained") {
+        const failure = new Error("native close refused");
+        const close = vi.spyOn(database.db, "close").mockImplementation(() => {
+          throw failure;
+        });
+        try {
+          expect(retire).toThrow(failure);
+        } finally {
+          close.mockRestore();
+        }
+      }
       const release = await holdStateCoordinator(database.path);
       const before = sqliteBytes(database.path);
       try {
@@ -110,7 +126,16 @@ describe("shared-state transaction lifecycle participation", () => {
         await release();
       }
       // Refusal retains the actual cache owner; retry closes it only after exclusion ends.
-      expect(openOpenClawStateDatabase(options)).toBe(database);
+      if (custody === "cached") {
+        expect(openOpenClawStateDatabase(options)).toBe(database);
+      } else {
+        expect(
+          openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(database.path),
+        ).toBeUndefined();
+        expect(() =>
+          acquireStateDatabaseHandleExclusion({ databasePath: database.path, busyTimeoutMs: 0 }),
+        ).toThrow(/state-handles/);
+      }
       retire();
       expect(database.db.isOpen).toBe(false);
       const reopened = openOpenClawStateDatabase(options);

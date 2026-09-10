@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import {
-  buildSessionUsageDateParams,
-  requestSessionUsage,
-  requestSessionUsageContextWeight,
-} from "./usage.ts";
+import { buildSessionUsageDateParams, requestSessionUsage } from "./usage.ts";
 
 describe("buildSessionUsageDateParams", () => {
   afterEach(() => {
@@ -38,7 +34,7 @@ describe("requestSessionUsage", () => {
   ])("scopes selected context for $key without an all-agent request", async ({ key, agentId }) => {
     const request = vi.fn().mockResolvedValue({ sessions: [] });
     const signal = new AbortController().signal;
-    await requestSessionUsageContextWeight(
+    await requestSessionUsage(
       { request } as never,
       {
         startDate: "2026-07-01",
@@ -47,8 +43,7 @@ describe("requestSessionUsage", () => {
         timeZone: "utc",
         agentId,
       },
-      key,
-      signal,
+      { key, includeContextWeight: true, signal },
     );
     expect(request).toHaveBeenCalledWith(
       "sessions.usage",

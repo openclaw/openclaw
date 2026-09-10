@@ -18,6 +18,7 @@ export type NodeWorkerLaunchInput = {
   gatewayNamespace: string;
   expectedBundleHash: string;
   placementGeneration: number;
+  sessionKey?: string;
   descriptor: WorkerLaunchPlan;
 };
 
@@ -124,19 +125,33 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
 export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchInput {
   if (
     !isRecord(value) ||
-    !hasExactOwnKeys(value, [
-      "environmentSession",
-      "launchId",
-      "gatewayNamespace",
-      "expectedBundleHash",
-      "placementGeneration",
-      "descriptor",
-    ])
+    !hasExactOwnKeys(
+      value,
+      [
+        "environmentSession",
+        "launchId",
+        "gatewayNamespace",
+        "expectedBundleHash",
+        "placementGeneration",
+        "descriptor",
+      ],
+      ["sessionKey"],
+    )
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker launch request");
   }
   if (value.environmentSession !== 1) {
     throw new Error("INVALID_REQUEST: node worker environment lifetime support required");
+  }
+  if (
+    value.sessionKey !== undefined &&
+    (typeof value.sessionKey !== "string" ||
+      value.sessionKey.length === 0 ||
+      value.sessionKey.length > 1_024 ||
+      value.sessionKey.trim() !== value.sessionKey ||
+      value.sessionKey.includes("\0"))
+  ) {
+    throw new Error("INVALID_REQUEST: sessionKey must be a bounded non-empty identifier");
   }
   const launchId = requireIdentifier(value.launchId, "launchId");
   const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
@@ -162,6 +177,7 @@ export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchI
     environmentSession: 1,
     launchId,
     gatewayNamespace,
+    ...(value.sessionKey === undefined ? {} : { sessionKey: value.sessionKey }),
     expectedBundleHash: value.expectedBundleHash,
     placementGeneration: requireNonNegativeInteger(
       value.placementGeneration,
@@ -243,7 +259,7 @@ export function parseNodeWorkerEnvironmentStopInput(
 export function nodeWorkerPlanHash(
   input: Pick<
     NodeWorkerLaunchInput,
-    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "placementGeneration"
+    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "placementGeneration" | "sessionKey"
   >,
 ): string {
   return createHash("sha256")
@@ -253,6 +269,7 @@ export function nodeWorkerPlanHash(
         descriptor: input.descriptor,
         gatewayNamespace: input.gatewayNamespace,
         placementGeneration: input.placementGeneration,
+        ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
       }),
     )
     .digest("hex");

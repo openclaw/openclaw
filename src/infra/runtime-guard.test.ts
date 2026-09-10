@@ -94,7 +94,9 @@ describe("runtime-guard", () => {
   it.each([
     ["--version"],
     ["-V"],
+    ["-v"],
     ["--help"],
+    ["-h"],
     ["gateway", "status"],
     ["gateway", "status", "--deep"],
     ["doctor"],

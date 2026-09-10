@@ -9,6 +9,7 @@ import {
   NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_PORTAL_STREAM_VERSION,
+  NODE_WORKER_PREPARED_WORKSPACE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
@@ -358,6 +359,9 @@ export function startNodeHostConnection({
             ? {
                 enabled: true,
                 capacity: workerCapacity,
+                ...(prepared.preparedWorkspacesEnabled
+                  ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
+                  : {}),
                 bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
                 ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION)
                   ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }

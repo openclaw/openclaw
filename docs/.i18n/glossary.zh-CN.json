@@ -52,6 +52,26 @@
     "target": "密钥管理"
   },
   {
+    "source": "Secrets runtime model",
+    "target": "密钥运行时模型"
+  },
+  {
+    "source": "SecretRef contract and provider config",
+    "target": "SecretRef 契约与提供商配置"
+  },
+  {
+    "source": "Shared secret store and egress proxy",
+    "target": "共享密钥存储与出口代理"
+  },
+  {
+    "source": "Secrets integration examples",
+    "target": "密钥集成示例"
+  },
+  {
+    "source": "Secrets operations and behavior",
+    "target": "密钥运维与行为"
+  },
+  {
     "source": "1Password",
     "target": "1Password"
   },
@@ -778,6 +798,50 @@
   {
     "source": "Sandboxing",
     "target": "沙箱隔离"
+  },
+  {
+    "source": "What gets sandboxed",
+    "target": "哪些内容会被沙箱隔离"
+  },
+  {
+    "source": "Modes, scope, and backend",
+    "target": "模式、作用域与后端"
+  },
+  {
+    "source": "Supported capability matrix",
+    "target": "支持的能力矩阵"
+  },
+  {
+    "source": "Docker backend",
+    "target": "Docker 后端"
+  },
+  {
+    "source": "Podman backend",
+    "target": "Podman 后端"
+  },
+  {
+    "source": "SSH backend",
+    "target": "SSH 后端"
+  },
+  {
+    "source": "OpenShell backend",
+    "target": "OpenShell 后端"
+  },
+  {
+    "source": "Workspace access",
+    "target": "工作区访问权限"
+  },
+  {
+    "source": "Multiple folders for one agent",
+    "target": "为单个 Agent 配置多个目录"
+  },
+  {
+    "source": "Images and setup",
+    "target": "镜像与设置"
+  },
+  {
+    "source": "setupCommand (one-time container setup)",
+    "target": "setupCommand（一次性容器设置）"
   },
   {
     "source": "sandboxed",
@@ -2148,6 +2212,38 @@
     "target": "威胁模型"
   },
   {
+    "source": "Reconnaissance (AML.TA0002)",
+    "target": "侦察（AML.TA0002）"
+  },
+  {
+    "source": "Initial access (AML.TA0004)",
+    "target": "初始访问（AML.TA0004）"
+  },
+  {
+    "source": "Execution (AML.TA0005)",
+    "target": "执行（AML.TA0005）"
+  },
+  {
+    "source": "Persistence (AML.TA0006)",
+    "target": "持久化（AML.TA0006）"
+  },
+  {
+    "source": "Defense evasion (AML.TA0007)",
+    "target": "防御规避（AML.TA0007）"
+  },
+  {
+    "source": "Discovery (AML.TA0008)",
+    "target": "发现（AML.TA0008）"
+  },
+  {
+    "source": "Collection and exfiltration (AML.TA0009, AML.TA0010)",
+    "target": "收集与外传（AML.TA0009、AML.TA0010）"
+  },
+  {
+    "source": "Impact (AML.TA0011)",
+    "target": "影响（AML.TA0011）"
+  },
+  {
     "source": "Timezones",
     "target": "时区"
   },
@@ -3042,6 +3138,46 @@
   {
     "source": "Gateway protocol auth",
     "target": "Gateway 协议身份验证"
+  },
+  {
+    "source": "System and channel methods",
+    "target": "系统与频道方法"
+  },
+  {
+    "source": "Talk, config, and agent methods",
+    "target": "Talk、配置与代理方法"
+  },
+  {
+    "source": "Session control",
+    "target": "会话控制"
+  },
+  {
+    "source": "Devices, nodes, and approvals",
+    "target": "设备、节点与审批"
+  },
+  {
+    "source": "Session list bootstrap and events",
+    "target": "会话列表引导与事件"
+  },
+  {
+    "source": "Gateway protocol system and channel methods",
+    "target": "Gateway 协议系统与频道方法"
+  },
+  {
+    "source": "Gateway protocol talk, config, and agent methods",
+    "target": "Gateway 协议 Talk、配置与代理方法"
+  },
+  {
+    "source": "Gateway protocol session control",
+    "target": "Gateway 协议会话控制"
+  },
+  {
+    "source": "Gateway protocol device, node, and approval methods",
+    "target": "Gateway 协议设备、节点与审批方法"
+  },
+  {
+    "source": "Gateway protocol session bootstrap and events",
+    "target": "Gateway 协议会话引导与事件"
   },
   {
     "source": "Config and utilities",

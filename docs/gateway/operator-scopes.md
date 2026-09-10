@@ -247,7 +247,9 @@ dispatch so authorization failures have one canonical structured response:
   `projectId`, and `operator.admin` for incognito sessions or any `execNode`
   request. For non-admin callers, the handler limits `cwd` to configured agent
   workspaces; `projectId` cannot be combined with `cwd` or `execNode`.
-- `environments.list` needs `operator.read`. Session placement methods derive
+- `environments.list` needs `operator.read` for plain inventory and
+  `operator.write` when `runtimeId` requests runtime-specific command eligibility.
+  Session placement methods derive
   their scope from the requested target before schema validation:
   `sessions.dispatch` needs `operator.write` for `deviceId` and
   `operator.admin` for `profileId` or a target-less

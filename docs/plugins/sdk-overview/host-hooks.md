@@ -68,7 +68,7 @@ These operations retain managed registrations and preserve raw host ownership.
 Configured fallback catalogs stay separate from direct preference and override
 lookups. Returned audio buffers outlive registration disposal; standard TTS
 transcodes and saves those completed buffers after releasing the provider. The
-separate synchronous speech lookup and request-preparation APIs keep their
+separate synchronous speech lookup and directive-parsing APIs keep their
 existing caller lifetime; streaming speech is not part of this finite operation.
 
 Streaming speech owns its provider registrations until stream cleanup finishes.
@@ -79,6 +79,15 @@ EOF or a read error releases registrations automatically. Stream cancellation
 and explicit release start source cancellation and provider cleanup before
 joining both, including tracked producer work. Release also handles an unopened
 stream. Existing raw host registrations keep their host lifetime.
+
+`api.runtime.tts.prepareTtsRequest(...)` can return opaque provider overrides for
+later synthesis. Preparation retains borrowed managed registrations
+until the SDK host closes, even if the original inspection is released first.
+Repeated preparation from the same source shares the host claim. Raw loader and
+Gateway registrations keep their existing lifetime and cache reuse; preparation
+does not create a fresh registration for each utterance. The host joins tracked
+preparation work before releasing its claims, including work started by a failed
+projection.
 
 For `image_generate`, `music_generate`, and `video_generate` tools prepared from an owned inspection,
 resources remain held through preflight and, once accepted, through generation, media saving, and

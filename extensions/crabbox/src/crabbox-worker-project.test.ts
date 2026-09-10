@@ -142,6 +142,126 @@ describe("Crabbox project snapshot provisioning", () => {
     },
   );
 
+  it("recovers enrolled preparation facts without rerunning setup or capture", async () => {
+    const events: string[] = [];
+    const current = projectOptions(events);
+    const { provider, calls } = createWarmProvider(current.observe);
+    const inspected = vi.fn(async () => {});
+    const options: ProvisionOptions = {
+      ...current.options,
+      project: {
+        ...current.options.project,
+        preparation: { key: "c".repeat(64), cacheKey: "d".repeat(64) },
+        inspectPreparedWorkspace: inspected,
+      },
+    };
+    await provider.provision(PROFILE, "enrolled-project-replay", options);
+    const before = calls.length;
+    current.options.project.prepare.mockClear();
+    current.options.prepareNodeRuntime.mockClear();
+    await provider.provision(PROFILE, "enrolled-project-replay", options);
+    expect(inspected).toHaveBeenCalledOnce();
+    expect(current.options.project.prepare).not.toHaveBeenCalled();
+    expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
+    expect(calls.slice(before).some(({ argv }) => argv[2] === "create")).toBe(false);
+  });
+
+  it.each([
+    { crash: "pending", alreadyComplete: false, replayCaptures: 1 },
+    { crash: "prepared", alreadyComplete: false, replayCaptures: 1 },
+    { crash: "published", alreadyComplete: false, replayCaptures: 0 },
+    { crash: "pending", alreadyComplete: true, replayCaptures: 1 },
+    { crash: "none", alreadyComplete: true, replayCaptures: 0 },
+  ])(
+    "preserves prepared capture on $crash replay (image complete=$alreadyComplete)",
+    async ({ crash, alreadyComplete, replayCaptures }) => {
+      let captures = 0;
+      const command = ({ argv }: CommandCall) =>
+        argv[2] === "create"
+          ? checkpointResult(
+              `${CHECKPOINT_ID}_${++captures}`,
+              argv[argv.indexOf("--id") + 1]!,
+              "completed",
+            )
+          : undefined;
+      const initial = createWarmProvider(command);
+      const baseline = await initial.provider.provision(
+        PROFILE,
+        "replay-baseline",
+        projectOptions([]).options,
+      );
+      await initial.provider.destroy({ ...baseline, profile: PROFILE });
+      await initial.provider.dispose();
+      const operation = "prepared-capture-replay";
+      const leaseId = operationLeaseId(operation);
+      let completionPublished = alreadyComplete;
+      const optionsFor = (interrupt: boolean) => {
+        const controller = new AbortController();
+        const { options } = projectOptions([], controller);
+        const prepare = options.project.prepare;
+        const project: NonNullable<ProvisionOptions["project"]> = {
+          ...options.project,
+          preparation: { key: "c".repeat(64), cacheKey: "d".repeat(64) },
+          inspectPreparedWorkspace: vi.fn(async () => {}),
+          prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
+            const result = await prepare(transport);
+            const captureRequired: true | undefined = completionPublished ? undefined : true;
+            completionPublished = true;
+            if (interrupt && crash === "pending") {
+              controller.abort();
+            }
+            return { ...result, captureRequired };
+          }),
+          assertCurrent: () => {
+            if (
+              interrupt &&
+              crash === "prepared" &&
+              listCrabboxWarmImages()[0]?.allocations[leaseId]?.phase === "prepared"
+            ) {
+              controller.abort();
+            }
+            controller.signal.throwIfAborted();
+          },
+        };
+        const begin = options.beginNodeEnrollment;
+        return {
+          ...options,
+          project,
+          beginNodeEnrollment: vi.fn(async () => {
+            if (interrupt && crash === "published") {
+              controller.abort();
+              controller.signal.throwIfAborted();
+            }
+            return await begin();
+          }),
+        };
+      };
+      const first = createWarmProvider(command, initial.stateDir);
+      if (crash === "none") {
+        await first.provider.provision(PROFILE, operation, optionsFor(false));
+        expect(captures).toBe(1);
+      } else {
+        await expect(
+          first.provider.provision(PROFILE, operation, optionsFor(true)),
+        ).rejects.toThrow();
+        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]?.phase).toBe(
+          crash === "pending" ? "pending" : "prepared",
+        );
+        expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
+      }
+      await first.provider.dispose();
+      const before = captures;
+      const resumed = createWarmProvider(command, initial.stateDir);
+      await resumed.provider.provision(PROFILE, operation, optionsFor(false));
+      expect(captures - before).toBe(replayCaptures);
+      const enrolled = optionsFor(false);
+      await resumed.provider.provision(PROFILE, operation, enrolled);
+      expect(enrolled.project.prepare).not.toHaveBeenCalled();
+      expect(enrolled.project.inspectPreparedWorkspace).toHaveBeenCalledOnce();
+      expect(captures - before).toBe(replayCaptures);
+    },
+  );
+
   it.each(["aws", "azure", "gcp"])(
     "waits beyond the submission deadline for a retained %s checkpoint before enrollment",
     async (backend) => {

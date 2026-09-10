@@ -94,7 +94,7 @@ describe("Crabbox worker doctor", () => {
     { version: "0.53.0", rejected: true },
     { version: "0.54.0", rejected: false },
     { version: "1.0.0", rejected: false },
-  ])("checks WSL2 profiles against Crabbox $version", async ({ version, rejected }) => {
+  ])("checks non-Linux profiles against Crabbox $version", async ({ version, rejected }) => {
     const probe = vi
       .spyOn(doctorRuntime, "probeCrabboxVersion")
       .mockResolvedValue({ status: "supported", version });
@@ -110,6 +110,10 @@ describe("Crabbox worker doctor", () => {
                   binary: process.execPath,
                   target: "windows/wsl2",
                 },
+              },
+              mac: {
+                provider: "crabbox",
+                settings: { binary: process.execPath, target: "macos" },
               },
             },
           },
@@ -127,6 +131,15 @@ describe("Crabbox worker doctor", () => {
                 requirement: expect.stringContaining("0.53.1"),
                 fixHint: expect.stringContaining("0.53.1"),
               }),
+              expect.objectContaining({
+                target: "mac",
+                severity: "warning",
+                message: expect.stringContaining(
+                  "macOS cloud workers require Crabbox 0.53.1 or newer",
+                ),
+                requirement: expect.stringContaining("0.53.1"),
+                fixHint: expect.stringContaining("0.53.1"),
+              }),
             ]
           : [],
       );
@@ -139,6 +152,7 @@ describe("Crabbox worker doctor", () => {
   it.each([
     { target: "linux", severity: "info", minimum: "0.41.1" },
     { target: "windows/wsl2", severity: "warning", minimum: "0.53.1" },
+    { target: "macos", severity: "warning", minimum: "0.53.1" },
   ])("reports an indeterminate version for $target", async ({ target, severity, minimum }) => {
     const probe = vi.spyOn(doctorRuntime, "probeCrabboxVersion").mockResolvedValue({
       status: "indeterminate",

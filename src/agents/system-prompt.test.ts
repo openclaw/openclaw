@@ -1431,31 +1431,64 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("skills.read");
   });
 
-  it("instructs models to use skill_workshop only when the tool is available", () => {
-    const withoutTool = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["read"],
-    });
-    expect(withoutTool).not.toContain("## Skill Workshop");
-    expect(withoutTool).not.toContain("Durable reusable skill/playbook/workflow work");
+  it.each(["full", "minimal"] as const)(
+    "scopes Workshop guidance to available tools in %s prompts",
+    (promptMode) => {
+      const withoutTool = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["read"],
+        promptMode,
+      });
+      expect(withoutTool).not.toContain("## Skill Workshop");
+      expect(withoutTool).not.toContain("Durable reusable skill/playbook/workflow work");
+      expect(withoutTool).not.toContain("repository-owned skill source");
 
-    const withTool = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["read", "skill_workshop"],
-    });
-    expect(withTool).toContain("- skill_workshop: Author reusable skills");
-    expect(withTool).toContain("## Skill Workshop");
-    expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
-    expect(withTool).toContain("Used skill proved wrong or incomplete");
-    expect(withTool).toContain(
-      "Where supported, autonomous mode may disable repair, stage a proposal, or apply it",
-    );
-    expect(withTool).toContain(
-      "unsolicited improvements stay pending proposals when supported; otherwise describe the suggestion without publishing",
-    );
-    expect(withTool).toContain("Publication-only create/update requires an explicit user request");
-    expect(withTool).not.toContain("patch it now");
-  });
+      const withTool = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["read", "skill_workshop"],
+        promptMode,
+      });
+      expect(withTool).toContain("- skill_workshop: Author reusable skills");
+      expect(withTool).toContain("## Skill Workshop");
+      expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
+      expect(withTool).toContain(
+        "never write Workshop proposal or Workshop-owned skill files directly",
+      );
+      expect(withTool).toContain("repository-owned skill source");
+      expect(withTool).toContain("never infer Workshop ownership");
+      expect(withTool).toContain("Used skill proved wrong or incomplete");
+      expect(withTool).toContain(
+        "Where supported, autonomous mode may disable repair, stage a proposal, or apply it",
+      );
+      expect(withTool).toContain(
+        "unsolicited improvements stay pending proposals when supported; otherwise describe the suggestion without publishing",
+      );
+      expect(withTool).toContain(
+        "Publication-only create/update requires an explicit user request",
+      );
+      expect(withTool).not.toContain("patch it now");
+    },
+  );
+
+  it.each(["full", "minimal"] as const)(
+    "preserves Workshop ownership guidance for deferred tools in %s prompts",
+    (promptMode) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["tool_search_code"],
+        capabilityToolNames: ["skill_workshop"],
+        codeModeActive: true,
+        promptMode,
+      });
+
+      expect(prompt).toContain("## Skill Workshop");
+      expect(prompt).toContain("normal repository file tools");
+      expect(prompt).toContain(
+        "never write Workshop proposal or Workshop-owned skill files directly",
+      );
+      expect(prompt).not.toContain("never write proposal/skill files directly");
+    },
+  );
 
   it("appends available skills when provided", () => {
     const prompt = buildAgentSystemPrompt({

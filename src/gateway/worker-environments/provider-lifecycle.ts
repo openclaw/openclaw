@@ -12,6 +12,7 @@ import {
 } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import {
   createWorkerProjectPreparation,
   readWorkerProjectSnapshot,
@@ -282,6 +283,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         projectOperation = createWorkerProjectPreparation({
           project,
           namespace: options.projectNamespace,
+          preparation: readWorkerProjectPreparation(record.profileSnapshot.project),
+          setupAuthorized: true,
           signal: cancellation?.signal,
           requireCurrent: () => {
             const current = requireCurrentOwner(record);
@@ -289,7 +292,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
               options.isStopping() ||
               current.destroyRequestedAtMs !== null ||
               current.provisionOperationId !== record.provisionOperationId ||
-              !isDeepStrictEqual(current.profileSnapshot.project, project)
+              !isDeepStrictEqual(current.profileSnapshot.project, record.profileSnapshot.project)
             ) {
               throw new Error("Worker project preparation owner is no longer current");
             }
@@ -415,6 +418,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         patch,
         preparedInstallation,
         cancellation,
+        projectOperation?.getPreparedWorkspace(),
       );
     }
     const bootstrapping = move(record, "bootstrapping", patch);

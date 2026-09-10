@@ -204,6 +204,9 @@ describe("repository workspace result ownership", () => {
         publishAcceptedWorkspace,
       });
     const environments: WorkerDispatchEnvironmentService = {
+      bindPreparedWorkspace: async () => {
+        throw new Error("unexpected prepared binding");
+      },
       get: () => attachedEnvironment(),
       create: vi.fn(async () => attachedEnvironment()),
       createFromProfileSnapshot: vi.fn(async () => attachedEnvironment()),
@@ -614,6 +617,9 @@ describe("repository workspace result ownership", () => {
         database: openOpenClawStateDatabase(),
       });
       const environments: WorkerDispatchEnvironmentService = {
+        bindPreparedWorkspace: async () => {
+          throw new Error("unexpected prepared binding");
+        },
         get: () => undefined,
         create: vi.fn(async () => attachedEnvironment()),
         createFromProfileSnapshot: vi.fn(async () => attachedEnvironment()),

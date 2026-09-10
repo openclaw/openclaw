@@ -48,6 +48,13 @@ uses the admitted handle. Coalesced callers retain their own guards. History
 eviction also uses this admission when reopening after archive materialization,
 then rereads candidate protection before preparing reclamation.
 
+Prepared session-store updates, entry replacements, and lifecycle upserts use
+the same admission for cold snapshot reads and actual commits, retaining their
+existing writer position. Warm update callbacks remain direct. Result-only
+no-op commits do not reopen a disposed handle. Native deletion and archive
+preparation still run outside the writer; the subsequent commit rechecks its
+native owner's authority after any awaited admission.
+
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
 while full integrity and foreign-key checks run on the same connection. Unrelated

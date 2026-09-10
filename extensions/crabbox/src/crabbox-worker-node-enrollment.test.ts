@@ -613,7 +613,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     expect(launch.cli).not.toBe(oldLaunch.cli);
   }, 30_000);
 
-  it.skipIf(process.platform !== "linux")(
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
     "reuses only a live process with the exact artifact and invocation",
     async () => {
       const { home, stateDir } = testHome();
@@ -624,6 +624,31 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       await expectSetupPhases(enroll(home, nodeBootstrap));
       expect(fs.readFileSync(path.join(stateDir, "node.pid"), "utf8")).toBe(pid);
       expect(authorizations).toHaveLength(1);
+      if (process.platform === "darwin") {
+        const launchFile = path.join(stateDir, "node-launch.json");
+        const record = JSON.parse(fs.readFileSync(launchFile, "utf8"));
+        expect(record).toMatchObject({
+          pid: Number(pid),
+          stateDir,
+          cli: (await readLaunch(stateDir)).cli,
+        });
+        expect(fs.statSync(launchFile).mode & 0o777).toBe(0o600);
+        expect(fs.statSync(stateDir).mode & 0o777).toBe(0o700);
+        expect(record.startTime).toBe(
+          execFileSync("ps", ["-o", "lstart=", "-p", pid.trim()], { encoding: "utf8" })
+            .trim()
+            .replace(/\s+/g, " "),
+        );
+        fs.writeFileSync(
+          launchFile,
+          JSON.stringify({ ...record, startTime: "different process start" }),
+        );
+        expect(await enroll(home, nodeBootstrap)).toMatchObject({
+          code: 1,
+          output: expect.stringContaining("release and reprovision the worker"),
+        });
+        fs.writeFileSync(launchFile, JSON.stringify(record));
+      }
       const rejected = await enroll(home, { ...nodeBootstrap, sha256: "b".repeat(64) });
       expect(rejected).toMatchObject({
         code: 1,
