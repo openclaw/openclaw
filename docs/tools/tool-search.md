@@ -161,10 +161,10 @@ light English stemming so `scheduling` reaches a tool described as `Schedule a
 recurring task`, and a small intent expansion so `look up the price` reaches one
 described as `Search the web`. Tool names and descriptions are written in English,
 so a query in another language will usually match nothing. It is not rejected —
-a catalog may legitimately describe a tool in another script — but it is also no
-longer answered with an arbitrary slice of the catalog presented as if it were
-ranked, which is what the previous scorer did whenever a query produced no
-usable terms. Both `tool_search` and the code-mode bridge state this
+a catalog may legitimately describe a tool in another script — but a query with
+no usable terms returns no ranked results rather than an arbitrary slice of the
+catalog. An exact tool name is still honored even when it tokenizes to nothing.
+Both `tool_search` and the code-mode bridge state this
 requirement in their model-facing descriptions.
 
 Untrusted parameter schemas are never indexed. MCP and client tools are matched
@@ -228,7 +228,7 @@ await openclaw.tools.call(calendarCreate.id, {
 Tool authors declare output contracts on the tool's `outputSchema` property.
 It describes `AgentToolResult.details`, not rendered content blocks. Include
 all non-throwing variants or omit it for unstable results. See
-[Code Mode output contracts](/tools/code-mode#declared-output-contracts) and
+[Code Mode output contracts](/tools/code-mode/output#declared-output-contracts) and
 [Tool plugins](/plugins/tool-plugins#output-contracts).
 
 The structured fallback mode exposes the same operations as tools:
@@ -263,6 +263,21 @@ independent queries:
 ```
 
 Single-query calls continue to return the compact candidate array directly.
+When both shapes contain searches, the non-empty `query` runs first, with the
+top-level `limit` scoped to it. Batch entries follow in request order, including
+repeated query text; each occurrence keeps its own limit and counts toward the
+batch budgets.
+
+Beside a non-empty batch, an omitted, `null`, empty, or whitespace-only `query`
+is ignored. In that case, omit the top-level `limit` or set it to `null`; a
+non-null top-level limit is rejected rather than applied to the batch.
+An omitted or `null` `queries` retains scalar behavior, and `queries: []` also
+falls back to the scalar shape when `query` is non-empty. A blank scalar query
+without a batch still returns an empty candidate array. A missing or `null`
+scalar with no batch, or an empty batch with no non-empty scalar, is rejected.
+A scalar `limit: null` uses the default limit, just like an omitted limit.
+Invalid query shapes, invalid limits, and over-budget batches still fail.
+
 Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
 query uses the same effective catalog, ranking, filtering, and per-query limit
 as an ordinary search; a candidate may appear in more than one result group.
@@ -321,6 +336,8 @@ Normal OpenClaw behavior still applies to final calls:
 - channel/runtime tool policy
 - approval hooks
 - plugin `before_tool_call` hooks
+- tool `executionMode`: sequential calls run exclusively with other calls in the
+  same catalog, including calls from other Tool Search or Code Mode cells
 - session identity, logs, and telemetry
 
 ## Config

@@ -5,6 +5,7 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -12,7 +13,7 @@ import {
   pruneSessionTranscriptArchivesToHighWater,
   type SessionPhysicalDiskUsage,
 } from "./disk-budget.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
 
 export async function reclaimSqliteFreePages(
   databaseOptions: OpenClawAgentDatabaseOptions,
@@ -22,25 +23,30 @@ export async function reclaimSqliteFreePages(
     if (remaining !== undefined) {
       await setImmediate();
     }
-    // Reacquire after yielding: idle cached handles can be evicted between passes.
-    const database = openOpenClawAgentDatabase(databaseOptions);
-    database.walMaintenance.checkpoint();
-    // sqlite-allow-raw -- Physical budget decisions need current SQLite page accounting.
-    const freePages = () =>
-      Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0);
-    const before = freePages();
-    if (!Number.isSafeInteger(before) || before <= 0) {
+    // Reacquire after yielding while the caller retains its writer section.
+    const nextRemaining = await withSqliteSessionDatabase(databaseOptions, (database) => {
+      database.walMaintenance.checkpoint();
+      // sqlite-allow-raw -- Physical budget decisions need current SQLite page accounting.
+      const freePages = () =>
+        Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0);
+      const before = freePages();
+      if (!Number.isSafeInteger(before) || before <= 0) {
+        return undefined;
+      }
+      // Bound the entire drain to its initial freelist, even if other writers free more pages.
+      const passRemaining = Math.min(remaining ?? before, before);
+      const pages = Math.min(512, passRemaining);
+      database.db.exec(`PRAGMA incremental_vacuum(${pages});`); // sqlite-allow-raw -- Bounded maintenance outside a transaction.
+      database.walMaintenance.checkpoint();
+      if (freePages() >= before) {
+        return undefined;
+      }
+      return passRemaining - pages;
+    });
+    if (nextRemaining === undefined) {
       return;
     }
-    // Bound the entire drain to its initial freelist, even if other writers free more pages.
-    remaining = Math.min(remaining ?? before, before);
-    const pages = Math.min(512, remaining);
-    database.db.exec(`PRAGMA incremental_vacuum(${pages});`); // sqlite-allow-raw -- Bounded maintenance outside a transaction.
-    database.walMaintenance.checkpoint();
-    remaining -= pages;
-    if (freePages() >= before) {
-      return;
-    }
+    remaining = nextRemaining;
   }
 }
 
@@ -48,7 +54,12 @@ export function hasCanonicalSessionTranscriptArchives(
   databaseOptions: OpenClawAgentDatabaseOptions,
 ): boolean {
   // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across awaits.
-  const database = openOpenClawAgentDatabase(databaseOptions);
+  return hasCanonicalSessionTranscriptArchivesInDatabase(
+    openOpenClawAgentDatabase(databaseOptions),
+  );
+}
+
+function hasCanonicalSessionTranscriptArchivesInDatabase(database: OpenClawAgentDatabase): boolean {
   const db = getSessionKysely(database.db);
   const table = executeSqliteQuerySync(
     database.db,
@@ -74,10 +85,8 @@ export function hasCanonicalSessionTranscriptArchives(
 }
 
 function readUnpublishedSessionTranscriptArchiveNames(
-  databaseOptions: OpenClawAgentDatabaseOptions,
+  database: OpenClawAgentDatabase,
 ): Set<string> {
-  // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across awaits.
-  const database = openOpenClawAgentDatabase(databaseOptions);
   const db = getSessionKysely(database.db);
   const table = executeSqliteQuerySync(
     database.db,
@@ -110,20 +119,20 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(params: {
   let usage = await measureSessionPhysicalDiskUsage(params.storePath);
   let removedFiles = 0;
   while (usage.totalBytes > params.highWaterBytes) {
-    // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across awaits.
-    const database = openOpenClawAgentDatabase(params.databaseOptions);
-    const db = getSessionKysely(database.db);
-    const row = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_transcript_archives")
-        .select(["archive_name", "generation", "session_id"])
-        .where("published_at", "is not", null)
-        .orderBy("created_at", "asc")
-        .orderBy("session_id", "asc")
-        .orderBy("generation", "asc")
-        .limit(1),
-    ).rows[0];
+    const row = await withSqliteSessionDatabase(params.databaseOptions, (database) => {
+      const db = getSessionKysely(database.db);
+      return executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_transcript_archives")
+          .select(["archive_name", "generation", "session_id"])
+          .where("published_at", "is not", null)
+          .orderBy("created_at", "asc")
+          .orderBy("session_id", "asc")
+          .orderBy("generation", "asc")
+          .limit(1),
+      ).rows[0];
+    });
     if (!row) {
       break;
     }
@@ -145,16 +154,18 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(params: {
         break;
       }
     }
-    runOpenClawAgentWriteTransaction((transactionDb) => {
-      const transactionKysely = getSessionKysely(transactionDb.db);
-      executeSqliteQuerySync(
-        transactionDb.db,
-        transactionKysely
-          .deleteFrom("session_transcript_archives")
-          .where("session_id", "=", row.session_id)
-          .where("generation", "=", row.generation),
-      );
-    }, params.databaseOptions);
+    await withSqliteSessionDatabase(params.databaseOptions, () =>
+      runOpenClawAgentWriteTransaction((transactionDb) => {
+        const transactionKysely = getSessionKysely(transactionDb.db);
+        executeSqliteQuerySync(
+          transactionDb.db,
+          transactionKysely
+            .deleteFrom("session_transcript_archives")
+            .where("session_id", "=", row.session_id)
+            .where("generation", "=", row.generation),
+        );
+      }, params.databaseOptions),
+    );
     await reclaimSqliteFreePages(params.databaseOptions);
     usage = await measureSessionPhysicalDiskUsage(params.storePath);
   }
@@ -169,14 +180,20 @@ export async function pruneAllSessionTranscriptArchivesToHighWater(params: {
 }): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
   // Reclaim committed free pages before pressure can destroy a retained archive.
   await reclaimSqliteFreePages(params.databaseOptions);
-  const canonical = hasCanonicalSessionTranscriptArchives(params.databaseOptions)
+  const canonical = (await withSqliteSessionDatabase(
+    params.databaseOptions,
+    hasCanonicalSessionTranscriptArchivesInDatabase,
+  ))
     ? await pruneCanonicalSessionTranscriptArchivesToHighWater(params)
     : { removedFiles: 0, usage: await measureSessionPhysicalDiskUsage(params.storePath) };
   if (canonical.usage.totalBytes <= params.highWaterBytes) {
     return canonical;
   }
   const legacy = await pruneSessionTranscriptArchivesToHighWater({
-    excludeNames: readUnpublishedSessionTranscriptArchiveNames(params.databaseOptions),
+    excludeNames: await withSqliteSessionDatabase(
+      params.databaseOptions,
+      readUnpublishedSessionTranscriptArchiveNames,
+    ),
     highWaterBytes: params.highWaterBytes,
     storePath: params.storePath,
   });

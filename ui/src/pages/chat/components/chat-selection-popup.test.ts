@@ -39,12 +39,14 @@ function selectRange(node: Text, start: number, end: number) {
 
 function pointerUp(thread: HTMLElement) {
   handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+    onAddToChat: onAddToChatSpy,
     onAskSideChat: onAskSideChatSpy,
   });
   vi.runAllTimers();
 }
 
 const onAskSideChatSpy = vi.fn();
+const onAddToChatSpy = vi.fn();
 
 describe("chat selection popup", () => {
   afterEach(() => {
@@ -52,10 +54,11 @@ describe("chat selection popup", () => {
     window.getSelection()?.removeAllRanges();
     document.body.innerHTML = "";
     onAskSideChatSpy.mockReset();
+    onAddToChatSpy.mockReset();
     vi.useRealTimers();
   });
 
-  it("shows one text-only side-chat action over bubble selections", () => {
+  it.each([0, 1])("routes selection action %i to its own composer", (actionIndex) => {
     vi.useFakeTimers();
     const { thread, textNode } = buildThreadWithBubble("Let's Encrypt cert is valid");
     selectRange(textNode, 0, 18);
@@ -65,11 +68,18 @@ describe("chat selection popup", () => {
     expect(popup).not.toBeNull();
     expect(popup?.getAttribute("aria-label")).toBe("Selection actions");
     const buttons = [...(popup?.querySelectorAll("button") ?? [])];
-    expect(buttons.map((button) => button.textContent)).toEqual(["Ask in side chat"]);
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Add to chat",
+      "Ask in side chat",
+    ]);
     expect(buttons[0]?.querySelector("svg")).toBeNull();
 
-    buttons[0]?.click();
-    expect(onAskSideChatSpy).toHaveBeenCalledWith("Let's Encrypt cert");
+    buttons[actionIndex]?.click();
+    const [called, untouched] =
+      actionIndex === 0 ? [onAddToChatSpy, onAskSideChatSpy] : [onAskSideChatSpy, onAddToChatSpy];
+    expect(called).toHaveBeenCalledWith("Let's Encrypt cert");
+    expect(untouched).not.toHaveBeenCalled();
+    expect(window.getSelection()?.isCollapsed).toBe(true);
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
   });
 
@@ -93,6 +103,7 @@ describe("chat selection popup", () => {
     const { thread, textNode } = buildThreadWithBubble("tear down before the selection settles");
     selectRange(textNode, 0, 9);
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
+      onAddToChat: onAddToChatSpy,
       onAskSideChat: onAskSideChatSpy,
     });
 

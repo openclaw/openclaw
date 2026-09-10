@@ -138,6 +138,35 @@ class ChatControllerMessageIdentityTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveHistoryKeepsOnlyExplicitBooleanTurnBoundaries() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """{"messages":[
+            {"role":"assistant","content":"first","__openclaw":{"turnBoundary":true}},
+            {"role":"assistant","content":"second","__openclaw":{"turnBoundary":false}},
+            {"role":"assistant","content":"third","__openclaw":{"turnBoundary":"true"}},
+            {"role":"assistant","content":"fourth","__openclaw":{"turnBoundary":null}},
+            {"role":"assistant","content":"legacy"}
+          ]}"""
+            } else {
+              emptyChatGatewayResponse(method)
+            }
+          },
+        )
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(listOf(true, false, false, false, false), controller.messages.value.map { it.turnBoundary })
+    }
+
+  @Test
   fun managedImagesParticipateInMessageIdentity() {
     fun message(artifactId: String) =
       ChatMessage(
@@ -176,12 +205,12 @@ class ChatControllerMessageIdentityTest {
               """
               {
                 "messages": [
-                  { "role": "user", "content": "hello", "senderLabel": "  Alex (Slack)  " },
-                  { "role": "user", "content": "numeric sender", "senderLabel": 42 },
-                  { "role": "user", "content": "boolean sender", "senderLabel": true },
+                  { "role": "user", "content": "hello", "senderLabel": "  Alex (Slack)  ", "idempotencyKey": "fallback:user", "__openclaw": { "runId": " canonical:user ", "steerTargetRunId": " active-run " } },
+                  { "role": "user", "content": "numeric sender", "senderLabel": 42, "idempotencyKey": " fallback:user " },
+                  { "role": "user", "content": "boolean sender", "senderLabel": true, "runId": 42, "__openclaw": { "steerTargetRunId": true } },
                   { "role": "user", "content": "blank sender", "senderLabel": "  " },
                   { "role": "user", "content": "null sender", "senderLabel": null },
-                  { "role": "toolResult", "content": "private tool output" },
+                  { "role": "toolResult", "tool_use_id": "call-1", "toolName": "read", "content": "bounded tool output" },
                   { "role": "internal", "text": "private reasoning" },
                   { "role": "custom", "content": "visible plugin notice" },
                   { "role": "Assistant", "content": "reply", "senderLabel": "Spoofed sender" }
@@ -198,14 +227,43 @@ class ChatControllerMessageIdentityTest {
       advanceUntilIdle()
 
       assertEquals(
-        listOf("user", "user", "user", "user", "user", "custom", "assistant"),
+        listOf("user", "user", "user", "user", "user", "toolresult", "custom", "assistant"),
         controller.messages.value.map { it.role },
       )
       assertEquals(
-        listOf("hello", "numeric sender", "boolean sender", "blank sender", "null sender", "visible plugin notice", "reply"),
+        listOf("hello", "numeric sender", "boolean sender", "blank sender", "null sender", null, "visible plugin notice", "reply"),
         controller.messages.value.map { it.content.single().text },
       )
-      assertEquals(listOf("Alex (Slack)", null, null, null, null, null, null), controller.messages.value.map { it.senderLabel })
+      assertEquals("canonical", controller.messages.value[0].runId)
+      assertEquals("active-run", controller.messages.value[0].steerTargetRunId)
+      assertEquals("fallback", controller.messages.value[1].runId)
+      assertEquals(null, controller.messages.value[2].runId)
+      assertEquals(null, controller.messages.value[2].steerTargetRunId)
+      assertEquals(
+        "bounded tool output",
+        controller.messages.value[5]
+          .content
+          .single()
+          .toolActivity
+          ?.result,
+      )
+      assertEquals(
+        "read",
+        controller.messages.value[5]
+          .content
+          .single()
+          .toolActivity
+          ?.name,
+      )
+      assertEquals(
+        "call-1",
+        controller.messages.value[5]
+          .content
+          .single()
+          .toolActivity
+          ?.toolCallId,
+      )
+      assertEquals(listOf("Alex (Slack)", null, null, null, null, null, null, null), controller.messages.value.map { it.senderLabel })
     }
 
   @Test

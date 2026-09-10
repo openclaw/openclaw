@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { triageAfterFailure } from "../../commands/triage-failure.js";
 import {
   sanitizeTriageUpdateFailure,
   writeTriageUpdateFailure,
@@ -14,8 +15,14 @@ import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
 import { resolveNodeRunner, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
-import { UpdateCommandFailure } from "./update-command-result.js";
+import {
+  isVerifiedUpdateRollback,
+  UpdateCommandFailure,
+  UpdateCommandFinalizedRecoveryFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 
 export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResult };
 
@@ -44,7 +51,31 @@ export async function withUpdateFailureTriage(
   try {
     await run();
   } catch (error) {
+    if (error instanceof UpdateCommandFinalizedRecoveryFailure) {
+      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+    }
+    if (error instanceof UpdateCommandPendingRecoveryFailure) {
+      // Do not use printResult: resolving its run would reopen canonical state.
+      if (opts.json) {
+        defaultRuntime.writeJson(error.result);
+      }
+      defaultRuntime.error(
+        `Update recovery remains pending (${error.result.reason ?? "update-failed"}). Retained state and artifacts were left for the owning updater to reconcile; automatic restart and repair were not attempted.`,
+      );
+      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+    }
     const reportedFailure = error instanceof UpdateCommandFailure;
+    const rollbackCompleted = reportedFailure && isVerifiedUpdateRollback(error.result);
+    // A healthy restored installation needs only an explicit terminal choice,
+    // never automatic diagnostics or a second managed-helper report.
+    if (
+      rollbackCompleted &&
+      (mode !== "interactive" ||
+        target.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
+        error.result.steps.some((step) => step.termination === "signal"))
+    ) {
+      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+    }
     // Post-core children return phase data; only their outer updater owns the final failure.
     if (
       (!reportedFailure || classifyUpdateOutcome(error.result) === "failed") &&
@@ -57,28 +88,33 @@ export async function withUpdateFailureTriage(
             ...(target.failureResult ? { result: target.failureResult } : {}),
             error: formatErrorMessage(error),
           };
-      if (target.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1") {
-        // This code was loaded before replacement. The helper stays dependency-free
-        // and starts installed triage only after its own recovery has settled.
+      const automatic =
+        mode !== "interactive" && reportedFailure ? error.automaticTriage : undefined;
+      if (automatic || target.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1") {
+        let updateResultPath: string | undefined;
         try {
           const meta = await readControlPlaneUpdateSentinelMeta(target.env);
-          if (!meta?.triageContextPath) {
+          if (!automatic && !meta?.triageContextPath) {
             throw new Error("Managed update triage context path is unavailable.", { cause: error });
           }
-          await writeTriageUpdateFailure(failure, {
+          updateResultPath = await writeTriageUpdateFailure(failure, {
             env: target.env,
-            outputPath: meta.triageContextPath,
+            ...(meta?.triageContextPath ? { outputPath: meta.triageContextPath } : {}),
           });
         } catch (exportError) {
           const diagnostic = sanitizeTriageUpdateFailure(
             { error: formatErrorMessage(exportError) },
-            {
-              env: target.env,
-              stateDir: resolveStateDir(target.env),
-            },
+            { env: target.env, stateDir: resolveStateDir(target.env) },
           );
           defaultRuntime.error(
-            `Managed update failure diagnostics could not be saved: ${diagnostic.error}`,
+            `${automatic ? "Update" : "Managed update"} failure diagnostics could not be saved: ${diagnostic.error}`,
+          );
+        }
+        // Finalization records eligibility. The outer owner starts one repair only
+        // after locks and service compensation unwind; otherwise the helper owns diagnostics.
+        if (automatic) {
+          await withOwnedManagedUpdateEnv(target.env, () =>
+            triageAfterFailure(defaultRuntime, automatic, undefined, updateResultPath),
           );
         }
       } else {
@@ -90,6 +126,7 @@ export async function withUpdateFailureTriage(
               env: opts.run?.env ?? target.env,
               ...(failure.error ? { error: failure.error } : {}),
               ...(failure.result ? { result: failure.result } : {}),
+              ...(rollbackCompleted ? { rollbackCompleted: true } : {}),
               runtime: defaultRuntime,
             });
           } catch (reportError) {

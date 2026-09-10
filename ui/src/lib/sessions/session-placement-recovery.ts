@@ -18,7 +18,7 @@ import {
 } from "./session-placement-recovery-storage-key.ts";
 
 export type SessionPlacementTarget =
-  | { kind: "profile"; profileId: string; machineClass?: string }
+  | { kind: "profile"; profileId: string; os?: string; machineClass?: string }
   | { kind: "device"; deviceId: string }
   | { kind: "auto-device" };
 
@@ -65,6 +65,7 @@ const SESSION_PLACEMENT_ERROR_MAX_LENGTH = 4096;
 const PLACEMENT_CREATE_STRING_FIELDS = [
   "category",
   "displayName",
+  "titleSource",
   "model",
   "contextWindow",
   "thinkingLevel",
@@ -119,6 +120,8 @@ export function parseSessionPlacementCreateParams(
       !Value.Check(SessionPermissionModeSchema, record.permissionMode)) ||
     (record.toolOverrides !== undefined &&
       !Value.Check(SessionToolOverridesSchema, record.toolOverrides)) ||
+    (record.titleSource !== undefined &&
+      !Value.Check(SessionsCreateParamsSchema.properties.titleSource, record.titleSource)) ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
@@ -157,9 +160,10 @@ function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | n
   if (
     value.kind === "profile" &&
     Object.keys(value).every(
-      (key) => key === "kind" || key === "profileId" || key === "machineClass",
+      (key) => key === "kind" || key === "profileId" || key === "os" || key === "machineClass",
     ) &&
     isNonEmptyString(value.profileId) &&
+    (value.os === undefined || (isNonEmptyString(value.os) && value.os.length <= 64)) &&
     (value.machineClass === undefined ||
       (isNonEmptyString(value.machineClass) && value.machineClass.length <= 128))
   ) {

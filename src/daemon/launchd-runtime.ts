@@ -75,22 +75,11 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
     return { port: null, probeHosts: [] };
   }
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
-  const fromArgs = parseTcpPortFromArgs(command?.programArguments);
-  if (fromArgs !== null) {
-    return {
-      port: fromArgs,
-      probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
-    };
-  }
-  const fromServiceEnv = parseTcpPort(command?.environment?.OPENCLAW_GATEWAY_PORT ?? "");
-  if (fromServiceEnv !== null) {
-    return {
-      port: fromServiceEnv,
-      probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
-    };
-  }
   return {
-    port: parseTcpPort(env.OPENCLAW_GATEWAY_PORT ?? ""),
+    port:
+      parseTcpPortFromArgs(command?.programArguments) ??
+      parseTcpPort(command?.environment?.OPENCLAW_GATEWAY_PORT ?? "") ??
+      parseTcpPort(env.OPENCLAW_GATEWAY_PORT ?? ""),
     probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
   };
 }
@@ -100,14 +89,6 @@ export function resolveLaunchAgentGuiDomain(): string {
     return "gui/501";
   }
   return `gui/${process.getuid()}`;
-}
-
-function throwBootstrapGuiSessionError(params: {
-  detail: string;
-  domain: string;
-  actionHint: string;
-}) {
-  throw new Error(formatLaunchAgentGuiSessionError(params));
 }
 
 export function formatLaunchAgentGuiSessionError(params: {
@@ -132,6 +113,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   actionHint: string;
   onMutation?: (mode: "enable" | "bootstrap") => void;
   skipEnable?: boolean;
+  assertCurrent?: () => void;
   // Opt-in for callers that just issued `bootout` on this label. Only those can
   // race a pending teardown, so start/install/recovery paths keep failing fast
   // on an unrelated EIO instead of waiting out the teardown deadline.
@@ -140,6 +122,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
   if (!params.skipEnable) {
+    params.assertCurrent?.();
     const enable = await execLaunchctl(["enable", params.serviceTarget]);
     if (enable.code === 0) {
       params.onMutation?.("enable");
@@ -147,6 +130,7 @@ export async function bootstrapLaunchAgentOrThrow(params: {
   }
   const teardownDeadline = Date.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;
   for (;;) {
+    params.assertCurrent?.();
     const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
     if (boot.code === 0) {
       params.onMutation?.("bootstrap");
@@ -154,11 +138,13 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     }
     const detail = (boot.stderr || boot.stdout).trim();
     if (isUnsupportedGuiDomain(detail)) {
-      throwBootstrapGuiSessionError({
-        detail,
-        domain: params.domain,
-        actionHint: params.actionHint,
-      });
+      throw new Error(
+        formatLaunchAgentGuiSessionError({
+          detail,
+          domain: params.domain,
+          actionHint: params.actionHint,
+        }),
+      );
     }
     if (boot.termination === "exit" && isLaunchctlOperationAlreadyInProgress(detail)) {
       const state = await probeLaunchAgentState(params.serviceTarget);
@@ -236,7 +222,7 @@ export function parseLaunchAgentEnabled(output: string, label: string): boolean 
 export async function isLaunchAgentEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(args.env);
-  const res = await execLaunchctl(["print-disabled", domain]);
+  const res = await execLaunchctl(["print-disabled", domain], args.timeoutMs);
   if (res.code !== 0) {
     throw new Error(`launchctl print-disabled failed: ${formatLaunchctlResultDetail(res)}`);
   }

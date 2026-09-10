@@ -143,11 +143,13 @@ it.each([
           signal: null,
           killed: false,
           termination: "exit",
+          cleanup: "normal",
         };
       });
       const runId = "migrated-windows-run";
       const operation = continueMigratedUpdateInFreshProcess(
         {
+          mutationStarted: true,
           root,
           result: { status: "ok", mode: "npm", root, runId, steps: [], durationMs: 0 },
           installKindChanged: false,

@@ -12,7 +12,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
@@ -24,6 +24,7 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
@@ -31,6 +32,7 @@ import {
   type InternalSessionEntry as SessionEntry,
   type SessionCompactionCheckpoint,
 } from "./types.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 // Compaction checkpoint branch/restore owner.
 
@@ -124,33 +126,37 @@ async function applySqliteCompactionCheckpointSessionOperation(
     sessionKey: sourceKey,
     ...(operation.storePath ? { storePath: operation.storePath } : {}),
   });
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const committed = runOpenClawAgentWriteTransaction((database) => {
-      const identityKeys = uniqueStrings([
-        ...collectSessionEntryLookupKeys(database, sourceKey),
-        ...collectSessionEntryLookupKeys(database, targetKey),
-      ]);
-      const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      const result = applySqliteCompactionCheckpointSessionOperationInTransaction(
-        database,
-        resolved,
-        operation,
-        sourceKey,
-        targetKey,
-      );
-      return {
-        previousIdentity,
-        currentIdentity: readSessionIdentitySnapshot(database, identityKeys),
-        result,
-      };
-    }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(
-      resolved.agentId,
-      committed.previousIdentity,
-      committed.currentIdentity,
-    );
-    return committed.result;
-  });
+  return await runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      const committed = runOpenClawAgentWriteTransaction((database) => {
+        const identityKeys = uniqueStrings([
+          ...collectSessionEntryLookupKeys(database, sourceKey),
+          ...collectSessionEntryLookupKeys(database, targetKey),
+        ]);
+        const previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+        const result = applySqliteCompactionCheckpointSessionOperationInTransaction(
+          database,
+          resolved,
+          operation,
+          sourceKey,
+          targetKey,
+        );
+        return {
+          publish: prepareSessionIdentityPublication(
+            database,
+            resolved.agentId,
+            previousIdentity,
+            readSessionIdentitySnapshot(database, identityKeys),
+          ),
+          result,
+        };
+      }, toDatabaseOptions(resolved));
+      committed.publish();
+      return committed.result;
+    },
+    operation.kind === "branch" ? "session.checkpoint.branch" : "session.checkpoint.restore",
+  );
 }
 
 function applySqliteCompactionCheckpointSessionOperationInTransaction(
@@ -271,6 +277,7 @@ function forkSqliteCheckpointTranscriptInTransaction(
     createSessionTranscriptHeader({
       cwd: readTranscriptHeaderCwd(selectedEvents),
       sessionId,
+      version: findSessionTranscriptHeader(selectedEvents)?.version ?? MIN_READABLE_SESSION_VERSION,
     }),
     ...selectedEvents.filter((event) => !isSessionTranscriptHeader(event)),
   ]);

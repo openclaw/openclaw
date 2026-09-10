@@ -52,8 +52,8 @@ export async function readConfigGetResponse(params: {
   }
   const appliedConfigHash = getRuntimeConfigAppliedHash();
   const pluginRegistryVersion = getActivePluginRegistryVersion();
-  // With an active watcher, cache hits never re-read the file. External edits
-  // become visible after its successful commit; the write path invalidates early.
+  // With an active watcher, cache hits never re-read the file. Candidate
+  // observation invalidates persisted bytes before runtime acceptance.
   if (
     configGetResponseCache?.getHotReloadStatus === getHotReloadStatus &&
     configGetResponseCache.revisionProjector === params.revisionProjector &&
@@ -87,7 +87,7 @@ export async function readConfigGetResponse(params: {
   }
 }
 
-/** Invalidates cached config.get work after the watcher accepts a config candidate. */
+/** Invalidates cached config.get work when the watcher observes or accepts a candidate. */
 export function invalidateConfigGetResponseCache(): void {
   configGetResponseCache = undefined;
 }

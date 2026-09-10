@@ -464,63 +464,47 @@ function isLegacyRestartSentinelPreflightDetection(
   );
 }
 
-function collectLegacyRestartSentinelBoundaryViolations(
-  sourceFile: ts.SourceFile,
-  relativePath: string,
-) {
-  if (relativePath === legacyRestartSentinelMigrationPath) {
-    return [];
-  }
-
-  const violations: LegacyStoreViolation[] = [];
-  const seen = new Set<string>();
-  function add(node: ts.Node, kind: string) {
+function collectLegacyFileBoundaryViolations(sourceFile: ts.SourceFile, relativePath: string) {
+  const checkRestartSentinel = relativePath !== legacyRestartSentinelMigrationPath;
+  const checkExecApprovals =
+    relativePath !== legacyExecApprovalsMigrationPath &&
+    relativePath !== legacyExecApprovalsConfigPath &&
+    relativePath !== stableExecApprovalsPolicyUriPath;
+  const restartViolations: LegacyStoreViolation[] = [];
+  const approvalViolations: LegacyStoreViolation[] = [];
+  const seenRestartViolations = new Set<string>();
+  function addRestartViolation(node: ts.Node, kind: string) {
     const line = toLine(sourceFile, node);
     const key = `${line}:${kind}`;
-    if (seen.has(key)) {
+    if (seenRestartViolations.has(key)) {
       return;
     }
-    seen.add(key);
-    violations.push({ kind, line });
+    seenRestartViolations.add(key);
+    restartViolations.push({ kind, line });
   }
 
   function visit(node: ts.Node) {
     if (
+      checkRestartSentinel &&
       ts.isStringLiteralLike(node) &&
       legacyRestartSentinelFilenamePattern.test(node.text) &&
       !isLegacyRestartSentinelPreflightDetection(node, relativePath)
     ) {
-      add(node, "legacy restart sentinel reference");
+      addRestartViolation(node, "legacy restart sentinel reference");
     }
     if (
       relativePath === legacyRestartSentinelRuntimePath &&
       ts.isImportDeclaration(node) &&
       legacyRestartSentinelRuntimeImportSpecifiers.has(importSource(node))
     ) {
-      add(node, "legacy restart sentinel filesystem import");
+      addRestartViolation(node, "legacy restart sentinel filesystem import");
     }
-    ts.forEachChild(node, visit);
-  }
-  visit(sourceFile);
-  return violations;
-}
-
-function collectLegacyExecApprovalsBoundaryViolations(
-  sourceFile: ts.SourceFile,
-  relativePath: string,
-) {
-  if (
-    relativePath === legacyExecApprovalsMigrationPath ||
-    relativePath === legacyExecApprovalsConfigPath ||
-    relativePath === stableExecApprovalsPolicyUriPath
-  ) {
-    return [];
-  }
-
-  const violations: LegacyStoreViolation[] = [];
-  function visit(node: ts.Node) {
-    if (ts.isStringLiteralLike(node) && legacyExecApprovalsFilenamePattern.test(node.text)) {
-      violations.push({
+    if (
+      checkExecApprovals &&
+      ts.isStringLiteralLike(node) &&
+      legacyExecApprovalsFilenamePattern.test(node.text)
+    ) {
+      approvalViolations.push({
         kind: "legacy exec approvals reference",
         line: toLine(sourceFile, node),
       });
@@ -530,7 +514,7 @@ function collectLegacyExecApprovalsBoundaryViolations(
       ts.isImportDeclaration(node) &&
       legacyRestartSentinelRuntimeImportSpecifiers.has(importSource(node))
     ) {
-      violations.push({
+      approvalViolations.push({
         kind: "legacy exec approvals filesystem import",
         line: toLine(sourceFile, node),
       });
@@ -538,7 +522,8 @@ function collectLegacyExecApprovalsBoundaryViolations(
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
-  return violations;
+  // Preserve rule-family ordering and the restart rule's distinct deduplication policy.
+  return [...restartViolations, ...approvalViolations];
 }
 
 function isHelperWriteModuleSource(source: string) {
@@ -751,10 +736,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
 ): LegacyStoreViolation[] {
   const relativePath = inputRelativePath.replaceAll("\\", "/");
   const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
-  const boundaryViolations = [
-    ...collectLegacyRestartSentinelBoundaryViolations(sourceFile, relativePath),
-    ...collectLegacyExecApprovalsBoundaryViolations(sourceFile, relativePath),
-  ];
+  const boundaryViolations = collectLegacyFileBoundaryViolations(sourceFile, relativePath);
   if (isAllowedLegacyOwnerPath(relativePath)) {
     return boundaryViolations;
   }

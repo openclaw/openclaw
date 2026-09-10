@@ -318,8 +318,9 @@ async function stageWorkerWorkspaceResult(params: {
     chunks.push(Buffer.from(`M ${mode} :${blob.mark} ${quoteFastImportPath(blob.entry.path)}\n`));
   }
   chunks.push(Buffer.from("done\n"));
-  const imported = await withWorkspaceResultRefMutation(root, () =>
+  const imported = await withWorkspaceResultRefMutation(root, (baseEnv) =>
     runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
+      baseEnv,
       input: Buffer.concat(chunks),
       timeoutMs: PATCH_TIMEOUT_MS,
       maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
@@ -574,7 +575,7 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       base: staged.base,
       current: staged.current,
       journal: params.journal,
-      publishAcceptedManifest: params.publishAcceptedManifest,
+      acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
     });
     return { ...applied, changed: staged.changed };
   });

@@ -6,10 +6,14 @@ import {
   type SessionTranscriptDisplayDeltaResult,
 } from "../../config/sessions/session-accessor.sqlite-history-events.js";
 import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
-import { createCurrentUserProfileMessageProjector } from "../chat-display-projection.js";
+import {
+  createCurrentUserProfileMessageProjector,
+  projectChatDisplayMessagesWithState,
+} from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   projectSessionMessagePayload,
+  projectTranscriptEntryMessage,
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
 
@@ -24,20 +28,6 @@ type ChatHistoryDeltaRead =
       kind: "delta";
       messages: Record<string, unknown>[];
     };
-
-function readMessageEvent(event: unknown): { message: unknown; messageId?: string } | undefined {
-  const record = asOptionalRecord(event);
-  if (!record) {
-    return undefined;
-  }
-  if (record.message === undefined) {
-    return undefined;
-  }
-  return {
-    message: record.message,
-    ...(typeof record.id === "string" && record.id ? { messageId: record.id } : {}),
-  };
-}
 
 function containsTranscriptDiscontinuity(
   result: Extract<SessionTranscriptDisplayDeltaResult, { kind: "page" }>,
@@ -81,14 +71,35 @@ export function readChatHistoryDelta(params: {
   // Include array brackets and separators without serializing the whole page.
   let messagesBytes = 2;
   for (const row of result.events) {
-    const event = readMessageEvent(row.event);
-    if (!event || row.messageSeq === undefined) {
+    if (row.messageSeq === undefined) {
       continue;
+    }
+    const entryMessage = projectTranscriptEntryMessage(
+      row.event,
+      row.messageSeq,
+      row.displayPosition,
+    );
+    if (!entryMessage) {
+      continue;
+    }
+    const messageId = asOptionalRecord(row.event)?.id;
+    const historyProjection = projectChatDisplayMessagesWithState([entryMessage], {
+      ...projectionState,
+      includeCommentaryFallbacks: true,
+    });
+    if (
+      historyProjection.messages.some(
+        (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
+      )
+    ) {
+      // One transcript entry can own both commentary and a tool call. The single-message
+      // envelope cannot carry that split; let the full history owner reconcile both rows.
+      return { kind: "reset" };
     }
     const projected = projectSessionMessagePayload({
       agentId: params.agentId,
-      message: event.message,
-      ...(event.messageId ? { messageId: event.messageId } : {}),
+      message: entryMessage,
+      ...(typeof messageId === "string" && messageId ? { messageId } : {}),
       messageSeq: row.messageSeq,
       transcriptPosition: row.displayPosition,
       projectionState,

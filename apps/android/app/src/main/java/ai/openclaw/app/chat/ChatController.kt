@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
+import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewayLoadedMedia
 import ai.openclaw.app.gateway.GatewayMediaKind
@@ -51,7 +52,9 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
 import java.util.Base64
@@ -141,7 +144,7 @@ private fun normalizedChatCacheScope(scope: ChatCacheScope?): ChatCacheScope? {
 
 internal data class MainSessionBinding(
   val key: String,
-  val label: String,
+  val autoLabel: String,
 )
 
 internal data class ChatSessionDeletion(
@@ -398,6 +401,7 @@ class ChatController internal constructor(
   private val activeSessionReads = mutableSetOf<SessionSettingsRead>()
   private val progressCardUpgradeError = nativeText("Update the gateway to load progress cards for this agent.")
   private val sessionSettingsRefreshError = nativeText("Could not refresh session settings. Refresh before sending.")
+  private val chatMetadataRefreshError = nativeText("Could not refresh models. Previous choices are unchanged. Tap Refresh to retry.")
 
   // Guarded by gatewayScopeApplyLock; stable gateway keys retain choices across reconnects.
   private val lastSelectedChatSessionByOwner = mutableMapOf<ChatAgentSessionSelectionOwner, RememberedChatSession>()
@@ -438,6 +442,11 @@ class ChatController internal constructor(
   private data class ChatRunOwner(
     val owner: ChatComposerOwner,
     val runId: String,
+  )
+
+  private data class RunLifecycleOwner(
+    val identity: ChatRunOwner,
+    val awaitingCanonicalTerminal: Boolean = true,
   )
 
   private data class OwnedPendingToolCall(
@@ -546,7 +555,28 @@ class ChatController internal constructor(
   @Volatile private var progressCardScopeKey: String? = null
 
   private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
-  val sessions: StateFlow<List<ChatSessionEntry>> = _sessions.asStateFlow()
+  private val presentedSessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
+  val sessions: StateFlow<List<ChatSessionEntry>> = presentedSessions.asStateFlow()
+
+  private fun projectLocalSessionTitles(
+    entries: List<ChatSessionEntry>,
+    binding: MainSessionBinding?,
+  ): List<ChatSessionEntry> {
+    if (binding == null) return entries
+    return entries.map { entry ->
+      if (entry.key == binding.key) entry.copy(localFallbackTitle = binding.autoLabel) else entry
+    }
+  }
+
+  private fun publishSessions(entries: List<ChatSessionEntry>) {
+    synchronized(gatewayScopeApplyLock) {
+      // Keep rejected device metadata out of raw entries/cache; all native title consumers
+      // share a local fallback bound to this gateway and exact session key.
+      _sessions.value = entries
+      val binding = currentCacheScope()?.let { desiredMainSessions[it.gatewayId] }
+      presentedSessions.value = projectLocalSessionTitles(entries, binding)
+    }
+  }
 
   private val _swarmGroups = MutableStateFlow<List<ChatSwarmGroup>>(emptyList())
   val swarmGroups: StateFlow<List<ChatSwarmGroup>> = _swarmGroups.asStateFlow()
@@ -704,6 +734,8 @@ class ChatController internal constructor(
   val commands: StateFlow<List<ChatCommandEntry>> = _commands.asStateFlow()
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> {
+    val lease = captureRequestLease(cacheScope()) ?: throw GatewayRequestNotEnqueued("not connected")
+
     suspend fun request(
       statuses: List<String>?,
       limit: Int,
@@ -714,26 +746,48 @@ class ChatController internal constructor(
           put("limit", JsonPrimitive(limit))
           statuses?.let { values -> put("status", JsonArray(values.map(::JsonPrimitive))) }
         }
-      return parseBackgroundTasks(json, requestGateway("tasks.list", params.toString()))
+      if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+      val response =
+        lease.request("tasks.list", params.toString()) { enqueue ->
+          if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+          enqueue()
+        }
+      if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+      return parseBackgroundTasks(json, response)
     }
 
     val active = request(listOf("queued", "running"), limit = 100)
     val recent = request(listOf("completed", "failed", "cancelled", "timed_out"), limit = 50)
-    return mergeBackgroundTasks(active, recent)
+    val tasks = mergeBackgroundTasks(active, recent)
+    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+    return tasks
   }
 
   suspend fun getBackgroundTask(taskId: String): BackgroundTask {
+    val lease = captureRequestLease(cacheScope()) ?: throw GatewayRequestNotEnqueued("not connected")
     val params = buildJsonObject { put("taskId", JsonPrimitive(taskId)) }
-    val root = json.parseToJsonElement(requestGateway("tasks.get", params.toString())).jsonObject
-    return root["task"]?.let(::parseBackgroundTask)
-      ?: error("Gateway returned no background task")
+    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+    val response =
+      lease.request("tasks.get", params.toString()) { enqueue ->
+        if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+        enqueue()
+      }
+    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+    val root = json.parseToJsonElement(response).jsonObject
+    val task =
+      root["task"]?.let(::parseBackgroundTask)
+        ?: error("Gateway returned no background task")
+    if (!lease.isCurrent()) throw GatewayRequestNotEnqueued("background task connection changed")
+    return task
   }
 
   private data class LiveRunTelemetryState(
     val highestSequence: Long,
     val outputTokens: Long? = null,
-    val terminal: Boolean = false,
-  )
+    val terminalAtHistoryRequest: Long? = null,
+  ) {
+    val terminal: Boolean get() = terminalAtHistoryRequest != null
+  }
 
   private val pendingRuns = mutableSetOf<String>()
   private val liveRunTelemetryLock = Any()
@@ -779,13 +833,16 @@ class ChatController internal constructor(
   private var mainSessionReadiness: MainSessionReadiness? = null
   private val gatewayScopeApplyLock = Any()
   private var latestAppliedHistoryRequest = 0L
+
+  // Gateway-lock owned: only live reads issued before completion retain its terminal fact.
+  private val activeHistoryReads = mutableMapOf<Long, () -> Boolean>()
   private var publishedHistoryBranch: PublishedHistoryBranch? = null
   private var latestAppliedRunSnapshot: HistoryRunSnapshot? = null
   private var lastHandledTerminalRunId: String? = null
 
-  // Lifecycle telemetry can retire a run before its canonical chat terminal arrives.
-  // Its diagnostic remains owned until that terminal, a newer run, or an owner reset.
-  @Volatile private var runDiagnosticOwner: ChatRunOwner? = null
+  // Keep the current run's terminal evidence through delayed history until its owner changes.
+  // Canonical completion closes diagnostic eligibility without discarding that bounded pin.
+  private var runLifecycleOwner: RunLifecycleOwner? = null
   private var historyLoadErrorGeneration: Long? = null
 
   private var lastHealthPollAtMs: Long? = null
@@ -925,7 +982,11 @@ class ChatController internal constructor(
       refreshConnectedGateway()
       return
     }
-    desiredMainSessions[requestScope.gatewayId] = mainSession
+    synchronized(gatewayScopeApplyLock) {
+      if (requestScope != currentCacheScope()) return
+      desiredMainSessions[requestScope.gatewayId] = mainSession
+      publishSessions(_sessions.value)
+    }
     val readiness =
       MainSessionReadiness(
         gatewayScope = requestScope,
@@ -941,19 +1002,19 @@ class ChatController internal constructor(
             try {
               val existingSession = fetchSessionDescription(requestScope.gatewayId, mainSession.key)
               if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
-              val existingLabel =
+              val existingAutoLabel =
                 existingSession
-                  ?.get("label")
+                  ?.get("autoLabel")
                   .asStringOrNull()
                   ?.trim()
                   ?.takeIf { it.isNotEmpty() }
-              if (existingLabel == null) {
-                // Label-only sessions.patch is operator.write-scoped and atomically upserts the row,
+              if (existingAutoLabel != mainSession.autoLabel) {
+                // Automatic display metadata atomically upserts the operator.write-scoped row,
                 // avoiding the concurrent-session identity race in sessions.create.
                 val patchParams =
                   buildJsonObject {
                     put("key", JsonPrimitive(mainSession.key))
-                    put("label", JsonPrimitive(mainSession.label))
+                    put("autoLabel", JsonPrimitive(mainSession.autoLabel))
                   }
                 requestGatewayBound(requestScope.gatewayId, "sessions.patch", patchParams.toString())
               }
@@ -961,6 +1022,7 @@ class ChatController internal constructor(
               throw err
             } catch (_: Throwable) {
               // History remains usable under the already-bound key when adoption cannot be verified.
+              // Older gateways may reject autoLabel; label must remain reserved for manual renames.
             }
           }
         } finally {
@@ -1017,7 +1079,7 @@ class ChatController internal constructor(
       clearProgressCard()
       clearSubagentActivities()
       clearLiveHistoryMarker()
-      _sessions.value = emptyList()
+      publishSessions(emptyList())
       publishRunPresentation()
       clearQuestions()
       applyThinkingMetadata(null)
@@ -1187,7 +1249,7 @@ class ChatController internal constructor(
     if (previousAgentId == verifiedAgentId) return
     // Session titles and model metadata are scoped to the default agent even when the visible
     // session alias stays unchanged. Empty first so offline bootstrap cannot reuse the old owner.
-    _sessions.value = emptyList()
+    publishSessions(emptyList())
     sessionsListArchived = false
     sessionsListLimit = null
     val generation = beginHistoryLoad(key, ownerAgentId = null)
@@ -1218,9 +1280,12 @@ class ChatController internal constructor(
     bootstrap(sessionKey = nextState.currentSessionKey, generation = generation)
   }
 
-  /** Refreshes current chat history and session list without clearing optimistic messages first. */
+  /** Refreshes chat history, sessions, and model choices without clearing optimistic messages first. */
   fun refresh() {
-    updateErrorText(null)
+    synchronized(gatewayScopeApplyLock) {
+      if (_errorText.value != chatMetadataRefreshError) updateErrorText(null)
+    }
+    refreshCommands()
     refreshHistoryForRecovery(forceHealth = true)
   }
 
@@ -2010,6 +2075,11 @@ class ChatController internal constructor(
         outboxItemMatches(item, snapshot) && item.status != ChatOutboxStatus.Failed
       }
 
+  internal fun canSwitchSessionBranch(sessionKey: String): Boolean {
+    val snapshot = currentSessionActionSnapshot(sessionKey) ?: return false
+    return canSwitchSessionBranch(snapshot)
+  }
+
   private fun canSwitchSessionBranch(snapshot: SessionActionSnapshot): Boolean =
     _pendingRunCount.value == 0 &&
       !_sessionBranchSwitching.value &&
@@ -2327,8 +2397,8 @@ class ChatController internal constructor(
       resolveAgentIdForSessionKey(requestSessionKey)
         ?: return when {
           archived -> emptyList()
-          query == null -> _sessions.value
-          else -> filterSessionEntries(_sessions.value, query)
+          query == null -> sessions.value
+          else -> filterSessionEntries(sessions.value, query)
         }
 
     fun requestOwnerIsCurrent(): Boolean {
@@ -2337,30 +2407,37 @@ class ChatController internal constructor(
         currentAgentId == ownerAgentId &&
         (!requestTracksDefaultAgent || currentDefaultAgentRevision() == requestDefaultAgentRevision)
     }
-    return try {
-      val params =
-        buildJsonObject {
-          put("includeGlobal", JsonPrimitive(true))
-          put("includeUnknown", JsonPrimitive(false))
-          put("agentId", JsonPrimitive(ownerAgentId))
-          put("limit", JsonPrimitive(SESSION_LIST_FETCH_LIMIT))
-          if (query != null) put("search", JsonPrimitive(query))
-          if (archived) put("archived", JsonPrimitive(true))
+    val entries =
+      try {
+        val params =
+          buildJsonObject {
+            put("includeGlobal", JsonPrimitive(true))
+            put("includeUnknown", JsonPrimitive(false))
+            put("agentId", JsonPrimitive(ownerAgentId))
+            put("limit", JsonPrimitive(SESSION_LIST_FETCH_LIMIT))
+            if (query != null) put("search", JsonPrimitive(query))
+            if (archived) put("archived", JsonPrimitive(true))
+          }
+        val sessions = parseSessions(requestGateway("sessions.list", params.toString())).sessions
+        sessions.map { session ->
+          session.copy(ownerAgentId = ownerAgentId)
         }
-      val sessions = parseSessions(requestGateway("sessions.list", params.toString())).sessions
-      if (!requestOwnerIsCurrent()) return emptyList()
-      sessions.map { session ->
-        session.copy(ownerAgentId = ownerAgentId)
+      } catch (err: CancellationException) {
+        // A superseded search owns the results now; never repaint stale fallback rows.
+        throw err
+      } catch (_: Throwable) {
+        when {
+          archived -> emptyList()
+          query == null -> sessions.value
+          else -> filterSessionEntries(sessions.value, query)
+        }
       }
-    } catch (err: CancellationException) {
-      // A superseded search owns the results now; never repaint stale fallback rows.
-      throw err
-    } catch (_: Throwable) {
-      if (!requestOwnerIsCurrent()) return emptyList()
-      when {
-        archived -> emptyList()
-        query == null -> _sessions.value
-        else -> filterSessionEntries(_sessions.value, query)
+    return synchronized(gatewayScopeApplyLock) {
+      if (!requestOwnerIsCurrent()) {
+        emptyList()
+      } else {
+        val binding = requestCacheScope?.let { desiredMainSessions[it.gatewayId] }
+        projectLocalSessionTitles(entries, binding)
       }
     }
   }
@@ -3152,14 +3229,15 @@ class ChatController internal constructor(
           clearProgressCard()
         }
         val activeAgentId = resolveAgentIdForSessionKey(key)
-        _sessions.value =
+        publishSessions(
           reconcileGlobalObserverDigestOwner(
             // Unscoped keys can name different sessions for each agent. Retire the
             // old owner's rows before history, settings intents, or events can merge.
             _sessions.value.filter { activeAgentId == null || it.ownerAgentId == activeAgentId },
             activeAgentId = activeAgentId,
             adoptOwnerless = false,
-          )
+          ),
+        )
         applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
         _selectedModelRef.value = null
         lastHandledTerminalRunId = null
@@ -3257,7 +3335,8 @@ class ChatController internal constructor(
     attachments: List<OutgoingAttachment>,
     expectedOwner: ChatComposerOwner,
     idempotencyKey: String? = null,
-  ): Boolean = sendMessageAwaitAcceptance(message, thinkingLevel, attachments, expectedOwner, idempotencyKey)
+    canAdmit: () -> Boolean = { true },
+  ): Boolean = sendMessageAwaitAcceptance(message, thinkingLevel, attachments, expectedOwner, idempotencyKey, canAdmit)
 
   internal suspend fun wasOutboxCommandAdmitted(id: String): Boolean = commandOutbox.wasAdmitted(id)
 
@@ -3281,6 +3360,7 @@ class ChatController internal constructor(
     attachments: List<OutgoingAttachment>,
     expectedOwner: ChatComposerOwner?,
     idempotencyKey: String? = null,
+    canAdmit: () -> Boolean = { true },
   ): Boolean {
     val sendCacheScope = currentCacheScope()
     val sendGatewayId = sendCacheScope?.gatewayId
@@ -3315,7 +3395,7 @@ class ChatController internal constructor(
     // Session settings and sends share one ordering boundary; the first post-selection turn
     // must not leave with stale model or thinking state while sessions.patch is in flight.
     if (!waitForPendingSessionSettings(sessionKey)) return false
-    if (!ownsCapturedUi()) return false
+    if (!canAdmit() || !ownsCapturedUi()) return false
     if (chatModelSendBlocked(_healthOk.value, _selectedModelRef.value, _modelCatalog.value)) return false
     // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
     // Applied at enqueue time too so durable rows never persist a level the selected model
@@ -3338,6 +3418,7 @@ class ChatController internal constructor(
         thinkingLevel = thinking,
         attachments = attachments,
         canPublishUi = ::ownsCapturedUi,
+        canAdmit = canAdmit,
         ownerAgentId = capturedOwner.agentId,
         idempotencyKey = idempotencyKey,
       ) ?: return false
@@ -3407,140 +3488,33 @@ class ChatController internal constructor(
     if (journaled.gatedEpoch != null && journaled.gatedEpoch != currentCacheScope()?.connectionGeneration) {
       // A reconnect landed between admission and this claim; command-shaped input never
       // auto-replays across connection epochs, so the claimed row parks for explicit retry.
-      persistJournaledSendState(journaled, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
+      persistJournaledSendState(journaled.copy(status = ChatOutboxStatus.Sending), ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
       return true
     }
 
     val runId = journaled.id
-
-    val optimisticMessage = optimisticUserMessage(runId = runId, text = text, attachments = attachments)
-    pendingRunProjectionsByRunId[runId] =
+    val projection =
       PendingRunProjection(
         owner = capturedOwner,
         runId = runId,
-        optimisticMessage = optimisticMessage,
+        optimisticMessage = optimisticUserMessage(runId = runId, text = text, attachments = attachments),
       )
+    pendingRunProjectionsByRunId[runId] = projection
+    // Admission may outlive its UI selection; only that selection projects before the ACK.
+    if (ownsCapturedUi()) projectPendingRun(runId)
 
-    // Durable admission can suspend while the user changes chats. Route the captured row, but
-    // project it only into the exact owner generation that initiated the send.
-    fun projectRunToCurrentOwner() {
-      pendingRunProjectionsByRunId[runId]?.let(::projectPendingRun)
-    }
-    if (ownsCapturedUi()) projectRunToCurrentOwner()
-
-    fun settleProjectedRun(settledRunId: String) {
-      retireRunTelemetry(settledRunId)
-      // A terminal may already have retired the projection while this dispatch was suspended.
-      clearPendingRun(settledRunId, owner = capturedOwner)
-      removeOptimisticMessage(settledRunId)
-      unresolvedRepliesByRunId.remove(settledRunId)
-      if (runDiagnosticOwner?.runId == settledRunId) runDiagnosticOwner = null
-    }
-
-    // Dispatch ownership lives in the controller scope: cancelling the calling UI scope
-    // (leaving the chat screen mid-send) after the durable claim must not strand a Sending
-    // row this process can no longer repair; the dispatch completes and settles the row.
-    val dispatch =
-      scope.async {
-        try {
-          val params =
-            buildChatSendParams(
-              // Dispatch exactly what was journaled: the row's captured session key is the
-              // idempotent identity a replay after process death would use.
-              sessionKey = journaled.sessionKey,
-              ownerAgentId = capturedOwner.agentId,
-              text = text,
-              thinking = thinking,
-              idempotencyKey = runId,
-              attachments = attachments,
-            )
-          val res = requestGatewayBound(sendGatewayId, "chat.send", params)
-          val ack = parseChatSendAck(json, res)
-          // Row transitions are durable state for the dispatching gateway and apply even when the
-          // UI scope moved on mid-request; only UI updates below are scope-guarded. A terminal
-          // failure ack proves transmission, not that this idempotency key never ran (a timeout ack
-          // can outlive a still-admitted run), so the row parks for review instead of deleting.
-          if (ack.isTerminalFailure) {
-            markJournaledSendUnconfirmed(journaled)
-          } else {
-            markJournaledSendAccepted(journaled)
-            val ackRunId = ack.runId
-            if (ackRunId != null && ackRunId != journaled.id) {
-              acknowledgedRunIdByRowId[journaled.id] = ackRunId
-            }
-          }
-          val actualRunId = ack.runId ?: runId
-          if (!ack.isTerminal) projectRunToCurrentOwner()
-          if (actualRunId != runId) {
-            transferRunOwnership(runId, actualRunId, optimisticMessage)
-          }
-          if (!ack.isTerminal && !synchronized(pendingRuns) { actualRunId in pendingRuns }) {
-            armPendingRunProjectionDeadline(actualRunId)
-          }
-          if (ack.isTerminal) {
-            settleProjectedRun(actualRunId)
-            if (ack.isTerminalSuccess) {
-              if (isCapturedOwnerCurrent()) {
-                refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
-              }
-              true
-            } else {
-              // Terminal timeout/error means the gateway did not accept a runnable turn.
-              // Surface failed acceptance instead of letting a cleared composer look successful.
-              if (isCapturedOwnerCurrent()) {
-                updateLocalizedErrorText(nativeText("Chat failed before the run started; try again."))
-              }
-              // The parked row owns the input; restoring the draft would duplicate it.
-              true
-            }
-          } else {
-            true
-          }
-        } catch (err: CancellationException) {
-          throw err
-        } catch (err: GatewayRequestNotEnqueued) {
-          // The frame provably never entered the socket queue. The journaled row stays queued and
-          // reconnect flush owns delivery, exactly like the flush path treats not-dispatched sends;
-          // deleting here could lose fire-and-forget input if the process died after the delete.
-          persistJournaledSendState(journaled, ChatOutboxStatus.Queued, err.message)
-          settleProjectedRun(runId)
-          // The transport is effectively down; drop health so the next health event re-flushes.
-          if (sendCacheScope == currentCacheScope()) _healthOk.value = false
-          publishOutbox()
-          true
-        } catch (err: GatewayRequestDefinitiveFailure) {
-          // An ok:false response proves transmission, not that this idempotency key was never run;
-          // park the journaled copy for review instead of deleting a possibly delivered send.
-          markJournaledSendUnconfirmed(journaled)
-          settleProjectedRun(runId)
-          if (isCapturedOwnerCurrent()) updateErrorText(err.message)
-          // The parked row owns the input; restoring the draft would duplicate it.
-          true
-        } catch (_: GatewayRequestOutcomeUnknown) {
-          // A transport failure cannot distinguish rejection from an accepted send whose ACK was
-          // lost. Keep the journaled row until history confirms or reconciliation parks it.
-          markJournaledSendAccepted(journaled)
-          if (!isCapturedOwnerCurrent()) {
-            settleProjectedRun(runId)
-            return@async true
-          }
-          projectRunToCurrentOwner()
-          unknownOutcomeRunIds.add(runId)
-          if (_healthOk.value) {
-            refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(runId))
-          }
-          true
-        } catch (err: Throwable) {
-          // Unexpected failure after dispatch is ambiguous; fail closed and keep the row visible.
-          markJournaledSendUnconfirmed(journaled)
-          settleProjectedRun(runId)
-          if (isCapturedOwnerCurrent()) updateErrorText(err.message)
-          // With a journaled row parked for review, the composer must not restore a duplicate
-          // draft: the row owns the input now.
-          true
-        }
-      }
-    return dispatch.await()
+    // The controller owns a claimed dispatch even if its UI caller stops awaiting it.
+    scope
+      .async {
+        dispatchClaimedSend(
+          item = journaled.copy(status = ChatOutboxStatus.Sending),
+          gatewayId = sendGatewayId,
+          ownerAgentId = capturedOwner.agentId,
+          attachments = attachments,
+          direct = DirectSendContext(projection, sendCacheScope),
+        )
+      }.await()
+    return true
   }
 
   private fun ChatComposerOwner.matches(
@@ -3573,66 +3547,78 @@ class ChatController internal constructor(
       .distinct()
 
   private fun publishRunPresentation() {
-    val localRunIds = synchronized(pendingRuns) { pendingRuns.toSet() }
-    val session = currentSelectedSession()
-    val rawAdvertisedRunIds = advertisedRunIds(session)
-    val telemetry = synchronized(liveRunTelemetryLock) { liveRunTelemetryByRunId.toMap() }
-    val liveLocalRunIds = localRunIds.filterTo(mutableSetOf()) { telemetry[it]?.terminal != true }
-    val liveAdvertisedRunIds = rawAdvertisedRunIds.filter { telemetry[it]?.terminal != true }
-    val selectedRunId =
-      resolvePreferredActiveRunId(
-        localRunIds = liveLocalRunIds,
-        advertisedRunIds = liveAdvertisedRunIds,
-      )
-    val hasUnknownAdvertisedRun =
-      session?.hasActiveRun == true &&
-        (rawAdvertisedRunIds.isEmpty() || liveAdvertisedRunIds.isNotEmpty())
-    val activeCount =
-      resolveSelectedActiveRunCount(
-        localRunIds = liveLocalRunIds,
-        advertisedRunIds = liveAdvertisedRunIds,
-        hasAdvertisedRun = hasUnknownAdvertisedRun,
-      )
-    val clockKey =
-      when {
-        selectedRunId != null && selectedRunId in liveLocalRunIds -> {
-          pendingRunProjectionsByRunId[selectedRunId]?.optimisticMessage?.id
-            ?: optimisticMessagesByRunId[selectedRunId]?.id
-            ?: unresolvedRepliesByRunId[selectedRunId]?.id
-            ?: selectedRunId
-        }
+    synchronized(gatewayScopeApplyLock) {
+      val localRunIds = synchronized(pendingRuns) { pendingRuns.toSet() }
+      val session = currentSelectedSession()
+      val rawAdvertisedRunIds = advertisedRunIds(session)
+      val telemetry = synchronized(liveRunTelemetryLock) { liveRunTelemetryByRunId.toMap() }
+      val liveLocalRunIds = localRunIds.filterTo(mutableSetOf()) { telemetry[it]?.terminal != true }
+      val liveAdvertisedRunIds = rawAdvertisedRunIds.filter { telemetry[it]?.terminal != true }
+      val selectedRunId =
+        resolvePreferredActiveRunId(
+          localRunIds = liveLocalRunIds,
+          advertisedRunIds = liveAdvertisedRunIds,
+        )
+      val hasUnknownAdvertisedRun =
+        session?.hasActiveRun == true &&
+          (rawAdvertisedRunIds.isEmpty() || liveAdvertisedRunIds.isNotEmpty())
+      val activeCount =
+        resolveSelectedActiveRunCount(
+          localRunIds = liveLocalRunIds,
+          advertisedRunIds = liveAdvertisedRunIds,
+          hasAdvertisedRun = hasUnknownAdvertisedRun,
+        )
+      val clockKey =
+        when {
+          selectedRunId != null && selectedRunId in liveLocalRunIds -> {
+            pendingRunProjectionsByRunId[selectedRunId]?.optimisticMessage?.id
+              ?: optimisticMessagesByRunId[selectedRunId]?.id
+              ?: unresolvedRepliesByRunId[selectedRunId]?.id
+              ?: selectedRunId
+          }
 
-        selectedRunId != null -> {
-          selectedRunId
-        }
+          selectedRunId != null -> {
+            selectedRunId
+          }
 
-        activeCount > 0 -> {
-          session?.startedAt?.let { "${_sessionKey.value}:active:$it" } ?: "${_sessionKey.value}:active"
-        }
+          activeCount > 0 -> {
+            session?.startedAt?.let { "${_sessionKey.value}:active:$it" } ?: "${_sessionKey.value}:active"
+          }
 
-        else -> {
-          null
+          else -> {
+            null
+          }
         }
-      }
-    _pendingRunCount.value = localRunIds.size
-    selectedActiveRunPresentationState.value =
-      ChatActiveRunPresentation(
-        count = activeCount,
-        runId = selectedRunId,
-        clockKey = clockKey,
-        outputTokens = selectedRunId?.let { telemetry[it]?.outputTokens },
-      )
+      _pendingRunCount.value = localRunIds.size
+      selectedActiveRunPresentationState.value =
+        ChatActiveRunPresentation(
+          count = activeCount,
+          runId = selectedRunId,
+          clockKey = clockKey,
+          outputTokens = selectedRunId?.let { telemetry[it]?.outputTokens },
+        )
+    }
   }
 
   private fun pruneRunTelemetryToAuthoritativeOwnership() {
+    activeHistoryReads.entries.removeAll { !it.value() }
+    val oldestHistoryRead = activeHistoryReads.keys.minOrNull()
     val session = currentSelectedSession() ?: return
     if (!session.hasActiveRunMetadata) return
-    val localRunIds = synchronized(pendingRuns) { pendingRuns.toSet() }
+    val localRunIds = synchronized(pendingRuns) { pendingRuns + unresolvedRepliesByRunId.keys }
     val authoritativeRunIds = advertisedRunIds(session).toSet()
+    val lifecycleRunId = runLifecycleOwner?.identity?.takeIf { it.owner == currentChatComposerRoutingOwner() }?.runId
     synchronized(liveRunTelemetryLock) {
-      liveRunTelemetryByRunId.keys.removeAll { it !in localRunIds && it !in authoritativeRunIds }
+      // An issued read can still present a completed run after its UI/reply owner retires.
+      // Newer overlapping reads cannot prolong that fact; idless headers stay unknown.
+      liveRunTelemetryByRunId.entries.removeAll { (runId, state) ->
+        val readOwnsTerminal = oldestHistoryRead != null && state.terminalAtHistoryRequest?.let { oldestHistoryRead <= it } == true
+        runId !in localRunIds && runId !in authoritativeRunIds && runId != lifecycleRunId && !readOwnsTerminal
+      }
     }
   }
+
+  private fun hasTerminalRunTelemetry(runId: String): Boolean = synchronized(liveRunTelemetryLock) { liveRunTelemetryByRunId[runId]?.terminal == true }
 
   private fun clearUnownedNonterminalTelemetry(runId: String) {
     val advertised = runId in advertisedRunIds()
@@ -3671,29 +3657,31 @@ class ChatController internal constructor(
     sequence: Long,
     terminal: Boolean,
   ): Boolean =
-    synchronized(liveRunTelemetryLock) {
-      val current = liveRunTelemetryByRunId[runId]
-      if (current?.terminal == true || sequence <= (current?.highestSequence ?: 0L)) {
-        return@synchronized false
+    synchronized(gatewayScopeApplyLock) {
+      synchronized(liveRunTelemetryLock) {
+        val current = liveRunTelemetryByRunId[runId]
+        if (current?.terminal == true || sequence <= (current?.highestSequence ?: 0L)) {
+          false
+        } else {
+          liveRunTelemetryByRunId[runId] =
+            LiveRunTelemetryState(
+              highestSequence = sequence,
+              outputTokens = current?.outputTokens,
+              terminalAtHistoryRequest = if (terminal) historyRequestSequence.get() else null,
+            )
+          true
+        }
       }
-      liveRunTelemetryByRunId[runId] =
-        LiveRunTelemetryState(
-          highestSequence = sequence,
-          outputTokens = current?.outputTokens,
-          terminal = terminal,
-        )
-      true
     }
 
   private fun retireRunTelemetry(runId: String) {
-    synchronized(liveRunTelemetryLock) {
-      val current = liveRunTelemetryByRunId[runId]
-      liveRunTelemetryByRunId[runId] =
-        LiveRunTelemetryState(
-          highestSequence = current?.highestSequence ?: 0L,
-          outputTokens = current?.outputTokens,
-          terminal = true,
-        )
+    synchronized(gatewayScopeApplyLock) {
+      synchronized(liveRunTelemetryLock) {
+        val current = liveRunTelemetryByRunId[runId]
+        val terminalAt = current?.terminalAtHistoryRequest ?: historyRequestSequence.get()
+        liveRunTelemetryByRunId[runId] =
+          current?.copy(terminalAtHistoryRequest = terminalAt) ?: LiveRunTelemetryState(highestSequence = 0L, terminalAtHistoryRequest = terminalAt)
+      }
     }
   }
 
@@ -3721,54 +3709,61 @@ class ChatController internal constructor(
           LiveRunTelemetryState(
             highestSequence = maxOf(old.highestSequence, existing.highestSequence),
             outputTokens = listOfNotNull(old.outputTokens, existing.outputTokens).maxOrNull(),
-            terminal = old.terminal || existing.terminal,
+            terminalAtHistoryRequest = listOfNotNull(old.terminalAtHistoryRequest, existing.terminalAtHistoryRequest).maxOrNull(),
           )
         }
     }
   }
 
-  private fun projectPendingRun(projection: PendingRunProjection) {
-    if (projection.owner != currentChatComposerRoutingOwner()) {
-      unprojectPendingRun(projection.runId)
-      return
-    }
-    val runId = projection.runId
-    val optimisticMessage = projection.optimisticMessage
-    val stillProjected =
-      optimisticMessagesByRunId.containsKey(runId) &&
-        synchronized(pendingRuns) { runId in pendingRuns }
-    if (stillProjected) return
-
-    optimisticMessagesByRunId[runId] = optimisticMessage
-    unresolvedRepliesByRunId[runId] = optimisticMessage
+  private fun projectPendingRun(
+    runId: String,
+    outcomeUnknown: Boolean = false,
+  ) {
     synchronized(gatewayScopeApplyLock) {
+      val projection = pendingRunProjectionsByRunId[runId] ?: return
+      if (projection.owner != currentChatComposerRoutingOwner()) {
+        unprojectPendingRun(runId)
+        return
+      }
+      // A late transport result cannot reclaim a projection already retired by history or a terminal.
+      if (outcomeUnknown) unknownOutcomeRunIds.add(runId)
+      val optimisticMessage = projection.optimisticMessage
+      val stillProjected =
+        optimisticMessagesByRunId.containsKey(runId) &&
+          synchronized(pendingRuns) { runId in pendingRuns }
+      if (stillProjected) return
+
+      optimisticMessagesByRunId[runId] = optimisticMessage
+      unresolvedRepliesByRunId[runId] = optimisticMessage
       if (_messages.value.none { it.idempotencyKey == optimisticMessage.idempotencyKey }) {
         _messages.value = _messages.value + optimisticMessage
       }
+      armPendingRunTimeout(runId)
+      synchronized(pendingRuns) { pendingRuns.add(runId) }
+      runLifecycleOwner = RunLifecycleOwner(ChatRunOwner(projection.owner, runId))
+      updateErrorText(null)
+      publishRunPresentation()
     }
-    armPendingRunTimeout(runId)
-    synchronized(pendingRuns) { pendingRuns.add(runId) }
-    runDiagnosticOwner = ChatRunOwner(projection.owner, runId)
-    updateErrorText(null)
-    publishRunPresentation()
   }
 
   /** Hides another owner's live run without discarding the ownership needed to restore it. */
   private fun unprojectPendingRun(runId: String) {
-    val owner = pendingRunProjectionsByRunId[runId]?.owner
-    clearLiveRunUi(runId, owner)
-    if (runDiagnosticOwner?.runId == runId) runDiagnosticOwner = null
-    pendingRunTimeoutJobs.remove(runId)?.cancel()
-    removeOptimisticMessage(runId)
-    unresolvedRepliesByRunId.remove(runId)
-    synchronized(pendingRuns) {
-      disconnectedPendingRunIds.remove(runId)
-      pendingRuns.remove(runId)
+    synchronized(gatewayScopeApplyLock) {
+      val owner = pendingRunProjectionsByRunId[runId]?.owner
+      clearLiveRunUi(runId, owner)
+      if (runLifecycleOwner?.identity?.runId == runId) runLifecycleOwner = null
+      pendingRunTimeoutJobs.remove(runId)?.cancel()
+      removeOptimisticMessage(runId)
+      unresolvedRepliesByRunId.remove(runId)
+      synchronized(pendingRuns) {
+        disconnectedPendingRunIds.remove(runId)
+        pendingRuns.remove(runId)
+      }
+      clearUnownedNonterminalTelemetry(runId)
+      clearTransientRunUiIfIdle(owner)
+      if (pendingRunProjectionsByRunId.containsKey(runId)) armPendingRunProjectionDeadline(runId)
+      publishRunPresentation()
     }
-    clearUnownedNonterminalTelemetry(runId)
-    clearTransientRunUiIfIdle(owner)
-    if (pendingRunProjectionsByRunId.containsKey(runId)) armPendingRunProjectionDeadline(runId)
-    publishRunPresentation()
   }
 
   /** Bounds hidden run ownership when its terminal event is lost before the owner is revisited. */
@@ -3777,9 +3772,13 @@ class ChatController internal constructor(
     pendingRunTimeoutJobs[runId] =
       scope.launch {
         delay(pendingRunTimeoutMs)
-        if (synchronized(pendingRuns) { runId in pendingRuns }) return@launch
-        if (pendingRunProjectionsByRunId.remove(runId) == null) return@launch
-        pendingRunTimeoutJobs.remove(runId)
+        synchronized(gatewayScopeApplyLock) {
+          if (synchronized(pendingRuns) { runId in pendingRuns }) return@launch
+          if (!pendingRunProjectionsByRunId.containsKey(runId)) return@launch
+          // Retire ownership without cancelling this job before its durable parking completes.
+          pendingRunTimeoutJobs.remove(runId)
+          clearPendingRun(runId)
+        }
         parkUnconfirmedDurableSend(runId)
       }
   }
@@ -3789,7 +3788,7 @@ class ChatController internal constructor(
     pendingRunProjectionsByRunId.values
       .filter { it.owner == owner }
       .sortedBy { it.runId }
-      .forEach(::projectPendingRun)
+      .forEach { projectPendingRun(it.runId) }
   }
 
   private fun optimisticUserMessage(
@@ -3906,44 +3905,21 @@ class ChatController internal constructor(
     right: String,
   ): Boolean = normalizeRequestedSessionKey(left) == normalizeRequestedSessionKey(right)
 
-  private suspend fun markJournaledSendAccepted(row: ChatOutboxItem) {
-    persistJournaledSendState(row, ChatOutboxStatus.Accepted, null)
-  }
-
-  private suspend fun markJournaledSendUnconfirmed(row: ChatOutboxItem) {
-    persistJournaledSendState(row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
-  }
-
-  // Mirrors the flush path's fail-closed persistence handling: a claimed row whose follow-up
-  // state cannot be made durable must not silently stay 'sending' (it would block its session
-  // with no user action available); the re-armed recovery sweep parks it once storage recovers.
   private suspend fun persistJournaledSendState(
     row: ChatOutboxItem,
     status: ChatOutboxStatus,
     lastError: String?,
-  ) {
-    if (status != ChatOutboxStatus.Accepted) acknowledgedRunIdByRowId.remove(row.id)
-    val persisted =
-      try {
-        commandOutbox.updateStatusIfAttempt(
-          row.id,
-          row.attemptVersion,
-          status,
-          row.retryCount,
-          lastError,
-          expectedStatus = ChatOutboxStatus.Sending,
-        )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        null
-      }
+    direct: Boolean = true,
+  ): Int? {
+    if (direct && status != ChatOutboxStatus.Accepted) acknowledgedRunIdByRowId.remove(row.id)
+    val persisted = updateOutboxStatusOrNull(row, status, lastError)
     if (persisted == null) {
       rearmOutboxRecovery()
-      _healthOk.value = false
+      if (direct) _healthOk.value = false
     }
     publishOutbox()
-    kickFlushForRoutedBacklog()
+    if (direct) kickFlushForRoutedBacklog()
+    return persisted
   }
 
   // Sends routed to the queue while a direct dispatch held their session wait for that dispatch
@@ -4647,163 +4623,163 @@ class ChatController internal constructor(
         // Only a locally ambiguous mutation carries an earlier adoption boundary. Ordinary history
         // (including remote branch events) must settle earlier input before becoming visible.
         var historyBranchState = mutationReconciliationState ?: branchSnapshot?.let { branchState(it) }
-        val history =
-          try {
-            val historyJson =
-              requestGatewayBound(
-                requestCacheScope?.gatewayId,
-                "chat.history",
-                buildJsonObject {
-                  put("sessionKey", JsonPrimitive(sessionKey))
-                  put("agentId", JsonPrimitive(requestAgentId))
-                }.toString(),
-              )
-            parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
-          } catch (err: CancellationException) {
-            throw err
-          } catch (err: Throwable) {
-            if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
-            throw err
-          }
+        val activeRequestSequence = requestSequence
+        synchronized(gatewayScopeApplyLock) { activeHistoryReads[activeRequestSequence] = ::isCurrent }
+        val history: ChatHistory
         var appliedHistoryEntry: ChatSessionEntry? = null
         val applied =
-          historyPublicationMutex.withLock {
-            if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock HistoryRefreshResult.Superseded
-            val previousState =
-              historyBranchState?.let { captured ->
-                // Continue only a committed history publication from this load. Never recapture after
-                // enqueue or borrow authority from branch listings or mutation-lease changes.
-                publishedHistoryBranch
-                  ?.takeIf {
-                    mutationReconciliationState == null &&
-                      it.snapshot == branchSnapshot &&
-                      it.generation == generation &&
-                      it.state.revision > captured.revision
-                  }?.state ?: captured
-              }
-            historyBranchState = previousState
-            if (
-              mutationReconciliationState == null &&
-              branchSnapshot != null &&
-              previousState != null
-            ) {
-              historyBranchState = reconcileOutboxHistory(
-                gatewayId = requestCacheScope?.gatewayId ?: return@withLock HistoryRefreshResult.OwnerUnavailable,
-                branchScope = branchSnapshot.outboxScope(),
-                previousState = previousState,
-                history = history,
-              ) ?: return@withLock null
-            }
-            synchronized(gatewayScopeApplyLock) {
-              if (!isCurrent()) return@synchronized HistoryRefreshResult.Superseded
-              // Transcript events do not own settings or run state. They may finish
-              // a pending load only while that exact load still needs its snapshot.
-              val appliedPurpose =
-                if (
-                  purpose == HistoryRefreshPurpose.Transcript &&
-                  !hasCurrentHistorySnapshot(sessionKey)
-                ) {
-                  HistoryRefreshPurpose.RestoreSession
-                } else {
-                  purpose
-                }
-              val reconcileRunState = appliedPurpose != HistoryRefreshPurpose.Transcript
-              val runIdsOwnedAfterRequest =
-                synchronized(pendingRuns) {
-                  pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
-                }
-              latestAppliedHistoryRequest = requestSequence
-              if (mutationReconciliationState == null && branchSnapshot != null && historyBranchState != previousState) {
-                historyBranchState?.let { publishedHistoryBranch = PublishedHistoryBranch(branchSnapshot, generation, it) }
-              }
-              val snapshotRunId =
-                history.inFlightRun
-                  ?.runId
-                  ?.trim()
-                  ?.takeIf { it.isNotEmpty() }
-              if (reconcileRunState) {
-                // A newer settings observation invalidates only this projection,
-                // not the useful transcript carried by the same history response.
-                appliedHistoryEntry =
-                  updateSessionFromHistory(
-                    history,
-                    ownerAgentId = requestAgentId,
-                    publishRunState = false,
-                    includeSessionInfo = appliedPurpose == HistoryRefreshPurpose.RestoreSession,
-                    preserveSessionSettings =
-                      requestSettingsGeneration != settingsPublicationGeneration.get() ||
-                        pendingSettingsMutations.containsKey(sessionSettingsKey(sessionKey)),
+          try {
+            history =
+              try {
+                val historyJson =
+                  requestGatewayBound(
+                    requestCacheScope?.gatewayId,
+                    "chat.history",
+                    buildJsonObject {
+                      put("sessionKey", JsonPrimitive(sessionKey))
+                      put("agentId", JsonPrimitive(requestAgentId))
+                    }.toString(),
                   )
-                transferLostAckOwnershipFromHistory(history)
-                latestAppliedRunSnapshot = HistoryRunSnapshot(requestSequence, snapshotRunId)
+                parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
+              } catch (err: CancellationException) {
+                throw err
+              } catch (err: Throwable) {
+                if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
+                throw err
               }
-              resolvePersistedReplies(history.messages)
-              val optimisticRunIds = reconciliationRunIds.filterTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
-              prunePersistedOptimisticMessages(history.messages)
-              if (reconcileRunState && snapshotRunId == null) {
-                optimisticRunIds
-                  .filterNot { runId ->
-                    unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
-                  }.filterNotTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
-                  .forEach { clearPendingRun(it, publishRunState = false) }
+            historyPublicationMutex.withLock {
+              if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock HistoryRefreshResult.Superseded
+              val previousState =
+                historyBranchState?.let { captured ->
+                  // Continue only a committed history publication from this load. Never recapture after
+                  // enqueue or borrow authority from branch listings or mutation-lease changes.
+                  publishedHistoryBranch
+                    ?.takeIf {
+                      mutationReconciliationState == null &&
+                        it.snapshot == branchSnapshot &&
+                        it.generation == generation &&
+                        it.state.revision > captured.revision
+                    }?.state ?: captured
+                }
+              historyBranchState = previousState
+              if (
+                mutationReconciliationState == null &&
+                branchSnapshot != null &&
+                previousState != null
+              ) {
+                historyBranchState = reconcileOutboxHistory(
+                  gatewayId = requestCacheScope?.gatewayId ?: return@withLock HistoryRefreshResult.OwnerUnavailable,
+                  branchScope = branchSnapshot.outboxScope(),
+                  previousState = previousState,
+                  history = history,
+                ) ?: return@withLock null
               }
-              if (reconcileRunState && snapshotRunId != null) {
-                reconciliationRunIds
-                  .filterTo(mutableSetOf()) {
-                    it != snapshotRunId &&
-                      !optimisticMessagesByRunId.containsKey(it) &&
-                      !unresolvedRepliesByRunId.containsKey(it)
-                  }.forEach { clearPendingRun(it, publishRunState = false) }
-              }
-              val nextMessages = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
-              _messagesFromCache.value = false
-              _messages.value = nextMessages
-              val previousAnchor = _transcriptAnchor.value?.takeIf { it.sessionKey == sessionKey }
-              val completionSettled =
-                markCompletedTranscript &&
-                  runIdsToReconcile.none(unresolvedRepliesByRunId::containsKey) &&
-                  history.sessionInfo?.endedAt != null
-              _transcriptAnchor.value =
-                ChatTranscriptAnchorState(
-                  sessionKey = sessionKey,
-                  newestItemId = nextMessages.lastOrNull()?.id,
-                  completedEndedAt =
-                    if (completionSettled) history.sessionInfo.endedAt else previousAnchor?.completedEndedAt,
-                  completedNewestItemId =
-                    if (completionSettled) history.messages.lastOrNull()?.id else previousAnchor?.completedNewestItemId,
+              synchronized(gatewayScopeApplyLock) {
+                if (!isCurrent()) return@synchronized HistoryRefreshResult.Superseded
+                // Transcript events do not own settings or run state. They may finish
+                // a pending load only while that exact load still needs its snapshot.
+                val appliedPurpose =
+                  if (
+                    purpose == HistoryRefreshPurpose.Transcript &&
+                    !hasCurrentHistorySnapshot(sessionKey)
+                  ) {
+                    HistoryRefreshPurpose.RestoreSession
+                  } else {
+                    purpose
+                  }
+                val reconcileRunState = appliedPurpose != HistoryRefreshPurpose.Transcript
+                val runIdsOwnedAfterRequest =
+                  synchronized(pendingRuns) {
+                    pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
+                  }
+                latestAppliedHistoryRequest = requestSequence
+                if (mutationReconciliationState == null && branchSnapshot != null && historyBranchState != previousState) {
+                  historyBranchState?.let { publishedHistoryBranch = PublishedHistoryBranch(branchSnapshot, generation, it) }
+                }
+                if (reconcileRunState) transferLostAckOwnershipFromHistory(history)
+                val reportedRun = history.inFlightRun
+                val inFlightRun = reportedRun?.takeUnless { hasTerminalRunTelemetry(it.runId) }
+                val snapshotRunId = inFlightRun?.runId
+                if (reconcileRunState) {
+                  // A newer settings observation invalidates only this projection,
+                  // not the useful transcript carried by the same history response.
+                  appliedHistoryEntry =
+                    updateSessionFromHistory(
+                      history,
+                      ownerAgentId = requestAgentId,
+                      publishRunState = false,
+                      includeSessionInfo = appliedPurpose == HistoryRefreshPurpose.RestoreSession,
+                      preserveSessionSettings =
+                        requestSettingsGeneration != settingsPublicationGeneration.get() ||
+                          pendingSettingsMutations.containsKey(sessionSettingsKey(sessionKey)),
+                    )
+                  latestAppliedRunSnapshot = HistoryRunSnapshot(requestSequence, snapshotRunId)
+                }
+                resolvePersistedReplies(history.messages)
+                prunePersistedOptimisticMessages(history.messages)
+                if (reconcileRunState && snapshotRunId != null) {
+                  reconciliationRunIds
+                    .filterTo(mutableSetOf()) {
+                      it != snapshotRunId &&
+                        !optimisticMessagesByRunId.containsKey(it) &&
+                        !unresolvedRepliesByRunId.containsKey(it)
+                    }.forEach { clearPendingRun(it, publishRunState = false) }
+                }
+                val nextMessages = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
+                _messagesFromCache.value = false
+                _messages.value = nextMessages
+                val previousAnchor = _transcriptAnchor.value?.takeIf { it.sessionKey == sessionKey }
+                val completionSettled =
+                  markCompletedTranscript &&
+                    runIdsToReconcile.none(unresolvedRepliesByRunId::containsKey) &&
+                    history.sessionInfo?.endedAt != null
+                _transcriptAnchor.value =
+                  ChatTranscriptAnchorState(
+                    sessionKey = sessionKey,
+                    newestItemId = nextMessages.lastOrNull()?.id,
+                    completedEndedAt =
+                      if (completionSettled) history.sessionInfo.endedAt else previousAnchor?.completedEndedAt,
+                    completedNewestItemId =
+                      if (completionSettled) history.messages.lastOrNull()?.id else previousAnchor?.completedNewestItemId,
+                  )
+                _sessionId.value = history.sessionId
+                history.sessionId?.let { sessionId ->
+                  lastSelectedChatSessionByOwner[ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, requestAgentId)]
+                    ?.takeIf { it.key == sessionKey }
+                    ?.observedSessionId = sessionId
+                }
+                markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
+                if (historyLoadErrorGeneration == generation) {
+                  updateErrorText(null)
+                }
+                if (reconcileRunState && reportedRun == null) {
+                  // Only raw absence settles other acknowledged runs; rejecting an ended run does not.
+                  // Unknown-outcome sends stay owned until reply proof, a terminal, or expiry.
+                  reconciliationRunIds
+                    .filterNot { runId ->
+                      unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
+                    }.forEach { clearPendingRun(it, publishRunState = false) }
+                }
+                if (reconcileRunState) {
+                  clearTransientRunUiIfIdle()
+                  inFlightRun?.let { adoptInFlightRun(it, runIdsOwnedAfterRequest) }
+                }
+                publishRunPresentation()
+                _historyLoading.value = false
+                enqueueTranscriptCacheWrite(
+                  requestCacheScope,
+                  requestAgentId,
+                  sessionKey,
+                  history.messages,
+                  appliedHistoryEntry.takeIf { appliedPurpose == HistoryRefreshPurpose.RestoreSession && history.sessionInfo != null },
                 )
-              _sessionId.value = history.sessionId
-              history.sessionId?.let { sessionId ->
-                lastSelectedChatSessionByOwner[ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, requestAgentId)]
-                  ?.takeIf { it.key == sessionKey }
-                  ?.observedSessionId = sessionId
+                HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
               }
-              markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
-              _historyLoading.value = false
-              if (historyLoadErrorGeneration == generation) {
-                updateErrorText(null)
-              }
-              if (reconcileRunState && history.inFlightRun == null) {
-                // Empty history is terminal proof for acknowledged runs. An unknown-outcome
-                // send stays owned until its reply persists, a terminal arrives, or it expires.
-                reconciliationRunIds
-                  .filterNot { runId ->
-                    unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
-                  }.forEach { clearPendingRun(it, publishRunState = false) }
-              }
-              if (reconcileRunState) {
-                clearTransientRunUiIfIdle()
-                adoptInFlightRun(history, runIdsOwnedAfterRequest)
-              }
-              publishRunPresentation()
-              enqueueTranscriptCacheWrite(
-                requestCacheScope,
-                requestAgentId,
-                sessionKey,
-                history.messages,
-                appliedHistoryEntry.takeIf { appliedPurpose == HistoryRefreshPurpose.RestoreSession && history.sessionInfo != null },
-              )
-              HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
+            }
+          } finally {
+            synchronized(gatewayScopeApplyLock) {
+              activeHistoryReads.remove(activeRequestSequence)
+              pruneRunTelemetryToAuthoritativeOwnership()
             }
           }
         if (applied == null) {
@@ -4943,11 +4919,12 @@ class ChatController internal constructor(
           requestCacheScope == currentCacheScope() &&
           requestOwnerIsCurrent()
         ) {
-          _sessions.value =
+          publishSessions(
             reconcileGlobalObserverDigestOwner(
               cachedSessions.map { session -> session.copy(ownerAgentId = requestAgentId) },
               activeAgentId = requestAgentId,
-            )
+            ),
+          )
         }
       }
     }
@@ -5054,7 +5031,7 @@ class ChatController internal constructor(
                     it.key == activeSessionKey && it.ownerAgentId == requestAgentId
                   }?.takeIf { result.sessions.none { row -> row.key == activeSessionKey } }
               val sessions = if (selected == null) result.sessions else result.sessions + selected
-              _sessions.value = sessions
+              publishSessions(sessions)
               result.sessions.forEach { observeSessionSettings(it) }
               sessionsListArchived = archived
               sessionsListLimit = requestLimit
@@ -5063,12 +5040,12 @@ class ChatController internal constructor(
                   .drop(MAX_CACHED_SESSIONS)
                   .any { session -> session.key == activeSessionKey }
               retainedSessionKey = activeSessionKey.takeIf { selected != null || result.isTruncated || activeOutsideLocalWindow }
+              pruneRunTelemetryToAuthoritativeOwnership()
+              publishRunPresentation()
               sessions
             }
           }
         if (appliedSessions == null) continue
-        pruneRunTelemetryToAuthoritativeOwnership()
-        publishRunPresentation()
         unreadPatchSessionKey?.let { trackedKey ->
           acknowledgeUnreadIfNeeded(
             key = trackedKey,
@@ -5113,13 +5090,15 @@ class ChatController internal constructor(
   private suspend fun fetchChatMetadata(requestSequence: Long = chatMetadataRequestSequence.incrementAndGet()) {
     val requestCacheScope = currentCacheScope()
     val metadataScope = currentChatMetadataScope() ?: return
-    synchronized(gatewayScopeApplyLock) {
-      if (requestSequence != chatMetadataRequestSequence.get()) return
-      if (chatMetadataScope != metadataScope) {
-        clearChatMetadata(metadataScope)
-        disableSwarmProgress()
+    val requestSelection =
+      synchronized(gatewayScopeApplyLock) {
+        if (requestSequence != chatMetadataRequestSequence.get()) return
+        if (chatMetadataScope != metadataScope) {
+          clearChatMetadata(metadataScope)
+          disableSwarmProgress()
+        }
+        currentSessionActionSnapshot(_sessionKey.value)
       }
-    }
     var shouldRefreshSwarm = false
     var shouldDisableSwarm = false
     try {
@@ -5146,10 +5125,26 @@ class ChatController internal constructor(
           synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
           shouldRefreshSwarm = metadataSwarmEnabled
           shouldDisableSwarm = !metadataSwarmEnabled
+          if (requestSelection != null && isCurrentSessionAction(requestSelection) && _errorText.value == chatMetadataRefreshError) {
+            updateErrorText(null)
+          }
         }
       }
+    } catch (err: CancellationException) {
+      throw err
     } catch (_: Throwable) {
-      // A transport failure is not a replacement availability or capability snapshot.
+      synchronized(gatewayScopeApplyLock) {
+        if (
+          requestSequence == chatMetadataRequestSequence.get() &&
+          requestCacheScope == currentCacheScope() &&
+          metadataScope == currentChatMetadataScope() &&
+          requestSelection != null &&
+          isCurrentSessionAction(requestSelection) &&
+          _errorText.value == null
+        ) {
+          updateLocalizedErrorText(chatMetadataRefreshError)
+        }
+      }
     }
     when {
       shouldRefreshSwarm -> refreshSwarmSessions()
@@ -5445,6 +5440,7 @@ class ChatController internal constructor(
     thinkingLevel: String,
     attachments: List<OutgoingAttachment>,
     canPublishUi: () -> Boolean,
+    canAdmit: () -> Boolean,
     ownerAgentId: String,
     idempotencyKey: String?,
   ): ChatOutboxItem? {
@@ -5473,6 +5469,8 @@ class ChatController internal constructor(
     val result =
       try {
         historyPublicationMutex.withLock {
+          // Recheck the caller and selected attempt after the history wait, immediately before enqueue.
+          if (!canAdmit()) return null
           commandOutbox.enqueue(
             gatewayId = outboxScope.gatewayId,
             sessionKey = sessionKey,
@@ -6012,27 +6010,6 @@ class ChatController internal constructor(
   // Stop: transport or persistence state cannot safely advance to younger work.
   private enum class OutboxSendOutcome { Sent, Continue, Stop }
 
-  private enum class GatewayResponseState { Received, Unknown }
-
-  private sealed interface OutboxSendResult {
-    data class Accepted(
-      val runId: String,
-    ) : OutboxSendResult
-
-    /** The request never entered the socket queue, so reconnect may retry it automatically. */
-    data class NotDispatched(
-      val error: String,
-    ) : OutboxSendResult
-
-    /** Dispatch may have succeeded, so only explicit user intent may retry the command. */
-    data class DeliveryUnconfirmed(
-      val gatewayResponse: GatewayResponseState,
-    ) : OutboxSendResult
-
-    /** The canonical alias now resolves to a different agent than the one captured at admission. */
-    data object OwnerChanged : OutboxSendResult
-  }
-
   private suspend fun updateOutboxStatusOrNull(
     item: ChatOutboxItem,
     status: ChatOutboxStatus,
@@ -6122,86 +6099,7 @@ class ChatController internal constructor(
           OutboxSendOutcome.Continue
         }
       }
-    return when (val result = attemptOutboxSend(item, flushScope.gatewayId, ownerAgentId, attachments)) {
-      is OutboxSendResult.Accepted -> {
-        // Ack received: keep the row as accepted until canonical history proves the user turn
-        // persisted; the started ACK alone is not durable proof (issue #86946 tracks the gap).
-        if (result.runId != item.id) acknowledgedRunIdByRowId[item.id] = result.runId
-        val persisted = updateOutboxStatusOrNull(item, ChatOutboxStatus.Accepted, null)
-        if (persisted == null) rearmOutboxRecovery()
-        publishOutbox()
-        if (persisted == null) {
-          // The accepted row is still Sending; the re-armed recovery sweep parks it once
-          // storage recovers, and canonical history proof can still retire it later.
-          _healthOk.value = false
-          OutboxSendOutcome.Stop
-        } else {
-          // Stale or removed attempts cannot adopt run ownership; history still owns proof.
-          if (persisted > 0) {
-            adoptFlushedSend(
-              item = item,
-              attachments = attachments,
-              ackRunId = result.runId,
-              gatewayId = flushScope.gatewayId,
-              ownerAgentId = ownerAgentId,
-            )
-          }
-          OutboxSendOutcome.Sent
-        }
-      }
-
-      is OutboxSendResult.NotDispatched -> {
-        // This frame never entered the socket queue, so reconnect may retry it safely.
-        val requeued = updateOutboxStatusOrNull(item, ChatOutboxStatus.Queued, result.error)
-        if (requeued == null) rearmOutboxRecovery()
-        publishOutbox()
-        _healthOk.value = false
-        OutboxSendOutcome.Stop
-      }
-
-      OutboxSendResult.OwnerChanged -> {
-        val parked = updateOutboxStatusOrNull(item, ChatOutboxStatus.Failed, OUTBOX_OWNER_CHANGED_ERROR)
-        if (parked == null) rearmOutboxRecovery()
-        publishOutbox()
-        if (parked == null) {
-          _healthOk.value = false
-          OutboxSendOutcome.Stop
-        } else {
-          OutboxSendOutcome.Continue
-        }
-      }
-
-      is OutboxSendResult.DeliveryUnconfirmed -> {
-        // Every transmitted failure is ambiguous: gateway error responses can be cached after
-        // agent dispatch, and gateway dedupe is process-local and time-bounded.
-        val persisted =
-          updateOutboxStatusOrNull(
-            item,
-            ChatOutboxStatus.Failed,
-            OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-          )
-        if (persisted == null) rearmOutboxRecovery()
-        publishOutbox()
-        when {
-          persisted == null -> {
-            // The ambiguous row is still Sending. Stop before younger work; the re-armed
-            // recovery sweep will park it after storage becomes available again.
-            _healthOk.value = false
-            OutboxSendOutcome.Stop
-          }
-
-          result.gatewayResponse == GatewayResponseState.Unknown -> {
-            _healthOk.value = false
-            OutboxSendOutcome.Stop
-          }
-
-          else -> {
-            // The response lets the drain continue; the store fences stale or retired attempts.
-            OutboxSendOutcome.Continue
-          }
-        }
-      }
-    }
+    return dispatchClaimedSend(item, flushScope.gatewayId, ownerAgentId, attachments)
   }
 
   private suspend fun loadOutboxAttachmentsForSend(
@@ -6247,93 +6145,224 @@ class ChatController internal constructor(
       )
     pendingRunProjectionsByRunId[runId] = projection
     armPendingRunProjectionDeadline(runId)
-    projectPendingRun(projection)
+    projectPendingRun(runId)
     // Chat events for this turn arrive under the acknowledged run id; mirroring the direct
     // path's ownership transfer keeps the live run from looking foreign and timing out.
     if (ackRunId != runId) transferRunOwnership(runId, ackRunId, optimistic)
   }
 
-  private suspend fun attemptOutboxSend(
+  private data class DirectSendContext(
+    val projection: PendingRunProjection,
+    val gatewayScope: ChatCacheScope?,
+  )
+
+  private fun settleDirectSendRun(
+    direct: DirectSendContext,
+    runId: String,
+    terminalSuccess: Boolean = false,
+  ) {
+    synchronized(gatewayScopeApplyLock) {
+      if (terminalSuccess) retireRunTelemetry(runId)
+      clearPendingRun(runId, owner = direct.projection.owner)
+      removeOptimisticMessage(runId)
+      unresolvedRepliesByRunId.remove(runId)
+      runLifecycleOwner?.takeIf { it.identity.runId == runId }?.let {
+        runLifecycleOwner =
+          when {
+            terminalSuccess -> it.copy(awaitingCanonicalTerminal = false)
+            hasTerminalRunTelemetry(runId) -> it
+            else -> null
+          }
+      }
+    }
+  }
+
+  private sealed interface OutboxSendResult {
+    data class Acknowledged(
+      val ack: ChatSendAck,
+    ) : OutboxSendResult
+
+    data class NotDispatched(
+      val error: String,
+    ) : OutboxSendResult
+
+    data object OwnerChanged : OutboxSendResult
+  }
+
+  /** One network and durable-settlement owner after either lane claims a command. */
+  private suspend fun dispatchClaimedSend(
     item: ChatOutboxItem,
-    gatewayId: String,
+    gatewayId: String?,
     ownerAgentId: String,
     attachments: List<OutgoingAttachment>,
-  ): OutboxSendResult {
-    return try {
-      val queuedSessionKey = normalizeRequestedSessionKey(item.sessionKey)
-      val canonicalAgentId = resolveAgentIdFromMainSessionKey(queuedSessionKey)
-      if (canonicalAgentId != null && canonicalAgentId != ownerAgentId) {
-        return OutboxSendResult.OwnerChanged
-      }
-      if (queuedSessionKey != item.sessionKey) {
-        // A row captured under the pre-hello "main" alias resolves exactly once, against the
-        // canonical main session active at first dispatch. Pinning it before the request means
-        // a later default-agent change can never redirect this input on a retry, so a pin
-        // that cannot be made durable must stop the dispatch while the row is still safe.
-        val pinned =
+    direct: DirectSendContext? = null,
+  ): OutboxSendOutcome {
+    fun ownsDirectUi(): Boolean = direct?.projection?.owner?.matches(currentCacheScope(), _sessionKey.value) == true
+
+    suspend fun persist(
+      status: ChatOutboxStatus,
+      error: String?,
+    ): Int? = persistJournaledSendState(item, status, error, direct = direct != null)
+
+    suspend fun attempt(): OutboxSendResult {
+      val sessionKey = if (direct == null) normalizeRequestedSessionKey(item.sessionKey) else item.sessionKey
+      if (direct == null) {
+        val canonicalAgentId = resolveAgentIdFromMainSessionKey(sessionKey)
+        if (canonicalAgentId != null && canonicalAgentId != ownerAgentId) return OutboxSendResult.OwnerChanged
+        if (sessionKey != item.sessionKey) {
+          // A pre-hello alias resolves once; a failed durable pin must prevent dispatch.
           try {
-            commandOutbox.pinSessionKey(item.id, queuedSessionKey)
-            true
+            commandOutbox.pinSessionKey(item.id, sessionKey)
           } catch (err: CancellationException) {
             throw err
           } catch (_: Throwable) {
-            false
+            return OutboxSendResult.NotDispatched("could not pin the delivery session")
           }
-        if (!pinned) return OutboxSendResult.NotDispatched("could not pin the delivery session")
-      }
-      // Android only knows the active session's selected model. Unknown queued sessions fail
-      // open, preserving the thinking level captured when they were enqueued.
-      val thinking =
-        if (
-          queuedSessionKey == _sessionKey.value && !thinkingSupportedForCurrentSelection()
-        ) {
-          "off"
-        } else {
-          item.thinkingLevel
         }
-      // The row id is the idempotency key, so gateway-side dedupe makes redelivery of an
-      // acked-but-crashed item harmless within the gateway's dedupe window.
-      val params =
-        buildChatSendParams(
-          sessionKey = queuedSessionKey,
-          ownerAgentId = ownerAgentId,
-          text = item.text,
-          thinking = thinking,
-          idempotencyKey = item.id,
-          attachments = attachments,
-        )
-      val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params))
-      when (ack.normalizedStatus) {
-        "ok", "started", "in_flight" -> {
-          if (ack.runId.isNullOrBlank()) {
-            OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
-          } else {
-            OutboxSendResult.Accepted(ack.runId)
-          }
+      }
+      // Reconnect rechecks the visible model; other queued owners keep their captured level.
+      val thinking =
+        if (direct == null && sessionKey == _sessionKey.value && !thinkingSupportedForCurrentSelection()) "off" else item.thinkingLevel
+      val params = buildChatSendParams(sessionKey, ownerAgentId, item.text, thinking, item.id, attachments)
+      return OutboxSendResult.Acknowledged(parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params)))
+    }
+
+    suspend fun settle(result: OutboxSendResult): OutboxSendOutcome {
+      when (result) {
+        OutboxSendResult.OwnerChanged -> {
+          if (persist(ChatOutboxStatus.Failed, OUTBOX_OWNER_CHANGED_ERROR) != null) return OutboxSendOutcome.Continue
+          _healthOk.value = false
+          return OutboxSendOutcome.Stop
         }
 
-        "timeout", "error" -> {
-          OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        is OutboxSendResult.NotDispatched -> {
+          persist(ChatOutboxStatus.Queued, result.error)
+          _healthOk.value = false
+          return OutboxSendOutcome.Stop
+        }
+
+        is OutboxSendResult.Acknowledged -> {}
+      }
+      val ack = result.ack
+      // Interactive sends retain their existing permissive ACK policy. Reconnect requires a
+      // recognized admission status and run ID before it adopts a previously hidden run.
+      val accepted =
+        !ack.isTerminalFailure &&
+          (direct != null || (ack.normalizedStatus in setOf("ok", "started", "in_flight") && !ack.runId.isNullOrBlank()))
+      val ackRunId = ack.runId
+      if (direct == null && accepted && ackRunId != item.id) acknowledgedRunIdByRowId[item.id] = checkNotNull(ackRunId)
+      val persisted =
+        persist(
+          if (accepted) ChatOutboxStatus.Accepted else ChatOutboxStatus.Failed,
+          if (accepted) null else OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+        )
+      if (direct != null) {
+        if (accepted && ackRunId != null && ackRunId != item.id) acknowledgedRunIdByRowId[item.id] = ackRunId
+        val actualRunId = ackRunId ?: item.id
+        if (!ack.isTerminal) projectPendingRun(item.id)
+        if (actualRunId != item.id) transferRunOwnership(item.id, actualRunId, direct.projection.optimisticMessage)
+        if (ack.isTerminal) {
+          settleDirectSendRun(direct, actualRunId, terminalSuccess = ack.isTerminalSuccess)
+          if (ownsDirectUi()) {
+            if (ack.isTerminalSuccess) {
+              refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
+            } else {
+              updateLocalizedErrorText(nativeText("OpenClaw request failed."))
+            }
+          }
+        }
+        return OutboxSendOutcome.Sent
+      }
+      if (persisted == null) {
+        _healthOk.value = false
+        return OutboxSendOutcome.Stop
+      }
+      if (!accepted) return OutboxSendOutcome.Continue
+      if (persisted > 0) adoptFlushedSend(item, attachments, checkNotNull(ackRunId), checkNotNull(gatewayId), ownerAgentId)
+      return OutboxSendOutcome.Sent
+    }
+
+    suspend fun fail(err: Throwable): OutboxSendOutcome =
+      when (err) {
+        is CancellationException -> {
+          // Process teardown leaves the claim for startup recovery. The direct caller's
+          // UI lifetime does not cancel the controller-owned dispatch.
+          throw err
+        }
+
+        is GatewayRequestNotEnqueued -> {
+          persist(ChatOutboxStatus.Queued, if (direct != null) err.message else err.message ?: "send failed")
+          direct?.let { settleDirectSendRun(it, item.id) }
+          if (direct == null || direct.gatewayScope == currentCacheScope()) _healthOk.value = false
+          if (direct != null) publishOutbox()
+          OutboxSendOutcome.Stop
+        }
+
+        is GatewayRequestDefinitiveFailure -> {
+          // A rejection can be a cached result from an admitted run; it never permits replay.
+          val persisted = persist(ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+          if (direct != null) {
+            settleDirectSendRun(direct, item.id)
+            if (ownsDirectUi()) updateErrorText(err.message)
+          } else if (persisted == null) {
+            _healthOk.value = false
+          }
+          if (direct == null && persisted == null) OutboxSendOutcome.Stop else OutboxSendOutcome.Continue
+        }
+
+        is GatewayRequestOutcomeUnknown -> {
+          // Interactive ambiguity retains its live owner for history recovery; reconnect
+          // has no pre-ACK projection and parks the input for explicit retry instead.
+          persist(
+            if (direct == null) ChatOutboxStatus.Failed else ChatOutboxStatus.Accepted,
+            if (direct == null) OUTBOX_DELIVERY_UNCONFIRMED_ERROR else null,
+          )
+          if (direct == null) {
+            _healthOk.value = false
+          } else {
+            val projected =
+              synchronized(gatewayScopeApplyLock) {
+                if (!ownsDirectUi()) {
+                  settleDirectSendRun(direct, item.id)
+                  false
+                } else {
+                  projectPendingRun(item.id, outcomeUnknown = true)
+                  true
+                }
+              }
+            if (projected && _healthOk.value) refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(item.id))
+          }
+          OutboxSendOutcome.Stop
         }
 
         else -> {
-          OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+          persist(ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+          if (direct == null) {
+            _healthOk.value = false
+          } else {
+            settleDirectSendRun(direct, item.id)
+            if (ownsDirectUi()) updateErrorText(err.message)
+          }
+          OutboxSendOutcome.Stop
         }
       }
-    } catch (err: CancellationException) {
-      // Teardown must not be recorded as a send failure; the row stays 'sending' and the
-      // next startup recovery parks it as delivery-unconfirmed.
-      throw err
-    } catch (err: GatewayRequestNotEnqueued) {
-      OutboxSendResult.NotDispatched(err.message ?: "send failed")
-    } catch (_: GatewayRequestDefinitiveFailure) {
-      // An ok:false response proves transmission, not that this idempotency key was never run.
-      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
-    } catch (_: GatewayRequestOutcomeUnknown) {
-      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
-    } catch (_: Throwable) {
-      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
+
+    if (direct != null) {
+      return try {
+        settle(attempt())
+      } catch (err: Throwable) {
+        fail(err)
+      }
     }
+    val result =
+      try {
+        attempt()
+      } catch (err: Throwable) {
+        return fail(err)
+      }
+    // Reconnect settlement was never transport failure evidence. Keep its exceptions outside
+    // request classification; direct dispatch intentionally owns the broader boundary above.
+    return settle(result)
   }
 
   private suspend fun recoverInterruptedOutboxSends(): Boolean =
@@ -6355,127 +6384,131 @@ class ChatController internal constructor(
   }
 
   private fun handleChatEvent(payloadJson: String) {
-    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-    val sessionKey = payload["sessionKey"].asStringOrNull()?.trim()
-    val runId = payload["runId"].asStringOrNull()
-    val state = payload["state"].asStringOrNull()
-    val projection = runId?.let(pendingRunProjectionsByRunId::get)
-    if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) {
-      if (state == "final" || state == "aborted" || state == "error") {
-        handleInactiveChatTerminal(
-          payload = payload,
-          runId = runId,
-          owner = resolveChatEventRoutingOwner(sessionKey, projection),
-        )
-      }
-      return
-    }
-
-    if (projection != null && projection.owner != currentChatComposerRoutingOwner()) {
-      if (state == "final" || state == "aborted" || state == "error") {
-        handleInactiveChatTerminal(
-          payload = payload,
-          runId = runId,
-          owner = resolveChatEventRoutingOwner(sessionKey, projection),
-        )
-      }
-      return
-    }
-    val isPending =
-      if (runId != null) synchronized(pendingRuns) { pendingRuns.contains(runId) } else true
-    val ownsDiagnostic =
-      runDiagnosticOwner?.let { it.runId == runId && it.owner == currentChatComposerRoutingOwner() } == true
-    val isOwned = isPending || ownsDiagnostic || (runId != null && unresolvedRepliesByRunId.containsKey(runId))
-
-    when (state) {
-      "delta" -> {
-        // Only show streaming text for runs we initiated in this controller.
-        if (!isPending) return
-        val text = parseAssistantDeltaText(payload)
-        if (!text.isNullOrEmpty()) {
-          updateStreamingAssistantText(runId, text)
+    synchronized(gatewayScopeApplyLock) {
+      val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+      val sessionKey = payload["sessionKey"].asStringOrNull()?.trim()
+      val runId = payload["runId"].asStringOrNull()
+      val state = payload["state"].asStringOrNull()
+      val projection = runId?.let(pendingRunProjectionsByRunId::get)
+      if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) {
+        if (state == "final" || state == "aborted" || state == "error") {
+          handleInactiveChatTerminal(
+            payload = payload,
+            runId = runId,
+            owner = resolveChatEventRoutingOwner(sessionKey, projection),
+          )
         }
+        return
       }
 
-      "final", "aborted", "error" -> {
-        val terminalHasAssistantMessage =
-          state == "final" && payload["message"].asObjectOrNull()?.get("role").asStringOrNull() == "assistant"
-        val resolvesWithoutReply = state != "final" || !terminalHasAssistantMessage
-        val wasTimedOut = runId != null && timedOutRunIds.remove(runId)
-        if (runId != null && runId == lastHandledTerminalRunId) return
-        if (runId != null && !isOwned && !wasTimedOut) {
-          val hasLocalRun =
-            synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
-          if (!hasLocalRun) {
-            // Another client or chat.inject can finish the open session. Refresh
-            // idle history without allowing its terminal state to own local UI.
+      if (projection != null && projection.owner != currentChatComposerRoutingOwner()) {
+        if (state == "final" || state == "aborted" || state == "error") {
+          handleInactiveChatTerminal(
+            payload = payload,
+            runId = runId,
+            owner = resolveChatEventRoutingOwner(sessionKey, projection),
+          )
+        }
+        return
+      }
+      val isPending =
+        if (runId != null) synchronized(pendingRuns) { pendingRuns.contains(runId) } else true
+      val ownsDiagnostic =
+        runLifecycleOwner?.let {
+          it.awaitingCanonicalTerminal && it.identity.runId == runId && it.identity.owner == currentChatComposerRoutingOwner()
+        } == true
+      val isOwned = isPending || ownsDiagnostic || (runId != null && unresolvedRepliesByRunId.containsKey(runId))
+
+      when (state) {
+        "delta" -> {
+          // Only show streaming text for runs we initiated in this controller.
+          if (!isPending) return
+          val text = parseAssistantDeltaText(payload)
+          if (!text.isNullOrEmpty()) {
+            updateStreamingAssistantText(runId, text)
+          }
+        }
+
+        "final", "aborted", "error" -> {
+          val terminalHasAssistantMessage =
+            state == "final" && payload["message"].asObjectOrNull()?.get("role").asStringOrNull() == "assistant"
+          val resolvesWithoutReply = state != "final" || !terminalHasAssistantMessage
+          val wasTimedOut = runId != null && timedOutRunIds.remove(runId)
+          if (runId != null && runId == lastHandledTerminalRunId) return
+          if (runId != null && !isOwned && !wasTimedOut) {
+            val hasLocalRun =
+              synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
+            if (!hasLocalRun) {
+              // Another client or chat.inject can finish the open session. Refresh
+              // idle history without allowing its terminal state to own local UI.
+              lastHandledTerminalRunId = runId
+              publishAssistantReplyFinalized(
+                payload = payload,
+                runId = runId,
+                owner = currentChatComposerRoutingOwner(),
+              )
+              refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
+            }
+            return
+          }
+          if (ownsDiagnostic) runLifecycleOwner = runLifecycleOwner?.copy(awaitingCanonicalTerminal = false)
+          if (runId != null) {
             lastHandledTerminalRunId = runId
-            publishAssistantReplyFinalized(
-              payload = payload,
-              runId = runId,
-              owner = currentChatComposerRoutingOwner(),
-            )
-            refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
+            retireRunTelemetry(runId)
           }
-          return
-        }
-        if (ownsDiagnostic) runDiagnosticOwner = null
-        if (runId != null) {
-          lastHandledTerminalRunId = runId
-          retireRunTelemetry(runId)
-        }
-        publishAssistantReplyFinalized(
-          payload = payload,
-          runId = runId,
-          owner = currentChatComposerRoutingOwner(),
-        )
-        if (wasTimedOut) {
-          val hasNewerRun =
-            synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
-          if (!hasNewerRun) {
-            clearLiveRunUi()
-            updateLocalizedErrorText(
-              if (state == "error") {
-                payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed")
-              } else {
-                null
-              },
-            )
+          publishAssistantReplyFinalized(
+            payload = payload,
+            runId = runId,
+            owner = currentChatComposerRoutingOwner(),
+          )
+          if (wasTimedOut) {
+            val hasNewerRun =
+              synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
+            if (!hasNewerRun) {
+              clearLiveRunUi()
+              updateLocalizedErrorText(
+                if (state == "error") {
+                  payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed")
+                } else {
+                  null
+                },
+              )
+            }
+            publishRunPresentation()
+            refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.RestoreSession)
+            return
           }
-          publishRunPresentation()
-          refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.RestoreSession)
-          return
-        }
-        if (state == "error" && (isPending || ownsDiagnostic)) {
-          updateLocalizedErrorText(payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed"))
-        }
-        if (runId != null && !isPending) {
-          clearLiveRunUi(runId)
-          if (resolvesWithoutReply) terminalWithoutReplyRunIds.add(runId)
-          publishRunPresentation()
+          if (state == "error" && (isPending || ownsDiagnostic)) {
+            updateLocalizedErrorText(payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed"))
+          }
+          if (runId != null && !isPending) {
+            clearLiveRunUi(runId)
+            if (resolvesWithoutReply) terminalWithoutReplyRunIds.add(runId)
+            publishRunPresentation()
+            refreshCurrentHistoryBestEffort(
+              runIdsToReconcile = setOf(runId),
+              purpose = HistoryRefreshPurpose.RestoreSession,
+            )
+            return
+          }
+          val terminalRunIds =
+            runId?.let(::setOf)
+              ?: (synchronized(pendingRuns) { pendingRuns.toSet() } + unresolvedRepliesByRunId.keys)
+          if (runId != null) {
+            clearPendingRun(runId)
+            if (resolvesWithoutReply) {
+              terminalWithoutReplyRunIds.add(runId)
+            }
+          } else {
+            terminalRunIds.forEach(::retireRunTelemetry)
+            clearPendingRuns(clearOptimisticMessages = false, clearRunTelemetry = false)
+          }
+          if (runId == null) clearLiveRunUi()
           refreshCurrentHistoryBestEffort(
-            runIdsToReconcile = setOf(runId),
+            runIdsToReconcile = terminalRunIds,
             purpose = HistoryRefreshPurpose.RestoreSession,
           )
-          return
         }
-        val terminalRunIds =
-          runId?.let(::setOf)
-            ?: (synchronized(pendingRuns) { pendingRuns.toSet() } + unresolvedRepliesByRunId.keys)
-        if (runId != null) {
-          clearPendingRun(runId)
-          if (resolvesWithoutReply) {
-            terminalWithoutReplyRunIds.add(runId)
-          }
-        } else {
-          terminalRunIds.forEach(::retireRunTelemetry)
-          clearPendingRuns(clearOptimisticMessages = false, clearRunTelemetry = false)
-        }
-        if (runId == null) clearLiveRunUi()
-        refreshCurrentHistoryBestEffort(
-          runIdsToReconcile = terminalRunIds,
-          purpose = HistoryRefreshPurpose.RestoreSession,
-        )
       }
     }
   }
@@ -6563,12 +6596,13 @@ class ChatController internal constructor(
   private fun handleSessionObserverEvent(payloadJson: String) {
     val digest = runCatching { json.decodeFromString<SessionObserverDigest>(payloadJson) }.getOrNull() ?: return
     val selectedAgentId = _sessionOwnerAgentId.value ?: resolveAgentIdForSessionKey(_sessionKey.value)
-    _sessions.value =
+    publishSessions(
       applySessionObserverDigest(
         _sessions.value,
         digest,
         activeAgentId = selectedAgentId,
-      )
+      ),
+    )
   }
 
   private fun scheduleSessionsChangedBranchReconciliation(
@@ -6738,11 +6772,13 @@ class ChatController internal constructor(
           (it["sessionKey"].asStringOrNull() != null && "permissionMode" in it && "permissionModePending" in it)
       }
 
-  // The gateway sends explicit JSON null for cleared label/category on session
+  // The gateway sends explicit JSON null for cleared display metadata on session
   // events; the merge must apply those clears instead of preserving stale values.
   private fun parseExplicitSessionClears(obj: JsonObject): Set<String> =
     buildSet {
       if (obj["label"] is JsonNull) add("label")
+      if (obj["autoLabel"] is JsonNull) add("autoLabel")
+      if (obj["displayName"] is JsonNull) add("displayName")
       if (obj["category"] is JsonNull) add("category")
     }
 
@@ -7216,11 +7252,10 @@ class ChatController internal constructor(
    * cold start, and seq-gap recovery restore pending/streaming UI state.
    */
   private fun adoptInFlightRun(
-    history: ChatHistory,
+    run: ChatInFlightRun,
     runIdsOwnedAfterRequest: Set<String>,
   ) {
-    val run = history.inFlightRun ?: return
-    val runId = run.runId.trim().takeIf { it.isNotEmpty() } ?: return
+    val runId = run.runId
     if (runIdsOwnedAfterRequest.isNotEmpty() && runId !in runIdsOwnedAfterRequest) return
     synchronized(pendingRuns) {
       // A different locally-owned run means this snapshot predates it; ignore.
@@ -7228,7 +7263,7 @@ class ChatController internal constructor(
       if (pendingRuns.isEmpty() && unresolvedRepliesByRunId.isNotEmpty() && !unresolvedRepliesByRunId.containsKey(runId)) return
       pendingRuns.add(runId)
     }
-    runDiagnosticOwner = currentChatComposerRoutingOwner()?.let { ChatRunOwner(it, runId) }
+    runLifecycleOwner = currentChatComposerRoutingOwner()?.let { RunLifecycleOwner(ChatRunOwner(it, runId)) }
     armPendingRunTimeout(runId)
     if (run.text.isNotEmpty()) {
       updateStreamingAssistantText(runId, run.text)
@@ -7311,17 +7346,19 @@ class ChatController internal constructor(
     publishRunState: Boolean = true,
     owner: ChatComposerOwner? = pendingRunProjectionsByRunId[runId]?.owner ?: currentChatComposerRoutingOwner(),
   ) {
-    pendingRunProjectionsByRunId.remove(runId)
-    pendingRunTimeoutJobs.remove(runId)?.cancel()
-    unknownOutcomeRunIds.remove(runId)
-    synchronized(pendingRuns) {
-      disconnectedPendingRunIds.remove(runId)
-      pendingRuns.remove(runId)
+    synchronized(gatewayScopeApplyLock) {
+      pendingRunProjectionsByRunId.remove(runId)
+      pendingRunTimeoutJobs.remove(runId)?.cancel()
+      unknownOutcomeRunIds.remove(runId)
+      synchronized(pendingRuns) {
+        disconnectedPendingRunIds.remove(runId)
+        pendingRuns.remove(runId)
+      }
+      clearLiveRunUi(runId, owner)
+      clearTransientRunUiIfIdle(owner)
+      clearUnownedNonterminalTelemetry(runId)
+      if (publishRunState) publishRunPresentation()
     }
-    clearLiveRunUi(runId, owner)
-    clearTransientRunUiIfIdle(owner)
-    clearUnownedNonterminalTelemetry(runId)
-    if (publishRunState) publishRunPresentation()
   }
 
   private fun clearTransientRunUiIfIdle(owner: ChatComposerOwner? = currentChatComposerRoutingOwner()) {
@@ -7337,32 +7374,34 @@ class ChatController internal constructor(
     preserveDisconnectedOwnership: Boolean = false,
     clearRunTelemetry: Boolean = true,
   ) {
-    for ((_, job) in pendingRunTimeoutJobs) {
-      job.cancel()
-    }
-    pendingRunTimeoutJobs.clear()
-    if (clearOptimisticMessages) {
-      runDiagnosticOwner = null
-      recoveryHistoryReconciliationJob?.cancel()
-      recoveryHistoryReconciliationGeneration = -1L
-      recoveryHistoryReconciliationJob = null
-      optimisticMessagesByRunId.clear()
-      unresolvedRepliesByRunId.clear()
-      timedOutRunIds.clear()
-      terminalWithoutReplyRunIds.clear()
-      unknownOutcomeRunIds.clear()
-    }
-    synchronized(pendingRuns) {
-      if (!preserveDisconnectedOwnership) {
-        disconnectedPendingRunIds.clear()
+    synchronized(gatewayScopeApplyLock) {
+      for ((_, job) in pendingRunTimeoutJobs) {
+        job.cancel()
       }
-      pendingRuns.clear()
+      pendingRunTimeoutJobs.clear()
+      if (clearOptimisticMessages) {
+        runLifecycleOwner = null
+        recoveryHistoryReconciliationJob?.cancel()
+        recoveryHistoryReconciliationGeneration = -1L
+        recoveryHistoryReconciliationJob = null
+        optimisticMessagesByRunId.clear()
+        unresolvedRepliesByRunId.clear()
+        timedOutRunIds.clear()
+        terminalWithoutReplyRunIds.clear()
+        unknownOutcomeRunIds.clear()
+      }
+      synchronized(pendingRuns) {
+        if (!preserveDisconnectedOwnership) {
+          disconnectedPendingRunIds.clear()
+        }
+        pendingRuns.clear()
+      }
+      if (clearRunTelemetry) clearAllRunTelemetry()
+      pendingRunProjectionsByRunId.keys
+        .filterNot { runId -> synchronized(pendingRuns) { runId in pendingRuns } }
+        .forEach(::armPendingRunProjectionDeadline)
+      publishRunPresentation()
     }
-    if (clearRunTelemetry) clearAllRunTelemetry()
-    pendingRunProjectionsByRunId.keys
-      .filterNot { runId -> synchronized(pendingRuns) { runId in pendingRuns } }
-      .forEach(::armPendingRunProjectionDeadline)
-    publishRunPresentation()
   }
 
   private fun removeOptimisticMessage(runId: String) {
@@ -7379,60 +7418,66 @@ class ChatController internal constructor(
     messageIdempotencyKey: String? = fallbackMessage.idempotencyKey,
     publishRunState: Boolean = true,
   ) {
-    if (oldRunId == newRunId) return
-    runDiagnosticOwner?.takeIf { it.runId == oldRunId }?.let { runDiagnosticOwner = it.copy(runId = newRunId) }
-    val pendingProjection = pendingRunProjectionsByRunId.remove(oldRunId)
-    val previousOwner = (pendingProjection?.owner ?: currentChatComposerRoutingOwner())?.let { ChatRunOwner(it, oldRunId) }
-    if (previousOwner != null) {
-      synchronized(gatewayScopeApplyLock) {
+    synchronized(gatewayScopeApplyLock) {
+      if (oldRunId == newRunId) return
+      runLifecycleOwner?.takeIf { it.identity.runId == oldRunId }?.let {
+        runLifecycleOwner = it.copy(identity = it.identity.copy(runId = newRunId))
+      }
+      val pendingProjection = pendingRunProjectionsByRunId.remove(oldRunId)
+      val owner = pendingProjection?.owner ?: currentChatComposerRoutingOwner()
+      val previousOwner = owner?.let { ChatRunOwner(it, oldRunId) }
+      if (previousOwner != null) {
         val nextOwner = previousOwner.copy(runId = newRunId)
         if (streamingAssistantOwner == previousOwner) streamingAssistantOwner = nextOwner
         pendingToolCallsById.replaceAll { _, tool ->
           if (tool.owner == previousOwner) tool.copy(owner = nextOwner) else tool
         }
       }
-    }
-    val optimistic = optimisticMessagesByRunId.remove(oldRunId)
-    val unresolved = unresolvedRepliesByRunId.remove(oldRunId)
-    val wasPending = synchronized(pendingRuns) { oldRunId in pendingRuns }
-    val terminalWithoutReply = terminalWithoutReplyRunIds.remove(oldRunId)
-    unknownOutcomeRunIds.remove(oldRunId)
-    pendingRunTimeoutJobs.remove(oldRunId)?.cancel()
-    val original = optimistic ?: unresolved ?: fallbackMessage
-    // Run ownership can change independently of the client key persisted on the
-    // user row. Only history proof may replace that transcript identity.
-    val rekeyed = original.copy(idempotencyKey = messageIdempotencyKey)
-    if (optimistic != null) optimisticMessagesByRunId[newRunId] = rekeyed
-    if (unresolved != null) unresolvedRepliesByRunId[newRunId] = rekeyed
-    if (terminalWithoutReply) terminalWithoutReplyRunIds.add(newRunId)
-    synchronized(gatewayScopeApplyLock) {
+      val optimistic = optimisticMessagesByRunId.remove(oldRunId)
+      val unresolved = unresolvedRepliesByRunId.remove(oldRunId)
+      val wasPending = synchronized(pendingRuns) { oldRunId in pendingRuns }
+      val terminalWithoutReply = terminalWithoutReplyRunIds.remove(oldRunId)
+      val original = optimistic ?: unresolved ?: fallbackMessage
+      // Run ownership can change independently of the client key persisted on the
+      // user row. Only history proof may replace that transcript identity.
+      val rekeyed = original.copy(idempotencyKey = messageIdempotencyKey)
+      if (optimistic != null) optimisticMessagesByRunId[newRunId] = rekeyed
+      if (unresolved != null) unresolvedRepliesByRunId[newRunId] = rekeyed
+      if (terminalWithoutReply) terminalWithoutReplyRunIds.add(newRunId)
       _messages.value = _messages.value.map { if (it.id == original.id) rekeyed else it }
+      transferRunTelemetry(oldRunId, newRunId)
+      val terminal = hasTerminalRunTelemetry(newRunId)
+      val wasProjected = optimistic != null || unresolved != null || wasPending
+      // Replace pending membership before retirement can mistake the live rekey for an idle chat.
+      synchronized(pendingRuns) {
+        disconnectedPendingRunIds.remove(oldRunId)
+        pendingRuns.remove(oldRunId)
+        if (!terminal && wasProjected) pendingRuns.add(newRunId)
+      }
+      clearPendingRun(oldRunId, publishRunState = false, owner = owner)
+      // Rekey reply identity even after a terminal, without restarting its UI or watchdog.
+      if (terminal) {
+        clearPendingRun(newRunId, publishRunState = false, owner = owner)
+      } else {
+        if (pendingProjection != null) {
+          pendingRunProjectionsByRunId[newRunId] =
+            pendingProjection.copy(
+              runId = newRunId,
+              optimisticMessage = rekeyed,
+            )
+        }
+        if (wasProjected) {
+          armPendingRunTimeout(newRunId)
+        } else if (pendingProjection != null) {
+          armPendingRunProjectionDeadline(newRunId)
+        }
+      }
+      if (publishRunState) publishRunPresentation()
     }
-    val wasProjected = optimistic != null || unresolved != null || wasPending
-    synchronized(pendingRuns) {
-      disconnectedPendingRunIds.remove(oldRunId)
-      pendingRuns.remove(oldRunId)
-      if (wasProjected) pendingRuns.add(newRunId)
-    }
-    transferRunTelemetry(oldRunId, newRunId)
-    if (wasProjected) armPendingRunTimeout(newRunId)
-    if (pendingProjection != null) {
-      pendingRunProjectionsByRunId[newRunId] =
-        pendingProjection.copy(
-          runId = newRunId,
-          optimisticMessage = rekeyed,
-        )
-      if (!wasProjected) armPendingRunProjectionDeadline(newRunId)
-    }
-    if (publishRunState) publishRunPresentation()
   }
 
   private fun transferLostAckOwnershipFromHistory(history: ChatHistory) {
-    val snapshotRunId =
-      history.inFlightRun
-        ?.runId
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() } ?: return
+    val snapshotRunId = history.inFlightRun?.runId ?: return
     if (unresolvedRepliesByRunId.containsKey(snapshotRunId)) return
     val localRunId =
       synchronized(pendingRuns) {
@@ -7605,7 +7650,12 @@ class ChatController internal constructor(
   ): ChatMessage? {
     val role = normalizeVisibleChatMessageRole(obj["role"].asStringOrNull()) ?: return null
     val metadata = obj["__openclaw"].asObjectOrNull()
-    val content = parseChatMessageContents(obj)
+    val content =
+      if (role == "toolresult") {
+        listOfNotNull(parseTopLevelToolResult(obj))
+      } else {
+        parseChatMessageContents(obj)
+      }
     // v2026.7.1-2 retains entry IDs but signals display caps with an exact terminal suffix.
     // Native clients can outlive their Gateway; normalize here until the minimum supported
     // Gateway guarantees the structural marker. The retrieval cap differs from history's.
@@ -7617,7 +7667,17 @@ class ChatController internal constructor(
       content = content,
       timestampMs = obj["timestamp"].asLongOrNull(),
       idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
+      runId =
+        normalizeChatRunId(metadata?.get("runId"))
+          ?: if (role == "user") normalizeChatRunId(metadata?.get("idempotencyKey")) ?: normalizeChatRunId(obj["idempotencyKey"]) else null,
+      steerTargetRunId =
+        metadata
+          ?.get("steerTargetRunId")
+          .asJsonStringOrNull()
+          ?.trim()
+          ?.takeIf(String::isNotEmpty),
       entryId = metadata?.get("id").asJsonStringOrNull()?.takeIf { it.isNotBlank() },
+      turnBoundary = metadata?.get("turnBoundary") == JsonPrimitive(true),
       isSyntheticDisplay = obj["openclawMessageToolMirror"].asObjectOrNull() != null || obj["openclawStreamFallback"].asObjectOrNull() != null,
       truncated =
         truncated == JsonPrimitive(true) ||
@@ -7734,6 +7794,7 @@ class ChatController internal constructor(
       displayName = obj["displayName"].asStringOrNull()?.trim(),
       derivedTitle = obj["derivedTitle"].asStringOrNull()?.trim(),
       label = obj["label"].asStringOrNull()?.trim(),
+      autoLabel = obj["autoLabel"].asStringOrNull()?.trim(),
       category = obj["category"].asStringOrNull()?.trim(),
       color =
         obj["color"]
@@ -8077,11 +8138,14 @@ class ChatController internal constructor(
       applied =
         applied.copy(
           label = if ("label" in clearedFields) null else applied.label,
+          autoLabel = if ("autoLabel" in clearedFields) null else applied.autoLabel,
+          displayName = if ("displayName" in clearedFields) null else applied.displayName,
           category = if ("category" in clearedFields) null else applied.category,
         )
     }
-    _sessions.value =
-      if (index >= 0) current.toMutableList().also { it[index] = applied } else listOf(applied) + current
+    publishSessions(
+      if (index >= 0) current.toMutableList().also { it[index] = applied } else listOf(applied) + current,
+    )
     if (!preserveSessionSettings && (authoritativeSessionSettings || replace || entry.carriesSessionSettings())) {
       observeSessionSettings(applied, SessionSettingsSnapshot(entry, authoritativeSessionSettings || replace))
     }
@@ -8162,7 +8226,7 @@ class ChatController internal constructor(
           }
         val visibleOwner = resolveAgentIdForSessionKey(_sessionKey.value)
         val removesVisibleEntry = cacheScope == currentCacheScope() && owner != null && owner == visibleOwner
-        if (removesVisibleEntry) _sessions.value = _sessions.value.filterNot { it.key == key }
+        if (removesVisibleEntry) publishSessions(_sessions.value.filterNot { it.key == key })
         removesVisibleEntry to retired
       }
     retiredSettings.forEach { it.complete(false) }
@@ -8382,10 +8446,150 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
       )
     }
 
+    "toolCall", "tool_call", "toolcall", "tool_use" -> {
+      parseToolActivityContent(obj, resultBlock = false)
+    }
+
+    "toolResult", "tool_result", "toolresult", "tool_result_block" -> {
+      parseToolActivityContent(obj, resultBlock = true)
+    }
+
     else -> {
       null
     }
   }
+}
+
+// Match gateway-client user-turn ownership, including the persisted user suffix.
+private fun normalizeChatRunId(value: JsonElement?): String? =
+  value
+    .asJsonStringOrNull()
+    ?.trim()
+    ?.removeSuffix(":user")
+    ?.takeIf(String::isNotEmpty)
+
+private const val CHAT_TOOL_DETAIL_MAX_CHARS = 600
+private const val CHAT_TOOL_RESULT_MAX_CHARS = 2_000
+
+private fun boundedToolText(
+  value: String?,
+  limit: Int,
+): String? =
+  value?.trim()?.takeIf(String::isNotEmpty)?.let { text ->
+    if (text.length <= limit) text else text.take(limit).trimEnd() + "…"
+  }
+
+private fun toolResultText(element: JsonElement?): String? =
+  when (element) {
+    is JsonPrimitive -> {
+      element.contentOrNull
+    }
+
+    is JsonArray -> {
+      buildString {
+        // Keep ordered text blocks, but never materialize an unbounded result projection.
+        for (item in element) {
+          val text =
+            item
+              .asObjectOrNull()
+              ?.get("text")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf(String::isNotEmpty) ?: continue
+          if (isNotEmpty()) append('\n')
+          append(text.take((CHAT_TOOL_RESULT_MAX_CHARS + 1 - length).coerceAtLeast(0)))
+          if (length > CHAT_TOOL_RESULT_MAX_CHARS) break
+        }
+      }.takeIf(String::isNotEmpty)
+    }
+
+    is JsonObject -> {
+      element["text"].asStringOrNull() ?: element["content"].asStringOrNull()
+    }
+
+    else -> {
+      null
+    }
+  }
+
+private fun toolDetail(args: JsonObject?): String? {
+  if (args == null) return null
+  val keys = listOf("command", "cmd", "path", "filePath", "query", "url", "target", "description")
+  return keys.firstNotNullOfOrNull { key ->
+    boundedToolText(args[key].asStringOrNull(), CHAT_TOOL_DETAIL_MAX_CHARS)?.let { "$key: $it" }
+  }
+}
+
+private fun toolPresentationArguments(args: JsonObject?): JsonObject? {
+  if (args == null) return null
+  val projected =
+    buildJsonObject {
+      listOf("command", "cmd", "path", "filePath", "query", "url", "target", "description", "markdown").forEach { key ->
+        boundedToolText(args[key].asStringOrNull(), CHAT_TOOL_DETAIL_MAX_CHARS)?.let { put(key, JsonPrimitive(it)) }
+      }
+      (args["plan"] as? JsonArray)?.let { plan ->
+        put(
+          "plan",
+          buildJsonArray {
+            plan.take(50).forEach { entry ->
+              val step = entry.asObjectOrNull() ?: return@forEach
+              val text = boundedToolText(step["step"].asStringOrNull(), CHAT_TOOL_DETAIL_MAX_CHARS) ?: return@forEach
+              val status = step["status"].asStringOrNull()?.takeIf { it in setOf("pending", "in_progress", "completed") } ?: return@forEach
+              add(
+                buildJsonObject {
+                  put("step", JsonPrimitive(text))
+                  put("status", JsonPrimitive(status))
+                },
+              )
+            }
+          },
+        )
+      }
+    }
+  return projected.takeIf { it.isNotEmpty() }
+}
+
+private fun parseToolActivityContent(
+  obj: JsonObject,
+  resultBlock: Boolean,
+): ChatMessageContent? {
+  // Match the web transcript aliases. Result envelopes often carry toolName,
+  // not name; losing it creates a spurious generic "Tool" row.
+  val name =
+    listOf("name", "toolName", "tool_name")
+      .firstNotNullOfOrNull { key ->
+        obj[key].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+      }.orEmpty()
+  val id =
+    listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "id").firstNotNullOfOrNull { key ->
+      obj[key].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+    }
+  if (name.isEmpty() && id == null) return null
+  val args = (obj["arguments"] ?: obj["input"] ?: obj["args"]).asObjectOrNull()
+  val result = if (resultBlock) boundedToolText(toolResultText(obj["content"] ?: obj["result"] ?: obj["text"]), CHAT_TOOL_RESULT_MAX_CHARS) else null
+  return ChatMessageContent(
+    type = if (resultBlock) "toolResult" else "toolCall",
+    toolActivity =
+      ChatToolActivity(
+        toolCallId = id,
+        name = name.ifEmpty { "tool" },
+        detail = toolDetail(args),
+        result = result,
+        isError = obj["isError"] == JsonPrimitive(true),
+        arguments = toolPresentationArguments(args),
+      ),
+  )
+}
+
+private fun parseTopLevelToolResult(obj: JsonObject): ChatMessageContent? {
+  val synthetic =
+    buildMap<String, JsonElement> {
+      put("type", JsonPrimitive("toolResult"))
+      listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "name", "toolName", "tool_name", "isError", "content", "result", "text").forEach { key ->
+        obj[key]?.let { put(key, it) }
+      }
+    }
+  return parseToolActivityContent(JsonObject(synthetic), resultBlock = true)
 }
 
 private fun parseChatMediaContent(
@@ -8907,6 +9111,7 @@ internal fun mergeChatSessionEntry(
     hasClassificationMetadata = existing.hasClassificationMetadata || next.hasClassificationMetadata,
     displayName = next.displayName ?: existing.displayName,
     label = next.label ?: existing.label,
+    autoLabel = next.autoLabel ?: existing.autoLabel,
     category = next.category ?: existing.category,
     // Omitted metadata preserves the tint; explicit null from another client clears it.
     color = if (next.hasColorMetadata) next.color else existing.color,
@@ -9004,7 +9209,7 @@ internal fun applySessionObserverDigest(
   if (index < 0) return scopedSessions
   val session = scopedSessions[index]
   val runId = digest.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return scopedSessions
-  val isRunning = session.hasActiveRun == true || session.status?.trim()?.lowercase() == "running"
+  val isRunning = isSessionRunActive(session.hasActiveRun, session.status)
   val matchesActiveRun = session.activeRunIds.orEmpty().any { it.trim() == runId }
   if (!isRunning || !matchesActiveRun) return scopedSessions
   val previous = session.observerDigest
@@ -9068,7 +9273,7 @@ private fun reconcileSessionObserverDigest(
   activeRunIds: List<String>?,
   status: String?,
 ): SessionObserverDigest? {
-  val isRunning = hasActiveRun == true || status?.trim()?.lowercase() == "running"
+  val isRunning = isSessionRunActive(hasActiveRun, status)
   val activeIds = activeRunIds.orEmpty().mapNotNull { it.trim().takeIf(String::isNotEmpty) }.toSet()
   var resolved = existing
   if (isRunning && resolved?.runId?.trim()?.let(activeIds::contains) != true) {

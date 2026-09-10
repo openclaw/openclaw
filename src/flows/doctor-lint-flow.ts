@@ -4,6 +4,7 @@ import { listHealthChecks } from "./health-check-registry.js";
 import {
   HEALTH_FINDING_SEVERITY_RANK,
   healthFindingMeetsSeverity,
+  isHealthCheckEnabledByDefault,
   type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
@@ -39,7 +40,7 @@ export async function runDoctorLintChecks(
     if (only.size > 0 && !only.has(c.id)) {
       return false;
     }
-    if (only.size === 0 && !includeDefaultDisabled && isDefaultDisabled(c)) {
+    if (only.size === 0 && !includeDefaultDisabled && !isHealthCheckEnabledByDefault(c)) {
       return false;
     }
     if (skip.has(c.id)) {
@@ -95,10 +96,6 @@ export function selectUpdateReadinessChecks(
   phase: "post-plugin",
 ): readonly HealthCheck[] {
   return checks.filter((check) => "updateReadiness" in check && check.updateReadiness === phase);
-}
-
-function isDefaultDisabled(check: HealthCheck): boolean {
-  return "defaultEnabled" in check && check.defaultEnabled === false;
 }
 
 // Stable ordering keeps CLI output and tests deterministic across registry order changes.

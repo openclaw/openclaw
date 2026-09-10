@@ -80,8 +80,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
   const defaultId = selection.defaultId;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const scope = cfg.session?.scope ?? "per-sender";
-  const configuredById = new Map<string, { name?: string }>();
-  const explicitIds = new Set<string>();
+  const configuredById = new Map<string, string | undefined>();
   const diskIds = new Set<string>();
   const agentIds = new Set<string>();
   agentIds.add(normalizeAgentId(defaultId));
@@ -93,8 +92,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
     const id = normalizeAgentId(entry.id);
     const configuredName = normalizeOptionalString(entry.name);
     const identityName = normalizeOptionalString(entry.identity?.name);
-    configuredById.set(id, { name: configuredName ?? identityName });
-    explicitIds.add(id);
+    configuredById.set(id, configuredName ?? identityName);
     agentIds.add(id);
   }
 
@@ -103,7 +101,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
     agentIds.add(id);
   }
 
-  const allowedIds = explicitIds.size > 0 ? new Set(explicitIds) : null;
+  const allowedIds = configuredById.size > 0 ? configuredById : null;
   const visibleIds = [...agentIds].filter(
     (id) =>
       !allowedIds ||
@@ -123,8 +121,10 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
   const agents: GatewayAgentListRow[] = orderedIds.map((id) => ({
     id,
     kind:
-      !explicitIds.has(id) && diskIds.has(id) ? (ownerEntries.get(id)?.kind ?? "agent") : "agent",
-    name: configuredById.get(id)?.name,
+      !configuredById.has(id) && diskIds.has(id)
+        ? (ownerEntries.get(id)?.kind ?? "agent")
+        : "agent",
+    name: configuredById.get(id),
   }));
   return { ...selection, mainKey, scope, agents };
 }

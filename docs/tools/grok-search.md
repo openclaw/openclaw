@@ -37,6 +37,9 @@ Skip it to enable or change `x_search` later in config.
 
 ## Sign in or get an API key
 
+The `xai` plugin that provides Grok web search ships with OpenClaw, so there is
+no `openclaw plugins install` step. Start at the credential you already have.
+
 <Steps>
   <Step title="Use xAI OAuth">
     If you already signed in with xAI during onboarding or model auth, choose
@@ -121,3 +124,4 @@ falls back to the same `webSearch.baseUrl` unless
 - [Web Search overview](/tools/web) -- all providers and auto-detection
 - [x_search in Web Search](/tools/web#x_search) -- first-class X search via xAI
 - [Gemini Search](/tools/gemini-search) -- AI-synthesized answers via Google grounding
+- [Kimi search](/tools/kimi-search) — the Moonshot-backed search tool

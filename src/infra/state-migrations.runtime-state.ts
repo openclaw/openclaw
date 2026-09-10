@@ -55,6 +55,7 @@ export function migrateLegacyJsonState<Value>(params: {
   stateDir: string;
   label: string;
   normalize: (value: unknown) => Value;
+  recoverableReadFailure?: (error: unknown) => string | undefined;
   shouldMigrate?: (value: Value) => boolean;
   migrate: (db: DatabaseSync, value: Value) => LegacyJsonImportOutcome;
   retire?: (params: { sourcePath: string; changes: string[]; warnings: string[] }) => void;
@@ -69,6 +70,10 @@ export function migrateLegacyJsonState<Value>(params: {
   try {
     value = params.normalize(readLegacyJsonObject(params.sourcePath));
   } catch (err) {
+    const advisory = params.recoverableReadFailure?.(err);
+    if (advisory) {
+      return { changes, warnings: [advisory], warningDisposition: "recoverable" };
+    }
     warnings.push(`Failed reading legacy ${params.label} ${params.sourcePath}: ${String(err)}`);
     return { changes, warnings };
   }

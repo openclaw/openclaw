@@ -11,8 +11,9 @@ title: "Transcripts CLI"
 
 # `openclaw transcripts`
 
-Inspector and export command for durable meeting transcripts. Google Meet,
-Microsoft Teams, and Zoom browser participants capture notes automatically;
+Inspector and export command for durable meeting transcripts.
+[Google Meet](/plugins/google-meet), [Microsoft Teams](/plugins/teams-meetings),
+and [Zoom](/plugins/zoom-meetings) browser participants capture notes automatically;
 the `transcripts` agent tool also supports provider capture and manual import.
 
 Canonical transcript state lives in the shared SQLite database at
@@ -35,7 +36,7 @@ derived from the session id.
 
 ## Read transcripts in the Control UI
 
-In the [Control UI](/web/control-ui#meetings-page), open the sidebar's pencil menu
+In the [Control UI](/web/control-ui/settings#meetings-page), open the sidebar's pencil menu
 (**Edit pinned items**) and choose **Meetings** to browse the same SQLite archive
 at `/meetings`. You can pin Meetings to the sidebar; it is not pinned by default.
 Meeting notes are separate from agent chat history in **Sessions**.
@@ -198,7 +199,7 @@ when one capture is active.
 
 ## Gateway and Control UI reads
 
-Open **Meetings** in the [Control UI](/web/control-ui#meetings-page) to browse
+Open **Meetings** in the [Control UI](/web/control-ui/settings#meetings-page) to browse
 captured meetings and notes without a terminal. The page and other Gateway
 clients use these read-only RPC methods:
 
@@ -456,9 +457,15 @@ that grace cancels the stop. Otherwise, OpenClaw stops capture and generates not
 Occupancy episodes use generated IDs; an entry's `sessionId` is ignored. To
 continue a meeting across a Gateway restart, OpenClaw reopens the most recent
 session for the same provider, account, guild, and channel when it stopped within
-the last 10 minutes. The session keeps its original ID, title, and start time, and new
+the last 10 minutes and its stored ID origin is `generated`. The session keeps its original ID, title, and start time, and new
 utterances append to it. A later return within that window also reuses the meeting;
 outside the window, capture gets a new ID.
+New admissions record whether the transcript ID was generated or supplied. If
+the newest candidate has a supplied ID, or its origin is missing or invalid,
+capture starts fresh without searching older history. Existing notes remain
+unchanged and readable. Legacy generated meetings without a recorded origin may
+therefore split after an upgrade or restart. Doctor preserves recorded origins
+when restoring metadata; it does not infer or backfill missing origins.
 If the room is routed to a different agent, that agent starts a new capture;
 the original agent retains its stored meeting and summary permissions.
 
@@ -467,9 +474,14 @@ provider logs a warning and skips the entry instead of capturing continuously.
 Configure at most one `whenOccupied: true` entry per Discord account and guild,
 even when the channel IDs differ: a Discord bot can occupy only one voice channel
 per guild. Later conflicting entries are skipped with a warning. For the complete
-listen-only setup, see [Discord meeting notes](/channels/discord#meeting-notes).
+listen-only setup, see [Discord meeting notes](/channels/discord/voice-transcripts#meeting-notes).
 
 The meeting provider ids are `google-meet`, `teams`, and `zoom`. Their aliases
 are `googlemeet`/`meet`, `teams-meetings`/`microsoft-teams`/`msteams`, and
 `zoom-meetings`, respectively. Meeting providers attach to an already-active
 meeting bot session; normal meeting joins do not need an `autoStart` entry.
+
+## Related
+
+- [CLI reference](/cli)
+- [Meeting plugins](/plugins/meeting-plugins) — the plugins that capture these transcripts

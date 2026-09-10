@@ -125,7 +125,7 @@ async function withQueue<T>(fn: (queue: FeishuIngressQueue, stateDir: string) =>
 }
 
 function signWebhookBody(rawBody: string, encryptKey: string): Record<string, string> {
-  const timestamp = "1711111111";
+  const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = "feishu-ingress-test";
   return {
     "content-type": "application/json",

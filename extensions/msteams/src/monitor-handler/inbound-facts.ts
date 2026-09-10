@@ -11,6 +11,7 @@ import type { StoredConversationReference } from "../conversation-store.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
+  htmlToPlainText,
   normalizeMSTeamsConversationId,
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
@@ -25,16 +26,11 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
     if (!raw) {
       continue;
     }
-    const text = raw
-      .replace(/<at[^>]*>.*?<\/at>/gis, " ")
-      .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1")
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/p>/gi, "\n")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/gi, " ")
-      .replace(/&amp;/gi, "&")
-      .replace(/\s+/g, " ")
-      .trim();
+    const text = htmlToPlainText(
+      raw
+        .replace(/<at[^>]*>.*?<\/at>/gis, " ")
+        .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1"),
+    );
     if (text) {
       return text;
     }
@@ -61,10 +57,11 @@ export async function prepareMSTeamsDebounceEntry(params: {
     ? activity.attachments
     : [];
   const rawText = activity.text?.trim() ?? "";
-  const htmlText = extractTextFromHtmlAttachments(attachments);
-  const valueText =
-    rawText || htmlText ? "" : serializeMSTeamsAdaptiveCardActionValue(activity.value);
-  const text = stripMSTeamsMentionTags(rawText || htmlText || valueText || "");
+  // HTML mentions are stripped before decoding so literally typed <at> tags survive.
+  const text = rawText
+    ? stripMSTeamsMentionTags(rawText)
+    : extractTextFromHtmlAttachments(attachments) ||
+      stripMSTeamsMentionTags(serializeMSTeamsAdaptiveCardActionValue(activity.value) || "");
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
   const replyToId = activity.replyToId ?? undefined;
   const implicitMentionKinds: Array<"reply_to_bot"> =

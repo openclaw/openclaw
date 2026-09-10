@@ -466,7 +466,7 @@ async function expectNativeHarnessModelsPublished(params: {
       availability: true,
     });
     const preparedModels = await buildModelsListResult({
-      context,
+      source: { kind: "gateway", context },
       agentId: "main",
       params: { view: "configured" },
       preloadedCatalog: { agentId: "main", config: params.config, snapshot: catalog },

@@ -22,8 +22,7 @@ const outputFileMocks = vi.hoisted(() => ({
   publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
 }));
 const stderrWrites = vi.hoisted(() => vi.fn());
-const getCoreCliCommandNamesMock = vi.hoisted(() => vi.fn(() => []));
-const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
+const getCoreCliCompletionGroupsMock = vi.hoisted(() => vi.fn(() => []));
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const getSubCliEntriesMock = vi.hoisted(() =>
   vi.fn(() => [
@@ -56,8 +55,7 @@ vi.mock("./output-file.runtime.js", async () => {
 });
 
 vi.mock("./program/command-registry-core.js", () => ({
-  getCoreCliCommandNames: getCoreCliCommandNamesMock,
-  registerCoreCliByName: registerCoreCliByNameMock,
+  getCoreCliCompletionGroups: getCoreCliCompletionGroupsMock,
 }));
 
 vi.mock("./program/program-context.js", () => ({
@@ -110,8 +108,7 @@ async function writeCompletionCacheForShell(shell: CompletionShell): Promise<str
 
 function expectCompletionInstallationToSkipRegistration(): void {
   expect(getProgramContextMock).not.toHaveBeenCalled();
-  expect(getCoreCliCommandNamesMock).not.toHaveBeenCalled();
-  expect(registerCoreCliByNameMock).not.toHaveBeenCalled();
+  expect(getCoreCliCompletionGroupsMock).not.toHaveBeenCalled();
   expect(getSubCliEntriesMock).not.toHaveBeenCalled();
   expect(registerSubCliByNameMock).not.toHaveBeenCalled();
   expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
@@ -130,8 +127,7 @@ describe("completion-cli write-state", () => {
       actual.publishOutputFileAtomically,
     );
     stderrWrites.mockReset();
-    getCoreCliCommandNamesMock.mockClear();
-    registerCoreCliByNameMock.mockClear();
+    getCoreCliCompletionGroupsMock.mockClear();
     getProgramContextMock.mockClear();
     getSubCliEntriesMock.mockClear();
     registerSubCliByNameMock.mockClear();

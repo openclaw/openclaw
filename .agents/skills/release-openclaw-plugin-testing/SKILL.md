@@ -30,15 +30,11 @@ From the OpenClaw repo root:
 ```bash
 pnpm docs:list
 git status --short --branch
-readlink node_modules
 pnpm changed:lanes --json
 ```
 
-In Codex worktrees under `.codex/worktrees`, `node_modules` must be a symlink to
-the main OpenClaw checkout. Do not run `pnpm install` there. For broad or
-package-heavy proof, use a prepared normal checkout on the current dedicated
-Linux worker, Blacksmith Testbox, or GitHub Actions according to the required
-artifact and capability boundary.
+Follow [`openclaw-testing`](../openclaw-testing/SKILL.md) for dependency
+ownership and the choice of local or remote proof.
 
 ## Runner Choice
 
@@ -68,7 +64,6 @@ pnpm run test:extensions:package-boundary:compile
 pnpm test:docker:plugins
 OPENCLAW_PLUGINS_E2E_CLAWHUB=0 pnpm test:docker:plugins
 pnpm test:docker:plugin-update
-pnpm test:docker:bundled-channel-deps:fast
 ```
 
 For full bundled install/uninstall proof, shard the packaged sweep:
@@ -79,7 +74,7 @@ OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX=<0-7> \
 pnpm test:docker:bundled-plugin-install-uninstall
 ```
 
-Expected current packaged scope: 116 public bundled plugins over shards `0-7`.
+This example partitions the selected package's plugin inventory over shards `0-7`.
 Private QA plugins are source-mode only unless a package explicitly includes
 them.
 
@@ -88,18 +83,17 @@ them.
 Use this matrix for pre-release signoff. Record pass/fail, run URL/Testbox ID,
 package SHA/version, and skipped-live reason.
 
-| Surface              | Proof                                                           | Preferred runner                     |
-| -------------------- | --------------------------------------------------------------- | ------------------------------------ |
-| Package artifact     | Package Acceptance `suite_profile=package` or custom lanes      | GitHub Actions                       |
-| Bundled lifecycle    | 8-shard `test:docker:bundled-plugin-install-uninstall`          | Testbox or release Docker            |
-| External plugins     | `test:docker:plugins` and `plugins-offline`                     | Testbox/package acceptance           |
-| Update no-op         | `test:docker:plugin-update`                                     | Testbox/package acceptance           |
-| Channel runtime deps | `test:docker:bundled-channel-deps:fast` plus key channels       | Testbox/package acceptance           |
-| Doctor/fix           | seeded bad configs + `doctor --fix --non-interactive`           | new Docker/Testbox harness           |
-| Config round-trip    | `config set/get`, inspect, doctor, reload, diff hash            | new Docker/Testbox harness           |
-| Gateway bootstrap    | clean `HOME`, plugin groups enabled/disabled, status JSON       | new Docker/Testbox harness           |
-| SDK compatibility    | directory, tgz, and `file:` external plugins using SDK subpaths | `test:docker:plugins` plus new smoke |
-| Live-ish             | redacted provider/channel probes only for present env           | Testbox live lanes                   |
+| Surface           | Proof                                                           | Preferred runner                     |
+| ----------------- | --------------------------------------------------------------- | ------------------------------------ |
+| Package artifact  | Package Acceptance `suite_profile=package` or custom lanes      | GitHub Actions                       |
+| Bundled lifecycle | Sharded `test:docker:bundled-plugin-install-uninstall`          | Testbox or release Docker            |
+| External plugins  | `test:docker:plugins` and `plugins-offline`                     | Testbox/package acceptance           |
+| Update no-op      | `test:docker:plugin-update`                                     | Testbox/package acceptance           |
+| Doctor/fix        | seeded bad configs + `doctor --fix --non-interactive`           | new Docker/Testbox harness           |
+| Config round-trip | `config set/get`, inspect, doctor, reload, diff hash            | new Docker/Testbox harness           |
+| Gateway bootstrap | clean `HOME`, plugin groups enabled/disabled, status JSON       | new Docker/Testbox harness           |
+| SDK compatibility | directory, tgz, and `file:` external plugins using SDK subpaths | `test:docker:plugins` plus new smoke |
+| Live-ish          | redacted provider/channel probes only for present env           | Testbox live lanes                   |
 
 ## Package Acceptance Plan
 
@@ -113,7 +107,7 @@ gh workflow run package-acceptance.yml \
   -f source=ref \
   -f package_ref=<branch-or-sha> \
   -f suite_profile=custom \
-  -f docker_lanes='plugins-offline plugin-update bundled-channel-deps-compat doctor-switch update-channel-switch config-reload mcp-channels npm-onboard-channel-agent' \
+  -f docker_lanes='plugins-offline plugin-update doctor-switch update-channel-switch config-reload mcp-channels npm-onboard-channel-agent' \
   -f telegram_mode=mock-openai
 ```
 
@@ -146,7 +140,7 @@ environment, secret, OIDC, npm mutation, or ClawHub mutation path:
 
 ```bash
 release_sha="$(git rev-parse origin/release/2026.7.1)"
-ghx workflow run plugin-npm-release.yml \
+gh workflow run plugin-npm-release.yml \
   --repo openclaw/openclaw \
   --ref main \
   -f preflight_only=true \
@@ -161,13 +155,15 @@ Do not pass `release_publish_run_id`. Require the workflow to finish
 and source SHA. The workflow first creates the staging/readback artifact
 `plugin-npm-package-source-<source-sha>-<extension-id>` containing
 `npm-pack.json`, `preflight-manifest.json`, and the tarball. It then uploads the
-final consumer artifact `plugin-npm-package-<extension-id>-<version>` containing
-the tarball and `plugin-npm-package-evidence.json`.
+final consumer artifact
+`plugin-npm-package-<extension-id>-<version>-<route>-<run-id>-<attempt>` containing
+the tarball and `plugin-publication-manifest.json`.
 
-Record the final artifact name and digest separately. In the v2 evidence,
-`publicationArtifact` binds the staging artifact id, name, digest, source and
-packed `package.json` hashes, and tarball hash. This proof is validation-only;
-it does not authorize or stage publication. For an already-published version,
+Record the final artifact name and digest separately. The manifest uses
+`openclaw.plugin-publication-artifact/v1` and records the target SHA, package
+manifest hashes, publication route and policy, and tarball hashes and inventory.
+This proof is validation-only; it does not authorize or stage publication.
+For an already-published version,
 require npm `dist.integrity` and `dist.shasum` to match the verified tarball.
 Treat only missing or provably older dist-tags as repairable; newer or
 incomparable selectors are a blocker.
@@ -186,8 +182,10 @@ that uses one package tarball and sharded plugin lists. Per plugin:
 7. `plugins registry --refresh`.
 8. `doctor --non-interactive`.
 9. `plugins uninstall <id> --force`.
-10. Assert no config entry, allow/deny residue, install record, managed dir, or
-    bundled `dist/extensions/...` load path remains.
+10. Assert the plugin's `plugins.entries` value is exactly `{ enabled: false }`,
+    while its allow/deny entries, install record, managed directory, and bundled
+    runtime load paths are gone. Use the existing harness's source-qualified
+    uninstall expectations for historical targets.
 11. Assert diagnostics contain no `level: "error"` and output redacts
     secret-looking values.
 

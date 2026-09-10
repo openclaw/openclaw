@@ -572,9 +572,14 @@ describe("application session placement startup", () => {
 
   it.each([
     {
-      target: { kind: "profile", profileId: "aws", machineClass: "fast" } as const,
+      target: {
+        kind: "profile",
+        profileId: "aws",
+        os: "windows/wsl2",
+        machineClass: "fast",
+      } as const,
       message: "retain this submission",
-      wire: { profileId: "aws", machineClass: "fast" },
+      wire: { profileId: "aws", os: "windows/wsl2", machineClass: "fast" },
     },
     {
       target: { kind: "device", deviceId: "device-1" } as const,

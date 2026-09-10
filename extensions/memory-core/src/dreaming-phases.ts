@@ -1128,6 +1128,10 @@ function dedupeEntries(
       duplicate.totalScore = Math.max(duplicate.totalScore, entry.totalScore);
       duplicate.maxScore = Math.max(duplicate.maxScore, entry.maxScore);
       duplicate.queryHashes = uniqueStrings([...duplicate.queryHashes, ...entry.queryHashes]);
+      duplicate.userQueryHashes = uniqueStrings([
+        ...(duplicate.userQueryHashes ?? []),
+        ...(entry.userQueryHashes ?? []),
+      ]);
       duplicate.recallDays = [
         ...new Set([...duplicate.recallDays, ...entry.recallDays]),
       ].toSorted();
@@ -1403,6 +1407,7 @@ async function runLightDreaming(
       workspaceDir: params.workspaceDir,
       phase: "light",
       bodyLines,
+      hasContent: capped.length > 0,
       nowMs,
       timezone: params.config.timezone,
       storage: params.config.storage,
@@ -1480,6 +1485,7 @@ async function runRemDreaming(
       workspaceDir: params.workspaceDir,
       phase: "rem",
       bodyLines: preview.bodyLines,
+      hasContent: entries.length > 0,
       nowMs,
       timezone: params.config.timezone,
       storage: params.config.storage,

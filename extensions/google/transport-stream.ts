@@ -57,10 +57,8 @@ import {
   type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
-import {
-  isGoogleVertexCredentialsMarker,
-  resolveGoogleVertexAuthorizedUserHeaders,
-} from "./vertex-adc.js";
+import { isGoogleVertexCredentialsMarker } from "./vertex-adc-config.js";
+import { resolveGoogleVertexAuthorizedUserHeaders } from "./vertex-adc.js";
 
 type CanonicalGoogleTransportApi = "google-generative-ai" | "google-vertex";
 type GoogleTransportApi = CanonicalGoogleTransportApi | "openclaw-google-generative-ai-transport";

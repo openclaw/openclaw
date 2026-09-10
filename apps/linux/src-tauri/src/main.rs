@@ -3,7 +3,7 @@ mod discovery;
 mod gateway;
 mod gateway_device_identity;
 mod gateway_operation_queue;
-#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+#[cfg(any(target_os = "linux", test))]
 mod gateway_sleep;
 #[cfg(target_os = "linux")]
 mod gateway_sleep_logind;
@@ -23,7 +23,7 @@ use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot, ReadyGateway};
 use gateway_operation_queue::{GatewayOperation, GatewayOperationQueue};
 use installer::InstallChannel;
-use remote_gateway::RemoteGatewayRequest;
+use remote_gateway::{RemoteConnectionSource, RemoteGatewayRequest};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -84,6 +84,23 @@ fn native_auth_initialization_script(
   }} catch {{}}
 }})();"#
     ))
+}
+
+fn remote_ws_config(
+    request: &RemoteGatewayRequest,
+    gateway_url: &Url,
+) -> gateway_ws::GatewayWsConfig {
+    gateway_ws::GatewayWsConfig::new(
+        gateway_url.to_string(),
+        request.token.clone(),
+        request.password.clone(),
+        if gateway_url.scheme() == "wss" {
+            request.tls_fingerprint.clone()
+        } else {
+            None
+        },
+        gateway_ws::GatewayOwnership::Remote,
+    )
 }
 
 fn open_external_browser(app: &AppHandle, url: &Url) {
@@ -370,7 +387,7 @@ struct DesktopInner {
     operation: Mutex<()>,
     pending_approvals: Mutex<pending_approvals::PendingApprovalState>,
     local_url: Url,
-    tray: Mutex<Option<tray::TrayHandles>>,
+    tray: Mutex<Option<Arc<tray::TrayHandles>>>,
     remote_tunnel: Mutex<Option<remote_gateway::SshTunnel>>,
     quitting: AtomicBool,
 }
@@ -397,19 +414,23 @@ impl DesktopState {
     }
 
     fn set_tray(&self, handles: tray::TrayHandles) {
-        *self.inner.tray.lock().expect("tray mutex poisoned") = Some(handles);
+        *self.inner.tray.lock().expect("tray mutex poisoned") = Some(Arc::new(handles));
+    }
+
+    fn with_tray(&self, update: impl FnOnce(&tray::TrayHandles)) {
+        let tray = self.inner.tray.lock().expect("tray mutex poisoned").clone();
+        // Menu setters synchronously dispatch to the main thread.
+        if let Some(tray) = tray {
+            update(&tray);
+        }
     }
 
     pub(crate) fn set_quickchat_shortcut_checked(&self, checked: bool) {
-        if let Some(tray) = self
-            .inner
-            .tray
-            .lock()
-            .expect("tray mutex poisoned")
-            .as_ref()
-        {
-            tray.set_quickchat_shortcut_checked(checked);
-        }
+        self.with_tray(|tray| tray.set_quickchat_shortcut_checked(checked));
+    }
+
+    pub(crate) fn refresh_update_action(&self, app: &AppHandle) {
+        self.with_tray(|tray| tray.refresh_update_action(app));
     }
 
     pub fn connect(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
@@ -428,7 +449,7 @@ impl DesktopState {
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
         if !explicit_local {
             if let Some(remote) = remote_gateway::load_saved_remote()? {
-                return self.connect_remote_locked(app, remote);
+                return self.connect_remote_locked(app, remote, RemoteConnectionSource::Saved);
             }
         }
         let cli = self.resolve_cli();
@@ -588,13 +609,14 @@ impl DesktopState {
             .operation
             .lock()
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
-        self.connect_remote_locked(app, request)
+        self.connect_remote_locked(app, request, RemoteConnectionSource::Submitted)
     }
 
     fn connect_remote_locked(
         &self,
         app: &AppHandle,
         mut request: RemoteGatewayRequest,
+        source: RemoteConnectionSource,
     ) -> Result<GatewaySnapshot, String> {
         remote_gateway::validate_request(&request)?;
         let mut active_tunnel = self
@@ -621,23 +643,17 @@ impl DesktopState {
         remote_gateway::resolve_remote_tls_fingerprint(&mut request, &gateway_url)?;
         let target = remote_gateway::dashboard_url(&gateway_url)?;
         let script = native_auth_initialization_script(&target, &gateway_url, &request)?;
-        remote_gateway::save_config_at(&remote_gateway::config_path()?, &request, &gateway_url)?;
+        remote_gateway::save_config_at(
+            &remote_gateway::config_path()?,
+            &request,
+            &gateway_url,
+            source,
+        )?;
         *active_tunnel = tunnel;
         drop(active_tunnel);
 
-        app.state::<gateway_ws::GatewayClient>().configure(
-            app,
-            gateway_ws::GatewayWsConfig::new(
-                gateway_url.to_string(),
-                request.token.clone(),
-                request.password.clone(),
-                if gateway_url.scheme() == "wss" {
-                    request.tls_fingerprint.clone()
-                } else {
-                    None
-                },
-            ),
-        );
+        app.state::<gateway_ws::GatewayClient>()
+            .configure(app, remote_ws_config(&request, &gateway_url));
         self.navigate_authenticated_remote(app, target, script)?;
         let snapshot = GatewaySnapshot {
             phase: "connected",
@@ -753,15 +769,7 @@ impl DesktopState {
     }
 
     fn update_tray(&self, snapshot: &GatewaySnapshot) {
-        if let Some(tray) = self
-            .inner
-            .tray
-            .lock()
-            .expect("tray mutex poisoned")
-            .as_ref()
-        {
-            tray.update(snapshot);
-        }
+        self.with_tray(|tray| tray.update(snapshot));
     }
 
     fn show_missing_cli(
@@ -810,15 +818,7 @@ impl DesktopState {
             .lock()
             .expect("pending approval mutex poisoned")
             .update(pending);
-        if let Some(tray) = self
-            .inner
-            .tray
-            .lock()
-            .expect("tray mutex poisoned")
-            .as_ref()
-        {
-            tray.update_pending_count(diff.count);
-        }
+        self.with_tray(|tray| tray.update_pending_count(diff.count));
         if !main_window(app).is_ok_and(|window| matches!(window.is_focused(), Ok(false))) {
             return;
         }

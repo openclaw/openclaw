@@ -1,6 +1,7 @@
 // Browser tests cover agent.shared plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { BrowserProfileUnavailableError, toBrowserErrorResponse } from "../errors.js";
+import * as navigationGuard from "../navigation-guard.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import "../../test-support/browser-security.mock.js";
 import {
@@ -173,6 +174,32 @@ describe("browser route shared helpers", () => {
           targetId: "tab-1",
         }),
       ).resolves.toBeUndefined();
+    });
+
+    it("propagates cancelled URL verification instead of returning a redacted URL", async () => {
+      const controller = new AbortController();
+      const reason = new Error("browser navigation verification deadline expired");
+      const guard = vi
+        .spyOn(navigationGuard, "assertBrowserNavigationResultAllowed")
+        .mockImplementationOnce(async () => {
+          controller.abort(reason);
+          throw reason;
+        });
+      try {
+        await expect(
+          resolveSafeRouteTabUrl({
+            ctx: routeContext() as never,
+            profileCtx: profileContext([
+              { targetId: "tab-1", url: "https://example.com/current" },
+            ]) as never,
+            targetId: "tab-1",
+            signal: controller.signal,
+          }),
+        ).rejects.toBe(reason);
+        expect(guard).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+      } finally {
+        guard.mockRestore();
+      }
     });
   });
 

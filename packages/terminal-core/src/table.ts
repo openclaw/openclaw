@@ -1,5 +1,5 @@
 import { iterateAnsiSegments } from "./ansi-sequences.js";
-import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
+import { iterateGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { createDisplayStringFormatter } from "./display-string.js";
 import { sanitizeTerminalText } from "./safe-text.js";
 
@@ -251,23 +251,14 @@ function wrapLine(text: string, width: number): string[] {
     ch === " " || ch === "/" || ch === "-" || ch === "_" || ch === ".";
   let skipNextLf = false;
   let hasChar = false;
+  let logicalLineHasOutput = false;
 
   const buf: AnsiToken[] = [];
   let bufVisible = 0;
   let lastBreakIndex: number | null = null;
 
-  const pushLine = (value: string) => {
-    const cleaned = value.replace(/\s+$/, "");
-    if (visibleWidth(cleaned) === 0) {
-      return;
-    }
-    lines.push(cleaned);
-  };
-
+  // A soft wrap can empty the buffer before a newline without creating a blank logical line.
   const flushAt = (breakAt: number | null) => {
-    if (buf.length === 0) {
-      return;
-    }
     // Keep the suffix in its buffer: long zero-width runs can exceed the argument
     // limit of a spread-based copy even when their visible width is small.
     const left = breakAt == null || breakAt <= 0 ? buf : buf.splice(0, breakAt);
@@ -296,7 +287,10 @@ function wrapLine(text: string, width: number): string[] {
     const openOsc8 = activeOsc8 ? `${ESC}]8;${activeOsc8.params};${activeOsc8.uri}${BEL}` : "";
     const closeSgr = activeSgr.map((state) => state.close).join("");
 
-    pushLine(`${content.join("")}${closeOsc8}${closeSgr}`);
+    if (bufVisible > 0 || !logicalLineHasOutput) {
+      lines.push(`${content.join("")}${closeOsc8}${closeSgr}`.trimEnd());
+      logicalLineHasOutput = true;
+    }
     if (breakAt == null || breakAt <= 0) {
       buf.length = 0;
       if (openOsc8) {
@@ -338,9 +332,10 @@ function wrapLine(text: string, width: number): string[] {
         return;
       }
       // CRLF is one grapheme; separated CR/LF may retain intervening ANSI controls.
-      skipNextLf = ch === "\r";
       if (ch === "\n" || ch === "\r" || ch === "\r\n") {
+        skipNextLf = ch === "\r";
         flushAt(buf.length);
+        logicalLineHasOutput = false;
         return;
       }
       // Soft-wrap remainders reuse the width measured when each token entered the buffer.
@@ -358,8 +353,12 @@ function wrapLine(text: string, width: number): string[] {
 
     buf.push(token);
     bufVisible += token.width;
-    if (token.kind === "char" && isBreakChar(token.value)) {
-      lastBreakIndex = buf.length;
+    if (token.kind === "char") {
+      // Discarded leading spacing must not interrupt a separated CR/LF pair.
+      skipNextLf = false;
+      if (isBreakChar(token.value)) {
+        lastBreakIndex = buf.length;
+      }
     }
   };
 
@@ -386,7 +385,7 @@ function wrapLine(text: string, width: number): string[] {
       acceptToken({ kind: "ansi", value, width: 0 });
       continue;
     }
-    for (const grapheme of splitGraphemes(value)) {
+    for (const grapheme of iterateGraphemes(value)) {
       acceptToken({ kind: "char", value: grapheme, width: 0 });
     }
   }
@@ -395,7 +394,10 @@ function wrapLine(text: string, width: number): string[] {
     return [text];
   }
 
-  flushAt(buf.length);
+  // A trailing newline or reopened style is not another physical row.
+  if (bufVisible > 0) {
+    flushAt(buf.length);
+  }
   return lines.length > 0 ? lines : [""];
 }
 

@@ -246,10 +246,14 @@ suite.define(() => {
         });
 
       const before = await readLayout();
-      expect(before.buttonBottom).toBeNull();
+      const button = page.locator(".chat-scroll-to-bottom");
+      expect(await button.isVisible()).toBe(false);
+      expect(await button.getAttribute("aria-hidden")).toBe("true");
+      expect(await button.evaluate((element: HTMLButtonElement) => element.inert)).toBe(true);
 
       await scrollChatThreadToTop(page);
       await page.getByRole("button", { name: "Scroll to latest" }).waitFor({ timeout: 10_000 });
+      expect(await button.evaluate((element: HTMLButtonElement) => element.inert)).toBe(false);
       const after = await readLayout();
 
       expect(after.threadBottom).toBe(before.threadBottom);

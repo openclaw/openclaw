@@ -1,6 +1,6 @@
 // Synthetic plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applySyntheticConfig, SYNTHETIC_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applySyntheticConnectionConfig, SYNTHETIC_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildSyntheticProvider, SYNTHETIC_MODEL_DISCOVERY } from "./provider-catalog.js";
 
@@ -16,7 +16,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/synthetic",
     manifestAuth: {
       defaultModel: SYNTHETIC_DEFAULT_MODEL_REF,
-      applyConfig: applySyntheticConfig,
+      applyConfig: applySyntheticConnectionConfig,
     },
     catalog: {
       discoveryMode: "strict",

@@ -12,10 +12,16 @@ import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-stat
 import type { UpdateRepairParams } from "../../infra/update-repair-protocol.js";
 import {
   createUpdateRun,
+  finishUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
+import { repairUpdateService } from "./update-command-repair-service.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
+import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 const mocks = vi.hoisted(() => ({
   repair:
@@ -24,7 +30,6 @@ const mocks = vi.hoisted(() => ({
   restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
   restartCommand:
     vi.fn<typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand>(),
-  serving: vi.fn<typeof import("../../infra/update-serving-verification.js").verifyUpdateServing>(),
   healthy: false,
   version: "2026.9.3",
   stop: vi.fn<
@@ -66,9 +71,8 @@ vi.mock("../daemon-cli/restart-health-probe.js", async (importOriginal) => ({
   resolveGatewayRestartProbeContext: async () => ({ config: {} }),
   confirmGatewayReachable: async () => ({ reachable: false }),
 }));
-vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
-  waitForGatewayHealthyRestart: async ({ expectedVersion }: { expectedVersion?: string }) => ({
+vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => {
+  const readHealth = async ({ expectedVersion }: { expectedVersion?: string }) => ({
     gatewayBootId: "repair-boot",
     healthy: mocks.healthy && mocks.version === expectedVersion,
     runtime: { status: mocks.healthy ? "running" : "stopped", pid: 4321 },
@@ -77,9 +81,14 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
     versionMismatch: mocks.version !== expectedVersion,
     portUsage: { status: "free", listeners: [] },
     staleGatewayPids: [],
-  }),
-  waitForGatewayHttpReadiness: mocks.readyz,
-}));
+  });
+  return {
+    ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
+    waitForGatewayHealthyRestart: readHealth,
+    inspectGatewayRestart: readHealth,
+    waitForGatewayHttpReadiness: mocks.readyz,
+  };
+});
 vi.mock("./update-command-service-recovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-recovery.js")>()),
   hasLoadedLaunchdKeepAliveSupervisor: async () => false,
@@ -99,19 +108,11 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => ({
 vi.mock("./update-command-convergence.js", () => ({
   convergeUpdatePlugins: mocks.converge,
 }));
-vi.mock("../../infra/update-serving-verification.js", () => ({
-  verifyUpdateServing: mocks.serving,
-}));
 vi.mock("./update-command-result.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-result.js")>()),
   writeControlPlaneUpdateRestartSentinelBestEffort: async () => {},
   markControlPlaneUpdateRestartSentinelFailureBestEffort: async () => {},
 }));
-import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
-import { repairUpdateService } from "./update-command-repair-service.js";
-import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
-import { verifyUpdatedGateway } from "./update-command-verification.js";
-import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -138,6 +139,7 @@ function fixture(): FinishUpdateParams {
   const env = { ...process.env };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   return {
+    mutationStarted: true,
     result: {
       status: "ok",
       mode: "npm",
@@ -194,28 +196,6 @@ function fixture(): FinishUpdateParams {
 describe("post-activation repair after rollback refusal or failure", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.serving.mockReset().mockImplementation(async (params) => ({
-      status: "verified",
-      receipt: {
-        runId: params.runId,
-        gateway: {
-          bootId: "repair-boot",
-          version: params.expectedVersion,
-          buildId: params.expectedBuildId ?? null,
-        },
-        agentId: "main",
-        sessionKey: "repair-session",
-        sessionId: "repair-session-id",
-        agentRunId: "00000000-0000-4000-8000-000000000002",
-        verifiedAtMs: Date.now(),
-        transcript: {
-          generation: "repair-generation",
-          maxSeq: 2,
-          user: { entryId: "user-entry", seq: 1 },
-          assistant: { entryId: "assistant-entry", seq: 2 },
-        },
-      },
-    }));
     mocks.healthy = false;
     mocks.version = "2026.9.3";
     mocks.readService.mockResolvedValue({
@@ -256,6 +236,47 @@ describe("post-activation repair after rollback refusal or failure", () => {
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
   });
 
+  it("terminalizes a failed final native read after current-core plugin parking", async () => {
+    const params = fixture();
+    params.coreAlreadyCurrent = true;
+    params.preManagedServiceStop!.stopped = false;
+    params.result.status = "skipped";
+    params.result.reason = "already-current";
+    params.result.before = params.result.after;
+    mocks.stop.mockResolvedValue({ ...params.preManagedServiceStop!, stopped: true });
+    mocks.converge.mockImplementation(
+      async (convergence: {
+        result: FinishUpdateParams["result"];
+        beforeDoctor?: () => Promise<void>;
+      }) => {
+        await convergence.beforeDoctor?.();
+        mocks.readService.mockRejectedValueOnce(new Error("final native query failed"));
+        return {
+          resultWithPostUpdate: {
+            ...convergence.result,
+            postUpdate: { plugins: { status: "ok", changed: true } },
+          },
+          postUpdateConfigSnapshot: params.configSnapshot,
+        };
+      },
+    );
+    await expect(finishUpdate(params)).rejects.toMatchObject({
+      exitCode: 1,
+      result: {
+        status: "error",
+        reason: "state-migrated-no-rollback",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "post-update verification", exitCode: 1 }),
+        ]),
+      },
+    });
+    expect(getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env })).toMatchObject({
+      status: "failed",
+    });
+    expect(mocks.stop).toHaveBeenCalledOnce();
+    expect(mocks.restart).not.toHaveBeenCalled();
+  });
+
   it.each([
     { rollback: "blocked", repaired: true },
     { rollback: "blocked", repaired: false },
@@ -265,16 +286,13 @@ describe("post-activation repair after rollback refusal or failure", () => {
     { rollback: "unavailable", repaired: false },
     { rollback: "restored", repaired: true },
     { rollback: "restored", repaired: false },
-    { rollback: "blocked", repaired: false, healthy: true, servingUnavailable: true },
-    { rollback: "restored", repaired: false, healthy: true, servingUnavailable: true },
+    { rollback: "blocked", repaired: false, healthy: true, readinessUnavailable: true },
+    { rollback: "restored", repaired: false, healthy: true, readinessUnavailable: true },
   ])(
-    "$rollback rollback with repaired=$repaired servingUnavailable=$servingUnavailable",
-    async ({ rollback, repaired, healthy, servingUnavailable }) => {
-      if (servingUnavailable) {
-        mocks.serving.mockResolvedValue({
-          status: "unavailable",
-          reason: "persistence-unavailable",
-        });
+    "$rollback rollback with repaired=$repaired readinessUnavailable=$readinessUnavailable",
+    async ({ rollback, repaired, healthy, readinessUnavailable }) => {
+      if (readinessUnavailable) {
+        mocks.readyz.mockResolvedValue({ readyz: 503 });
       }
       const params = fixture();
       if (rollback === "unavailable") {
@@ -419,19 +437,12 @@ describe("post-activation repair after rollback refusal or failure", () => {
           },
         });
       }
-      if (healthy || repaired) {
-        expect(mocks.serving).toHaveBeenCalledWith(
-          expect.objectContaining({
-            runId: run.runId,
-            env: run.env,
-            expectedVersion: rollback === "restored" ? "2026.9.1" : "2026.9.3",
-          }),
-        );
-        expect(mocks.serving.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
-          mocks.restartCommand.mock.invocationCallOrder.at(-1)!,
-        );
-      }
-      expect(mocks.converge).toHaveBeenCalledTimes(repaired && rollback !== "restored" ? 1 : 0);
+      // Plugin writes complete in the original stopped interval even when the
+      // subsequent activation/repair fails; they are never rerun after restore.
+      expect(mocks.converge).toHaveBeenCalledOnce();
+      expect(mocks.converge.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.restart.mock.invocationCallOrder[0]!,
+      );
       expect(mocks.repair).toHaveBeenCalledOnce();
       if (rollback === "restored") {
         expect(completeRecovery).toHaveBeenCalled();
@@ -470,7 +481,6 @@ describe("post-activation repair after rollback refusal or failure", () => {
                 serviceRunning: true,
                 versionMatch: true,
                 readyz: true,
-                inferenceProbe: "passed",
               },
             }
           : {}),
@@ -500,6 +510,8 @@ describe("post-activation repair after rollback refusal or failure", () => {
         command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
         definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
       };
+      state.runtime!.systemd = { managerUid: 2001 };
+      params.preManagedServiceStop!.serviceManagerUid = 2001;
       params.root = root;
       params.result.root = root;
       params.preManagedServiceStop!.serviceUpdateVerdict =
@@ -551,8 +563,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
         });
         mocks.restart.mockImplementation(async (restart) => {
           await startTask();
-          const initial = mocks.restart.mock.calls.length === 1;
-          mocks.healthy = !initial && activated;
+          mocks.healthy = false;
           recordUpdateRunPhase(run.runId, "verifying", undefined, { env: run.env });
           if (!mocks.healthy) {
             restart.onVerificationFailure?.("readyz-unhealthy");
@@ -574,7 +585,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
         });
         mocks.restartCommand.mockImplementation(async () => {
           await startTask();
-          mocks.healthy = true;
+          mocks.healthy = activated;
           return "accepted";
         });
         mocks.repair.mockImplementation(async (repair) => {
@@ -587,23 +598,21 @@ describe("post-activation repair after rollback refusal or failure", () => {
             model: "gpt-5.6-luna",
           });
           const validation = await repair.validate(signal);
-          expect(validation.ok).toBe(true);
-          repair.onEvent?.({ type: "stopped", status: "repaired" });
-          return { status: "repaired", attempts: [], finalValidation: validation };
+          expect(validation.ok).toBe(activated && finalProof);
+          const status = validation.ok ? "repaired" : "unrepaired";
+          repair.onEvent?.({ type: "stopped", status });
+          return { status, attempts: [], finalValidation: validation };
         });
         mocks.converge.mockImplementation(
           async (convergence: {
             result: FinishUpdateParams["result"];
             beforeDoctor?: () => Promise<void>;
           }) => {
-            expect(mocks.healthy).toBe(true);
+            expect(mocks.healthy).toBe(false);
             await convergence.beforeDoctor?.();
             expect(enabled).toBe(false);
             if (!finalProof) {
-              mocks.serving.mockResolvedValue({
-                status: "unavailable",
-                reason: "persistence-unavailable",
-              });
+              mocks.readyz.mockResolvedValue({ readyz: 503 });
             }
             return {
               resultWithPostUpdate: {
@@ -628,19 +637,72 @@ describe("post-activation repair after rollback refusal or failure", () => {
         await originalRecovery.complete();
         expect(mocks.rollback).toHaveBeenCalledOnce();
         expect(mocks.repair).toHaveBeenCalledOnce();
-        expect(mocks.restart).toHaveBeenCalledTimes(2);
+        expect(mocks.restart).toHaveBeenCalledOnce();
         expect(mocks.restartCommand).toHaveBeenCalledOnce();
-        expect(mocks.stop).toHaveBeenCalledTimes(2);
+        expect(mocks.stop).toHaveBeenCalledOnce();
         expect(enabled).toBe(activated && finalProof);
-        if (activated) {
-          expect(mocks.serving).toHaveBeenCalledTimes(2);
-        }
         expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baselineListeners);
       } finally {
         for (const recovery of recoveries) {
           await recovery.complete(false);
         }
       }
+    },
+  );
+
+  it.each(["restart-result", "restart-error", "readiness-result"] as const)(
+    "does not continue repair after authority is lost during %s",
+    async (boundary) => {
+      const params = fixture();
+      const run = params.opts.run!;
+      const onVerified = vi.fn();
+      let settledRun = getUpdateRun(run.runId, { env: run.env });
+      const revoke = () => {
+        finishUpdateRun(run.runId, { status: "failed", reason: "owner-revoked" }, { env: run.env });
+        settledRun = getUpdateRun(run.runId, { env: run.env });
+      };
+      mocks.repair.mockImplementation(async (repair) => {
+        const controller = new AbortController();
+        const initial = await repair.validate(controller.signal);
+        repair.onEvent?.({
+          type: "turn-started",
+          turn: 1,
+          provider: "openai",
+          model: "gpt-4.1",
+        });
+        if (boundary === "readiness-result") {
+          mocks.healthy = true;
+          mocks.readyz.mockImplementationOnce(async () => {
+            revoke();
+            return { readyz: 200 };
+          });
+        } else {
+          mocks.restartCommand.mockImplementationOnce(async () => {
+            revoke();
+            mocks.healthy = true;
+            if (boundary === "restart-error") {
+              throw new Error("Native restart failed after revocation");
+            }
+            return "accepted";
+          });
+        }
+        await expect(repair.validate(controller.signal)).rejects.toThrow(
+          "Repair no longer owns the update attempt.",
+        );
+        return { status: "aborted", attempts: [], finalValidation: initial };
+      });
+      await repairUpdateService({
+        result: { ...params.result, status: "error", reason: "readyz-unhealthy" },
+        root: params.root,
+        env: run.env,
+        opts: params.opts,
+        gatewayPort: 19101,
+        timeoutMs: 1_000,
+        expectedService: params.preManagedServiceStop!,
+        onVerified,
+      });
+      expect(onVerified).not.toHaveBeenCalled();
+      expect(getUpdateRun(run.runId, { env: run.env })).toEqual(settledRun);
     },
   );
 
@@ -696,10 +758,12 @@ describe("post-activation repair after rollback refusal or failure", () => {
         env,
         command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
       };
+      state.runtime!.systemd = { managerUid: 2001 };
       mocks.readService.mockResolvedValue(state);
       mocks.revalidate.mockImplementation(revalidateManagedGatewayServiceAfterUpdate);
       const expectedService = {
         serviceEnv: env,
+        serviceManagerUid: 2001,
         serviceUpdateVerdict: await revalidateManagedGatewayServiceAfterUpdate({ state, root }),
       };
       const controller = new AbortController();

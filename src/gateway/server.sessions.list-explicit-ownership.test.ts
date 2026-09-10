@@ -310,7 +310,7 @@ test("sessions.list never substitutes a later same-owner sentinel after the sele
       .spyOn(sessionUtils, "listSessionsFromStoreAsync")
       .mockImplementationOnce(async (params) => {
         const result = await project(params);
-        expect(params.targetsBySessionKey.get("unknown")).toEqual({
+        expect(params.targetsBySessionKey.get("unknown")).toMatchObject({
           agentId: "main",
           storeTarget: { agentId: "main", storePath: first.storePath },
         });

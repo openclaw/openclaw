@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import {
@@ -923,6 +925,44 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it.each<[string, boolean]>([
+    ["channels.mattermost.accounts.ops.groupPolicy", true],
+    ["channels.mattermost.accounts.support.groupPolicy", true],
+    ["channels.mattermost.accounts.ops.guilds.123.users", true],
+    ["channels.mattermost.accounts.very-long-account-name.groupPolicy", true],
+    ["channels.mattermost.accounts.locked.groupPolicy", false],
+    ["channels.mattermost.accounts.ops.token", false],
+    ["channels.mattermost.accounts.ops.guildsBackup", false],
+    ["channels.mattermost.accounts.ops", false],
+    ["channels.mattermost.accounts..groupPolicy", false],
+  ])("honors per-account dynamic policy paths: %s", (path, dynamic) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: mattermostPlugin.id,
+          source: "test",
+          plugin: {
+            ...mattermostPlugin,
+            reload: {
+              configPrefixes: [
+                "channels.mattermost",
+                "channels.mattermost.accounts.very-long-account-name",
+                "channels.mattermost.accounts.locked.groupPolicy",
+              ],
+              noopPrefixes: [
+                "channels.mattermost.accounts.*.groupPolicy",
+                "channels.mattermost.accounts.*.guilds",
+              ],
+            },
+          },
+        },
+      ]),
+    );
+    const plan = buildGatewayReloadPlan([path]);
+    expect(isNoopGatewayReloadPlan(plan)).toBe(dynamic);
+    expect(plan.restartChannels).toEqual(new Set(dynamic ? [] : ["mattermost"]));
+  });
+
   it.each<[OpenClawConfig, OpenClawConfig]>([
     [{}, { messages: { ackReactionScope: "all" } }],
     [{ messages: { ackReactionScope: "all" } }, {}],
@@ -1218,6 +1258,76 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(expectedChannels);
     expect(plan.restartChannelAccounts).toEqual(expectedAccounts);
     expect(isNoopGatewayReloadPlan(plan)).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "inspects unresolved account secrets",
+      inspection: "available",
+      resolves: false,
+      scoped: true,
+    },
+    {
+      label: "promotes failed inspection without falling back to resolution",
+      inspection: "throws",
+      resolves: true,
+      scoped: false,
+    },
+    {
+      label: "resolves accounts when inspection is unavailable",
+      inspection: "absent",
+      resolves: true,
+      scoped: true,
+    },
+    {
+      label: "promotes failed resolution when inspection is unavailable",
+      inspection: "absent",
+      resolves: false,
+      scoped: false,
+    },
+  ])("$label", ({ inspection, resolves, scoped }) => {
+    const plugin: ChannelPlugin = {
+      ...mattermostPlugin,
+      config: {
+        ...mattermostPlugin.config,
+        resolveAccount: () => {
+          if (!resolves) {
+            throw new Error("SecretRef has not been activated");
+          }
+          return {};
+        },
+        ...(inspection === "absent"
+          ? {}
+          : {
+              inspectAccount: () => {
+                if (inspection === "throws") {
+                  throw new Error("Account cannot be inspected");
+                }
+                return { configured: true, botTokenStatus: "configured_unavailable" };
+              },
+            }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "mattermost", plugin, source: "test" }]),
+    );
+    const candidateConfig = {
+      channels: {
+        mattermost: {
+          accounts: {
+            alpha: { botToken: { source: "env", provider: "default", id: "BOT_TOKEN" } },
+            beta: { enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const plan = buildGatewayReloadPlan(["channels.mattermost.accounts.alpha.botToken"], {
+      candidateConfig,
+    });
+    expect(plan.restartChannels).toEqual(new Set(scoped ? [] : ["mattermost"]));
+    expect(plan.restartChannelAccounts).toEqual(
+      new Map(scoped ? [["mattermost", new Set(["alpha"])]] : []),
+    );
   });
 
   it("restarts every channel whose config prefix matches", () => {
@@ -1611,11 +1721,7 @@ function createReloaderHarness(
       }
     };
   });
-  const log = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+  const log = createInfoWarnErrorLogger();
   const initialConfig = options.initialConfig ?? { gateway: { reload: {} } };
   const reloader = startGatewayConfigReloader({
     testDebounceMs: 0,
@@ -1732,10 +1838,7 @@ describe("startGatewayConfigReloader include files", () => {
     const initialSnapshot = await configIo.readConfigFileSnapshot();
     expect(initialSnapshot.valid, JSON.stringify(initialSnapshot.issues)).toBe(true);
     const onHotReload = vi.fn(async () => "applied" as const);
-    let signalWatcherReady!: () => void;
-    const watcherReady = new Promise<void>((resolve) => {
-      signalWatcherReady = resolve;
-    });
+    const { promise: watcherReady, resolve: signalWatcherReady } = createDeferred();
     const reloader = startGatewayConfigReloader({
       initialConfig: initialSnapshot.config,
       initialCompareConfig: initialSnapshot.sourceConfig,
@@ -2337,10 +2440,7 @@ describe("startGatewayConfigReloader", () => {
   )(
     "settles an in-process $kind receipt after its owner is $outcome",
     async ({ kind, outcome }) => {
-      let releaseReload!: () => void;
-      const reloadGate = new Promise<void>((resolve) => {
-        releaseReload = resolve;
-      });
+      const { promise: reloadGate, resolve: releaseReload } = createDeferred();
       const finishReload = async () => {
         await reloadGate;
         if (outcome === "rejected") {
@@ -2413,14 +2513,8 @@ describe("startGatewayConfigReloader", () => {
     setRuntimeConfigSnapshot(initialConfig, initialConfig);
     initializePublishedConfigRuntimeEnv(initialConfig);
 
-    let releaseHotReload!: () => void;
-    const hotReloadGate = new Promise<void>((resolve) => {
-      releaseHotReload = resolve;
-    });
-    let markHotReloadStarted!: () => void;
-    const hotReloadStarted = new Promise<void>((resolve) => {
-      markHotReloadStarted = resolve;
-    });
+    const { promise: hotReloadGate, resolve: releaseHotReload } = createDeferred();
+    const { promise: hotReloadStarted, resolve: markHotReloadStarted } = createDeferred();
     const onHotReload = vi.fn(
       async (
         plan: GatewayReloadPlan,
@@ -3055,14 +3149,8 @@ describe("startGatewayConfigReloader", () => {
             hash: "external-b",
           }),
         );
-      let markStarted: (() => void) | undefined;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
-      let releaseA: (() => void) | undefined;
-      const blocked = new Promise<void>((resolve) => {
-        releaseA = resolve;
-      });
+      const { promise: started, resolve: markStarted } = createDeferred();
+      const { promise: blocked, resolve: releaseA } = createDeferred();
       const publishA = async (
         _plan: GatewayReloadPlan,
         _nextConfig: OpenClawConfig,
@@ -3122,14 +3210,8 @@ describe("startGatewayConfigReloader", () => {
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValueOnce(makeSnapshot({ config: configA, hash: "post-commit-a" }))
       .mockResolvedValueOnce(makeSnapshot({ config: initialConfig, hash: "reverse-b" }));
-    let recordCommitted: (() => void) | undefined;
-    const committed = new Promise<void>((resolve) => {
-      recordCommitted = resolve;
-    });
-    let releaseTail = () => {};
-    const tailGate = new Promise<void>((resolve) => {
-      releaseTail = resolve;
-    });
+    const { promise: committed, resolve: recordCommitted } = createDeferred();
+    const { promise: tailGate, resolve: releaseTail } = createDeferred();
     const onHotReload = vi.fn(
       async (
         plan: GatewayReloadPlan,
@@ -3318,14 +3400,8 @@ describe("startGatewayConfigReloader", () => {
           hash: "restart-invalid-b",
         }),
       );
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    let releaseA: (() => void) | undefined;
-    const blocked = new Promise<void>((resolve) => {
-      releaseA = resolve;
-    });
+    const { promise: started, resolve: markStarted } = createDeferred();
+    const { promise: blocked, resolve: releaseA } = createDeferred();
     const restartRequests: OpenClawConfig[] = [];
     const harness = createReloaderHarness(readSnapshot, {
       initialConfig,
@@ -3392,14 +3468,8 @@ describe("startGatewayConfigReloader", () => {
           hash: "unlink-b",
         }),
       );
-    let markStarted: (() => void) | undefined;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    let releaseA: (() => void) | undefined;
-    const blocked = new Promise<void>((resolve) => {
-      releaseA = resolve;
-    });
+    const { promise: started, resolve: markStarted } = createDeferred();
+    const { promise: blocked, resolve: releaseA } = createDeferred();
     const harness = createReloaderHarness(readSnapshot, {
       initialConfig,
       onHotReload: async (_plan, _nextConfig, ownership) => {
@@ -3457,14 +3527,8 @@ describe("startGatewayConfigReloader", () => {
           hash: "plugin-read-invalid-b",
         }),
       );
-    let markPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      markPluginReadStarted = resolve;
-    });
-    let releasePluginRead: (() => void) | undefined;
-    const pluginReadBlocked = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: markPluginReadStarted } = createDeferred();
+    const { promise: pluginReadBlocked, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       markPluginReadStarted?.();
       await pluginReadBlocked;
@@ -3509,14 +3573,8 @@ describe("startGatewayConfigReloader", () => {
       makeSnapshot({ config: nextConfig, hash: "active-reload" }),
     );
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
-    let markReloadStarted: (() => void) | undefined;
-    const reloadStarted = new Promise<void>((resolve) => {
-      markReloadStarted = resolve;
-    });
-    let finishReload: (() => void) | undefined;
-    const reloadBlocked = new Promise<void>((resolve) => {
-      finishReload = resolve;
-    });
+    const { promise: reloadStarted, resolve: markReloadStarted } = createDeferred();
+    const { promise: reloadBlocked, resolve: finishReload } = createDeferred();
     harness.onHotReload.mockImplementationOnce(async () => {
       markReloadStarted?.();
       await reloadBlocked;
@@ -3780,14 +3838,8 @@ describe("startGatewayConfigReloader", () => {
   );
 
   it("keeps restart preparation inside the accepted config root", async () => {
-    let releaseRestart = () => {};
-    let noteRestartStarted = () => {};
-    const restartStarted = new Promise<void>((resolve) => {
-      noteRestartStarted = resolve;
-    });
-    const restartPending = new Promise<void>((resolve) => {
-      releaseRestart = resolve;
-    });
+    const { promise: restartStarted, resolve: noteRestartStarted } = createDeferred();
+    const { promise: restartPending, resolve: releaseRestart } = createDeferred();
     const initialConfig: OpenClawConfig = {
       gateway: { reload: {}, port: 18789 },
     };
@@ -4382,10 +4434,7 @@ describe("startGatewayConfigReloader", () => {
       env: targetEnv,
       previousOwnedEnv: { [envKey]: "old" },
     });
-    let releaseRestart = () => {};
-    const restartGate = new Promise<void>((resolve) => {
-      releaseRestart = resolve;
-    });
+    const { promise: restartGate, resolve: releaseRestart } = createDeferred();
     const harness = createReloaderHarness(
       vi.fn(async () => makeSnapshot({ config: initialConfig, hash: "superseding-env" })),
       {
@@ -4515,14 +4564,8 @@ describe("startGatewayConfigReloader", () => {
     },
   ])("preserves slow in-process $label intent across its watcher echo", async (testCase) => {
     const hash = `slow-${testCase.label}`;
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -4570,14 +4613,8 @@ describe("startGatewayConfigReloader", () => {
     const initialConfig = {
       gateway: { reload: {} },
     } satisfies OpenClawConfig;
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -4972,14 +5009,8 @@ describe("startGatewayConfigReloader", () => {
         auth: { mode: "token" as const, token: "resolved-replay-token" },
       },
     } satisfies OpenClawConfig;
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -5042,14 +5073,8 @@ describe("startGatewayConfigReloader", () => {
   });
 
   it("preserves the newest pending write when a watcher supersedes a slow write", async () => {
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -5088,14 +5113,8 @@ describe("startGatewayConfigReloader", () => {
     emitWatcherEcho: boolean,
     latestMode: "auto" | "none",
   ) => {
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;
@@ -5172,14 +5191,8 @@ describe("startGatewayConfigReloader", () => {
   );
 
   it("preserves a pending restart intent when a newer write arrives during missing-file retry", async () => {
-    let releasePluginRead = () => {};
-    let recordPluginReadStarted: (() => void) | undefined;
-    const pluginReadStarted = new Promise<void>((resolve) => {
-      recordPluginReadStarted = resolve;
-    });
-    const pluginReadGate = new Promise<void>((resolve) => {
-      releasePluginRead = resolve;
-    });
+    const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
+    const { promise: pluginReadGate, resolve: releasePluginRead } = createDeferred();
     const readPluginInstallRecords = vi.fn(async () => {
       recordPluginReadStarted?.();
       await pluginReadGate;

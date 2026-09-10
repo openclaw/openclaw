@@ -63,29 +63,31 @@ Keep each agent's workspace path explicit when retaining older directories. Befo
 
 ## Workspace file map
 
+Use **Settings → Agents → Files** in the Control UI to edit these files. **Preview** shows the current draft; **Edit** returns to the editor so you can continue typing, while **Close** returns to **Preview**.
+
 Standard files OpenClaw expects inside the workspace:
 
 <AccordionGroup>
   <Accordion title="AGENTS.md - operating instructions">
-    Operating instructions for the agent and how it should use memory. Loaded at the start of every session. Good place for rules, priorities, and "how to behave" details.
+    Operating instructions for the agent and how it should use memory. Loaded at the start of every session. Good place for rules, priorities, and "how to behave" details. Template: [AGENTS.md](/reference/templates/AGENTS).
   </Accordion>
   <Accordion title="SOUL.md - persona and tone">
     Persona, tone, and boundaries. Loaded every session. Guide: [SOUL.md personality guide](/concepts/soul).
   </Accordion>
   <Accordion title="USER.md - directive-based user model (optional)">
-    Stable preferences, communication style, relationships, and active-project context. Write entries as dated active or superseded directives. Loaded every session with a separate 4,000-character budget. See [User model](/concepts/user-model).
+    Stable preferences, communication style, relationships, and active-project context. Write entries as dated active or superseded directives. Loaded every session with a separate 4,000-character budget. See [User model](/concepts/user-model). Template: [USER.md](/reference/templates/USER).
   </Accordion>
   <Accordion title="IDENTITY.md - name, vibe, emoji">
-    The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual.
+    The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual. Template: [IDENTITY.md](/reference/templates/IDENTITY).
   </Accordion>
   <Accordion title="AGENTS.md Tools section - local tool conventions">
-    The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance.
+    The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance. Template: [AGENTS.md Tools section](/reference/templates/AGENTS#tools).
   </Accordion>
   <Accordion title="BOOT.md - startup checklist">
-    Optional startup checklist run on Gateway startup when the [boot-md hook](/automation/hooks#boot-md) is enabled. Enabling a different internal hook does not enable `boot-md`. Keep it short; use the message tool for outbound sends.
+    Optional startup checklist run on Gateway startup when the [boot-md hook](/automation/hooks/bundled-hooks#boot-md) is enabled. Enabling a different internal hook does not enable `boot-md`. Keep it short; use the message tool for outbound sends. Template: [BOOT.md](/reference/templates/BOOT).
   </Accordion>
   <Accordion title="BOOTSTRAP.md - first-run ritual">
-    One-time first-run ritual. Only created for a brand-new workspace. Delete it after the ritual is complete.
+    One-time first-run ritual. Only created for a brand-new workspace. Delete it after the ritual is complete. Template: [BOOTSTRAP.md](/reference/templates/BOOTSTRAP).
   </Accordion>
   <Accordion title="memory/YYYY-MM-DD.md - daily memory log">
     Daily memory log (one file per day). Recommended to read today + yesterday on session start.
@@ -108,8 +110,7 @@ These live under `~/.openclaw/` and should NOT be committed to the workspace rep
 
 - `~/.openclaw/openclaw.json` (config)
 - `~/.openclaw/state/openclaw.sqlite` (shared workspace setup state and attestations)
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (model auth profiles, routing state, standing intents, and other agent-scoped durability)
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (session rows, transcripts, and per-agent runtime state)
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (model auth profiles, routing state, standing intents, session rows, transcripts, memory index state, and other per-agent runtime durability)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
 - `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
 - `~/.openclaw/agents/<agentId>/sessions/` (legacy migration sources and archive/support artifacts)
@@ -237,7 +238,11 @@ Suggested `.gitignore` starter:
 
 ## Related
 
+- [Backups](/install/backups) - archives, per-database snapshots, scheduling, and offsite copies of state and workspace
+- [Bootstrapping](/start/bootstrapping) - the first-run ritual that seeds a new workspace and its identity files
+- [Default AGENTS.md](/reference/AGENTS.default) - the default agent instructions and skills roster placed in the workspace
 - [Heartbeat](/gateway/heartbeat) - heartbeat monitors and cron scratch
 - [Sandboxing](/gateway/sandboxing) - workspace access in sandboxed environments
 - [Session](/concepts/session) - session storage paths
 - [Standing orders](/automation/standing-orders) - persistent instructions in workspace files
+- [System prompt](/concepts/system-prompt) - where workspace files are injected into the prompt

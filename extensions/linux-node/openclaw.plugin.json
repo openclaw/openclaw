@@ -1,5 +1,6 @@
 {
   "id": "linux-node",
+  "categories": ["runtime"],
   "activation": {
     "onStartup": true
   },

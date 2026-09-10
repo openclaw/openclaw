@@ -77,6 +77,21 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
     }
   });
 
+  it("names the doctor repair path when a canonical index is missing", () => {
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      database.exec("DROP INDEX idx_children_parent;");
+
+      // Operators hit this throw as gateway startup failure text, so it must
+      // name the repair owner instead of dead-ending on the drift detail.
+      expect(() => assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA)).toThrow(
+        /missing or drifted index idx_children_parent; run openclaw doctor --fix to repair it\./,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts an extra non-unique index on a canonical table", () => {
     const database = createDatabase(CANONICAL_SCHEMA);
     try {
