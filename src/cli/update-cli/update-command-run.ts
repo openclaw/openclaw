@@ -5,7 +5,7 @@ import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatExternalSupervisorUpdateRequired,
@@ -92,18 +92,20 @@ async function resolveUpdateCommandAdmissionEnv(params: {
     !env[UPDATE_RUN_ID_ENV] &&
     isGatewayServiceManagementAllowedForUpdate(env)
   ) {
-    // Use the service owner's affirmative absence proof without loading native
-    // units or treating unavailable ownership as permission to write caller state.
-    const { command } = await readGatewayServiceState(resolveGatewayService(), {
-      env,
-      requireEffective: true,
-      requireLoadedCommand: true,
-    }).catch((cause: unknown) => {
-      throw new GatewayServiceUpdateOwnershipError(
-        "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
-        cause,
-      );
-    });
+    // Admission needs only the command owner. Leave runtime/status inspection to
+    // the safety preflight, after persisted service selectors have been validated.
+    const service = resolveGatewayService();
+    const absent = await service.isAbsent?.({ env }).catch(() => false);
+    const command = absent
+      ? null
+      : await service
+          .readCommand(env, { requireEffective: true, requireLoaded: true })
+          .catch((cause: unknown) => {
+            throw new GatewayServiceUpdateOwnershipError(
+              "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
+              cause,
+            );
+          });
     if (command) {
       const usesRoot = await gatewayServiceCommandUsesRoot({ root: params.root, command });
       if (usesRoot === null) {
