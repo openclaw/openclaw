@@ -31,6 +31,7 @@ import {
   isStagedInputPath,
   stagedInputDirectoriesFromEntries,
 } from "../media/staged-inputs.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import {
   boundedWorkspaceTransferChunks,
   readWorkspaceTransferBody as readResponseBody,
@@ -190,29 +191,13 @@ function workspacePath(root: string, relative: string): string {
   return candidate;
 }
 
-const workspaceTransferQueues = new Map<string, Promise<void>>();
+const workspaceTransferQueue = new KeyedAsyncQueue();
 
-export async function serializeNodeWorkerWorkspace<T>(
+export function serializeNodeWorkerWorkspace<T>(
   workspaceDir: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  const key = path.resolve(workspaceDir);
-  const previous = workspaceTransferQueues.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const queued = previous.then(() => current);
-  workspaceTransferQueues.set(key, queued);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    release();
-    if (workspaceTransferQueues.get(key) === queued) {
-      workspaceTransferQueues.delete(key);
-    }
-  }
+  return workspaceTransferQueue.enqueue(path.resolve(workspaceDir), operation);
 }
 
 async function downloadWorkspace(params: {
