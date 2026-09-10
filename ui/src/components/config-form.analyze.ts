@@ -613,16 +613,26 @@ function normalizeUnion(
     const booleanBranch = remaining.length === 1 ? remaining[0] : undefined;
     const plainBooleanBranch =
       booleanBranch?.type === "boolean" && Object.keys(booleanBranch).length === 1;
-    if (
-      !plainBooleanBranch ||
-      literals.includes("true") ||
-      literals.includes("false") ||
-      (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
-    ) {
-      return null;
+    // A single plain scalar branch (string/number/integer) renders as a text
+    // input — the renderer already handles mixed primitives, and zod still
+    // accepts the literal value on save. Pass it through instead of bailing
+    // to Raw mode (issue #143646: cron.sessionRetention).
+    const plainScalarBranch =
+      remaining.length === 1 &&
+      ["string", "number", "integer"].includes(String(booleanBranch?.type)) &&
+      Object.keys(booleanBranch ?? {}).length === 1;
+    if (!plainScalarBranch) {
+      if (
+        !plainBooleanBranch ||
+        literals.includes("true") ||
+        literals.includes("false") ||
+        (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
+      ) {
+        return null;
+      }
+      remaining.pop();
+      literals.unshift(true, false);
     }
-    remaining.pop();
-    literals.unshift(true, false);
   }
 
   if (literals.length > 0 && remaining.length === 0) {
