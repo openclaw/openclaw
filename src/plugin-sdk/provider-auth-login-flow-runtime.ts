@@ -7,6 +7,7 @@ import type {
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { ProviderAuthConfigApplyError } from "../shared/provider-auth-result.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import type { RuntimeEnv } from "./runtime-env.js";
 
@@ -14,6 +15,7 @@ export type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
+export { ProviderAuthConfigApplyError };
 
 type ProviderAuthLoginFlowRuntime = typeof import("../commands/models/auth.js");
 type RunModelsAuthLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
@@ -170,6 +172,14 @@ function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResu
   };
   const providerId = parseRequiredString(result.providerId, "provider id");
   const methodId = parseRequiredString(result.methodId, "method id");
+  const authRefresh = result.authRefresh;
+  if (
+    authRefresh !== "refreshed" &&
+    authRefresh !== "gateway-rejected" &&
+    authRefresh !== "gateway-unreachable"
+  ) {
+    throw new Error("Provider login returned an invalid auth refresh outcome.");
+  }
   const profiles = result.profiles.map((profile): ModelsAuthLoginFlowResult["profiles"][number] => {
     if (!profile || typeof profile !== "object") {
       throw new Error("Provider login returned an invalid profile.");
@@ -194,6 +204,7 @@ function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResu
   return {
     providerId,
     methodId,
+    authRefresh,
     ...(defaultModel ? { defaultModel } : {}),
     profiles,
   };
@@ -219,6 +230,7 @@ async function runCodexDeviceLoginFlow(params: {
     config: params.config,
     runtime: params.runtime,
     signal: params.signal,
+    beforePersistentEffect: () => params.signal?.throwIfAborted(),
     prompter: buildCodexDeviceLoginPrompter({
       sendMessage: params.sendMessage,
       sendDeviceCode: params.sendDeviceCode,
@@ -239,4 +251,25 @@ export const codexChannelLoginRuntime = {
   reserveFlow: reserveCodexLoginFlow,
   releaseFlow: releaseCodexLoginFlow,
   runDeviceLoginFlow: runCodexDeviceLoginFlow,
+  formatCompletion: (
+    authRefresh: ModelsAuthLoginFlowResult["authRefresh"],
+    sessionSwitchFailed = false,
+  ): string => {
+    const sessionFailure =
+      "this session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.";
+    if (authRefresh === "refreshed") {
+      return sessionSwitchFailed
+        ? `Codex login completed, but ${sessionFailure}`
+        : "Codex login complete. Try your request again now.";
+    }
+    const message =
+      authRefresh === "gateway-rejected"
+        ? "Codex credentials saved, but the Gateway could not apply the auth update. Check the Gateway logs, restart the Gateway, then use /models."
+        : "Codex credentials saved, but the Gateway could not be reached to apply them. Restart the Gateway, then use /models.";
+    return sessionSwitchFailed ? `${message} Also, ${sessionFailure}` : message;
+  },
+  formatFailure: (error: unknown): string =>
+    error instanceof ProviderAuthConfigApplyError
+      ? "Codex credentials saved, but provider settings could not be applied. Review the provider settings and check the Gateway logs before trying again."
+      : "Codex login did not complete. Send `/login codex` to request a new code.",
 };

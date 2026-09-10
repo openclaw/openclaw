@@ -135,8 +135,6 @@ export async function executeTelegramLoginCommand(params: {
   // Device-code delivery releases Telegram's serialized chat lane. The
   // reservation and account signal still own polling through completion.
   const completion = (async () => {
-    const sessionSwitchFailedMessage =
-      "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.";
     let terminalMessage: string;
     const loginFlow =
       dispatch.telegramDeps.runModelsAuthLoginFlow ??
@@ -170,10 +168,8 @@ export async function executeTelegramLoginCommand(params: {
       const nextProfileId = loginResult.profiles.find(
         (profile) => profile.provider === loginProvider,
       )?.profileId;
-      terminalMessage = "Codex login complete. Try your request again now.";
-      if (!nextProfileId) {
-        terminalMessage = sessionSwitchFailedMessage;
-      } else {
+      let sessionSwitchFailed = !nextProfileId;
+      if (nextProfileId) {
         const storePath = resolveStorePath(dispatch.runtimeCfg.session?.store, {
           agentId: dispatch.route.agentId,
         });
@@ -228,7 +224,7 @@ export async function executeTelegramLoginCommand(params: {
               persisted.authProfileOverrideSource !== "user" ||
               persisted.authProfileOverrideCompactionCount !== undefined)
           ) {
-            terminalMessage = sessionSwitchFailedMessage;
+            sessionSwitchFailed = true;
           }
         } catch (error) {
           flowSignal.throwIfAborted();
@@ -239,15 +235,19 @@ export async function executeTelegramLoginCommand(params: {
               )}`,
             ),
           );
-          terminalMessage = sessionSwitchFailedMessage;
+          sessionSwitchFailed = true;
         }
       }
+      terminalMessage = codexChannelLoginRuntime.formatCompletion(
+        loginResult.authRefresh,
+        sessionSwitchFailed,
+      );
     } catch (error) {
       if (flowSignal.aborted) {
         return;
       }
       dispatch.runtime.error?.(danger(`telegram /login codex failed: ${String(error)}`));
-      terminalMessage = "Codex login did not complete. Send `/login codex` to request a new code.";
+      terminalMessage = codexChannelLoginRuntime.formatFailure(error);
     }
     if (flowSignal.aborted) {
       return;

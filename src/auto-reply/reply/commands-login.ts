@@ -21,10 +21,6 @@ const activeCodexLoginFlows = codexChannelLoginRuntime.createFlowRegistry();
 
 type RunLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
 
-const LOGIN_COMPLETE_MESSAGE = "Codex login complete. Try your request again now.";
-const LOGIN_SESSION_SWITCH_FAILED_MESSAGE =
-  "Codex login completed, but this session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.";
-
 function parseLoginCommand(commandBodyNormalized: string): { providerInput: string } | null {
   const match = commandBodyNormalized.trim().match(/^\/login(?:\s+(.+))?$/u);
   if (!match) {
@@ -257,18 +253,20 @@ async function runChannelCodexLogin(params: {
       (profile) => profile.provider === params.provider,
     )?.profileId;
     if (!nextProfileId) {
-      return { text: LOGIN_SESSION_SWITCH_FAILED_MESSAGE };
+      return { text: codexChannelLoginRuntime.formatCompletion(loginResult.authRefresh, true) };
     }
     const switchResult = await switchLoginSessionProfile({
       commandParams: params.commandParams,
       nextProfileId,
     });
     return {
-      text:
-        switchResult === "failed" ? LOGIN_SESSION_SWITCH_FAILED_MESSAGE : LOGIN_COMPLETE_MESSAGE,
+      text: codexChannelLoginRuntime.formatCompletion(
+        loginResult.authRefresh,
+        switchResult === "failed",
+      ),
     };
-  } catch {
-    return { text: "Codex login did not complete. Send `/login codex` to request a new code." };
+  } catch (error) {
+    return { text: codexChannelLoginRuntime.formatFailure(error) };
   } finally {
     codexChannelLoginRuntime.releaseFlow({
       flows: activeCodexLoginFlows,

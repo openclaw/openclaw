@@ -59,6 +59,7 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
@@ -67,7 +68,7 @@ import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
-import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
+import { refreshRunningGatewayAuthState, type ModelAuthRefreshOutcome } from "./auth-refresh.js";
 import {
   loadValidConfigSnapshotOrThrow,
   resolveModelsTargetAgent,
@@ -423,7 +424,7 @@ async function persistProviderAuthResult(params: {
   setDefault?: boolean;
   env?: NodeJS.ProcessEnv;
   beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<ProviderAuthResult["profiles"]> {
+}): Promise<{ profiles: ProviderAuthResult["profiles"]; authRefresh: ModelAuthRefreshOutcome }> {
   const defaultModel = params.result.defaultModel
     ? normalizeAgentModelRefForConfig(params.result.defaultModel)
     : undefined;
@@ -503,10 +504,7 @@ async function persistProviderAuthResult(params: {
       if (persistedProfiles.length === 0) {
         throw error;
       }
-      throw new Error(
-        `Credentials saved, but provider settings could not be applied: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error },
-      );
+      throw new ProviderAuthConfigApplyError(error);
     });
     if (defaultModel) {
       const repaired = await repairCodexRuntimePluginInstallForModelSelection({
@@ -524,7 +522,7 @@ async function persistProviderAuthResult(params: {
     logConfigUpdated(params.runtime);
   }
 
-  await refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
+  const authRefresh = await refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
 
   for (const profile of persistedProfiles) {
     params.runtime.log(
@@ -541,7 +539,7 @@ async function persistProviderAuthResult(params: {
   if (params.result.notes && params.result.notes.length > 0) {
     await params.prompter.note(params.result.notes.join("\n"), "Provider notes");
   }
-  return persistedProfiles;
+  return { profiles: persistedProfiles, authRefresh };
 }
 
 function resolveConfiguredAuthSelectionForProvider(
@@ -607,7 +605,11 @@ async function runProviderAuthMethod(params: {
   signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
   beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<{ result: ProviderAuthResult; profiles: ProviderAuthResult["profiles"] }> {
+}): Promise<{
+  result: ProviderAuthResult;
+  profiles: ProviderAuthResult["profiles"];
+  authRefresh: ModelAuthRefreshOutcome;
+}> {
   params.signal?.throwIfAborted();
   const result = await params.method.run({
     config: params.config,
@@ -635,7 +637,7 @@ async function runProviderAuthMethod(params: {
     requestedProfileId: params.profileId,
   });
 
-  const persistedProfiles = await persistProviderAuthResult({
+  const { profiles: persistedProfiles, authRefresh } = await persistProviderAuthResult({
     result,
     profiles,
     config: params.config,
@@ -648,7 +650,7 @@ async function runProviderAuthMethod(params: {
     env: params.env ?? process.env,
     beforePersistentEffect: params.beforePersistentEffect,
   });
-  return { result, profiles: persistedProfiles };
+  return { result, profiles: persistedProfiles, authRefresh };
 }
 
 /** Runs an interactive provider setup-token auth flow. */
@@ -962,6 +964,7 @@ type LoginOptions = {
 export type ModelsAuthLoginFlowResult = {
   providerId: string;
   methodId: string;
+  authRefresh: ModelAuthRefreshOutcome;
   defaultModel?: string;
   imported?: boolean;
   profiles: Array<{
@@ -1130,7 +1133,11 @@ export async function runModelsAuthLoginFlowCore(
       provider: imported.provider,
       profileId: imported.profileId,
     });
-    await refreshRunningGatewayAuthState(context.agentId, "login", opts.runtime);
+    const authRefresh = await refreshRunningGatewayAuthState(
+      context.agentId,
+      "login",
+      opts.runtime,
+    );
     if (imported.configUpdated) {
       logConfigUpdated(opts.runtime);
     }
@@ -1140,6 +1147,7 @@ export async function runModelsAuthLoginFlowCore(
     return {
       providerId: selectedProvider.id,
       methodId: chosenMethod.id,
+      authRefresh,
       imported: true,
       profiles: [
         { profileId: imported.profileId, provider: imported.provider, mode: imported.mode },
@@ -1181,7 +1189,7 @@ export async function runModelsAuthLoginFlowCore(
     await refreshRunningGatewayAuthState(context.agentId, "logout", opts.runtime);
   }
 
-  const { result, profiles } = await runProviderAuthMethod({
+  const { result, profiles, authRefresh } = await runProviderAuthMethod({
     config: context.config,
     configSnapshot: context.configSnapshot,
     agentId: context.agentId,
@@ -1203,6 +1211,7 @@ export async function runModelsAuthLoginFlowCore(
   return {
     providerId: selectedProvider.id,
     methodId: chosenMethod.id,
+    authRefresh,
     ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
     profiles: profiles.map((profile) => ({
       profileId: profile.profileId,

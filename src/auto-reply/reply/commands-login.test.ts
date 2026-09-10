@@ -3,6 +3,7 @@ import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
 import type { SessionEntryUpdateOptions } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ProviderAuthConfigApplyError } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
@@ -87,7 +88,7 @@ function buildLoginParams(
   return params;
 }
 
-function mockSuccessfulLoginFlow(profileId = "openai:owner"): void {
+function mockSuccessfulLoginFlow(profileId = "openai:owner", authRefresh = "refreshed"): void {
   runModelsAuthLoginFlowMock.mockImplementation(async (opts: ModelsAuthLoginFlowOptions) => {
     await opts.prompter.note?.(
       "Open https://auth.openai.com/device and enter code ABCD-EFGH. Never share this code.",
@@ -96,6 +97,7 @@ function mockSuccessfulLoginFlow(profileId = "openai:owner"): void {
     return {
       providerId: "openai",
       methodId: "device-code",
+      authRefresh,
       profiles: [{ profileId, provider: "openai", mode: "oauth" }],
     };
   });
@@ -206,6 +208,53 @@ describe("handleLoginCommand", () => {
     },
   );
 
+  it.each([
+    [
+      "gateway-rejected",
+      "Codex credentials saved, but the Gateway could not apply the auth update. Check the Gateway logs, restart the Gateway, then use /models.",
+    ],
+    [
+      "gateway-unreachable",
+      "Codex credentials saved, but the Gateway could not be reached to apply them. Restart the Gateway, then use /models.",
+    ],
+  ])("reports saved credentials when auth refresh is %s", async (outcome, message) => {
+    mockSuccessfulLoginFlow("openai:owner", outcome);
+    const result = await handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
+    expect(result?.reply?.text).toBe(message);
+  });
+
+  it("distinguishes saved credentials from failed provider settings", async () => {
+    runModelsAuthLoginFlowMock.mockRejectedValue(
+      new ProviderAuthConfigApplyError(new Error("config write failed")),
+    );
+    const result = await handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
+    expect(result?.reply?.text).toBe(
+      "Codex credentials saved, but provider settings could not be applied. Review the provider settings and check the Gateway logs before trying again.",
+    );
+  });
+
+  it.each([undefined, "unknown"])("rejects an invalid refresh outcome %s", async (authRefresh) => {
+    runModelsAuthLoginFlowMock.mockResolvedValue({
+      providerId: "openai",
+      methodId: "device-code",
+      authRefresh,
+      profiles: [{ profileId: "openai:owner", provider: "openai", mode: "oauth" }],
+    });
+    const result = await handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
+    expect(result?.reply?.text).toBe(
+      "Codex login did not complete. Send `/login codex` to request a new code.",
+    );
+  });
+
   it("rejects dispatcher-less contexts before starting device-code polling", async () => {
     mockSuccessfulLoginFlow();
 
@@ -293,6 +342,7 @@ describe("handleLoginCommand", () => {
     runModelsAuthLoginFlowMock.mockResolvedValue({
       providerId: "openai",
       methodId: "device-code",
+      authRefresh: "refreshed",
       profiles: [],
     });
 
@@ -310,6 +360,7 @@ describe("handleLoginCommand", () => {
     runModelsAuthLoginFlowMock.mockResolvedValue({
       providerId: "openai",
       methodId: "device-code",
+      authRefresh: "refreshed",
       profiles: [{ profileId: " ", provider: "openai", mode: "oauth" }],
     });
 
@@ -327,6 +378,7 @@ describe("handleLoginCommand", () => {
     runModelsAuthLoginFlowMock.mockResolvedValue({
       providerId: " openai ",
       methodId: " device-code ",
+      authRefresh: "refreshed",
       defaultModel: " openai/gpt-5.4 ",
       profiles: [{ profileId: " openai:owner@example.com ", provider: " openai ", mode: "oauth" }],
     });
@@ -505,6 +557,7 @@ describe("handleLoginCommand", () => {
             resolve({
               providerId: "openai",
               methodId: "device-code",
+              authRefresh: "refreshed",
               profiles: [],
             });
         }),
@@ -554,6 +607,7 @@ describe("handleLoginCommand", () => {
       .mockResolvedValueOnce({
         providerId: "openai",
         methodId: "device-code",
+        authRefresh: "refreshed",
         profiles: [],
       });
 
