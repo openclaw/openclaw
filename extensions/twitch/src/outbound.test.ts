@@ -32,12 +32,6 @@ vi.mock("./send.js", () => ({
   sendMessageTwitchInternal: vi.fn(),
 }));
 
-vi.mock("./utils/twitch.js", () => ({
-  normalizeTwitchChannel: (channel: string) => channel.toLowerCase().replace(/^#/, ""),
-  missingTargetError: (channel: string, hint: string) =>
-    new Error(`Missing target for ${channel}. Provide ${hint}`),
-}));
-
 function assertResolvedTarget(
   result: ReturnType<NonNullable<typeof twitchOutbound.resolveTarget>>,
 ): string {
@@ -294,7 +288,7 @@ describe("outbound", () => {
           mode: "explicit",
           allowFrom: [],
         },
-        "Missing target",
+        "Delivering to Twitch requires target <channel-name>",
       );
     });
 
@@ -306,7 +300,7 @@ describe("outbound", () => {
           mode: "explicit",
           allowFrom: [],
         },
-        "Missing target",
+        "Delivering to Twitch requires target <channel-name>",
       );
     });
 
