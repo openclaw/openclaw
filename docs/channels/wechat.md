@@ -125,7 +125,7 @@ openclaw gateway restart
 ## Sidecar process
 
 The WeChat plugin can run helper work beside the Gateway while it monitors the
-Tencent iLink API. In issue #68451, that helper path exposed a bug in OpenClaw's
+Tencent iLink API. In [issue #68451](https://github.com/openclaw/openclaw/issues/68451), that helper path exposed a bug in OpenClaw's
 generic stale-Gateway cleanup: a child process could try to clean up the parent
 Gateway process, causing restart loops under process managers such as systemd.
 

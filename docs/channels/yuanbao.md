@@ -35,7 +35,7 @@ Requires OpenClaw 2026.4.10 or above. Check with `openclaw --version`; upgrade w
 openclaw channels login --channel yuanbao
 ```
 
-Follow the prompts to enter your App ID and App Secret.
+Follow the prompts to enter your App Key (`appKey`) and App Secret (`appSecret`).
 
 ## Access control
 

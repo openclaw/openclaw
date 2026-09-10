@@ -1,5 +1,5 @@
 ---
-summary: "Install the official WeCom plugin and find its versioned setup documentation"
+summary: "Install the external WeCom plugin and find its versioned setup documentation"
 read_when:
   - You want to connect OpenClaw to WeCom
   - You need the supported WeCom plugin and its setup documentation

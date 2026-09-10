@@ -125,8 +125,14 @@ export const demoMessageAdapter = defineChannelMessageAdapter({
 ```
 
 Only declare capabilities the native transport actually preserves. Cover
-each declared send, receipt, live-preview, and receive-ack capability with
-the contract helpers exported from this subpath.
+each declared capability with the matching contract helper exported from this
+subpath:
+
+- send: `verifyChannelMessageAdapterCapabilityProofs(...)`
+- durable final delivery: `verifyDurableFinalCapabilityProofs(...)`
+- live preview: `verifyChannelMessageLiveCapabilityAdapterProofs(...)` and
+  `verifyChannelMessageLiveFinalizerProofs(...)`
+- receive ack: `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`
 
 ## Outbound echo suppression
 

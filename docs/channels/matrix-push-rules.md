@@ -51,6 +51,14 @@ curl -sS -X POST \
   }'
 ```
 
+    Replace `https://matrix.example.org` with your homeserver base URL and
+    `@alice:example.org` with the recipient's MXID. Export the `access_token`
+    from the response as `USER_ACCESS_TOKEN`; the remaining steps read it:
+
+```bash
+export USER_ACCESS_TOKEN="<access_token from the login response>"
+```
+
   </Step>
 
   <Step title="Verify pushers exist">
