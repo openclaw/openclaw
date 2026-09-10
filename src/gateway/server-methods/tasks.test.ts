@@ -16,6 +16,12 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.js
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  requestHeartbeatAndWait,
+  setHeartbeatWakeHandler,
+  type HeartbeatWakeRequest,
+} from "../../infra/heartbeat-wake.js";
+import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -50,6 +56,16 @@ const mainSessionTaskScope = {
 } as const;
 
 let stateDir: string;
+let clearHeartbeatWakeHandler: (() => void) | undefined;
+const heartbeatWakeRequests: HeartbeatWakeRequest[] = [];
+
+async function flushTaskHandlerWakes() {
+  const result = await requestHeartbeatAndWait(
+    { source: "other", intent: "immediate", reason: "task-handler-test-flush", coalesceMs: 0 },
+    { abortSignal: AbortSignal.timeout(1_000) },
+  );
+  expect(result).toMatchObject({ status: "ran" });
+}
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -63,6 +79,11 @@ beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   resetTaskRegistryForTests();
+  heartbeatWakeRequests.length = 0;
+  clearHeartbeatWakeHandler = setHeartbeatWakeHandler(async (request) => {
+    heartbeatWakeRequests.push(request);
+    return { status: "ran", durationMs: 0 };
+  });
   cancelSessionMock.mockReset();
   setTaskRegistryControlRuntimeForTests({
     cancelActiveCronTaskRun: () => false,
@@ -76,12 +97,21 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  resetTaskRegistryControlRuntimeForTests();
-  resetTaskRegistryForTests();
-  stateDirEnvSnapshot.restore();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  await fs.rm(stateDir, { recursive: true, force: true });
+  try {
+    // Cancellation queues a real session wake. Drain it before disposing its owner
+    // so another non-isolated Gateway fixture cannot consume this task's update.
+    await flushTaskHandlerWakes();
+  } finally {
+    clearHeartbeatWakeHandler?.();
+    clearHeartbeatWakeHandler = undefined;
+    resetSystemEventsForTest();
+    resetTaskRegistryControlRuntimeForTests();
+    resetTaskRegistryForTests();
+    stateDirEnvSnapshot.restore();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
 });
 
 async function getTaskPayload(taskId: string) {
@@ -950,6 +980,14 @@ describe("tasks gateway handlers", () => {
     expect(getTaskById(task.taskId)?.status).toBe("cancelled");
     expect(getTaskById(siblingTask.taskId)?.status).toBe("cancelled");
     expect(getTaskById(siblingTask.taskId)?.error).toBe("operator requested stop");
+    await flushTaskHandlerWakes();
+    expect(heartbeatWakeRequests).toContainEqual(
+      expect.objectContaining({
+        source: "background-task",
+        intent: "immediate",
+        sessionKey: "agent:main:main",
+      }),
+    );
   });
 
   it.each([

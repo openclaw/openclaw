@@ -314,12 +314,36 @@ metadata:
       skills: [{ name: "first", description: "First", content: content("first", "First") }],
     });
     const firstVersion = getSkillsSnapshotVersion();
+    const firstSkill = mergeRemoteNodeSkillEntries([], { canExec: true })[0]!.skill;
+    expect(firstSkill.contentHash).toEqual(expect.any(String));
 
     replaceRemoteNodeSkills({
       nodeId: "node-1",
       skills: [{ name: "first", description: "First", content: content("first", "First") }],
     });
     expect(getSkillsSnapshotVersion()).toBe(firstVersion);
+    expect(mergeRemoteNodeSkillEntries([], { canExec: true })[0]!.skill.contentHash).toBe(
+      firstSkill.contentHash,
+    );
+
+    replaceRemoteNodeSkills({
+      nodeId: "node-1",
+      skills: [
+        {
+          name: "first",
+          description: "First",
+          content: content("first", "First", "# Changed instructions"),
+        },
+      ],
+    });
+    const changedSkill = mergeRemoteNodeSkillEntries([], { canExec: true })[0]!.skill;
+    expect(changedSkill).toMatchObject({
+      name: firstSkill.name,
+      description: firstSkill.description,
+      filePath: firstSkill.filePath,
+    });
+    expect(changedSkill.contentHash).not.toBe(firstSkill.contentHash);
+    expect(getSkillsSnapshotVersion()).toBeGreaterThan(firstVersion);
 
     replaceRemoteNodeSkills({
       nodeId: "node-1",

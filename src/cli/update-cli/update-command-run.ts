@@ -5,7 +5,7 @@ import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
-import { resolveGatewayService } from "../../daemon/service.js";
+import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatExternalSupervisorUpdateRequired,
@@ -92,19 +92,18 @@ async function resolveUpdateCommandAdmissionEnv(params: {
     !env[UPDATE_RUN_ID_ENV] &&
     isGatewayServiceManagementAllowedForUpdate(env)
   ) {
-    // Admission must not load native units or turn unavailable ownership into
-    // an absent service and a write to the caller's unrelated profile.
-    const command = await resolveGatewayService()
-      .readCommand(env, {
-        requireEffective: true,
-        requireLoaded: true,
-      })
-      .catch((cause: unknown) => {
-        throw new GatewayServiceUpdateOwnershipError(
-          "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
-          cause,
-        );
-      });
+    // Use the service owner's affirmative absence proof without loading native
+    // units or treating unavailable ownership as permission to write caller state.
+    const { command } = await readGatewayServiceState(resolveGatewayService(), {
+      env,
+      requireEffective: true,
+      requireLoadedCommand: true,
+    }).catch((cause: unknown) => {
+      throw new GatewayServiceUpdateOwnershipError(
+        "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
+        cause,
+      );
+    });
     if (command) {
       const usesRoot = await gatewayServiceCommandUsesRoot({ root: params.root, command });
       if (usesRoot === null) {

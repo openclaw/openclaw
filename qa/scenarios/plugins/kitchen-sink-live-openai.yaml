@@ -99,6 +99,9 @@ scenario:
         - "http route registration missing or invalid auth: /kitchen-sink/http-route"
         - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
         - "trusted tool policy registration requires id, description, and evaluate()"
+        - invalid widget presenter registration
+        - "worker provider registration missing method: resolveAllocation"
+        - MCP server connection resolver registration missing serverName or resolve
         - memory prompt preparation registration missing prepare function
         - memory prompt supplement registration missing builder
         - model catalog provider registration missing provider

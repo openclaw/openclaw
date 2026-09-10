@@ -70,3 +70,72 @@ describe("Kitchen Sink conformance evidence", () => {
     },
   );
 });
+
+const ADVERSARIAL_CANARIES = [
+  "agent tool result middleware must be a function",
+  'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
+  'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
+  "trusted tool policy registration requires id, description, and evaluate()",
+  "session scheduler job registration requires unique id, sessionKey, and kind",
+  "plugin must declare contracts.tools for: kitchen-sink-tool",
+];
+const PUBLISHED_INVALID_REGISTRATION_DIAGNOSTICS = [
+  "invalid widget presenter registration",
+  "worker provider registration missing method: resolveAllocation",
+  "MCP server connection resolver registration missing serverName or resolve",
+];
+
+async function inspectAdversarialKitchenSink(messages: string[]) {
+  const scenario = readQaScenarioById("kitchen-sink-live-openai");
+  const step = scenario.execution.flow?.steps.at(-1);
+  if (!step) {
+    throw new Error("Kitchen Sink adversarial flow is missing");
+  }
+  return await runLoadedScenarioFlow(scenario.id, {
+    flow: { steps: [step] },
+    api: {
+      env: {
+        gateway: {
+          restartAfterStateMutation: async (
+            mutate: (context: { configPath: string }) => Promise<void>,
+          ) => await mutate({ configPath: "/qa/openclaw.json" }),
+        },
+      },
+      fs: { readFile: async () => "{}", writeFile: async () => undefined },
+      runQaCli: async (_env: unknown, args: string[]) => {
+        expect(args.slice(0, 2)).toEqual(["plugins", "inspect"]);
+        return { diagnostics: messages.map((message) => ({ level: "error", message })) };
+      },
+    },
+  });
+}
+
+describe("Kitchen Sink adversarial evidence", () => {
+  it("accepts published invalid registration probes with every stable canary", async () => {
+    await expect(
+      inspectAdversarialKitchenSink([
+        ...ADVERSARIAL_CANARIES,
+        ...PUBLISHED_INVALID_REGISTRATION_DIAGNOSTICS,
+      ]),
+    ).resolves.toMatchObject({ status: "pass" });
+  });
+
+  it("rejects unknown errors alongside approved adversarial probes", async () => {
+    await expect(
+      inspectAdversarialKitchenSink([
+        ...ADVERSARIAL_CANARIES,
+        ...PUBLISHED_INVALID_REGISTRATION_DIAGNOSTICS,
+        "unexpected plugin registration failure",
+      ]),
+    ).rejects.toThrow("Kitchen Sink adversarial diagnostics contained unapproved messages");
+  });
+
+  it("rejects adversarial probes when a stable diagnostic canary disappears", async () => {
+    await expect(
+      inspectAdversarialKitchenSink([
+        ...ADVERSARIAL_CANARIES.slice(1),
+        ...PUBLISHED_INVALID_REGISTRATION_DIAGNOSTICS,
+      ]),
+    ).rejects.toThrow("Kitchen Sink adversarial diagnostics missing required canaries");
+  });
+});

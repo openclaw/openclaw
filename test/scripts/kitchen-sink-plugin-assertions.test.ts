@@ -28,6 +28,10 @@ const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
 ];
 const FROZEN_MEMORY_EMBEDDING_DIAGNOSTIC =
   "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider";
+const PUBLISHED_INVALID_REGISTRATION_DIAGNOSTICS = [
+  "invalid widget presenter registration",
+  "worker provider registration missing method: resolveAllocation",
+];
 
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -309,28 +313,58 @@ describe("kitchen-sink plugin assertions", () => {
     );
   });
 
-  it("accepts published full-surface installs with stable diagnostic canaries", () => {
-    const result = runAssertInstalled({
-      diagnostics: diagnosticErrors([
-        ...REQUIRED_FULL_DIAGNOSTIC_CANARIES,
-        "memory prompt preparation registration missing prepare function",
-      ]),
-    });
+  it.each(["full", "adversarial"])(
+    "accepts published invalid registration probes in %s mode",
+    (surfaceMode) => {
+      const result = runAssertInstalled({
+        diagnostics: diagnosticErrors([
+          ...REQUIRED_FULL_DIAGNOSTIC_CANARIES,
+          "memory prompt preparation registration missing prepare function",
+          ...PUBLISHED_INVALID_REGISTRATION_DIAGNOSTICS,
+        ]),
+        surfaceMode,
+      });
 
-    expect(result.status).toBe(0);
-  });
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
 
-  it("rejects diagnostics in conformance mode", () => {
-    const result = runAssertInstalled({
-      diagnostics: diagnosticErrors(["plugin must declare contracts.tools for: kitchen-sink-tool"]),
-      surfaceMode: "conformance",
-    });
+  it.each(["conformance", "basic", "unknown"])(
+    "rejects published invalid registration probes in %s mode",
+    (surfaceMode) => {
+      const messages = [
+        "plugin must declare contracts.tools for: kitchen-sink-tool",
+        ...PUBLISHED_INVALID_REGISTRATION_DIAGNOSTICS,
+      ];
+      const result = runAssertInstalled({
+        diagnostics: diagnosticErrors(messages),
+        surfaceMode,
+      });
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "unexpected kitchen-sink diagnostic errors: plugin must declare contracts.tools for: kitchen-sink-tool",
-    );
-  });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        `unexpected kitchen-sink diagnostic errors: ${messages.join(", ")}`,
+      );
+    },
+  );
+
+  it.each(["full", "adversarial"])(
+    "rejects an unknown diagnostic alongside published probes in %s mode",
+    (surfaceMode) => {
+      const message = "unexpected plugin registration failure";
+      const result = runAssertInstalled({
+        diagnostics: diagnosticErrors([
+          message,
+          ...REQUIRED_FULL_DIAGNOSTIC_CANARIES,
+          ...PUBLISHED_INVALID_REGISTRATION_DIAGNOSTICS,
+        ]),
+        surfaceMode,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`unexpected kitchen-sink diagnostic error: ${message}`);
+    },
+  );
 
   it("accepts only the candidate memory diagnostic for an authorized frozen target", () => {
     const result = runAssertInstalled({
