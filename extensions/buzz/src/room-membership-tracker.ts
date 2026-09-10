@@ -363,7 +363,11 @@ export async function createBuzzRoomMembershipTracker(params: {
         if (error === undefined) {
           resolve();
         } else {
-          reject(error);
+          reject(
+            error instanceof Error
+              ? error
+              : new Error("Buzz room membership loading failed", { cause: error }),
+          );
         }
       };
       const onAbort = () =>
