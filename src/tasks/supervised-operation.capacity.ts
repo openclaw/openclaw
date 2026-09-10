@@ -10,7 +10,7 @@ import {
 } from "../node-host/node-worker-process-identity.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { getSupervisedCommandResources } from "./supervised-command-custody.js";
+import { getSupervisedCommandResources } from "./supervised-command-custody.persistence.js";
 import { isSupervisedCommandBootRetired } from "./supervised-command-resources.js";
 import { readExecution } from "./supervised-operation.persistence.js";
 import {

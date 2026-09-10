@@ -2,12 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   assertSupervisedOperationInTransaction,
@@ -34,50 +29,23 @@ import {
   type SupervisedArtifactOwner,
 } from "./supervised-workspace-retention.js";
 import {
+  getSupervisedWorkspaceHead,
+  readSupervisedWorkspaceHeadInTransaction,
+} from "./supervised-workspace-versions.persistence.js";
+import {
   captureSupervisedWorkspace,
   readSupervisedWorkspaceFile,
   type SupervisedWorkspaceSnapshot,
 } from "./supervised-workspace.js";
 
 export { supervisedWorkspaceVersionPath } from "./supervised-workspace-path.js";
+export {
+  getSupervisedWorkspaceHead,
+  readSupervisedWorkspaceHeadInTransaction,
+  resolveSupervisedWorkflowWorkspace,
+} from "./supervised-workspace-versions.persistence.js";
 
 const sql = (db: DatabaseSync) => getNodeSqliteKysely<DB>(db);
-export function readSupervisedWorkspaceHeadInTransaction(
-  db: DatabaseSync,
-  flowId: string,
-  episode: number,
-) {
-  if (!tableExists(db, "task_flow_workspace_heads")) {
-    return undefined;
-  }
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    sql(db)
-      .selectFrom("task_flow_workspace_heads as h")
-      .innerJoin("task_flow_workspace_versions as v", "v.version_id", "h.version_id")
-      .select(["v.version_id", "v.source_hash", "v.byte_count"])
-      .where("h.flow_id", "=", flowId)
-      .where("h.episode", "=", episode),
-  );
-}
-export function getSupervisedWorkspaceHead(flowId: string, episode: number, options: Options = {}) {
-  return readSupervisedWorkflow(
-    (db) => readSupervisedWorkspaceHeadInTransaction(db, flowId, episode),
-    options,
-  );
-}
-export function resolveSupervisedWorkflowWorkspace(
-  contract: SupervisedWorkflowContract,
-  flowId: string,
-  episode: number,
-  options: Options = {},
-) {
-  const head = getSupervisedWorkspaceHead(flowId, episode, options);
-  return {
-    ...contract,
-    workspace: head ? supervisedWorkspaceVersionPath(head.version_id, options) : contract.workspace,
-  };
-}
 
 export async function cloneSupervisedWorkspaceSnapshot(
   contract: SupervisedWorkflowContract,

@@ -9,7 +9,7 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   listSupervisedOperations,
   listSupervisedOperationsInTransaction,
-} from "./supervised-operation.store.js";
+} from "./supervised-operation.recovery.js";
 import type { SupervisedOperation } from "./supervised-operation.types.js";
 import {
   getSupervisedOperatorAcceptance,
@@ -22,12 +22,12 @@ import {
   readSupervisedWorkflowContractInTransaction,
 } from "./supervised-workflow.store.js";
 import type { SupervisedWorkflowProfile } from "./supervised-workflow.types.js";
+import { supervisedWorkspaceVersionPath } from "./supervised-workspace-path.js";
 import {
-  resolveSupervisedWorkflowWorkspace,
-  supervisedWorkspaceVersionPath,
-  readSupervisedWorkspaceHeadInTransaction,
   getSupervisedWorkspaceHead,
-} from "./supervised-workspace-versions.js";
+  readSupervisedWorkspaceHeadInTransaction,
+  resolveSupervisedWorkflowWorkspace,
+} from "./supervised-workspace-versions.persistence.js";
 import { captureSupervisedWorkspace, readSupervisedWorkspaceFile } from "./supervised-workspace.js";
 
 /** Host-only target prepared from a closed attempt's staged immutable candidate.

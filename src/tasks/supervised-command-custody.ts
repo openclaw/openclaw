@@ -1,13 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
-import { z } from "zod";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeWorkerProcessIdentity } from "../node-host/node-worker-process-identity.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import {
+  decodeSupervisedCommandBinding as decodeBinding,
+  supervisedCommandIdentitySchema as identitySchema,
+  supervisedCommandPrebindingSchema as prebindingSchema,
+} from "./supervised-command-custody.persistence.js";
 import {
   supervisedCommandScopeName,
   type SupervisedCommandScopeIdentity,
@@ -19,52 +22,11 @@ import {
 } from "./supervised-operation.types.js";
 import { readSupervisedProcessHostIdentity } from "./supervised-process-resources.js";
 import {
-  readSupervisedWorkflow,
   writeSupervisedWorkflow,
   type SupervisedWorkflowDatabaseOptions as Options,
 } from "./supervised-workflow.persistence.js";
 
-const identitySchema = z.strictObject({
-  executionId: z.uuid(),
-  scopeName: z.string().max(128),
-  invocationId: z.string().regex(/^[a-f0-9]{32}$/),
-  controlGroup: z.string().min(1).max(4096),
-  bootId: z.uuid(),
-  hostId: z.string().regex(/^[a-f0-9]{64}$/),
-  custodian: z.strictObject({
-    pid: z.number().int().positive(),
-    startTime: z.number().int().nonnegative(),
-  }),
-  cgroupDevice: z.string().regex(/^\d+$/),
-  cgroupInode: z.string().regex(/^\d+$/),
-  limits: z.strictObject({
-    memoryBytes: z.number().int().positive(),
-    tasks: z.number().int().positive(),
-  }),
-});
-
-const prebindingSchema = z.strictObject({
-  kind: z.literal("prebinding"),
-  executionId: z.uuid(),
-  hostId: z.string().regex(/^[a-f0-9]{64}$/),
-  bootId: z.uuid(),
-  launcher: z.strictObject({
-    pid: z.number().int().positive(),
-    startTime: z.number().int().nonnegative(),
-  }),
-  transport: z.enum(["not_started", "started", "extinct"]),
-});
-
-function decodeBinding(encoded: string | null) {
-  if (encoded === null) {
-    return { identity: null, prebinding: null };
-  }
-  const value: unknown = JSON.parse(encoded);
-  const plan = prebindingSchema.safeParse(value);
-  return plan.success
-    ? { identity: null, prebinding: plan.data }
-    : { identity: identitySchema.parse(value), prebinding: null };
-}
+export { getSupervisedCommandResources } from "./supervised-command-custody.persistence.js";
 
 function planSupervisedOperationResources(
   kind: "command" | "review",
@@ -341,33 +303,6 @@ export function bindSupervisedCommandResources(
     if (result.numAffectedRows !== 1n) {
       throw new Error("Command resource binding was already consumed");
     }
-  }, options);
-}
-
-export function getSupervisedCommandResources(executionId: string, options: Options = {}) {
-  return readSupervisedWorkflow((db) => {
-    if (!tableExists(db, "task_flow_command_resources")) {
-      return undefined;
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getNodeSqliteKysely<DB>(db)
-        .selectFrom("task_flow_command_resources")
-        .selectAll()
-        .where("execution_id", "=", executionId),
-    );
-    if (!row) {
-      return undefined;
-    }
-    const { identity, prebinding } = decodeBinding(row.identity_json);
-    if (
-      (prebinding && (prebinding.executionId !== executionId || row.state === "bound")) ||
-      row.scope_name !== supervisedCommandScopeName(executionId) ||
-      (identity && (identity.executionId !== executionId || identity.scopeName !== row.scope_name))
-    ) {
-      throw new Error("Corrupt command resource binding");
-    }
-    return { ...row, identity, prebinding };
   }, options);
 }
 
