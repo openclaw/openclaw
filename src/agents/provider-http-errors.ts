@@ -12,6 +12,7 @@ import {
   readResponseWithLimit,
   type ReadResponseTextPrefixOptions,
 } from "../infra/http-body.js";
+import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
 import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
@@ -115,6 +116,8 @@ function readProviderResponseBytes(
 /** Options for bounded provider error-body normalization. */
 type ProviderHttpErrorOptions = {
   statusPrefix?: string;
+  signal?: AbortSignal;
+  maxBodyBytes?: number;
   bodyTimeoutMs?: ReadResponseTextPrefixOptions["timeoutMs"];
   onBodyTimeout?: NonNullable<ReadResponseTextPrefixOptions["onTimeout"]>;
   /** Scrub reflected request credentials before retaining response diagnostics. */
@@ -219,6 +222,7 @@ export function formatProviderErrorPayload(payload: unknown): string | undefined
 type ProviderHttpErrorInfo = ProviderErrorPayloadMetadata & {
   body?: string;
   requestId?: string;
+  retryAfterMs?: number;
 };
 
 /** Extracts normalized provider error metadata while keeping the raw body bounded and redacted. */
@@ -227,7 +231,8 @@ async function extractProviderErrorInfo(
   options?: ProviderHttpErrorOptions,
 ): Promise<ProviderHttpErrorInfo> {
   const bodyTimeoutMs = options?.bodyTimeoutMs;
-  const prefix = await readResponseTextPrefix(response, 16 * 1024, {
+  const prefix = await readResponseTextPrefix(response, options?.maxBodyBytes ?? 16 * 1024, {
+    signal: options?.signal,
     chunkTimeoutMs: 10_000,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`error body read stalled for ${chunkTimeoutMs}ms`),
@@ -247,6 +252,7 @@ async function extractProviderErrorInfo(
           new Error(`Provider error body timed out after ${params.timeoutMs}ms`),
       ),
   }).catch((error: unknown) => {
+    options?.signal?.throwIfAborted();
     if (error instanceof ProviderErrorBodyTimeout) {
       throw error.timeoutError;
     }
@@ -256,14 +262,18 @@ async function extractProviderErrorInfo(
     }
     return undefined;
   });
+  options?.signal?.throwIfAborted();
   const rawRequestId = extractProviderRequestId(response);
   const requestId =
     rawRequestId && options?.requestHeaders
       ? redactProviderResponseErrorText(rawRequestId, options.requestHeaders)
       : rawRequestId;
   const rawBody = trimToUndefined(prefix?.text);
+  const retryAfterSeconds = parseRetryAfterHeaderSeconds(response.headers.get("Retry-After"));
+  const headerRetryAfterMs =
+    retryAfterSeconds === undefined ? undefined : Math.ceil(retryAfterSeconds * 1000);
   if (!rawBody) {
-    return { requestId };
+    return { requestId, retryAfterMs: headerRetryAfterMs };
   }
   // Redact before metadata extraction or preview truncation can split a credential.
   const safeBody = options?.requestHeaders
@@ -279,6 +289,7 @@ async function extractProviderErrorInfo(
       detail: (metadata.detail && redactSensitiveText(metadata.detail)) || body,
       code: metadata.code,
       type: metadata.type,
+      retryAfterMs: headerRetryAfterMs,
       body,
       requestId,
     };
@@ -287,6 +298,7 @@ async function extractProviderErrorInfo(
       detail: body,
       body,
       requestId,
+      retryAfterMs: headerRetryAfterMs,
     };
   }
 }
@@ -308,6 +320,7 @@ export function extractProviderRequestId(response: Response): string | undefined
 export class ProviderHttpError extends Error {
   readonly status: number;
   readonly statusCode: number;
+  retryAfterMs?: number;
   readonly code?: string;
   readonly errorCode?: string;
   readonly errorType?: string;
@@ -322,6 +335,7 @@ export class ProviderHttpError extends Error {
       type?: string;
       body?: string;
       requestId?: string;
+      retryAfterMs?: number;
     },
   ) {
     super(message);
@@ -333,6 +347,7 @@ export class ProviderHttpError extends Error {
     this.errorType = params.type;
     this.errorBody = params.body;
     this.requestId = params.requestId;
+    this.retryAfterMs = params.retryAfterMs;
   }
 }
 
@@ -357,7 +372,7 @@ export async function createProviderHttpError(
   response: Response,
   label: string,
   options?: ProviderHttpErrorOptions,
-): Promise<Error> {
+): Promise<ProviderHttpError> {
   const info = await extractProviderErrorInfo(response, options);
   return new ProviderHttpError(
     formatProviderHttpErrorMessage({
@@ -373,6 +388,7 @@ export async function createProviderHttpError(
       type: info.type,
       body: info.body,
       requestId: info.requestId,
+      retryAfterMs: info.retryAfterMs,
     },
   );
 }
