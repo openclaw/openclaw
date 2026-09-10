@@ -20,6 +20,8 @@ export type SkillWorkshopRenderContext = {
   onRevisionSubmit: (proposalId: string) => void;
   selfLearning: SkillWorkshopSelfLearning | null;
   onSelfLearningToggle: (enabled: boolean) => void;
-  onHistoryScan: () => void;
+  learningBusy: boolean;
+  learningError: string | null;
+  onLearn: () => Promise<void>;
   onRetry: () => void;
 };

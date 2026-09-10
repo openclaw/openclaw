@@ -362,6 +362,36 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
+  it("accepts signed callbacks near the timestamp skew window edge", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "skew-window-edge",
+        path: "/hook-e2e-skew-window-edge",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const rawBody = JSON.stringify(payload);
+        const response = await fetch(url, {
+          method: "POST",
+          headers: signFeishuPayload({
+            encryptKey: "encrypt_key",
+            rawBody,
+            timestamp: (Math.floor(Date.now() / 1000) - 3_300).toString(),
+          }),
+          body: rawBody,
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ challenge: "challenge-token" });
+      },
+    );
+  });
+
   it("accepts signed non-challenge events and reaches the dispatcher", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
     const statusSink = vi.fn();

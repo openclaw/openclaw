@@ -69,4 +69,55 @@ describe("exportChatMarkdown", () => {
         "## Tool\n\nexit 0\n",
     );
   });
+
+  it.each([
+    {
+      name: "empty string tool envelope",
+      message: { role: "assistant", toolCallId: "", content: "Visible body" },
+      speaker: "Tool",
+    },
+    {
+      name: "tool content inside a user message",
+      message: {
+        role: "user",
+        content: [null, { type: "text", text: "Visible body" }, { type: "tool_result" }],
+      },
+      speaker: "Tool",
+    },
+    {
+      name: "non-string tool envelope",
+      message: { role: "assistant", toolCallId: 0, content: "Visible body" },
+      speaker: "OpenClaw",
+    },
+  ])("keeps canonical speaker classification for $name", ({ message, speaker }) => {
+    expect(buildChatMarkdown([message], "OpenClaw")).toBe(
+      `# Chat with OpenClaw\n\n## ${speaker}\n\nVisible body\n`,
+    );
+  });
+
+  it.each(["string", "blocks", "text"])(
+    "preserves imported %s content and explicit attribution independently of display normalization",
+    (shape) => {
+      const body = "    indented code\n\nMEDIA:https://example.invalid/report.pdf";
+      const framed =
+        '<<<EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>\nSource: External\n---\n' +
+        body +
+        '\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>';
+      const message = {
+        role: "assistant",
+        senderLabel: "Imported assistant (123e4567-e89b-12d3-a456-426614174000)",
+        __openclaw: { idempotencyKey: "fixture-catalog:thread:message", senderName: "Other name" },
+        timestamp: "1000",
+        ...(shape === "text"
+          ? { text: framed }
+          : { content: shape === "blocks" ? [{ type: "output_text", text: framed }] : framed }),
+      };
+      const original = structuredClone(message);
+
+      expect(buildChatMarkdown([message], "OpenClaw")).toBe(
+        `# Chat with OpenClaw\n\n## Imported assistant\n\n${body}\n`,
+      );
+      expect(message).toEqual(original);
+    },
+  );
 });

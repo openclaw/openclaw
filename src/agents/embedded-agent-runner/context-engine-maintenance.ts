@@ -1,6 +1,7 @@
 /**
  * Schedules and runs deferred context-engine turn maintenance.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -48,6 +49,11 @@ import {
 } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/index.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
+import {
+  disposeDeferredMaintenanceContextEngine,
+  mergeContextEngineFactoryWork,
+  runContextEngineMaintenanceWork,
+} from "./context-engine-maintenance-work.js";
 import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 import { resolveRuntimeTranscriptReadTarget } from "./transcript-runtime-state.js";
@@ -79,19 +85,25 @@ type ContextEngineMaintenanceParams = {
   onDeferredMaintenanceFailure?: (error: unknown) => void;
   config?: OpenClawConfig;
   disposeDeferredContextEngineAfterMaintenance?: boolean;
+  closeFactoryWork?: () => Promise<void>;
 };
 
 type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
   contextEngine: ContextEngine;
   sessionKey: string;
+  runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   disposeContextEngineAfterMaintenance?: boolean;
   onScheduleFailure?: (error: unknown) => void;
+  factoryWorkClosers: Set<() => Promise<void>>;
 };
 
 type DeferredTurnMaintenanceRunState = {
+  maintenance: ReturnType<typeof createSessionMaintenanceOwner>;
+  pendingDisposals: Set<Promise<void>>;
   promise: Promise<void>;
   rerunRequested: boolean;
   activeContextEngine: ContextEngine;
+  activeFactoryWorkClosers: Set<() => Promise<void>>;
   disposeActiveContextEngineAfterMaintenance: boolean;
   latestParams: DeferredTurnMaintenanceScheduleParams;
 };
@@ -116,18 +128,6 @@ function unregisterDeferredTurnMaintenanceAbortSignalHandlers(
     processLike.off(signal, handler);
   }
   state.cleanupHandlers.clear();
-}
-
-async function disposeDeferredMaintenanceContextEngine(
-  contextEngine: ContextEngine,
-): Promise<void> {
-  try {
-    await contextEngine.dispose?.();
-  } catch (err) {
-    log.warn("context engine dispose failed after deferred maintenance", {
-      errorMessage: formatErrorMessage(err),
-    });
-  }
 }
 
 function createDeferredTurnMaintenanceAbortSignal(params?: {
@@ -460,6 +460,12 @@ function scheduleDeferredTurnMaintenance(
   if (activeRun) {
     const supersededParams = activeRun.rerunRequested ? activeRun.latestParams : undefined;
     const latestParams = { ...params, sessionKey };
+    latestParams.factoryWorkClosers = mergeContextEngineFactoryWork(
+      latestParams,
+      activeRun.activeContextEngine,
+      activeRun.activeFactoryWorkClosers,
+      supersededParams,
+    );
     // Coalesced resolutions may wrap one shared factory instance. Carry disposal
     // ownership forward without closing an engine still used by active or newer work.
     if (
@@ -484,7 +490,12 @@ function scheduleDeferredTurnMaintenance(
       ) &&
       !hasSameContextEngineInstance(supersededParams.contextEngine, latestParams.contextEngine)
     ) {
-      void disposeDeferredMaintenanceContextEngine(supersededParams.contextEngine);
+      const disposal = disposeDeferredMaintenanceContextEngine(
+        supersededParams,
+        activeRun.maintenance,
+      );
+      activeRun.pendingDisposals.add(disposal);
+      void disposal.finally(() => activeRun.pendingDisposals.delete(disposal));
     }
     return activeRun.promise;
   }
@@ -552,17 +563,23 @@ function scheduleDeferredTurnMaintenance(
   let runPromise: Promise<void>;
   try {
     runPromise = enqueueCommandInLane(lane, () =>
-      maintenance.run(() =>
-        runDeferredTurnMaintenanceWorker({
-          ...params,
-          abortSignal: maintenance.signal,
-          assertActive: () => {
-            maintenance.assertCurrent();
-            params.assertActive?.();
-          },
-          sessionKey,
-          runId: task.runId!,
-        }),
+      params.runInContext(() =>
+        maintenance.run(() =>
+          runContextEngineMaintenanceWork(
+            () =>
+              runDeferredTurnMaintenanceWorker({
+                ...params,
+                abortSignal: maintenance.signal,
+                assertActive: () => {
+                  maintenance.assertCurrent();
+                  params.assertActive?.();
+                },
+                sessionKey,
+                runId: task.runId!,
+              }),
+            maintenance.signal,
+          ),
+        ),
       ),
     );
   } catch (err) {
@@ -575,7 +592,6 @@ function scheduleDeferredTurnMaintenance(
   const cleanupDeferredTurnMaintenance = () =>
     maintenance.run(async () => {
       releaseProcessOwner();
-      schedulerAbort.dispose();
       const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
       if (current !== state) {
         return;
@@ -592,7 +608,7 @@ function scheduleDeferredTurnMaintenance(
           current.activeContextEngine,
         );
         if (!rerunSharesActiveEngine && current.disposeActiveContextEngineAfterMaintenance) {
-          await disposeDeferredMaintenanceContextEngine(current.activeContextEngine);
+          await disposeDeferredMaintenanceContextEngine(params, maintenance);
         }
         const nextParams =
           rerunSharesActiveEngine && current.disposeActiveContextEngineAfterMaintenance
@@ -601,7 +617,7 @@ function scheduleDeferredTurnMaintenance(
         // Disposal can await a lifecycle rotation. Retired work cannot mint a fresh rerun.
         if (maintenance.signal.aborted) {
           if (nextParams.disposeContextEngineAfterMaintenance) {
-            await disposeDeferredMaintenanceContextEngine(nextParams.contextEngine);
+            await disposeDeferredMaintenanceContextEngine(nextParams, maintenance);
           }
           return;
         }
@@ -609,14 +625,14 @@ function scheduleDeferredTurnMaintenance(
         maintenance.releaseWrites();
         const scheduledRerun = scheduleDeferredTurnMaintenance(nextParams);
         if (!scheduledRerun && nextParams.disposeContextEngineAfterMaintenance) {
-          await disposeDeferredMaintenanceContextEngine(nextParams.contextEngine);
+          await disposeDeferredMaintenanceContextEngine(nextParams, maintenance);
         } else {
           await scheduledRerun;
         }
         return;
       }
       if (current.disposeActiveContextEngineAfterMaintenance) {
-        await disposeDeferredMaintenanceContextEngine(current.activeContextEngine);
+        await disposeDeferredMaintenanceContextEngine(params, maintenance);
       }
       if (
         discardedRerunParams?.disposeContextEngineAfterMaintenance &&
@@ -625,24 +641,40 @@ function scheduleDeferredTurnMaintenance(
           current.activeContextEngine,
         )
       ) {
-        await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
+        await disposeDeferredMaintenanceContextEngine(discardedRerunParams, maintenance);
       }
     });
+  const pendingDisposals = new Set<Promise<void>>();
   const trackedPromise = maintenance.track(
-    runPromise
-      .catch((err: unknown) => {
-        params.onScheduleFailure?.(err);
-        cancelFailedTask(err);
-      })
-      .then(cleanupDeferredTurnMaintenance, async (error: unknown) => {
-        await cleanupDeferredTurnMaintenance();
-        throw error;
-      }),
+    (async () => {
+      try {
+        await runPromise
+          .catch((err: unknown) => {
+            params.onScheduleFailure?.(err);
+            cancelFailedTask(err);
+          })
+          .then(cleanupDeferredTurnMaintenance, async (error: unknown) => {
+            await cleanupDeferredTurnMaintenance();
+            throw error;
+          });
+      } finally {
+        try {
+          while (pendingDisposals.size > 0) {
+            await Promise.all(pendingDisposals);
+          }
+        } finally {
+          schedulerAbort.dispose();
+        }
+      }
+    })(),
   );
   const state: DeferredTurnMaintenanceRunState = {
+    maintenance,
+    pendingDisposals,
     promise: trackedPromise,
     rerunRequested: false,
     activeContextEngine: params.contextEngine,
+    activeFactoryWorkClosers: params.factoryWorkClosers,
     disposeActiveContextEngineAfterMaintenance:
       params.disposeContextEngineAfterMaintenance === true,
     latestParams: { ...params, sessionKey },
@@ -689,6 +721,8 @@ export async function runContextEngineMaintenance(
         ...params,
         contextEngine,
         sessionKey,
+        runInContext: AsyncLocalStorage.snapshot(),
+        factoryWorkClosers: new Set(params.closeFactoryWork ? [params.closeFactoryWork] : []),
         disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
         onScheduleFailure: params.onDeferredMaintenanceFailure,
       });

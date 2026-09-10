@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import {
   makeAgentAssistantMessage,
@@ -11,14 +12,10 @@ const call = makeAgentAssistantMessage({
   content: [{ type: "toolCall", id: "call_order", name: "read", arguments: {} }],
   stopReason: "toolUse",
 });
-const result = {
-  role: "toolResult",
-  toolCallId: "call_order",
-  toolName: "read",
-  content: [{ type: "text", text: "success" }],
-  isError: false,
-  timestamp: 1,
-} satisfies Extract<AgentMessage, { role: "toolResult" }>;
+const result = makeTextToolResult("call_order", "read", "success", false, 1) satisfies Extract<
+  AgentMessage,
+  { role: "toolResult" }
+>;
 
 describe("tool-result persistence ordering", () => {
   it.each(["result", "throw"])(

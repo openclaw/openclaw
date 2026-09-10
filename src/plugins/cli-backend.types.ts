@@ -168,6 +168,8 @@ export type CliBackendToolAvailability = {
 
 /** Native action a plugin-owned runtime asks the admitted host run to authorize. */
 export type CliBackendToolPermissionRequest = {
+  /** Actual working directory reported by the native permission hook. */
+  cwd?: string;
   toolName: string;
   toolInput: Record<string, unknown>;
   toolCallId?: string;
@@ -226,17 +228,12 @@ export type CliBackendLiveSessionHandle = {
 export type CliBackendLiveSessionCapability = {
   fingerprint: string;
   current(): CliBackendLiveSessionHandle | undefined;
+  /** Retires the current process and awaits host-owned cleanup before replacement. */
+  restart(): Promise<void>;
   register(handle: CliBackendLiveSessionHandle): void;
   /** Rebinds this exact admitted turn to the registered process's stable capture. */
   activate(handle: CliBackendLiveSessionHandle): void;
   remove(handle: CliBackendLiveSessionHandle): void;
-  /**
-   * Joins the retired predecessor's retained cleanup before a replacement process
-   * registers. Resolves immediately when no predecessor is retiring; rejects when
-   * that cleanup failed or exceeded its deadline, in which case replacement stays
-   * refused. Call it before `register` whenever `current()` returned nothing.
-   */
-  settleRetired(): Promise<void>;
 };
 
 /** Turn-only context that must not become an operator-authored native transcript row. */
@@ -287,6 +284,8 @@ export type CliBackendResolveExecutionArgsContext = {
   modelId: string;
   authProfileId?: string;
   thinkingLevel?: CliBackendThinkingLevel;
+  /** Effective fast mode at spawn, after queue admission and backend preparation. */
+  fastMode?: boolean;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;
   useResume: boolean;
@@ -536,6 +535,12 @@ type CliBackendPluginBase = {
   resolveModelId?: (ctx: CliBackendResolveModelIdContext) => string;
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
+  /**
+   * Exact-tool execution suppresses ambient instruction files, skills, hooks,
+   * and plugins so the host-prepared instruction snapshot remains authoritative.
+   * Required for rooted runs; omission keeps those runs unavailable.
+   */
+  isolatesInstructionsWithExactTools?: true;
   /**
    * Maps the observed native list, intersected with the host selection, to equivalent
    * cron capabilities: read/write/edit/apply_patch/exec/process/web_search/web_fetch.

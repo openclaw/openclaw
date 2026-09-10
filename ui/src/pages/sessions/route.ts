@@ -37,7 +37,7 @@ function routeOptions(location: RouteLocation) {
 }
 
 export function sessionsPageListQuery(
-  context: ApplicationContext,
+  context: Pick<ApplicationContext, "agentSelection">,
   filters: SessionsPageListFilters,
 ): SessionListOptions {
   const deepLinkSessionKey = filters.deepLinkSessionKey?.trim() || null;

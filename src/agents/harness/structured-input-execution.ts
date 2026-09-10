@@ -1,5 +1,6 @@
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import { runAgentHarnessGatewayQuestion } from "./gateway-question.js";
+import { STRUCTURED_INPUT_URL_COMPLETED_LABEL } from "./structured-input.js";
 import type {
   StructuredInputAnswerValue,
   StructuredInputCompileResult,
@@ -73,7 +74,7 @@ async function runUrl(
     return cancellation;
   }
   const answer = result.answers.answers[question.id]?.[0];
-  return answer?.toLowerCase() === "continue"
+  return answer?.toLowerCase() === STRUCTURED_INPUT_URL_COMPLETED_LABEL.toLowerCase()
     ? { status: "answered", answers: result.answers.answers, content: {} }
     : { status: "declined" };
 }

@@ -360,7 +360,7 @@ describe("Codex auth product proof", () => {
   );
 
   it(
-    "returns bounded recovery when the configured profile is absent without calling app-server",
+    "returns bounded recovery after the explicitly selected profile is removed",
     { timeout: 180_000 },
     async () => {
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
@@ -452,6 +452,13 @@ describe("Codex auth product proof", () => {
         };
         await runConfiguredTurn("qa-codex-profile-binding-setup");
         await expect(
+          client.request("models.list", { agentId: "main", refresh: true }),
+        ).resolves.toMatchObject({
+          models: expect.arrayContaining([
+            expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" }),
+          ]),
+        });
+        await expect(
           client.request("sessions.patch", {
             key: sessionKey,
             model: `${MODEL}@${MISSING_PROFILE_ID}`,
@@ -466,9 +473,17 @@ describe("Codex auth product proof", () => {
         // A metadata patch alone does not prove the selected profile reaches native execution.
         await runConfiguredTurn("qa-codex-profile-binding-pinned");
 
-        await instance.state.writeAuthProfiles({ version: 1, profiles: {} });
-        // Publish this offline write through the supported activation boundary before the next turn.
-        await expect(client.request("secrets.reload", {})).resolves.toMatchObject({ ok: true });
+        await expect(
+          client.request("models.authLogout", {
+            provider: "openai",
+            agentId: "main",
+            profileIds: [MISSING_PROFILE_ID],
+          }),
+        ).resolves.toEqual({
+          provider: "openai",
+          removedProfiles: [MISSING_PROFILE_ID],
+          abortedRunIds: [],
+        });
         await fs.writeFile(requestLog, "", "utf8");
         events.length = 0;
         await client.request("sessions.messages.subscribe", { key: sessionKey });
@@ -562,24 +577,20 @@ describe("Codex auth product proof", () => {
       expect(JSON.stringify(failedHistory)).not.toContain(MISSING_PROFILE_ID);
       expect(JSON.stringify(failedHistory)).not.toContain("Codex app-server auth profile");
 
-      await waitForRequest(failureAppServerLog, "initialize");
       const failureMethods = failureAppServerLog
         .read()
         .flatMap((entry) => (typeof entry.method === "string" ? [entry.method] : []));
-      expect(failureMethods).toContain("initialize");
-      expect(failureMethods).not.toContain("account/login/start");
-      expect(failureMethods).not.toContain("thread/start");
-      expect(failureMethods).not.toContain("thread/resume");
-      expect(failureMethods).not.toContain("turn/start");
+      const operationalMethods = failureMethods.filter(
+        (method) => method !== "initialize" && method !== "initialized",
+      );
+      expect(operationalMethods).toEqual([]);
 
       console.log(
         `[qa-codex-missing-auth-profile] ${JSON.stringify({
           assistantOutput: SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT,
           historySessionKey: sessionKey,
-          appServerInitialized: true,
-          appServerOperationalRpcCount: failureMethods.filter(
-            (method) => method !== "initialize" && method !== "initialized",
-          ).length,
+          appServerInitialized: failureMethods.includes("initialize"),
+          appServerOperationalRpcCount: operationalMethods.length,
         })}`,
       );
     },

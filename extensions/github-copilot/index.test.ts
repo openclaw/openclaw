@@ -17,6 +17,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { runGitHubCopilotDeviceFlow } from "./login.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -1035,6 +1036,45 @@ describe("github-copilot plugin", () => {
     });
   });
 
+  it("returns a supplied setup token without replacing stored credentials or starting login", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = requireAuthMethod(provider.auth, 0);
+    const agentDir = await createAgentDir();
+    writeExistingCopilotTokenProfile(agentDir);
+    const before = structuredClone(ensureAuthProfileStore(agentDir));
+    const prompter = { confirm: vi.fn(), note: vi.fn(), text: vi.fn() };
+    const openUrl = vi.fn();
+
+    const result = await method.run({
+      config: {},
+      env: {},
+      agentDir,
+      prompter,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      opts: { tokenProvider: "github-copilot", token: "supplied-setup-token" },
+      isRemote: true,
+      openUrl,
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    });
+
+    expect(result).toMatchObject({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: { type: "token", provider: "github-copilot", token: "supplied-setup-token" },
+          secretStorage: { kind: "store", namePrefix: "GITHUB_COPILOT_TOKEN" },
+        },
+      ],
+    });
+    expect(result?.defaultModel).toBeTruthy();
+    expect(ensureAuthProfileStore(agentDir)).toEqual(before);
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.text).not.toHaveBeenCalled();
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
+    expect(mocks.resolveCopilotStarterModel).not.toHaveBeenCalled();
+  });
+
   it("keeps valid interactive auth when live starter-model discovery is unavailable", async () => {
     mocks.resolveCopilotStarterModel.mockRejectedValueOnce(new Error("catalog unavailable"));
     const provider = registerProviderWithPluginConfig({});
@@ -1450,7 +1490,7 @@ describe("github-copilot plugin", () => {
     const prompter = {
       confirm: vi.fn(async () => false),
       text: vi.fn(async () => ""),
-      note: vi.fn(),
+      note: vi.fn(async (_message: string, _title?: string) => {}),
     };
 
     const result = await runDeviceAuthWithTty(
@@ -1479,7 +1519,15 @@ describe("github-copilot plugin", () => {
 
     // Domain switch must not offer to reuse the tenant-scoped token.
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(prompter.note).toHaveBeenCalled();
+    const deviceNote = prompter.note.mock.calls.find(
+      ([, title]) => title === "Authorize GitHub Copilot",
+    );
+    expect(deviceNote).toBeDefined();
+    const [message] = expectDefined(deviceNote, "device-code note");
+    expect(markdownToIR(message, { linkify: false }).links.map((link) => link.href)).toEqual([
+      "https://github.com/login/device",
+    ]);
+    expect(message).toContain("\nCode: ABCD-1234\n");
     expect(result.profiles[0]?.credential).toEqual({
       type: "token",
       provider: "github-copilot",

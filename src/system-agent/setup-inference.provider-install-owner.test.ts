@@ -246,7 +246,7 @@ it.each([false, true])(
                 modelRef: "fixture-provider/fixture-model",
               });
               // The running generation intentionally retains its pre-install cache.
-              const records = await withPluginLifecycleLease({}, () =>
+              const records = await withPluginLifecycleLease({}, async () =>
                 readPersistedInstalledPluginIndexInstallRecords({ stateDir: state.stateDir }),
               );
               if (!trustedRecord) {

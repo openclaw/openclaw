@@ -1,4 +1,3 @@
-// LLM Core module implements validation behavior.
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import type { Tool, ToolCall } from "./types.js";
@@ -291,6 +290,9 @@ function coerceWithJsonSchema(value: unknown, schema: JsonSchemaObject): unknown
     schemaTypes.some((schemaType) => matchesJsonType(nextValue, schemaType));
   if (schemaTypes.length > 0 && !matchesUnionMember) {
     for (const schemaType of schemaTypes) {
+      if (schemaType === "null" && nextValue !== null && schemaTypes.length > 1) {
+        continue;
+      }
       const candidate = coercePrimitiveByType(nextValue, schemaType);
       if (candidate !== nextValue) {
         nextValue = candidate;

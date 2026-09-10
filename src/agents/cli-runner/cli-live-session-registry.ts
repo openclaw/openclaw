@@ -243,26 +243,12 @@ export function createCliLiveSessionCapability(params: {
       }
       return handle;
     },
-    settleRetired: async () => {
+    restart: async () => {
       assertActive();
-      // `remove` retires the owner key until the old child exits and its artifacts
-      // are cleaned; a replacement that registers before then is refused. Joining
-      // that promise here is what lets a steered or drifted turn start its
-      // successor without racing the predecessor's exit.
-      const pending = retiredSessionCleanup.get(ownerKey);
-      if (!pending) {
-        return;
+      if (params.requiredGeneration) {
+        throw requiredSessionError("cli_live_session_changed");
       }
-      await runCliCleanup(
-        params.context.params,
-        "cli-live-session-settle",
-        async () => {
-          assertActive();
-          await pending;
-        },
-        "required",
-      );
-      assertActive();
+      await restartCliLiveSession(params.context, params.abortSignal);
     },
     register: (handle) => {
       assertActive();

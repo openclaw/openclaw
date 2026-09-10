@@ -3,7 +3,6 @@
    ============================================= */
 
 .chat-thinking {
-  margin-bottom: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   border: 1px dashed rgba(255, 255, 255, 0.18);
@@ -121,14 +120,6 @@
   margin: 0;
 }
 
-/* Keep every adjacent top-level Markdown block on the same rhythm, including
-   special blocks that otherwise read as part of the preceding block. */
-.chat-text
-  > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
-  + :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
-  margin-top: 1em;
-}
-
 .chat-text
   :where(blockquote, details, li)
   > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
@@ -136,8 +127,6 @@
   margin-top: 0.5em;
 }
 
-/* Tables retain top margin even when first; the adjacent-block rule above gives
-   tables the same rhythm when they follow another Markdown block. */
 .chat-text :where(table) {
   margin-top: 0.75em;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
@@ -504,7 +493,6 @@
    opacity, which composited the link toward its background and cost another 1.1. */
 .chat-text :where(a) {
   color: var(--link);
-  text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
@@ -747,7 +735,7 @@
 }
 
 .chat-text :where(.markdown-inline-image-button:focus-visible) {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
 
@@ -800,7 +788,6 @@
 :is(.chat-text, .sidebar-markdown) .markdown-external-image > a:hover {
   background: color-mix(in srgb, var(--text) 13%, transparent);
   color: var(--link-hover);
-  text-decoration: none;
 }
 
 /* Code surfaces must lift off the host bubble in every theme. --secondary equals
@@ -974,12 +961,16 @@
 
 .code-block-expand:focus-visible,
 .code-block-wrap:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
+.code-block-expand:focus-visible {
+  /* Keep the bottom edge inside the clipped code wrapper. */
+  outline-offset: -2px;
+}
+
 .chat-group.user .chat-text :where(pre) {
-  margin-block: 1em;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -988,6 +979,10 @@
   font: inherit;
   overflow: visible;
   white-space: pre-wrap;
+}
+
+.chat-group.user .chat-text :where(:not(.chat-text) > pre) {
+  margin-block: 1em;
 }
 
 /* A user fence carries no code chrome, so it reads as the message it was typed
@@ -1178,4 +1173,61 @@
   .chat-json-content {
     max-height: 200px;
   }
+}
+
+/* Only top-level blocks share message rhythm; list/quote interiors keep their
+   own spacing. Reset edge margins so a first or last block adds no extra gap. */
+.chat-text > *,
+.chat-text > .markdown-external-image {
+  margin-block: 0;
+}
+
+/* renderBody is shared by normal bubbles and expanded tool output. */
+:is(.chat-bubble, .chat-tool-msg-body, .chat-message-avatar-anchor) {
+  > :is(
+    .chat-message-images,
+    .chat-assistant-attachments,
+    .chat-assistant-attachment-card,
+    .chat-pairing-qr-notices,
+    .chat-thinking,
+    .chat-tool-card__widget-host,
+    .chat-text,
+    .chat-json-collapse,
+    .chat-message-disclosure,
+    .chat-message-avatar-anchor,
+    .chat-tools-inline
+  ) {
+    margin-block: 0;
+
+    + :is(
+      .chat-message-images,
+      .chat-assistant-attachments,
+      .chat-assistant-attachment-card,
+      .chat-pairing-qr-notices,
+      .chat-thinking,
+      .chat-tool-card__widget-host,
+      .chat-text,
+      .chat-json-collapse,
+      .chat-message-disclosure,
+      .chat-message-avatar-anchor,
+      .chat-tools-inline
+    ) {
+      margin-block-start: var(--chat-block-gap);
+    }
+  }
+}
+
+/* A display-contents anchor transfers its block gap to the first rendered box. */
+.chat-bubble:not(.chat-bubble--with-images) > .chat-message-avatar-anchor > :first-child {
+  margin-block-start: inherit;
+}
+
+.chat-text > * + *,
+.chat-text > * + .markdown-external-image {
+  margin-block-start: var(--chat-block-gap);
+}
+
+/* Contain the preview's reserved toolbar space within its message block. */
+.chat-bubble > .chat-tool-card__widget-host {
+  display: flow-root;
 }

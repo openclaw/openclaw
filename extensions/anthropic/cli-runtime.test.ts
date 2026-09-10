@@ -66,12 +66,22 @@ async function createContext(
   };
 }
 
-function createLiveSession(): CliBackendLiveSessionCapability {
+function createLiveSession(cleanup?: () => Promise<void>): CliBackendLiveSessionCapability {
   let current: CliBackendLiveSessionHandle | undefined;
+  let retiredCleanup: Promise<void> | undefined;
   return {
     fingerprint: "synthetic-process-policy",
     current: () => current,
+    restart: async () => {
+      const previous = current;
+      previous?.close("restart");
+      await previous?.waitForExit();
+      await retiredCleanup;
+    },
     register: (handle) => {
+      if (retiredCleanup) {
+        throw new Error("Previous CLI live session cleanup has not settled.");
+      }
       current = handle;
       handles.add(handle);
     },
@@ -79,9 +89,16 @@ function createLiveSession(): CliBackendLiveSessionCapability {
     remove: (handle) => {
       if (current === handle) {
         current = undefined;
+        if (cleanup) {
+          retiredCleanup = handle
+            .waitForExit()
+            .then(cleanup)
+            .then(() => {
+              retiredCleanup = undefined;
+            });
+        }
       }
     },
-    settleRetired: async () => {},
   };
 }
 
@@ -149,82 +166,48 @@ describe("Claude native stdio boundary", () => {
     },
   );
 
-  it("starts a fresh process when the host execution fingerprint changes", async () => {
-    const liveSession = createLiveSession();
+  it("starts a fresh process after host cleanup when the execution fingerprint changes", async () => {
+    const gate = createDeferred<void>();
+    const cleanup = vi.fn(() => gate.promise);
+    const liveSession = createLiveSession(cleanup);
     const context = await createContext("normal", { liveSession });
     const first = resultDetail(await collect(context));
     liveSession.fingerprint = "changed-authoritative-prompt";
-    const second = resultDetail(
-      await collect({
-        ...context,
-        useResume: true,
-        systemPrompt: "changed authoritative instructions",
-      }),
-    );
-    expect(second.pid).not.toBe(first.pid);
-    expect(second.turn).toBe(1);
-    expect(second.initialize).toMatchObject({
-      appendSystemPrompt: "changed authoritative instructions",
-    });
-    expect(() => process.kill(Number(first.pid), 0)).toThrow();
-  });
-
-  it("waits for the retired predecessor's cleanup before registering a replacement", async () => {
-    const liveSession = createLiveSession();
-    const registered = vi.fn((handle: CliBackendLiveSessionHandle) => {
-      handles.add(handle);
-      registeredHandle = handle;
-    });
-    let registeredHandle: CliBackendLiveSessionHandle | undefined;
-    liveSession.register = registered;
-    liveSession.current = () => registeredHandle;
-    liveSession.remove = (handle) => {
-      if (registeredHandle === handle) {
-        registeredHandle = undefined;
-      }
-    };
-    const context = await createContext("normal", { liveSession });
-    const first = resultDetail(await collect(context));
-    expect(registered).toHaveBeenCalledOnce();
-
-    // A drifted fingerprint retires the first process; the host keeps the owner key
-    // retired until that child's artifacts are cleaned, so the replacement must wait.
-    const retired = createDeferred();
-    const settleRetired = vi.fn(() => retired.promise);
-    liveSession.settleRetired = settleRetired;
-    liveSession.fingerprint = "changed-authoritative-prompt";
-    const replacement = collect({
+    const pending = collect({
       ...context,
       useResume: true,
       systemPrompt: "changed authoritative instructions",
     });
-    await vi.waitFor(() => expect(settleRetired).toHaveBeenCalledOnce());
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    expect(registered).toHaveBeenCalledOnce();
-    expect(() => process.kill(Number(first.pid), 0)).toThrow();
-
-    retired.resolve();
-    const second = resultDetail(await replacement);
-    expect(registered).toHaveBeenCalledTimes(2);
-    expect(second.pid).not.toBe(first.pid);
-    expect(second.turn).toBe(1);
+    void pending.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+      expect(liveSession.current()).toBeUndefined();
+      gate.resolve();
+      const second = resultDetail(await pending);
+      expect(second.pid).not.toBe(first.pid);
+      expect(second.turn).toBe(1);
+      expect(second.initialize).toMatchObject({
+        appendSystemPrompt: "changed authoritative instructions",
+      });
+      expect(() => process.kill(Number(first.pid), 0)).toThrow();
+    } finally {
+      gate.resolve();
+    }
   });
 
   it("refuses replacement when the retired predecessor's cleanup failed", async () => {
-    const liveSession = createLiveSession();
-    const context = await createContext("normal", { liveSession });
-    resultDetail(await collect(context));
     const failure = new Error("artifact cleanup failed");
-    liveSession.settleRetired = vi.fn(async () => {
+    const liveSession = createLiveSession(async () => {
       throw failure;
     });
+    const context = await createContext("normal", { liveSession });
+    const first = resultDetail(await collect(context));
     liveSession.fingerprint = "changed-authoritative-prompt";
     await expect(
       collect({ ...context, useResume: true, systemPrompt: "changed authoritative instructions" }),
     ).rejects.toBe(failure);
     expect(liveSession.current()).toBeUndefined();
+    expect(() => process.kill(Number(first.pid), 0)).toThrow();
   });
 
   it("refuses process startup when the admitted owner rejects capture activation", async () => {
@@ -513,7 +496,11 @@ describe("Claude native stdio boundary", () => {
     expect(handle?.isIdle()).toBe(true);
     expect(context.requestToolPermission).toHaveBeenCalledTimes(4);
     expect(context.requestToolPermission).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "Read", toolInput: { file_path: "fixture.txt" } }),
+      expect.objectContaining({
+        cwd: context.cwd,
+        toolName: "Read",
+        toolInput: { file_path: "fixture.txt" },
+      }),
     );
   });
 

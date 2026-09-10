@@ -27,6 +27,7 @@ import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessi
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../../gateway/worker-environments/placement-test-fixtures.js";
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../../plugin-sdk/codex-session-transcript-runtime.js";
 import { readSessionTranscriptVisibleMessageDelta } from "../../plugin-sdk/session-transcript-runtime.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -42,6 +43,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { convertToLlm } from "../sessions/messages.js";
@@ -182,6 +184,27 @@ async function prepareAdmission(
 }
 
 describe("host-owned current admission annotation", () => {
+  it.each([undefined, "external_user", "inter_session", "internal_system"] as const)(
+    "annotates unchanged %s provenance after transcript persistence",
+    async (kind) => {
+      const provenance = kind ? { kind, sourceTool: "heartbeat" } : undefined;
+      await withAdmission(
+        async (f) => {
+          await f.annotate();
+          expect(f.recorder.getPersistedMessage?.()).toMatchObject({
+            content: "prompt",
+            ...(provenance ? { provenance } : {}),
+            __openclaw: { mirrorIdentity: "native-turn:prompt" },
+          });
+        },
+        {
+          input: { text: "prompt", ...(provenance ? { provenance } : {}) },
+          beforeMessageWrite: ({ message }) => message,
+        },
+      );
+    },
+  );
+
   it.each(["staged", "collected"] as const)(
     "refreshes only the admitted %s input while preserving source custody",
     async (kind) => {
@@ -610,6 +633,7 @@ describe("host-owned current admission annotation", () => {
           entered.resolve();
           await release.promise;
         },
+        "session.transcript.batch",
       );
       await entered.promise;
       const updates = vi.fn();
@@ -660,6 +684,11 @@ describe("host-owned current admission annotation", () => {
   it("revalidates the captured host-owned worker claim inside the write transaction", async () => {
     await withAdmission(async (f) => {
       const placements = createWorkerSessionPlacementStore();
+      seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+        environmentId: "annotation-worker",
+        sessionId: f.target.sessionId,
+        ownerEpoch: 7,
+      });
       let placement = placements.startDispatch(f.target);
       placement = placements.transition({
         sessionId: f.target.sessionId,
@@ -721,6 +750,7 @@ describe("host-owned current admission annotation", () => {
           entered.resolve();
           await release.promise;
         },
+        "session.transcript.batch",
       );
       await entered.promise;
       const refused = expect(

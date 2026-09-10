@@ -14,6 +14,7 @@ import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
+  resolveProjectedSessionContextBudgetStatus,
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
   type SessionEntry,
@@ -24,9 +25,11 @@ import {
   MAX_SESSION_PARTICIPANTS,
   sessionCreatorProfileId,
 } from "../config/sessions/session-entry-provenance.js";
+import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
+import { deriveSessionUnread } from "../shared/session-unread.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -43,17 +46,20 @@ import {
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
+import { readSessionTerminalModelFromTranscript } from "./session-transcript-readers.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
+import type {
+  GatewaySessionModelSource,
+  SessionListRowContext,
+} from "./session-utils-contracts.js";
 import {
   buildCompactionCheckpointPreview,
   deriveSessionTitle,
-  deriveSessionUnread,
   resolveEstimatedSessionCostUsd,
   resolveLatestCompactionCheckpoint,
   resolvePositiveNumber,
   resolveProjectableCompactionCheckpoints,
-  resolveRuntimeChildSessionKeys,
+  buildStoreChildSessionIndex,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
@@ -66,8 +72,6 @@ import {
   resolveSessionDisplayModelIdentityRefCached,
 } from "./session-utils-model.js";
 import {
-  mergeChildSessionKeys,
-  resolveChildSessionKeys,
   resolveSessionSelectedModelRef,
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
@@ -84,6 +88,7 @@ export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
+  modelSource?: GatewaySessionModelSource;
   key: string;
   entry?: InternalSessionEntry;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -153,7 +158,7 @@ export function buildGatewaySessionRow(params: {
   const selectedModel = resolveSessionSelectedModelRef({
     cfg,
     sessionKey: key,
-    entry,
+    source: params.modelSource ?? { entry, loadSessionEntry: (parentKey) => store[parentKey] },
     agentId: sessionAgentId,
     rowContext,
     allowPluginNormalization: !lightweight,
@@ -185,12 +190,19 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
   });
-  const childSessions = params.storeChildSessionsByKey
-    ? mergeChildSessionKeys(
-        resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
-        params.storeChildSessionsByKey.get(key),
-      )
-    : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
+  const childSessions = (
+    params.storeChildSessionsByKey ??
+    buildStoreChildSessionIndex({
+      store,
+      keys: [key],
+      now,
+      subagentRuns: rowContext?.subagentRuns,
+    })
+  ).get(key);
+  const pinnedAt =
+    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
+      ? entry.pinnedAt
+      : undefined;
   const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
   const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
     ? compactionCheckpoints.length
@@ -207,10 +219,17 @@ export function buildGatewaySessionRow(params: {
     rowContext: params.rowContext,
   });
   // Display aliases do not change the selected route's catalog or runtime policy.
+  const completedModel =
+    entry?.status === "done" && entry.lastRunId && entry.fallbackNotice
+      ? readSessionTerminalModelFromTranscript(
+          { agentId: sessionAgentId, sessionKey: key, sessionId: entry.sessionId, storePath },
+          entry.lastRunId,
+        )
+      : undefined;
   const runtimeModels = resolveSelectedAndActiveModel({
     selectedProvider: rowModelProvider,
     selectedModel: rowModel,
-    sessionEntry: entry,
+    sessionEntry: completedModel ?? entry,
   });
   const activeFallback = resolveActiveFallbackState({
     selectedModelRef: runtimeModels.selected.label,
@@ -394,6 +413,7 @@ export function buildGatewaySessionRow(params: {
     previousSessionId: entry?.previousSessionId,
     kind: gatewayKind,
     label: entry?.label,
+    autoLabel: entry?.autoLabel,
     icon: entry?.icon,
     color: entry?.color,
     channelAvatarUrl,
@@ -414,8 +434,8 @@ export function buildGatewaySessionRow(params: {
     archivedAt: entry?.archivedAt,
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
     archiveReason: entry?.archiveReason,
-    pinned: entry?.pinnedAt !== undefined,
-    pinnedAt: entry?.pinnedAt,
+    pinned: pinnedAt !== undefined,
+    pinnedAt,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,
@@ -485,11 +505,19 @@ export function buildGatewaySessionRow(params: {
     model: rowModelIdentity.model,
     activeModelProvider: activeFallback.active ? runtimeModels.active.provider : undefined,
     activeModel: activeFallback.active ? runtimeModels.active.model : undefined,
-    modelOverrideSource: resolveSessionModelOverrideSource(entry),
+    modelOverrideSource:
+      selectedModel.storedOverrideSource === "parent"
+        ? "inherited"
+        : resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,
-    contextBudgetStatus: entry?.contextBudgetStatus,
+    contextBudgetStatus: resolveProjectedSessionContextBudgetStatus({
+      entry,
+      provider: rowModelProvider,
+      model: rowModel,
+      contextTokens,
+    }),
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel,
     lastTo: deliveryFields.lastTo,

@@ -1,4 +1,3 @@
-// Verifies plugin loader runtime registry behavior.
 import fs, { writeFileSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
@@ -21,10 +20,9 @@ import {
   getRegisteredEmbeddingProvider,
   registerEmbeddingProvider,
 } from "./embedding-providers.js";
-import {
-  loadInstalledPluginIndexInstallRecordsSync,
-  writePersistedInstalledPluginIndexInstallRecordsSync,
-} from "./installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+// Verifies plugin loader runtime registry behavior.
+import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import * as loaderModule from "./loader-module-runtime.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
@@ -629,9 +627,11 @@ describe("resolvePluginLoadCacheContext", () => {
     };
     // Writing an installed index invalidates the current metadata generation,
     // so prepare the custom profile before installing the process snapshot.
-    writePersistedInstalledPluginIndexInstallRecordsSync(profileInstallRecords, {
+    refreshPersistedInstalledPluginIndex({
       env: profileEnv,
       candidates: [],
+      reason: "source-changed",
+      installRecords: profileInstallRecords,
     });
     const { config, env, installRecords, workspaceDir } = setLoaderMetadataSnapshot();
 

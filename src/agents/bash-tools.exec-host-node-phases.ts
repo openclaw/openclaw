@@ -27,7 +27,10 @@ import {
   resolveAllowAlwaysPatternCoverage,
   type AllowAlwaysPattern,
 } from "../infra/exec-approvals.js";
-import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
+import {
+  hasPosixShellStartupBeforeInlineCommand,
+  isBlockedShellWrapperCommand,
+} from "../infra/exec-wrapper-resolution.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   parsePreparedSystemRunPayload,
@@ -39,6 +42,7 @@ import {
 } from "../infra/system-run-command.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
+import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
 import {
   formatNodeInvokeFailureToolResult,
   invokeNodeSystemRun,
@@ -82,6 +86,8 @@ type NodeApprovalAnalysis = {
   nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
+  autoReviewBlockedByShellStartup: boolean;
+  autoReviewEligibility: ReturnType<typeof resolveNodeAutoApprovalEligibility>;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
@@ -688,6 +694,16 @@ export async function analyzeNodeApprovalRequirement(params: {
       `${obsoleteGeneratedApprovalCount} older generated exec ${obsoleteGeneratedApprovalCount === 1 ? "approval is" : "approvals are"} inactive on this node because they are not tied to a working directory. Run "openclaw doctor --fix" on the node, then rerun the workflow and choose "Always allow here".`,
     );
   }
+  const autoReviewEligibility = resolveNodeAutoApprovalEligibility({
+    argv: params.prepared.argv,
+    shellPayload: preparedShellPayload,
+    platform: params.target.platform,
+    authorizationPlan: autoReviewBindingEval.authorizationPlan,
+    segmentSatisfiedBy: autoReviewBindingEval.segmentSatisfiedBy,
+  });
+  const autoReviewBlockedByShellStartup = autoReviewBindingEval.segments.some((segment) =>
+    hasPosixShellStartupBeforeInlineCommand(segment.argv),
+  );
   return {
     analysisOk,
     allowlistSatisfied,
@@ -697,17 +713,23 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
-    allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
-      segments: baseAllowlistEval.segments,
-      commandText: approvalCommand,
-      cwd: approvalCwd,
-      env: analysisEnv,
-      platform: params.target.platform,
-      strictInlineEval: params.request.strictInlineEval,
-      authorizationPlan: baseAllowlistEval.authorizationPlan,
-      runtimePayload: inlineEvalHit !== null,
-      preparedCoverage: params.prepared.allowAlwaysCoverage,
-    }),
+    autoReviewBlockedByShellStartup,
+    autoReviewEligibility,
+    allowAlwaysPersistence:
+      params.request.autoReview === true &&
+      (autoReviewBlockedByShellStartup || !autoReviewEligibility.eligible)
+        ? { kind: "one-shot", reasons: ["no-reusable-pattern"] }
+        : resolveAllowAlwaysPersistenceDecision({
+            segments: baseAllowlistEval.segments,
+            commandText: approvalCommand,
+            cwd: approvalCwd,
+            env: analysisEnv,
+            platform: params.target.platform,
+            strictInlineEval: params.request.strictInlineEval,
+            authorizationPlan: baseAllowlistEval.authorizationPlan,
+            runtimePayload: inlineEvalHit !== null,
+            preparedCoverage: params.prepared.allowAlwaysCoverage,
+          }),
     autoReviewArgv,
   };
 }

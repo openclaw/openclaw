@@ -230,6 +230,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
         .toBe(true);
 
       await openChatSidePanelType(page, "Files");
+      await page.locator(".chat-workspace-rail__group-summary", { hasText: "Artifacts" }).click();
       const artifactRow = page.locator(".chat-workspace-rail__file-open", {
         hasText: "openclaw-banner.png",
       });

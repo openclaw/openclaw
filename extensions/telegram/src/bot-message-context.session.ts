@@ -568,6 +568,9 @@ export async function buildTelegramInboundContextPayload(params: {
   const hasGroupHistoryContext = isGroup;
   const commandBody = normalizeCommandBody(rawBody, {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
+    // Preserve multiline text-directive arguments for the core boundary (#138545);
+    // native strictness is re-derived core-side from the same text.
+    preserveArguments: true,
   });
   const commandSource =
     options?.commandSource ??

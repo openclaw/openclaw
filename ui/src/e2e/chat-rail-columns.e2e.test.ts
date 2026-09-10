@@ -60,6 +60,7 @@ function scenario(): ControlUiMockGatewayScenario {
       "browser.request",
       "desktop.observe",
       "environments.list",
+      "environments.status",
       "sessions.diff",
       "tasks.list",
       "terminal.open",
@@ -77,9 +78,7 @@ function scenario(): ControlUiMockGatewayScenario {
         control: false,
         auth: "vnc-password",
       },
-      "environments.list": {
-        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
-      },
+      "environments.status": { id: "gateway", type: "local", status: "available", desktop: true },
       "sessions.diff": {
         sessionKey,
         root: "/workspace/openclaw",

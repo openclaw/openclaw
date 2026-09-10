@@ -88,18 +88,32 @@ describe("sqlite hot query plans", () => {
          LIMIT 50
       `,
     });
-    expectPlanUsesIndex({
-      db: database.db,
-      indexName: "idx_plugin_state_listing",
-      params: ["telegram", "kv"],
-      sql: `
+    const pluginListingPlan = explainQueryPlan(
+      database.db,
+      `
         SELECT entry_key, value_json
           FROM plugin_state_entries
          WHERE plugin_id = ? AND namespace = ?
          ORDER BY created_at ASC, entry_key
          LIMIT 50
       `,
-    });
+      ["telegram", "kv"],
+    );
+    expect(pluginListingPlan).toContain("idx_plugin_state_listing");
+    expect(pluginListingPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+    for (const namespace of [undefined, "kv"]) {
+      expectPlanIncludes({
+        db: database.db,
+        expected: "USING COVERING INDEX idx_plugin_state_listing",
+        params: namespace ? ["telegram", namespace, 1000] : ["telegram", 1000],
+        sql: `
+          SELECT count(*)
+            FROM plugin_state_entries
+           WHERE plugin_id = ? ${namespace ? "AND namespace = ?" : ""}
+             AND (expires_at IS NULL OR expires_at > ?)
+        `,
+      });
+    }
     expectPlanUsesIndex({
       db: database.db,
       indexName: "idx_channel_ingress_pending",

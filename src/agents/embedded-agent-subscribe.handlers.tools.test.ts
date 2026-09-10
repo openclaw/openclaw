@@ -25,7 +25,6 @@ import { addSession, deleteSession, markExited } from "./bash-process-registry.j
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
-import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
   handleToolExecutionEnd,
@@ -191,9 +190,6 @@ function createTestContext(): {
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
       itemCompletedCount: 0,
-      pendingMessagingTargets: new Map<string, MessagingToolSend>(),
-      pendingMessagingTexts: new Map<string, string>(),
-      pendingMessagingMediaUrls: new Map<string, string[]>(),
       pendingToolMediaUrls: [],
       pendingToolMediaTrustByUrl: new Map(),
       toolAutoDeliveryMediaUrls: new Set(),
@@ -3686,7 +3682,7 @@ describe("messaging tool media URL tracking", () => {
     ctx.params.currentThreadId = "171.222";
     ctx.params.replyToMode = "all";
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "message",
       toolCallId: "tool-threaded-message",
       args: {
@@ -3694,13 +3690,16 @@ describe("messaging tool media URL tracking", () => {
         to: "user:U1",
         content: "hi",
       },
+      isError: false,
+      result: { details: { messageId: "message-threaded" } },
     });
 
-    expect(ctx.state.pendingMessagingTargets.get("tool-threaded-message")).toMatchObject({
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
       provider: "slack",
       to: "user:u1",
       threadId: "171.222",
       threadImplicit: true,
+      text: "hi",
     });
   });
 
@@ -3742,8 +3741,6 @@ describe("messaging tool media URL tracking", () => {
       toolCallId,
       args: { action: "send", to: "1234", message: "thread ownership" },
     });
-
-    expect(ctx.state.pendingMessagingTargets.get(toolCallId)?.threadId).toBe(currentThreadId);
 
     await endTool(ctx, {
       toolName: "message",
@@ -3879,21 +3876,7 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
-  it("tracks media arg from messaging tool as pending", async () => {
-    const { ctx } = createTestContext();
-
-    const evt: ToolExecutionStartEvent = {
-      toolName: "message",
-      toolCallId: "tool-m1",
-      args: { action: "send", to: "channel:123", content: "hi", media: "file:///img.jpg" },
-    };
-
-    await startTool(ctx, evt);
-
-    expect(ctx.state.pendingMessagingMediaUrls.get("tool-m1")).toEqual(["file:///img.jpg"]);
-  });
-
-  it("commits pending media URL on tool success", async () => {
+  it("commits media URL on tool success", async () => {
     const { ctx } = createTestContext();
 
     // Simulate start
@@ -3921,7 +3904,6 @@ describe("messaging tool media URL tracking", () => {
       text: "hi",
       mediaUrls: ["file:///img.jpg"],
     });
-    expect(ctx.state.pendingMessagingMediaUrls.has("tool-m2")).toBe(false);
   });
 
   it("commits mediaUrls from tool result payload", async () => {
@@ -3976,7 +3958,6 @@ describe("messaging tool media URL tracking", () => {
       },
       provider: "discord",
       mediaUrls: ["/tmp/generated-song.mp3"],
-      verifyPendingMedia: true,
     },
     {
       name: "commits message attachment aliases as delivery evidence",
@@ -4003,12 +3984,9 @@ describe("messaging tool media URL tracking", () => {
       provider: "discord",
       mediaUrls: ["/tmp/generated-song.mp3"],
     },
-  ])("$name", async ({ toolCallId, args, provider, mediaUrls, verifyPendingMedia }) => {
+  ])("$name", async ({ toolCallId, args, provider, mediaUrls }) => {
     const { ctx } = createTestContext();
     await startTool(ctx, { toolName: "message", toolCallId, args });
-    if (verifyPendingMedia) {
-      expect(ctx.state.pendingMessagingMediaUrls.get(toolCallId)).toEqual(mediaUrls);
-    }
     await endTool(ctx, {
       toolName: "message",
       toolCallId,
@@ -4022,9 +4000,6 @@ describe("messaging tool media URL tracking", () => {
       text: "track ready",
       mediaUrls,
     });
-    if (verifyPendingMedia) {
-      expect(ctx.state.pendingMessagingMediaUrls.has(toolCallId)).toBe(false);
-    }
   });
 
   it("commits internal-ui source replies from successful message sends", async () => {
@@ -4307,7 +4282,7 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSentMediaUrls).not.toContain("file:///img-0.jpg");
   });
 
-  it("discards pending media URL on tool error", async () => {
+  it("does not commit media URL on tool error", async () => {
     const { ctx } = createTestContext();
 
     const startEvt: ToolExecutionStartEvent = {
@@ -4328,7 +4303,6 @@ describe("messaging tool media URL tracking", () => {
     await endTool(ctx, endEvt);
 
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
-    expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
 });
 

@@ -346,7 +346,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             `
           : nothing
       }
-      ${disabledBanner} ${progressCard} ${queue} ${goalCard}
+      ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing} ${progressCard}
+      ${queue} ${goalCard}
       ${
         showComposerInput
           ? html`<div
@@ -566,7 +567,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 </div>
               </div>
             </div> `
-          : nothing
+          : props.disabledBanner?.kind === "composer-replacement"
+            ? disabledBanner
+            : nothing
       }
       ${composerUnderlaps}
     </div>

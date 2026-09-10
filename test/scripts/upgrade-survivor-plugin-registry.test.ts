@@ -287,3 +287,78 @@ describe("standalone upgrade survivor live OpenAI probe", () => {
     expect(args).not.toContain(key);
   });
 });
+
+describe("legacy operator baseline plugin cohort", () => {
+  it.each([
+    ["2026.7.1-1", "2026.7.1"],
+    ["2026.7.1-2", "2026.7.1"],
+    ["2026.8.1", "2026.8.1"],
+    ["2026.8.1-beta.3", "2026.8.1-beta.3"],
+  ])("installs the published plugin cohort for core %s", (baseline, pluginVersion) => {
+    const root = tempDirs.make("openclaw-survivor-plugin-cohort-");
+    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const runner = join(root, "run.sh");
+    // Exercise registry preparation and installation together; only external
+    // npm/CLI operations are replaced so a corrected core never pins a nonexistent plugin.
+    writeFileSync(
+      runner,
+      `${source.slice(0, source.indexOf("phase storage-preflight"))}
+trap - EXIT ERR HUP INT TERM
+baseline_version="$BASELINE_VERSION"
+candidate_version=2026.9.4
+npm() {
+  printf '%s\\n' "$2" >"$CAPTURE_DIR/packed-spec"
+  printf 'discord.tgz\\n'
+}
+openclaw_prepublish_plugin_registry_start() {
+  printf '%s\\n' "$@" >"$CAPTURE_DIR/registry-args"
+  printf '%s\\n' "$OPENCLAW_NPM_REGISTRY_DIST_TAGS" >"$CAPTURE_DIR/dist-tags"
+}
+openclaw_e2e_fixture_plugin_command() {
+  printf '%s\\n' "$@" >"$CAPTURE_DIR/install-args"
+}
+node() {
+  if [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ]; then
+    printf '%s\\n' "$@" >"$CAPTURE_DIR/assert-args"
+  else
+    command node "$@"
+  fi
+}
+configure_plugin_registry baseline
+install_companion_plugins
+printf '%s\\n' "$baseline_version" >"$CAPTURE_DIR/core-version"
+`,
+    );
+    const result = spawnSync("bash", [runner], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: {
+        ...process.env,
+        BASELINE_VERSION: baseline,
+        CAPTURE_DIR: root,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baseline}`,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(root, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(root, "artifacts", "summary.json"),
+        OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC: join(root, "candidate.tgz"),
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(join(root, "packed-spec"), "utf8")).toBe(
+      `@openclaw/discord@${pluginVersion}\n`,
+    );
+    expect(readFileSync(join(root, "dist-tags"), "utf8")).toBe(
+      `latest=${pluginVersion},beta=${pluginVersion}\n`,
+    );
+    expect(readFileSync(join(root, "registry-args"), "utf8")).toContain(
+      `@openclaw/discord\n${pluginVersion}\n`,
+    );
+    expect(readFileSync(join(root, "assert-args"), "utf8")).toBe(
+      `scripts/e2e/lib/upgrade-survivor/assertions.mjs\nassert-baseline-plugin\n${pluginVersion}\n`,
+    );
+    expect(readFileSync(join(root, "install-args"), "utf8")).toBe(
+      "openclaw\n--\nplugins\ninstall\n@openclaw/discord@latest\n",
+    );
+    expect(readFileSync(join(root, "core-version"), "utf8")).toBe(`${baseline}\n`);
+  });
+});
