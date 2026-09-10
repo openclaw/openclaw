@@ -221,6 +221,8 @@ export function renderChatPaneComposerControls(params: {
           onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
           onModelPickerOpenChange: (open) => {
             state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
+            // Closing also needs a render; catalog refresh only invalidates on open.
+            state.requestUpdate?.();
           },
           onModelSelect: (next, targetSessionKey) =>
             modelAccess.allowed
