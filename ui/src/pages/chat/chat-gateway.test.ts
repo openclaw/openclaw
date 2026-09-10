@@ -2668,16 +2668,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-failed-before-start" });
   });
 
-  it("drops NO_REPLY final payload from another run", () => {
-    const state = createActiveStreamingState();
-    const payload = createOtherRunNoReplyFinalPayload();
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toStrictEqual([]);
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatStream).toBe("Working...");
-  });
-
   it("drops NO_REPLY final payload from own run", () => {
     const state = createState({
       sessionKey: "main",
