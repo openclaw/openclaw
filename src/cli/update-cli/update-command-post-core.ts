@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -17,6 +18,7 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
+import { readPackageActivationContinuation } from "../../infra/package-update-activation.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import {
@@ -35,11 +37,13 @@ import {
   POST_CORE_UPDATE_STARTED_AT_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
+import { adoptUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../plugins/installed-plugin-index-records.js";
 import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store-write.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { createCommandTerminationController } from "../../process/exec-termination.js";
 import { runExec } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
@@ -47,7 +51,17 @@ import {
   normalizePluginInstallRecordMap,
   writePostCoreSourceConfigFile,
 } from "./update-command-config.js";
+import {
+  withUpdateCommandExecutorChild,
+  type UpdateCommandChildBinding,
+  type UpdateCommandChildGrant,
+} from "./update-command-executor.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import {
+  POST_CORE_EXECUTOR_FD,
+  POST_CORE_EXECUTOR_MAX_BYTES,
+} from "./update-command-post-core-admission.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-run.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
@@ -284,11 +298,25 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   exitCode?: number;
   error?: string;
 }> {
+  const run = params.opts.run
+    ? { runId: params.opts.run.runId, env: { ...params.opts.run.env } }
+    : undefined;
+  const fence = params.opts.run?.executorFence;
+  const continuation = readPackageActivationContinuation(resolveUpdateInstallRoot(params.root));
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
+    if (continuation) {
+      throw new Error("Retained publication has no post-core receiver.");
+    }
     return { resumed: false };
   }
   const nodeRunner = params.nodeRunner ?? resolveNodeRunner();
+  if (continuation) {
+    assertUpdatePackageActivationAdmission(params.root, { continuation: fence });
+    if (!["index.js", "index.mjs"].includes(path.basename(entryPath))) {
+      throw new Error("Retained publication requires an in-process post-core receiver.");
+    }
+  }
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   if (params.opts.acceptCapabilities) {
     // Same-version artifacts can expose different CLI options. Keep consent in
@@ -299,6 +327,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       timeoutMs: params.timeoutMs,
     });
     if (!/^[\t ]*--accept-capabilities(?:[\t ]|$)/m.test(stripVTControlCharacters(stdout))) {
+      if (continuation) {
+        throw new Error("Retained publication cannot receive capability consent.");
+      }
       return { resumed: false };
     }
   }
@@ -337,7 +368,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     if (!tentative) {
       return;
     }
-    await withPluginLifecycleLease({}, async (lease) => {
+    fence?.assertCurrent();
+    await withPluginLifecycleLease({ assertCurrent: fence?.assertCurrent }, async (lease) => {
+      fence?.assertCurrent();
       await restorePersistedInstalledPluginIndexIfCurrent(tentative.previous, tentative.revision, {
         lease,
       });
@@ -346,8 +379,10 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   };
 
   try {
+    fence?.assertCurrent();
     if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
-      await withPluginLifecycleLease({}, async (lease) => {
+      await withPluginLifecycleLease({ assertCurrent: fence?.assertCurrent }, async (lease) => {
+        fence?.assertCurrent();
         tentativePluginIndex = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
           pluginInstallRecords,
           {
@@ -379,113 +414,200 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       await fs.writeFile(sentinelPath, JSON.stringify(sentinel), { mode: 0o600 });
       handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
     }
-    const child = spawn(nodeRunner, argv, {
-      stdio: childStdio,
-      env: {
-        ...handoffEnv,
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        ...(params.opts.run ? { [UPDATE_RUN_ID_ENV]: params.opts.run.runId } : {}),
-        [POST_CORE_UPDATE_ENV]: "1",
-        [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
-        [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
-        [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
-        [POST_CORE_UPDATE_STARTED_AT_ENV]: String(params.updateStartedAtMs),
-      },
-    });
-    // JSON callers own stdout, so child diagnostics must remain off that protocol stream.
-    if (childStdio === "pipe") {
-      child.stdout?.pipe(jsonMode ? process.stderr : process.stdout);
-      child.stderr?.pipe(process.stderr);
-    }
+    const runChild = async (
+      grant?: UpdateCommandChildGrant,
+      bindChild?: UpdateCommandChildBinding,
+    ) => {
+      const input = grant ? Buffer.from(JSON.stringify(grant)) : undefined;
+      if (input && input.byteLength > POST_CORE_EXECUTOR_MAX_BYTES) {
+        throw new Error("Post-core executor grant exceeds its bound.");
+      }
+      const child = spawn(nodeRunner, argv, {
+        stdio: grant ? [childStdio, childStdio, childStdio, "pipe"] : childStdio,
+        detached: Boolean(grant),
+        env: {
+          ...handoffEnv,
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          ...(run ? { [UPDATE_RUN_ID_ENV]: run.runId } : {}),
+          [POST_CORE_UPDATE_ENV]: "1",
+          [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
+          [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
+          [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
+          [POST_CORE_UPDATE_STARTED_AT_ENV]: String(params.updateStartedAtMs),
+        },
+      });
+      // JSON callers own stdout, so child diagnostics must remain off that protocol stream.
+      if (childStdio === "pipe") {
+        child.stdout?.pipe(jsonMode ? process.stderr : process.stdout);
+        child.stderr?.pipe(process.stderr);
+      }
 
-    const childResult = await new Promise<
-      | { kind: "exit"; exitCode: number }
-      | { kind: "plugin-update"; pluginUpdate: PostCorePluginUpdateResult }
-    >((resolve, reject) => {
-      let closed = false;
-      let exited = false;
-      let committed: PostCorePluginUpdateResult | undefined;
-      let childError: Error | undefined;
-      let terminationError: unknown;
-      let termination = Promise.resolve();
-      let forceStop: NodeJS.Timeout | undefined;
-      const resultPoll = setInterval(() => {
-        void readPostCoreUpdateResultFile(resultPath)
-          .then((pluginUpdate) => {
-            if (
-              closed ||
-              exited ||
-              committed ||
-              childError ||
-              !pluginUpdate ||
-              pluginUpdate.status === "failed"
-            ) {
-              return;
-            }
-            committed = pluginUpdate;
-            // Preserve committed convergence even if stopping its writer fails.
-            // Neither a termination signal nor a helper error can undo that commit.
-            tentativePluginIndex = undefined;
-            clearInterval(resultPoll);
-            if (process.platform !== "win32") {
-              forceStop = setTimeout(() => {
-                if (child.exitCode === null && child.signalCode === null) {
-                  try {
-                    child.kill("SIGKILL");
-                  } catch (error) {
-                    terminationError = error;
-                  }
-                }
-              }, POST_CORE_UPDATE_STOP_GRACE_MS);
-              forceStop.unref();
-            }
-            termination = Promise.resolve()
-              .then(() => {
-                if (!exited) {
-                  return stopPostCoreUpdateChild(child);
-                }
-                return undefined;
-              })
-              .catch((error: unknown) => {
-                terminationError = error;
-              });
-          })
-          .catch(() => undefined);
-      }, POST_CORE_UPDATE_RESULT_POLL_MS);
-      child.once("error", (error) => {
-        childError = error;
-      });
-      child.once("exit", () => {
-        exited = true;
-        clearInterval(resultPoll);
-      });
-      child.once("close", (code, signal) => {
-        closed = true;
-        clearInterval(resultPoll);
-        clearTimeout(forceStop);
-        // A result file commits plugin work, but does not settle its writer.
-        // Also join taskkill before handing control to Doctor or checkpoint capture.
-        void termination
-          .then(async () => {
-            // Close may beat an in-flight poll. Read the final committed result
-            // without signaling an exited writer or treating its signal as rollback.
-            const finalResult = committed ?? (await readPostCoreUpdateResultFile(resultPath));
-            if (finalResult && finalResult.status !== "failed") {
+      return await new Promise<
+        | { kind: "exit"; exitCode: number }
+        | { kind: "plugin-update"; pluginUpdate: PostCorePluginUpdateResult }
+      >((resolve, reject) => {
+        let closed = false;
+        let exited = false;
+        let committed: PostCorePluginUpdateResult | undefined;
+        let childError: Error | undefined;
+        let terminationError: unknown;
+        let termination = Promise.resolve();
+        let forceStop: NodeJS.Timeout | undefined;
+        const inputPipe = grant ? child.stdio[POST_CORE_EXECUTOR_FD] : undefined;
+        let inputFinished = !grant;
+        const group = grant
+          ? createCommandTerminationController({
+              child,
+              cancelController: new AbortController(),
+              processTree: { mode: "graceful" },
+              killGraceMs: POST_CORE_UPDATE_STOP_GRACE_MS,
+              isChildExited: () => exited,
+              isCommandSettled: () => closed,
+            })
+          : undefined;
+        const failInput = (cause: unknown) => {
+          childError ??=
+            cause instanceof Error ? cause : new Error("Post-core input failed", { cause });
+          if (inputPipe instanceof Writable) {
+            inputPipe.destroy();
+          }
+          group?.terminate();
+        };
+        const deadline = grant
+          ? setTimeout(
+              () => failInput(new Error("Post-core executor timed out.")),
+              params.timeoutMs,
+            )
+          : undefined;
+        const resultPoll = setInterval(() => {
+          void readPostCoreUpdateResultFile(resultPath)
+            .then((pluginUpdate) => {
+              if (
+                closed ||
+                exited ||
+                committed ||
+                childError ||
+                !pluginUpdate ||
+                pluginUpdate.status === "failed"
+              ) {
+                return;
+              }
+              committed = pluginUpdate;
+              // Preserve committed convergence even if stopping its writer fails.
+              // Neither a termination signal nor a helper error can undo that commit.
               tentativePluginIndex = undefined;
-              resolve({ kind: "plugin-update", pluginUpdate: finalResult });
-            } else if (terminationError) {
-              reject(new Error("Post-core writer termination failed", { cause: terminationError }));
-            } else if (childError) {
-              reject(childError);
-            } else if (signal) {
-              reject(new Error(`post-update process terminated by signal ${signal}`));
-            } else {
-              resolve({ kind: "exit", exitCode: code ?? 1 });
+              clearInterval(resultPoll);
+              if (group) {
+                group.terminate();
+                return;
+              }
+              if (process.platform !== "win32") {
+                forceStop = setTimeout(() => {
+                  if (child.exitCode === null && child.signalCode === null) {
+                    try {
+                      child.kill("SIGKILL");
+                    } catch (error) {
+                      terminationError = error;
+                    }
+                  }
+                }, POST_CORE_UPDATE_STOP_GRACE_MS);
+                forceStop.unref();
+              }
+              termination = Promise.resolve()
+                .then(() => {
+                  if (!exited) {
+                    return stopPostCoreUpdateChild(child);
+                  }
+                  return undefined;
+                })
+                .catch((error: unknown) => {
+                  terminationError = error;
+                });
+            })
+            .catch(() => undefined);
+        }, POST_CORE_UPDATE_RESULT_POLL_MS);
+        child.once("error", (error) => {
+          childError = error;
+          group?.terminate();
+        });
+        child.once("exit", () => {
+          exited = true;
+          clearInterval(resultPoll);
+          if (!inputFinished) {
+            failInput(new Error("Post-core receiver exited before accepting its executor."));
+          }
+          // The root exiting does not settle descendants that inherited the grant.
+          group?.terminate();
+        });
+        child.once("close", (code, signal) => {
+          closed = true;
+          clearInterval(resultPoll);
+          clearTimeout(forceStop);
+          clearTimeout(deadline);
+          // A result file commits plugin work, but does not settle its writer.
+          // Also join taskkill before handing control to Doctor or checkpoint capture.
+          void termination
+            .then(async () => {
+              if (group && (await group.settle()) === "uncertain") {
+                throw new Error("Post-core executor process group has not settled.");
+              }
+              if (childError) {
+                throw childError;
+              }
+              // Close may beat an in-flight poll. Read the final committed result
+              // without signaling an exited writer or treating its signal as rollback.
+              const finalResult = committed ?? (await readPostCoreUpdateResultFile(resultPath));
+              if (finalResult && finalResult.status !== "failed") {
+                tentativePluginIndex = undefined;
+                resolve({ kind: "plugin-update", pluginUpdate: finalResult });
+              } else if (terminationError) {
+                reject(
+                  new Error("Post-core writer termination failed", { cause: terminationError }),
+                );
+              } else if (signal) {
+                reject(new Error(`post-update process terminated by signal ${signal}`));
+              } else {
+                resolve({ kind: "exit", exitCode: code ?? 1 });
+              }
+            })
+            .catch(reject);
+        });
+        if (grant) {
+          // Install every process and pipe observer before binding the real PID.
+          // Only this synchronous bind permits bytes, followed by EOF, to leave.
+          if (inputPipe instanceof Writable) {
+            inputPipe.once("error", failInput);
+            inputPipe.once("finish", () => {
+              inputFinished = true;
+            });
+            inputPipe.once("close", () => {
+              if (!inputFinished && !closed) {
+                failInput(new Error("Post-core executor pipe closed before EOF."));
+              }
+            });
+          }
+          try {
+            if (!child.pid || !(inputPipe instanceof Writable) || !bindChild || !run) {
+              throw new Error("Post-core executor has no live child pipe.");
             }
-          })
-          .catch(reject);
+            bindChild(child.pid, (identity) => {
+              adoptUpdateRun(run.runId, {
+                env: run.env,
+                driver: { host: os.hostname(), ...identity },
+              });
+            });
+            inputPipe.end(input);
+          } catch (cause) {
+            failInput(cause);
+          }
+        }
       });
-    });
+    };
+    fence?.assertCurrent();
+    const childResult = continuation
+      ? await withUpdateCommandExecutorChild(fence!, runChild)
+      : await runChild();
+    fence?.assertCurrent();
 
     const postCoreResult =
       childResult.kind === "plugin-update"

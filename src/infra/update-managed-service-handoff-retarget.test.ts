@@ -331,12 +331,12 @@ unix.each(["update", "foreground", "retarget"] as const)(
   "retires a dead legacy process only at %s admission",
   (admission) => {
     const { from, to, store, source, options } = fixture();
-    const child = spawnSync(process.execPath, ["-e", "console.log(process.pid)"], {
-      encoding: "utf8",
-    });
+    const child = spawnSync(process.execPath, ["-e", ""]);
     expect(child.status).toBe(0);
-    const pid = Number(child.stdout.trim());
-    expect(() => process.kill(pid, 0)).toThrow();
+    const pid = child.pid;
+    expect(Number.isInteger(pid)).toBe(true);
+    expect(pid).toBeGreaterThan(0);
+    expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     const db = new DatabaseSync(options.databasePath);
     try {
       const payload = JSON.stringify({ version: 1, pid, startIdentity: "0" });
@@ -618,12 +618,12 @@ unix(
     const store = createManagedHandoffLeaseStore();
     const reserved = store.acquire(to, "legacy-owner", { kind: "update" });
     expect(reserved.kind).toBe("acquired");
-    const dead = spawnSync(process.execPath, ["-e", "console.log(process.pid)"], {
-      encoding: "utf8",
-    });
+    const dead = spawnSync(process.execPath, ["-e", ""]);
     expect(dead.status).toBe(0);
-    const pid = Number(dead.stdout.trim());
-    expect(() => process.kill(pid, 0)).toThrow();
+    const pid = dead.pid;
+    expect(Number.isInteger(pid)).toBe(true);
+    expect(pid).toBeGreaterThan(0);
+    expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
     const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
     try {
       db.prepare("UPDATE managed_update_handoffs SET payload_json = ? WHERE install_root = ?").run(

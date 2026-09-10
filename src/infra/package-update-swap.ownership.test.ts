@@ -1,15 +1,297 @@
-import { unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import fsSync, { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  openPackageActivationJournal,
+  resolvePackageActivationAnchor,
+  type PackageActivationJournal,
+} from "./package-update-activation-journal.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "./package-update-swap.test-support.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "./update-managed-service-handoff-database.js";
+import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+type JournaledSwap = Awaited<ReturnType<typeof createPackageSwapFixture>> & {
+  transaction: PackageUpdateTransaction;
+  anchor: string;
+  journal: PackageActivationJournal;
+  fence: UpdateRecoveryFence;
+  databasePath: string;
+};
+
+async function withJournaledSwap(run: (fixture: JournaledSwap) => Promise<void>) {
+  const base = await fs.realpath(tempDirs.make("openclaw-journal-retirement-"));
+  const fixture = await createPackageSwapFixture(base);
+  const stageRoot = fixture.params.stage.packageRoot;
+  const worker = runtimeProcessEntrypoints.updateMigratedFinalize;
+  const checkPath = path.join(stageRoot, "dist", worker.distWorkerPath);
+  await fs.mkdir(path.dirname(checkPath), { recursive: true });
+  await fs.writeFile(
+    path.join(stageRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version: "2.0.0", type: "module" }),
+  );
+  await fs.writeFile(
+    checkPath,
+    `await import(${JSON.stringify(resolveRuntimeWorkerUrl(worker).href)});\n`,
+  );
+  await writePackageDistInventory(stageRoot);
+  const databasePath = path.join(base, "authority", "managed-update-handoffs.sqlite");
+  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
+  await withUpdateCommandExecutor(
+    randomUUID(),
+    async (executor) => {
+      const fence = await executor.enter(fixture.packageRoot);
+      let transaction: PackageUpdateTransaction | undefined;
+      const result = await swapStagedPackageInstall({
+        ...fixture.params,
+        activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+        onTransaction: (value) => {
+          transaction = value;
+        },
+      });
+      expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+      if (!transaction) {
+        throw new Error("Journaled swap did not retain its transaction");
+      }
+      const anchor = resolvePackageActivationAnchor(fixture.packageRoot);
+      const journal = openPackageActivationJournal(anchor);
+      expect(journal.read().phase).toBe("publication-complete");
+      await run({ ...fixture, transaction, anchor, journal, fence, databasePath });
+    },
+    {
+      existingAuthority: {
+        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+        installKey: fixture.packageRoot,
+      },
+    },
+  );
+}
+
+describe.runIf(process.platform !== "win32" && !process.versions.bun)(
+  "journaled package transaction retirement",
+  () => {
+    it("shares concurrent retirement and returns only after final anchor removal settles", async () => {
+      await withJournaledSwap(async ({ transaction, anchor, packageRoot, launcher, fence }) => {
+        const entered = createDeferred();
+        const release = createDeferred();
+        const rmdir = fs.rmdir.bind(fs);
+        const rmdirSpy = vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+          await rmdir(...args);
+          if (String(args[0]) === anchor) {
+            entered.resolve();
+            await release.promise;
+          }
+        });
+        const rm = vi.spyOn(fs, "rm");
+        const first = transaction.complete({ activationVerified: true }, fence.assertCurrent);
+        const firstSettled = vi.fn();
+        void first.then(firstSettled, firstSettled);
+        let second: ReturnType<PackageUpdateTransaction["complete"]> | undefined;
+        try {
+          await Promise.race([entered.promise, first]);
+          expect(rmdirSpy.mock.calls.filter(([target]) => String(target) === anchor)).toHaveLength(
+            1,
+          );
+          await expect(fs.lstat(anchor)).rejects.toMatchObject({ code: "ENOENT" });
+          second = transaction.complete({ activationVerified: true }, fence.assertCurrent);
+          const secondSettled = vi.fn();
+          void second.then(secondSettled, secondSettled);
+          await Promise.resolve();
+          expect(firstSettled).not.toHaveBeenCalled();
+          expect(secondSettled).not.toHaveBeenCalled();
+        } finally {
+          release.resolve();
+          await Promise.allSettled([first, ...(second ? [second] : [])]);
+        }
+        await expect(first).resolves.toBeUndefined();
+        await expect(second).resolves.toBeUndefined();
+        expect(rmdirSpy.mock.calls.filter(([target]) => String(target) === anchor)).toHaveLength(1);
+        expect(
+          rm.mock.calls.filter(([target]) => String(target) === transaction.backupRoot),
+        ).toHaveLength(1);
+        await expect(
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain('"version":"2.0.0"');
+        await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
+      });
+    });
+
+    it("retires once when two completions await the same in-flight rollback", async () => {
+      await withJournaledSwap(
+        async ({ transaction, anchor, journal, packageRoot, launcher, fence }) => {
+          const entered = createDeferred();
+          const release = createDeferred();
+          const rename = fs.rename.bind(fs);
+          const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+            if (String(args[0]) === transaction.backupRoot && String(args[1]) === packageRoot) {
+              entered.resolve();
+              await release.promise;
+            }
+            return rename(...args);
+          });
+          const rmdir = vi.spyOn(fs, "rmdir");
+          const rollback = transaction.rollback(fence.assertCurrent);
+          const completions: ReturnType<PackageUpdateTransaction["complete"]>[] = [];
+          try {
+            await Promise.race([entered.promise, rollback]);
+            expect(journal.read().phase).toBe("rollback-in-progress");
+            expect(transaction.rollback(fence.assertCurrent)).toBe(rollback);
+            completions.push(
+              transaction.complete({ activationVerified: false }, fence.assertCurrent),
+              transaction.complete({ activationVerified: false }, fence.assertCurrent),
+            );
+            expect(rmdir.mock.calls.filter(([target]) => String(target) === anchor)).toEqual([]);
+          } finally {
+            release.resolve();
+            await Promise.allSettled([rollback, ...completions]);
+          }
+          await expect(rollback).resolves.toMatchObject({ exitCode: 0 });
+          await expect(Promise.all(completions)).resolves.toEqual([undefined, undefined]);
+          expect(
+            renameSpy.mock.calls.filter(
+              ([source, destination]) =>
+                String(source) === transaction.backupRoot && String(destination) === packageRoot,
+            ),
+          ).toHaveLength(1);
+          expect(rmdir.mock.calls.filter(([target]) => String(target) === anchor)).toHaveLength(1);
+          await expect(fs.lstat(anchor)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(
+            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"1.0.0"');
+          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+        },
+      );
+    });
+
+    it("caches a failed retirement after the filesystem recovers and refuses rollback", async () => {
+      await withJournaledSwap(
+        async ({ transaction, anchor, journal, packageRoot, launcher, fence }) => {
+          const failure = Object.assign(new Error("retirement removal denied"), { code: "EACCES" });
+          const rm = fs.rm.bind(fs);
+          const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+            if (String(args[0]) === transaction.backupRoot) {
+              throw failure;
+            }
+            return rm(...args);
+          });
+          const packageIdentity = (await fs.lstat(packageRoot)).ino;
+          const launcherIdentity = (await fs.lstat(launcher)).ino;
+          const completions = await Promise.allSettled([
+            transaction.complete({ activationVerified: true }, fence.assertCurrent),
+            transaction.complete({ activationVerified: true }, fence.assertCurrent),
+          ]);
+          for (const completion of completions) {
+            expect(completion.status).toBe("rejected");
+            if (completion.status === "rejected") {
+              expect(completion.reason).toBe(failure);
+            }
+          }
+          expect(
+            rmSpy.mock.calls.filter(([target]) => String(target) === transaction.backupRoot),
+          ).toHaveLength(1);
+          rmSpy.mockRestore();
+          const retained = journal.read();
+          expect(retained).toMatchObject({
+            phase: "retiring",
+            intent: { kind: "remove", name: "previous", selected: "candidate" },
+          });
+          const artifacts = await fs.readdir(anchor);
+          const rename = vi.spyOn(fs, "rename");
+          const remove = vi.spyOn(fs, "rm");
+          await expect(
+            transaction.complete({ activationVerified: true }, fence.assertCurrent),
+          ).rejects.toBe(failure);
+          await expect(transaction.rollback(fence.assertCurrent)).resolves.toMatchObject({
+            exitCode: 1,
+            stderrTail: expect.stringContaining("retirement"),
+          });
+          expect(rename).not.toHaveBeenCalled();
+          expect(remove).not.toHaveBeenCalled();
+          expect(journal.read()).toEqual(retained);
+          expect(await fs.readdir(anchor)).toEqual(artifacts);
+          expect((await fs.lstat(packageRoot)).ino).toBe(packageIdentity);
+          expect((await fs.lstat(launcher)).ino).toBe(launcherIdentity);
+          await expect(
+            fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"1.0.0"');
+          await expect(
+            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"2.0.0"');
+          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
+        },
+      );
+    });
+
+    it("keeps the original executor failure after final anchor removal sticky", async () => {
+      await withJournaledSwap(
+        async ({ transaction, anchor, packageRoot, launcher, fence, databasePath }) => {
+          const rmdir = fs.rmdir.bind(fs);
+          let failedLeasePath: string | undefined;
+          const rmdirSpy = vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
+            await rmdir(...args);
+            if (String(args[0]) === anchor) {
+              // The native owner, not a replacement fence, decides that this
+              // one unreadable lease observation cannot authorize success.
+              vi.spyOn(fsSync, "realpathSync").mockImplementationOnce((target) => {
+                failedLeasePath = String(target);
+                throw Object.assign(new Error("lease identity read unavailable"), {
+                  code: "EIO",
+                });
+              });
+            }
+          });
+          const [outcome] = await Promise.allSettled([
+            transaction.complete({ activationVerified: true }, fence.assertCurrent),
+          ]);
+          expect(rmdirSpy.mock.calls.filter(([target]) => String(target) === anchor)).toHaveLength(
+            1,
+          );
+          expect(failedLeasePath).toBe(databasePath);
+          if (outcome?.status !== "rejected") {
+            throw new Error("Retirement succeeded without its final executor observation");
+          }
+          expect(outcome.reason).toMatchObject({
+            message: expect.stringMatching(/executor ownership is no longer current/u),
+          });
+          expect(() => fence.assertCurrent()).not.toThrow();
+          await expect(
+            transaction.complete({ activationVerified: true }, fence.assertCurrent),
+          ).rejects.toBe(outcome.reason);
+          await expect(transaction.rollback(fence.assertCurrent)).resolves.toMatchObject({
+            exitCode: 1,
+          });
+          expect(rmdirSpy.mock.calls.filter(([target]) => String(target) === anchor)).toHaveLength(
+            1,
+          );
+          await expect(fs.lstat(anchor)).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(
+            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"2.0.0"');
+          await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
+        },
+      );
+    });
+  },
+);
 
 describe("retained package transaction authority", () => {
   it("stops a partial npm activation before launcher compensation after executor loss", async () => {

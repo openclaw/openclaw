@@ -10,6 +10,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
   "infra/package-update-activation-runtime-assets":
     "src/infra/package-update-activation-runtime-assets.ts",
+  "infra/package-update-activation.process.test-support":
+    "src/infra/package-update-activation.process.test-support.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
   "commands/doctor-config-runtime.test-support":

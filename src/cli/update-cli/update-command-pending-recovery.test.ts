@@ -2,13 +2,23 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hasUnjoinedWork, runManagedCommand } from "../../../scripts/lib/managed-child-process.mts";
+import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as triageUpdate from "../../commands/triage-update.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
 import * as gatewayService from "../../daemon/service.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
+import {
+  swapStagedPackageInstall,
+  type PackageUpdateTransaction,
+} from "../../infra/package-update-swap.js";
+import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -33,6 +43,10 @@ import * as updateConfig from "./update-command-config.js";
 import * as updateExecutor from "./update-command-executor.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import {
+  POST_CORE_EXECUTOR_FD,
+  POST_CORE_EXECUTOR_MAX_BYTES,
+} from "./update-command-post-core-admission.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -72,6 +86,28 @@ function materialSnapshot(root: string) {
             : null,
       };
     });
+}
+
+async function createCapablePackageSwapFixture(base: string) {
+  const packages = await createPackageSwapFixture(base);
+  const stageRoot = packages.params.stage.packageRoot;
+  const worker = runtimeProcessEntrypoints.updateMigratedFinalize;
+  const checkPath = path.join(stageRoot, "dist", worker.distWorkerPath);
+  fs.mkdirSync(path.dirname(checkPath), { recursive: true });
+  fs.writeFileSync(
+    path.join(stageRoot, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version: "2.0.0",
+      type: "module",
+    }),
+  );
+  fs.writeFileSync(
+    checkPath,
+    `await import(${JSON.stringify(resolveRuntimeWorkerUrl(worker).href)});\n`,
+  );
+  await writePackageDistInventory(stageRoot);
+  return packages;
 }
 
 function pendingPackageInvocation(
@@ -196,6 +232,212 @@ function pendingPackageInvocation(
 }
 
 describe.skipIf(process.platform === "win32")("pending package activation admission", () => {
+  it("preserves the ENV-only legacy continuation when no package recovery is pending", async () => {
+    const f = pendingPackageInvocation({ existingRun: true });
+    try {
+      if (!f.runId) {
+        throw new Error("Legacy parent's diagnostic run was not created");
+      }
+      const before = ledger.getUpdateRun(f.runId);
+      vi.stubEnv(POST_CORE_UPDATE_ENV, "1");
+      vi.stubEnv(POST_CORE_UPDATE_CHANNEL_ENV, "stable");
+      f.writers.resumePostCore.mockResolvedValue(undefined);
+      await expect(updateCommand({ json: true, yes: true })).resolves.toBeUndefined();
+      expect(f.writers.resumePostCore).toHaveBeenCalledWith(
+        expect.objectContaining({ root: f.source, channel: "stable" }),
+      );
+      expect(f.writers.createRun).not.toHaveBeenCalled();
+      expect(f.writers.adoptRun).not.toHaveBeenCalled();
+      expect(f.writers.finishRun).not.toHaveBeenCalled();
+      expect(f.writers.disableAutoStart).not.toHaveBeenCalled();
+      expect(f.writers.writeTriage).not.toHaveBeenCalled();
+      expect(f.writers.runTriage).not.toHaveBeenCalled();
+      expect(ledger.getUpdateRun(f.runId)).toEqual(before);
+    } finally {
+      f.restore();
+    }
+  });
+
+  it.each(["valid", "missing", "malformed", "oversized", "stale"] as const)(
+    "admits real preparation only through a bound post-core fd3 grant (%s)",
+    async (inputKind) => {
+      const f = pendingPackageInvocation({ existingRun: true });
+      try {
+        if (!f.runId) {
+          throw new Error("Original diagnostic run was not created");
+        }
+        const runId = f.runId;
+        const packages = await createCapablePackageSwapFixture(f.home);
+        const driverName = "pending-admission.mjs";
+        fs.writeFileSync(
+          path.join(packages.params.stage.packageRoot, driverName),
+          `
+            import { withPostCoreUpdateExecutor } from ${JSON.stringify(new URL("./update-command-post-core-admission.ts", import.meta.url).href)};
+            import { prepareUpdateCommand } from ${JSON.stringify(new URL("./update-command-run.ts", import.meta.url).href)};
+            let preparationStarted = false;
+            try {
+              await withPostCoreUpdateExecutor({ json: true, yes: true }, async (admitted) => {
+                if (!admitted.run?.executorFence) throw new Error("No delegated executor");
+                admitted.run.executorFence.assertCurrent();
+                preparationStarted = true;
+                const prepared = await prepareUpdateCommand(admitted);
+                admitted.run.executorFence.assertCurrent();
+                process.stdout.write(JSON.stringify({
+                  status: "prepared", preparationStarted,
+                  root: prepared.discoveredRoot, runId: admitted.run.runId,
+                  postCore: prepared.postCoreUpdateResume
+                }) + "\\n");
+              });
+            } catch (error) {
+              process.stdout.write(JSON.stringify({
+                status: "refused", preparationStarted, name: error.name, message: error.message,
+                reason: error.result?.reason, cause: error.cause?.message
+              }) + "\\n");
+              process.exitCode = 1;
+            }
+          `,
+        );
+        await updateExecutor.withUpdateCommandExecutor(runId, async (executor) => {
+          const fence = await executor.enter(packages.packageRoot);
+          const published = await swapStagedPackageInstall({
+            ...packages.params,
+            activation: { fence, nodeRunner: process.execPath, onPrepared: () => undefined },
+            onTransaction: () => undefined,
+          });
+          expect(published.status, published.step.stderrTail ?? undefined).toBe("committed");
+          expect(
+            fs.existsSync(resolvePackageActivationAnchor(packages.packageRoot)),
+            published.step.stderrTail ?? undefined,
+          ).toBe(true);
+          const authorityDatabase = path.relative(
+            f.home,
+            updateExecutor.captureUpdateCommandExecutorAuthority(fence).databasePath,
+          );
+          // Binding and releasing the real child changes only its authority store.
+          const leaseMaterial = new Set([
+            path.dirname(authorityDatabase),
+            authorityDatabase,
+            `${authorityDatabase}-wal`,
+            `${authorityDatabase}-shm`,
+            `${authorityDatabase}-journal`,
+          ]);
+          const material = () =>
+            materialSnapshot(f.home).filter((entry) => !leaseMaterial.has(entry.name));
+          const before = material();
+          const observed = await updateExecutor.withUpdateCommandExecutorChild(
+            fence,
+            async (grant, bindChild) => {
+              let stdout = "";
+              let stderr = "";
+              let inputError: Error | undefined;
+              const code = await runManagedCommand({
+                bin: process.execPath,
+                args: [
+                  "--import",
+                  path.resolve("scripts/tsx.mjs"),
+                  path.join(packages.packageRoot, driverName),
+                ],
+                cwd: f.home,
+                env: {
+                  ...process.env,
+                  // The candidate runs outside the checkout but loads this source fixture.
+                  TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+                  [POST_CORE_UPDATE_ENV]: "1",
+                  [POST_CORE_UPDATE_CHANNEL_ENV]: "stable",
+                },
+                stdio: ["ignore", "pipe", "pipe", inputKind === "missing" ? "ignore" : "pipe"],
+                timeoutMs: 20_000,
+                requireProcessTreeExit: true,
+                onReady(child) {
+                  child.stdout?.on("data", (chunk: Buffer) => {
+                    stdout += chunk.toString();
+                  });
+                  child.stderr?.on("data", (chunk: Buffer) => {
+                    stderr += chunk.toString();
+                  });
+                  if (!child.pid) {
+                    throw new Error("Post-core fixture did not spawn");
+                  }
+                  bindChild(child.pid);
+                  if (inputKind !== "missing") {
+                    const input = child.stdio[POST_CORE_EXECUTOR_FD];
+                    if (!(input instanceof Writable)) {
+                      throw new Error("Post-core fixture has no private input pipe");
+                    }
+                    input.on("error", (error: Error) => {
+                      inputError = error;
+                    });
+                    const payload =
+                      inputKind === "malformed"
+                        ? "{"
+                        : inputKind === "oversized"
+                          ? Buffer.alloc(POST_CORE_EXECUTOR_MAX_BYTES + 1, 0x20)
+                          : JSON.stringify(
+                              inputKind === "stale"
+                                ? {
+                                    ...grant,
+                                    parent: {
+                                      ...grant.parent,
+                                      updatedAt: grant.parent.updatedAt + 1,
+                                    },
+                                  }
+                                : grant,
+                            );
+                    input.end(payload);
+                  }
+                },
+              });
+              if (inputKind !== "oversized") {
+                expect(inputError).toBeUndefined();
+              }
+              return { code, stdout, stderr };
+            },
+          );
+          expect(observed.code, observed.stderr + observed.stdout).toBe(
+            inputKind === "valid" ? 0 : 1,
+          );
+          const result = JSON.parse(observed.stdout.trim());
+          if (inputKind === "valid") {
+            expect(result).toEqual({
+              status: "prepared",
+              preparationStarted: true,
+              root: packages.packageRoot,
+              runId,
+              postCore: true,
+            });
+          } else {
+            expect(result).toMatchObject({
+              status: "refused",
+              preparationStarted: false,
+              name: "UpdateCommandPendingRecoveryFailure",
+              reason: "update-recovery-pending",
+              cause: expect.stringMatching(
+                inputKind === "missing"
+                  ? /pipe is missing|EBADF|ENOTTY|bad file descriptor/i
+                  : inputKind === "malformed"
+                    ? /JSON|Unexpected|property/i
+                    : inputKind === "oversized"
+                      ? /exceeds its bound/
+                      : /does not match its parent/,
+              ),
+            });
+          }
+          expect(material()).toEqual(before);
+          fence.assertCurrent();
+        });
+      } catch (error) {
+        if (hasUnjoinedWork(error)) {
+          // Unconfirmed child cleanup retains its package and authority artifacts.
+          dirs.delete(f.home);
+        }
+        throw error;
+      } finally {
+        f.restore();
+      }
+    },
+    45_000,
+  );
+
   it.each([
     { name: "source with absent history" },
     { name: "canonical source behind an alias", alias: true },
@@ -208,10 +450,33 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
     },
     { name: "Bun caller with another profile", manager: "bun" as const, profile: "other" },
     { name: "externally managed config", readOnlyConfig: true, existingRun: true },
+    { name: "forged post-core marker", postCore: "forged" as const },
+    {
+      name: "post-core marker with a released original executor",
+      postCore: "released" as const,
+      existingRun: true,
+    },
   ])("refuses $name before writable preparation or run admission", async (params) => {
     const f = pendingPackageInvocation(params);
     try {
       const opts: UpdateCommandOptions = { json: true, yes: true };
+      if (params.postCore) {
+        vi.stubEnv(POST_CORE_UPDATE_ENV, "1");
+        vi.stubEnv(POST_CORE_UPDATE_CHANNEL_ENV, "stable");
+        if (params.postCore === "released") {
+          if (!f.runId) {
+            throw new Error("Original diagnostic run was not created");
+          }
+          const run: NonNullable<UpdateCommandOptions["run"]> = {
+            runId: f.runId,
+            env: { ...process.env },
+          };
+          await updateExecutor.withUpdateCommandExecutor(run.runId, async (executor) => {
+            run.executorFence = await executor.enter(f.source);
+          });
+          opts.run = run;
+        }
+      }
       f.addPending();
       const before = materialSnapshot(f.home);
       await expect(updateCommand(opts)).rejects.toMatchObject({ code: 1 });
@@ -307,6 +572,78 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
       f.restore();
     }
   });
+
+  it.each([false, true])(
+    "keeps retained package completion with its original live executor (released=%s)",
+    async (released) => {
+      const f = pendingPackageInvocation();
+      try {
+        const packages = await createCapablePackageSwapFixture(f.home);
+        const run: NonNullable<UpdateCommandOptions["run"]> = {
+          runId: createUpdateRun({ trigger: "cli" }).runId,
+          env: { ...process.env },
+        };
+        const windows = taskRecovery();
+        let transaction: PackageUpdateTransaction | undefined;
+        const complete = () =>
+          withUpdateCommandRecoveryUnwind(
+            { run },
+            { triageTarget: { env: run.env }, windowsTaskAutoStartRecovery: windows },
+            async () => {
+              if (!transaction || !run.executorFence) {
+                throw new Error("Original package owner was not prepared");
+              }
+              await transaction.complete(
+                { activationVerified: true },
+                run.executorFence.assertCurrent,
+              );
+            },
+          );
+        await updateExecutor.withUpdateCommandExecutor(run.runId, async (executor) => {
+          const fence = await executor.enter(packages.packageRoot);
+          run.executorFence = fence;
+          const result = await swapStagedPackageInstall({
+            ...packages.params,
+            activation: { fence, nodeRunner: process.execPath, onPrepared: () => undefined },
+            onTransaction: (retained) => {
+              transaction = retained;
+            },
+          });
+          expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+          expect(transaction).toBeDefined();
+          expect(fs.existsSync(resolvePackageActivationAnchor(packages.packageRoot))).toBe(true);
+          if (!released) {
+            await complete();
+          }
+        });
+        if (released) {
+          closeOpenClawStateDatabaseForTest();
+          const before = materialSnapshot(f.home);
+          await expect(complete()).rejects.toMatchObject({
+            name: "UpdateCommandPendingRecoveryFailure",
+            result: { recovery: { serviceRestartSafe: false } },
+          });
+          expect(materialSnapshot(f.home)).toEqual(before);
+          expect(windows.restore).not.toHaveBeenCalled();
+          expect(windows.complete).not.toHaveBeenCalled();
+        } else {
+          expect(fs.existsSync(resolvePackageActivationAnchor(packages.packageRoot))).toBe(false);
+          expect(windows.restore).toHaveBeenCalledOnce();
+          expect(windows.complete).toHaveBeenCalledOnce();
+        }
+        expect(
+          JSON.parse(fs.readFileSync(path.join(packages.packageRoot, "package.json"), "utf8")),
+        ).toMatchObject({ version: "2.0.0" });
+        expect(fs.readFileSync(packages.launcher, "utf8")).toBe("candidate launcher\n");
+        expect(f.writers.finishRun).not.toHaveBeenCalled();
+        expect(f.writers.disableAutoStart).not.toHaveBeenCalled();
+        expect(f.writers.writeTriage).not.toHaveBeenCalled();
+        expect(f.writers.runTriage).not.toHaveBeenCalled();
+      } finally {
+        f.restore();
+      }
+    },
+  );
 });
 
 async function fixture() {

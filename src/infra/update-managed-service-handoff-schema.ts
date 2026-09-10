@@ -92,3 +92,38 @@ export function parseManagedHandoffLeasePayload(value: string) {
     return null;
   }
 }
+
+export type ManagedHandoffLease = ManagedHandoffLeasePayload & {
+  key: string;
+  owner: string;
+  payload: string;
+  updatedAt: number;
+};
+
+export function decodeManagedHandoffLeaseRow(
+  root: string,
+  value: { owner: string; payload_json: string; updated_at: number },
+): ManagedHandoffLease {
+  const payload = parseManagedHandoffLeasePayload(value.payload_json);
+  if (!payload || !text.safeParse(value.owner).success) {
+    throw new Error(
+      "existing managed handoff lease is incompatible; retain diagnostics and run openclaw triage manually",
+    );
+  }
+  return {
+    key: root,
+    owner: value.owner,
+    payload: value.payload_json,
+    updatedAt: value.updated_at,
+    ...payload,
+  };
+}
+
+export const triageFailureSchema = z.strictObject({
+  kind: z.enum(["update", "gateway-startup"]),
+  phase: z.string().max(120),
+  error: z.string().max(800),
+  installationRoot: text.optional(),
+  expectedVersion: z.string().max(100).optional(),
+  gateway: z.enum(["verify-running", "preserve"]),
+});

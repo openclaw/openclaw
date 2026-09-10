@@ -43,7 +43,6 @@ import {
   resolveGlobalManager,
   resolveNodeRunner,
   resolveTargetVersion,
-  tryResolveInvocationCwd,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
@@ -54,6 +53,7 @@ import {
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import { runUpdateCommandWithPostCoreExecutor } from "./update-command-post-core-executor.js";
 import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
@@ -83,26 +83,19 @@ import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
 export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
-  const invocationCwd = tryResolveInvocationCwd();
+  return withUpdateAdmissionReporting(inputOpts, () =>
+    runUpdateCommandWithPostCoreExecutor(inputOpts, executeUpdateCommand),
+  );
+}
+
+async function executeUpdateCommand(
+  inputOpts: UpdateCommandOptions,
+  prepared: Awaited<ReturnType<typeof prepareUpdateCommand>>,
+  invocationCwd: string | undefined,
+): Promise<void> {
   const recoveryState: UpdateCommandRecoveryState = {
     triageTarget: { env: resolveServiceRefreshEnv(process.env, invocationCwd) },
   };
-  // Rejected arguments and handoffs must not open or recover persistent state.
-  const prepared = await withUpdateAdmissionReporting(inputOpts, () =>
-    withUpdateInProgressEnv(invocationCwd, () => prepareUpdateCommand(inputOpts)),
-  );
-  // Post-core children report phase results; the outer updater owns the run ledger.
-  if (prepared.postCoreUpdateResume) {
-    return await withUpdateInProgressEnv(invocationCwd, async () => {
-      const { resumePostCoreUpdate } = await import("./update-execution.runtime.js");
-      await resumePostCoreUpdate({
-        root: prepared.discoveredRoot,
-        channel: prepared.postCoreUpdateChannel,
-        opts: inputOpts,
-        timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-      });
-    });
-  }
   const admission = {
     opts: inputOpts,
     root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,

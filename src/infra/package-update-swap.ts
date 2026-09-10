@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { reserveUpdateCommandExecutorSlot } from "../cli/update-cli/update-command-executor.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import {
   collectPackageDistInventory,
@@ -110,6 +111,10 @@ export async function swapStagedPackageInstall(params: {
       postVerifyStep: null,
       packageRollbackVerified: false,
     };
+  }
+
+  if (!native && params.activation) {
+    reserveUpdateCommandExecutorSlot(params.activation.fence, targetSwapRoot);
   }
 
   // Recovery artifacts must survive cleanupGlobalRenameDirs on a later update.

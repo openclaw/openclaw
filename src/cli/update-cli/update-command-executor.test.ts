@@ -7,16 +7,38 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createApplicationOverlays } from "../../../ui/src/app/overlays.ts";
+import { bindUpdateConfigWriteInterlock } from "../../../ui/src/app/update-config-interlock.ts";
+import { updateRunHarness } from "../../../ui/src/app/update-run.test-support.ts";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
+import {
+  openPackageActivationJournal,
+  resolvePackageActivationAnchor,
+} from "../../infra/package-update-activation-journal.js";
+import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
+import { activationDriverCustodyArgs } from "../../infra/package-update-activation.process.test-support.js";
+import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  createManagedHandoffLeaseDatabase,
+} from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
+import {
+  adoptUpdateRun,
+  createUpdateRun,
+  getUpdateRun,
+  reconcileAbandonedUpdateRuns,
+} from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -26,7 +48,14 @@ import {
 } from "./update-command-executor.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+let unjoinedProcess = false;
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    if (!unjoinedProcess) {
+      cleanup();
+    }
+  }),
+);
 let root: string;
 let temporary: string;
 beforeEach(() => {
@@ -38,6 +67,7 @@ beforeEach(() => {
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
 });
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -55,6 +85,22 @@ function replaceOwner() {
 }
 
 describe("live update executor", () => {
+  it.each([
+    undefined,
+    null,
+    {},
+    { host: "", pid: 1, startIdentity: "0" },
+    { host: "local", pid: 0, startIdentity: "0" },
+    { host: "local", pid: 1, startIdentity: "unknown" },
+  ])("rejects a malformed explicit driver without self-adopting (%j)", (driver) => {
+    const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "state") } };
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    expect(() =>
+      Reflect.apply(adoptUpdateRun, undefined, [run.runId, { ...options, driver }]),
+    ).toThrow();
+    expect(getUpdateRun(run.runId, options)).toEqual(run);
+  });
+
   it("recovery acquires a fresh owner without reactivating the original fence", async () => {
     const store = createManagedHandoffLeaseStore();
     const runId = randomUUID();
@@ -354,6 +400,223 @@ describe("live update executor", () => {
   });
 });
 
+describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+  "post-core driver custody",
+  () => {
+    it.each(["before-grant", "after-grant", "refused"] as const)(
+      "records bound custody before fd3 delivery (%s)",
+      async (mode) => {
+        const packages = await createPackageSwapFixture(root);
+        const state = path.join(root, "state");
+        const runId = randomUUID();
+        const receipt = path.join(root, "receiver.json");
+        const observation = path.join(root, "delivery.json");
+        const completed = path.join(root, "completed.json");
+        const spawned = path.join(root, "spawned.json");
+        const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
+        const options = { env: { OPENCLAW_STATE_DIR: state } };
+        for (const directory of [state, path.join(root, "home")]) {
+          fs.mkdirSync(directory);
+        }
+        createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
+        const authority = {
+          ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
+          installKey: packages.packageRoot,
+        };
+        const parent = spawn(
+          process.execPath,
+          activationDriverCustodyArgs({ base: root, mode, runId, packages, authority }),
+          {
+            cwd: root,
+            env: {
+              PATH: process.env.PATH,
+              HOME: path.join(root, "home"),
+              TMPDIR: temporary,
+              LC_ALL: "C",
+              TZ: "UTC",
+              OPENCLAW_STATE_DIR: state,
+              OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+              OPENCLAW_NO_RESPAWN: "1",
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+        let diagnostics = "";
+        parent.stdout.on("data", (chunk: Buffer) => {
+          diagnostics += chunk.toString();
+        });
+        parent.stderr.on("data", (chunk: Buffer) => {
+          diagnostics += chunk.toString();
+        });
+        const closed = once(parent, "close");
+        let childPid: number | undefined;
+        let childStart: string | undefined;
+        let overlays: ReturnType<typeof createApplicationOverlays> | undefined;
+        let stopInterlock: (() => void) | undefined;
+        const stopCandidate = async () => {
+          if (!childPid) {
+            return;
+          }
+          if (isChildProcessTreeAlive({ pid: childPid })) {
+            if (!isPidDefinitelyDead(childPid)) {
+              expect(String(getFileLockProcessStartTime(childPid))).toBe(childStart);
+            }
+            try {
+              process.kill(-childPid, "SIGKILL");
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+                throw error;
+              }
+            }
+          }
+          await vi.waitFor(() => expect(isChildProcessTreeAlive({ pid: childPid })).toBe(false), {
+            timeout: 5_000,
+            interval: 25,
+          });
+        };
+        const verifyCustody = async () => {
+          await vi.waitFor(
+            () => {
+              const ready =
+                mode === "refused" ? completed : mode === "before-grant" ? observation : receipt;
+              expect(fs.existsSync(ready), diagnostics).toBe(true);
+            },
+            { timeout: 25_000, interval: 25 },
+          );
+          if (mode === "refused") {
+            await closed;
+            const result = JSON.parse(fs.readFileSync(completed, "utf8"));
+            childPid = result.pid;
+            expect(result.error).toContain("cannot be adopted");
+            expect(result.bytesWritten).toBe(0);
+            expect(fs.existsSync(observation)).toBe(false);
+            expect(fs.existsSync(receipt)).toBe(false);
+            expect(Number.isSafeInteger(childPid)).toBe(true);
+            expect(isChildProcessTreeAlive({ pid: childPid! })).toBe(false);
+            expect(getUpdateRun(runId, options)?.reason).toBe("fixture-terminal");
+            return;
+          }
+          const observed = JSON.parse(fs.readFileSync(observation, "utf8"));
+          childPid = observed.bound.pid;
+          childStart = observed.bound.startIdentity;
+          expect(observed.bytesWritten).toBe(0);
+          expect(observed.run.origin.driver).toEqual({
+            host: observed.parent.host,
+            ...observed.bound,
+          });
+          expect(observed.run.origin.previousDrivers).toContainEqual(observed.parent);
+          expect(observed.renewed.updatedAtMs).toBeGreaterThan(observed.run.updatedAtMs);
+          expect(observed.renewed.origin).toEqual(observed.run.origin);
+          if (mode === "after-grant") {
+            expect(JSON.parse(fs.readFileSync(receipt, "utf8"))).toMatchObject({
+              pid: childPid,
+              run: { runId, origin: observed.run.origin },
+            });
+            parent.kill("SIGKILL");
+          } else {
+            expect(fs.existsSync(receipt)).toBe(false);
+          }
+          await closed;
+          expect(isPidDefinitelyDead(parent.pid!)).toBe(true);
+          expect(isPidDefinitelyDead(childPid!)).toBe(false);
+          vi.spyOn(Date, "now").mockReturnValue(
+            observed.renewed.updatedAtMs + ABANDONED_UPDATE_RUN_MS + 10,
+          );
+          expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
+          expect(getUpdateRun(runId, options)?.status).toBe("running");
+          let suspended = false;
+          overlays = createApplicationOverlays(
+            updateRunHarness(async (method) => {
+              reconcileAbandonedUpdateRuns({}, options);
+              const run = getUpdateRun(runId, options);
+              return method === "update.runs.get"
+                ? { run }
+                : {
+                    lastRun: run,
+                    ...(run?.status === "running" ? { activeRun: run } : {}),
+                  };
+            }).gateway,
+          );
+          stopInterlock = bindUpdateConfigWriteInterlock(overlays, {
+            setWritesSuspended(value) {
+              suspended = value;
+            },
+          });
+          await overlays.refreshUpdateStatus();
+          expect(overlays.snapshot.updateRunning).toBe(true);
+          expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+          expect(suspended).toBe(true);
+          await expect(
+            withUpdateCommandExecutor(
+              randomUUID(),
+              async (executor) => executor.enter(packages.packageRoot),
+              { existingAuthority: authority },
+            ),
+          ).rejects.toThrow("Another update executor");
+          const journal = openPackageActivationJournal(
+            resolvePackageActivationAnchor(packages.packageRoot),
+          );
+          const retained = journal.read();
+          expect(retained.phase).toBe("publication-complete");
+          expect(() => assertNoPendingPackageActivation(packages.packageRoot)).toThrow(
+            "recovery is pending",
+          );
+          await stopCandidate();
+          expect(reconcileAbandonedUpdateRuns({}, options)).toMatchObject([
+            { runId, status: "failed", reason: "abandoned" },
+          ]);
+          await overlays.refreshUpdateStatus();
+          expect(suspended).toBe(false);
+          expect(journal.read()).toEqual(retained);
+          expect(() => assertNoPendingPackageActivation(packages.packageRoot)).toThrow(
+            "recovery is pending",
+          );
+        };
+        const failures: unknown[] = [];
+        // A body failure must not skip either process join, and a cleanup
+        // failure must retain the fixture without hiding the original error.
+        for (const phase of [
+          verifyCustody,
+          async () => {
+            stopInterlock?.();
+            overlays?.dispose();
+          },
+          async () => {
+            if (fs.existsSync(spawned)) {
+              const identity = JSON.parse(fs.readFileSync(spawned, "utf8"));
+              childPid ??= identity.pid;
+              childStart ??= String(identity.startIdentity);
+            }
+            await stopCandidate();
+          },
+          async () => {
+            if (parent.exitCode === null && parent.signalCode === null) {
+              parent.kill("SIGKILL");
+            }
+            await closed;
+          },
+        ]) {
+          try {
+            await phase();
+          } catch (error) {
+            if (phase !== verifyCustody) {
+              unjoinedProcess = true;
+            }
+            failures.push(error);
+          }
+        }
+        if (failures.length === 1) {
+          throw failures[0];
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "Driver custody proof and cleanup failed");
+        }
+      },
+      40_000,
+    );
+  },
+);
+
 describe("candidate executor delegation", () => {
   const moduleUrl = new URL("./update-command-executor.ts", import.meta.url).href;
   const program = `
@@ -384,7 +647,7 @@ describe("candidate executor delegation", () => {
       const output = path.join(root, "effect");
       const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(root);
-        const pending = withUpdateCommandExecutorChild(fence, (grant, beforeInput) =>
+        const pending = withUpdateCommandExecutorChild(fence, (grant, bindChild) =>
           runUtf8CommandWithTimeout(
             [
               process.execPath,
@@ -396,7 +659,15 @@ describe("candidate executor delegation", () => {
             ],
             {
               input: JSON.stringify({ grant, proceed, output }),
-              beforeInput,
+              beforeInput(pid) {
+                bindChild(pid, (identity) => {
+                  const child = createManagedHandoffLeaseStore().read(grant.childKey);
+                  assert(child.kind === "current", "Child binding was not committed");
+                  expect(identity).toEqual(child.lease.executor);
+                  expect(Object.isFrozen(identity)).toBe(true);
+                  expect(() => Object.assign(identity, { pid: process.pid })).toThrow();
+                });
+              },
               timeoutMs: 15_000,
               killProcessTree: true,
               // Match production candidate transport: join source-loader helpers too.

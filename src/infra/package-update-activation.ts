@@ -51,7 +51,7 @@ const status = (record: PackageActivationRecord): PackageActivationStatus => ({
 });
 
 /** Read-only correlation; callers still need a privately registered live fence. */
-function readPackageActivationContinuation(installKey: string) {
+export function readPackageActivationContinuation(installKey: string) {
   const anchor = resolvePackageActivationAnchor(installKey);
   try {
     fs.lstatSync(anchor);

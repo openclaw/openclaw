@@ -110,6 +110,10 @@ describe("check-deadcode-exports", () => {
       }
     }
 
+    const declarationOnlyRoot =
+      vitestWorkerDeclarationEntries["infra/package-update-activation.process.test-support"];
+    expect(buildSources).not.toContain(declarationOnlyRoot);
+    expect(fullRootWorkspace.entry).toContain(`${declarationOnlyRoot}!`);
     expect(allExportsKnipConfig.workspaces["extensions/qa-lab"]?.entry).toContain(
       "src/gateway-child-artifacts-runtime.test-support.ts!",
     );

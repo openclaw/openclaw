@@ -1,5 +1,6 @@
 import { hostname } from "node:os";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 export type UpdateRunDriver = {
   host: string;
@@ -13,7 +14,12 @@ export function sameUpdateRunDriver(left: UpdateRunDriver, right: UpdateRunDrive
   );
 }
 
-export function readUpdateRunDriver(): UpdateRunDriver | undefined {
+export function readUpdateRunDriver(observed?: { driver: unknown }): UpdateRunDriver | undefined {
+  if (observed) {
+    // Binding already observed this process generation. Re-reading its PID could
+    // adopt a replacement process; malformed explicit observations must fail.
+    return UpdateRunRecordSchema.shape.origin.shape.driver.unwrap().parse(observed.driver);
+  }
   const host = hostname();
   const startedAt = getFileLockProcessStartTime(process.pid);
   if (

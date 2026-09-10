@@ -250,8 +250,11 @@ function upsertStep(record: UpdateRunRecord, step: UpdateRunStep): void {
 }
 
 /** Adoption is explicit: reading or reserving an existing run does not make this process its driver. */
-export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): UpdateRunRecord {
-  const driver = readUpdateRunDriver();
+export function adoptUpdateRun(
+  runId: string,
+  options: LedgerOptions & { driver?: Readonly<UpdateRunDriver> } = {},
+): UpdateRunRecord {
+  const driver = readUpdateRunDriver("driver" in options ? { driver: options.driver } : undefined);
   let identityUnavailable = false;
   const adopted = mutateRun(
     runId,

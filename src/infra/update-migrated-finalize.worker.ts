@@ -17,6 +17,7 @@ import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-com
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { POST_CORE_EXECUTOR_CAPABILITY } from "./update-post-core-capability.js";
 import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
@@ -31,6 +32,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
     process.stdout.write(
       JSON.stringify({
         executorDelegation: "pid-start-v1",
+        postCoreExecutor: POST_CORE_EXECUTOR_CAPABILITY,
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
       }),

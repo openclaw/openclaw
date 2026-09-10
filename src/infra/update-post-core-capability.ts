@@ -4,7 +4,7 @@ import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 
-const POST_CORE_EXECUTOR_CAPABILITY = "fd3-pid-start-v1";
+export const POST_CORE_EXECUTOR_CAPABILITY = "fd3-pid-start-v1";
 
 /** Compatibility only: authority still comes from the original live executor. */
 export async function supportsPostCoreExecutor(root: string, nodeRunner: string): Promise<boolean> {
