@@ -26,9 +26,8 @@ describe("memory embedding retry policy with remote transport", () => {
     const server = createServer((request, response) => {
       void (async () => {
         try {
-          for await (const _chunk of request) {
-            // Drain the request before responding so the real transport completes normally.
-          }
+          request.resume();
+          await once(request, "end");
           requestCount += 1;
           response.writeHead(429, { "content-type": "application/json" });
           response.end(
