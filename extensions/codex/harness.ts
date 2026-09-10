@@ -333,8 +333,6 @@ export function createCodexAppServerAgentHarness(
         agentId: params.agentId,
         authProfileId: params.authProfileId,
       };
-      // Every turn starts on the model the session selected. Only a turn OpenAI
-      // actually refused is routed to the weaker Daybreak tier.
       const result = await runAttemptOnModel(attemptModel);
       if (!isCodexCyberRefusalResult(result)) {
         return result;
@@ -347,8 +345,6 @@ export function createCodexAppServerAgentHarness(
         workspace: cyberWorkspace,
       });
       if (plan.kind !== "escalate") {
-        // A known account-level denial is worth stating: without it these turns
-        // show only the generic block and never learn why escalation is silent.
         if (plan.reason === "target_unavailable") {
           await emitCodexCyberNotice(params, {
             state: "unavailable",
@@ -394,9 +390,6 @@ export function createCodexAppServerAgentHarness(
       // Daybreak also refused keeps the projector's own block, and any other
       // failure surfaces through its normal terminal error.
       const answered = !unavailable && isCodexCyberEscalationAnswered(escalated);
-      // The damper exists to stop a target that is not working from being retried.
-      // Once Daybreak has answered, later refusals in this session deserve the
-      // same escalation rather than a bare refusal for the rest of the window.
       if (answered) {
         clearCodexCyberSessionSuppression(params.sessionKey);
       }
@@ -407,8 +400,6 @@ export function createCodexAppServerAgentHarness(
           fallbackModel: plan.model,
         });
       }
-      // A Daybreak target the workspace cannot use leaves the original refusal as
-      // the honest outcome for this turn.
       return unavailable ? result : escalated;
     },
     runIsolatedCompletionV2: async (params) => {

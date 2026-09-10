@@ -172,8 +172,6 @@ function renderProviderPolicyNotice(notice: ProviderPolicyNotice | null | undefi
   }
   const blocked = notice.state === "blocked" || notice.state === "unavailable";
   const model = notice.fallbackModel ?? notice.model;
-  // Only buffering and blocked have model-free copy; the rest name a model and
-  // fall back to the generic line when the event carried none.
   const namesModel = notice.state !== "buffering" && notice.state !== "blocked";
   const body =
     namesModel && !model

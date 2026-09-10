@@ -30,7 +30,6 @@ const DEFAULT_CYBER_FAILOVER: CodexCyberFailoverConfig = {
   cooloffMs: 600_000,
 };
 
-/** Reads `plugins.entries.codex.config.appServer.cyberFailover`, applying defaults. */
 export function resolveCodexCyberFailoverConfig(pluginConfig: unknown): CodexCyberFailoverConfig {
   const configured = readCodexPluginConfig(pluginConfig).appServer?.cyberFailover;
   if (!configured) {
@@ -44,7 +43,6 @@ export function resolveCodexCyberFailoverConfig(pluginConfig: unknown): CodexCyb
 }
 
 /**
- * What an escalation attempt tells later turns.
  * `unavailable` means the workspace cannot use the target at all, which is an
  * account-level fact. `suppressed` records that this session just made an
  * attempt, so it does not immediately make another.
@@ -53,8 +51,7 @@ export type CodexCyberEscalationOutcome = "unavailable" | "suppressed";
 
 // Session-scoped attempt history, deliberately in memory: the window is minutes
 // long, so it must not outlive the process or enter the session store. Entries
-// expire on read, so writes also sweep to keep the map bounded. Values are the
-// expiry of that session's suppression.
+// expire on read, so writes also sweep to keep the map bounded.
 const escalationWindows = new Map<string, number>();
 const MAX_ESCALATION_WINDOWS = 256;
 
@@ -63,9 +60,11 @@ const MAX_ESCALATION_WINDOWS = 256;
 // for every session under that workspace. One process can host several
 // agent-scoped Codex homes, so the key carries the workspace identity too: a
 // workspace without entitlement must not disable escalation for one that has it.
-// Bounded by configured targets times workspaces, and never evicted by session
-// churn — which is what makes the expensive 401/403 reconnect ladder genuinely
-// unrepeatable inside its cooloff.
+// Session churn cannot displace these records, which is what stops the expensive
+// 401/403 reconnect ladder from repeating inside its cooloff. Every write sweeps
+// expired keys, so live entries are bounded by the workspaces and targets that
+// actually failed within one window; the cap below is a backstop that should not
+// be reachable in practice.
 const unavailableTargets = new Map<string, number>();
 const MAX_UNAVAILABLE_TARGETS = 256;
 // One probe per workspace and target at a time. Without this, sibling sessions
@@ -73,7 +72,6 @@ const MAX_UNAVAILABLE_TARGETS = 256;
 // the first result records the target as unavailable.
 const inFlightProbes = new Set<string>();
 
-/** Identifies the authenticated workspace an authorization result belongs to. */
 export type CodexCyberWorkspace = {
   agentId?: string | undefined;
   authProfileId?: string | undefined;
@@ -137,7 +135,6 @@ export function reserveCodexCyberProbe(params: {
   };
 }
 
-/** Clears a session's damper so a proven-good target stays reachable. */
 export function clearCodexCyberSessionSuppression(sessionKey: string | undefined): void {
   if (sessionKey) {
     escalationWindows.delete(sessionKey);
@@ -164,12 +161,21 @@ export function recordCodexCyberEscalation(params: {
         unavailableTargets.delete(key);
       }
     }
+    // If the backstop is ever reached, drop the record with the least remaining
+    // protection rather than an arbitrary one.
     while (unavailableTargets.size >= MAX_UNAVAILABLE_TARGETS) {
-      const oldest = unavailableTargets.keys().next();
-      if (oldest.done) {
+      let soonestKey: string | undefined;
+      let soonestExpiry = Number.POSITIVE_INFINITY;
+      for (const [key, expiresAt] of unavailableTargets) {
+        if (expiresAt < soonestExpiry) {
+          soonestExpiry = expiresAt;
+          soonestKey = key;
+        }
+      }
+      if (soonestKey === undefined) {
         break;
       }
-      unavailableTargets.delete(oldest.value);
+      unavailableTargets.delete(soonestKey);
     }
     unavailableTargets.set(targetKey(params.model, params.workspace), now + params.cooloffMs);
     return;
@@ -224,7 +230,6 @@ export type CodexCyberEscalationPlan =
         | "probe_in_flight";
     };
 
-/** Decides whether a refused turn may be retried on Daybreak. */
 export function planCodexCyberEscalation(params: {
   config: CodexCyberFailoverConfig;
   sessionKey: string | undefined;
@@ -257,8 +262,6 @@ export function planCodexCyberEscalation(params: {
   if (inFlightProbes.has(targetKey(config.model, params.workspace))) {
     return { kind: "skip", reason: "probe_in_flight" };
   }
-  // One attempt per session per cooloff: a refused turn is retried once, and a
-  // burst of them does not each pay for their own retry.
   if (isSessionSuppressed(params.sessionKey, now)) {
     return { kind: "skip", reason: "cooling_off" };
   }

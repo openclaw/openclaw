@@ -343,9 +343,6 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
       return true;
     }
     const currentNotice = host.providerPolicyNotice;
-    // Outcomes only ever settle further: a transient review cannot replace a
-    // reroute or a block, and an automatic Daybreak escalation is the last word
-    // because it happens after the block it followed.
     if (
       currentNotice?.runId === payload.runId &&
       PROVIDER_POLICY_PRECEDENCE[state] < PROVIDER_POLICY_PRECEDENCE[currentNotice.state]
