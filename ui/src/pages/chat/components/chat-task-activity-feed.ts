@@ -129,6 +129,21 @@ function entries(messages: unknown[]): Entry[] {
   return result;
 }
 
+function toolIcon(call: ToolCard) {
+  switch (resolveToolCallView(call).kind) {
+    case "read":
+      return icons.fileText;
+    case "edit":
+    case "write":
+      return icons.pencil;
+    case "search":
+    case "fetch":
+      return icons.search;
+    default:
+      return icons.terminal;
+  }
+}
+
 function renderToolLine(call: ToolCard) {
   return html`<div
     class="chat-task-feed__tool-line ${isToolCardError(call) ? "chat-task-feed__error" : ""}"
@@ -144,7 +159,7 @@ export function renderTaskActivityFeed(messages: unknown[]): TemplateResult {
       (entry) => entry.key,
       (entry) => html` <div class="chat-task-feed__entry" data-task-feed-entry=${entry.key}>
         <span class="chat-task-feed__icon" aria-hidden="true"
-          >${entry.kind === "tools" ? icons.terminal : entry.kind === "user" ? icons.users : entry.kind === "block" ? icons.paperclip : icons.messageSquare}</span
+          >${entry.kind === "tools" ? toolIcon(entry.calls[0]!) : entry.kind === "user" ? icons.users : entry.kind === "block" ? icons.paperclip : icons.messageSquare}</span
         >
         <div class="chat-task-feed__body">
           ${
