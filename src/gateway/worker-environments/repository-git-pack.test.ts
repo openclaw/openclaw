@@ -226,7 +226,7 @@ async function fixture() {
     return execFileSync("sh", ["-c", script], {
       encoding: "utf8",
       timeout: 30_000,
-      env: { PATH: process.env.PATH, HOME: home },
+      env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home },
     });
   };
   const transport = {
