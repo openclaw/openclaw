@@ -601,17 +601,13 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - List chats: `imsg chats --limit 20`.
 - Group replies always go back to the same `chat_id`.
 
-## WhatsApp system prompts
-
-See [WhatsApp](/channels/whatsapp#system-prompts) for the canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics.
-
-## WhatsApp specifics
-
-See [Group messages](/channels/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
-
 ## Related
+
+<a id="whatsapp-system-prompts" />
+<a id="whatsapp-specifics" />
 
 - [Broadcast groups](/channels/broadcast-groups)
 - [Channel routing](/channels/channel-routing)
-- [Group messages](/channels/group-messages)
+- [Group messages](/channels/group-messages) — WhatsApp-only behavior (history injection, mention handling details)
 - [Pairing](/channels/pairing)
+- [WhatsApp](/channels/whatsapp#system-prompts) — canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics

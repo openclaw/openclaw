@@ -1651,8 +1651,8 @@
                   "channels/pairing",
                   "channels/access-groups",
                   "channels/bot-loop-protection",
-                  "channels/group-messages",
                   "channels/groups",
+                  "channels/group-messages",
                   "channels/ambient-room-events",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
@@ -2974,8 +2974,7 @@
                 "pages": [
                   "plugins/plugin-inventory",
                   "plugins/reference",
-                  "plugins/dependency-resolution",
-                  "plugins/install-overrides"
+                  "plugins/dependency-resolution"
                 ]
               },
               {
@@ -3086,6 +3085,7 @@
                     ]
                   },
                   "plugins/compatibility",
+                  "plugins/install-overrides",
                   "plugins/sdk-channel-outbound",
                   "plugins/sdk-channel-inbound",
                   "plugins/sdk-channel-ingress",

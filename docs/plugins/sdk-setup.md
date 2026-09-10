@@ -14,6 +14,15 @@ Reference for plugin packaging (`package.json` metadata), manifests (`openclaw.p
 **Looking for a walkthrough?** The how-to guides cover packaging in context: [Channel plugins](/plugins/sdk-channel-plugins#step-1-package-and-manifest) and [Provider plugins](/plugins/sdk-provider-plugins#step-1-package-and-manifest).
 </Tip>
 
+On this page:
+
+- [Package metadata](#package-metadata)
+- [Plugin manifest](#plugin-manifest)
+- [Setup entry](#setup-entry)
+- [Config schema](#config-schema)
+- [Setup wizards](#setup-wizards)
+- [Publishing and installing](#publishing-and-installing)
+
 ## Package metadata
 
 Your `package.json` needs an `openclaw` field that tells the plugin system what your plugin provides:
@@ -324,19 +333,6 @@ Even plugins with no config must ship a schema. An empty schema is valid:
 
 See [Plugin manifest](/plugins/manifest) for the full schema reference.
 
-## ClawHub publishing
-
-Skills and plugin packages use separate ClawHub publish commands. For plugin packages, use the package-specific command:
-
-```bash
-clawhub package publish your-org/your-plugin --dry-run
-clawhub package publish your-org/your-plugin
-```
-
-<Note>
-`clawhub skill publish <path>` is a different command for publishing a skill folder, not a plugin package. See [Publishing on ClawHub](/clawhub/publishing).
-</Note>
-
 ## Setup entry
 
 `setup-entry.ts` is a lightweight alternative to `index.ts` that OpenClaw loads when it only needs setup surfaces (onboarding, config repair, disabled channel inspection):
@@ -638,6 +634,19 @@ Gateway startup does not install plugin dependencies. npm/git/ClawHub install fl
 </Note>
 
 Bundled package metadata is explicit, not inferred from built JavaScript at gateway startup. Runtime dependencies belong in the plugin package that owns them; packaged OpenClaw startup never repairs or mirrors plugin dependencies.
+
+### ClawHub publishing
+
+Skills and plugin packages use separate ClawHub publish commands. For plugin packages, use the package-specific command:
+
+```bash
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
+```
+
+<Note>
+`clawhub skill publish <path>` is a different command for publishing a skill folder, not a plugin package. See [Publishing on ClawHub](/clawhub/publishing).
+</Note>
 
 ## Related
 

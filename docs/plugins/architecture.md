@@ -6,7 +6,7 @@ read_when:
   - Working on the plugin load pipeline or registry
   - Implementing provider runtime hooks or channel plugins
 title: "Plugin internals"
-sidebarTitle: "Internals"
+sidebarTitle: "Architecture"
 ---
 
 This is the **deep architecture reference** for the OpenClaw plugin system. For practical guides, start with one of the focused pages below.

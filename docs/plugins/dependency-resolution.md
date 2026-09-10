@@ -47,6 +47,8 @@ cd ~/.openclaw/npm/projects/<encoded-package>
 npm install --omit=dev --omit=peer --legacy-peer-deps --ignore-scripts --no-audit --no-fund
 ```
 
+### npm-pack tarball installs
+
 `openclaw plugins install npm-pack:<path.tgz>` uses the same per-plugin npm
 project root for a local npm-pack tarball: OpenClaw reads the tarball's npm
 metadata, adds it to the managed project as a copied `file:` dependency, runs
@@ -67,6 +69,8 @@ published package path that records official trust. Privileged helper access
 and trusted-official scope handling should be validated on that trusted
 install path, not inferred from a local tarball install.
 
+### Missing runtime imports
+
 If a plugin fails at runtime with a missing import, fix the package manifest
 instead of repairing the managed project by hand. Runtime imports belong in
 the plugin package `dependencies` or `optionalDependencies`; `devDependencies`
@@ -75,10 +79,14 @@ are not installed for managed runtime projects. A local `npm install` inside
 diagnostic, but it is not package-acceptance proof because the next install or
 update recreates the project from package metadata.
 
+### Hoisted transitive dependencies
+
 npm may hoist transitive dependencies to the per-plugin project's
 `node_modules` beside the plugin package. OpenClaw scans the managed project
 root before trusting the install, and removes that project on uninstall, so
 hoisted runtime dependencies stay inside that plugin's cleanup boundary.
+
+### Lockfile policy
 
 OpenClaw-owned npm plugin packages never ship npm lockfiles. The repository
 uses `pnpm-lock.yaml` as its committed product dependency review boundary, then
@@ -95,6 +103,8 @@ policy, and rejects generated versions absent from `pnpm-lock.yaml`. Nothing
 is written into the checkout. Third-party plugin packages may still contain
 lockfiles according to their own packaging policy; OpenClaw's installer leaves
 that npm behavior to the installed npm version.
+
+### Verify a package tarball
 
 Before treating a local package as release-candidate proof, inspect the
 tarball that will be installed:
@@ -117,6 +127,8 @@ tmpdir=$(mktemp -d)
 )
 rm -rf "$tmpdir"
 ```
+
+### Bundled runtime dependencies
 
 OpenClaw-owned npm plugin packages can also publish with explicit
 `bundledDependencies`. The npm publish path overlays the runtime dependency
@@ -145,6 +157,8 @@ instead of embedding every platform binary in the plugin tarball. The root
 bundle its full dependency tree. See
 [dependency locking](/gateway/security/dependency-locking).
 
+### Host peer dependency
+
 Plugins that import `openclaw/plugin-sdk/*` declare `openclaw` as a peer
 dependency. OpenClaw does not let npm install a separate registry copy of the
 host package into a managed project, because a stale host package can affect
@@ -152,6 +166,8 @@ npm's peer resolution inside that plugin. Managed npm installs skip npm peer
 resolution/materialization, and OpenClaw reasserts plugin-local
 `node_modules/openclaw` links for installed packages that declare the host
 peer, after install or update.
+
+### git installs
 
 git installs clone or refresh the repository, then run:
 

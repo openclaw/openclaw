@@ -2092,6 +2092,14 @@
     "target": "渠道路由"
   },
   {
+    "source": "Bot loop protection",
+    "target": "机器人循环保护"
+  },
+  {
+    "source": "Access groups",
+    "target": "访问组"
+  },
+  {
     "source": "Channels Overview",
     "target": "渠道概览"
   },
