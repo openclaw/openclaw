@@ -1524,7 +1524,7 @@ describe("model-specific runtime view", () => {
     const runtime = rows
       .flatMap((row) => row.components ?? [])
       .find((c) => parseDiscordModelPickerCustomId(c.custom_id ?? "")?.action === "runtime");
-    expect(runtime?.options?.map((o) => o.value) ?? ["openclaw"]).not.toContain("codex");
+    expect(runtime).toBeUndefined();
     const payload = JSON.stringify(
       renderDiscordModelPickerModelsView({
         command: "model",

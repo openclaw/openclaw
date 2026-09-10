@@ -202,7 +202,9 @@ export async function loadDiscordModelPickerData(
   options?: Parameters<
     typeof import("openclaw/plugin-sdk/models-provider-runtime").buildPreparedModelsProviderData
   >[2],
-): Promise<ModelsProviderData> {
+): ReturnType<
+  typeof import("openclaw/plugin-sdk/models-provider-runtime").buildPreparedModelsProviderData
+> {
   const { buildPreparedModelsProviderData } = await loadModelsProviderRuntime();
   return buildPreparedModelsProviderData(cfg, agentId, options);
 }

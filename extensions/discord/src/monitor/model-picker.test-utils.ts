@@ -1,5 +1,6 @@
 // Discord helper module supports model picker utils behavior.
 import type {
+  buildPreparedModelsProviderData,
   ModelsProviderData,
   ModelsRuntimeChoice,
 } from "openclaw/plugin-sdk/models-provider-runtime";
@@ -7,7 +8,7 @@ import type {
 export function createModelsProviderData(
   entries: Record<string, string[]>,
   opts?: { defaultProviderOrder?: "insertion" | "sorted" },
-): ModelsProviderData {
+): Awaited<ReturnType<typeof buildPreparedModelsProviderData>> {
   const byProvider = new Map<string, Set<string>>();
   for (const [provider, models] of Object.entries(entries)) {
     byProvider.set(provider, new Set(models));
@@ -33,6 +34,9 @@ export function createModelsProviderData(
     ),
   );
   return {
+    modelCatalog: Object.entries(entries).flatMap(([provider, models]) =>
+      models.map((id) => ({ id, name: id, provider })),
+    ),
     runtimeChoicesByProvider,
     runtimeChoicesByModel,
     isCurrent: () => true,

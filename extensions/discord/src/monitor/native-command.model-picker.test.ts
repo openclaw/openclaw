@@ -7,7 +7,6 @@ import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native"
 import type {
   ChatCommandDefinition,
   CommandArgsParsing,
-  ModelsProviderData,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsRuntimeChoice } from "openclaw/plugin-sdk/models-provider-runtime";
@@ -90,7 +89,7 @@ function createResolvedAgentRoute(overrides: Partial<ResolvedAgentRoute> = {}): 
   };
 }
 
-function createModelsProviderData(entries: Record<string, string[]>): ModelsProviderData {
+function createModelsProviderData(entries: Record<string, string[]>) {
   return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
 }
 
@@ -154,7 +153,7 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
   return interaction;
 }
 
-function createDefaultModelPickerData(): ModelsProviderData {
+function createDefaultModelPickerData() {
   return createModelsProviderData({
     openai: ["gpt-4.1", "gpt-4o"],
     anthropic: ["claude-sonnet-4-5"],
@@ -539,10 +538,10 @@ describe("Discord model picker interactions", () => {
       ...context.cfg,
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-terra" },
+          model: { primary: "openai/gpt-4.1" },
           models: {
             "openai/gpt-5.5": {},
-            "openai/gpt-5.6-terra": {},
+            "openai/gpt-4.1": {},
           },
         },
       },
@@ -555,9 +554,9 @@ describe("Discord model picker interactions", () => {
     const staleData = createModelsProviderData({ openai: ["gpt-5.5"] });
     staleData.resolvedDefault = { provider: "openai", model: "gpt-5.5" };
     const runtimeData = createModelsProviderData({
-      openai: ["gpt-5.5", "gpt-5.6-terra"],
+      openai: ["gpt-5.5", "gpt-4.1"],
     });
-    runtimeData.resolvedDefault = { provider: "openai", model: "gpt-5.6-terra" };
+    runtimeData.resolvedDefault = { provider: "openai", model: "gpt-4.1" };
     const loadSpy = vi
       .spyOn(modelPickerModule, "loadDiscordModelPickerData")
       .mockImplementation(async (cfg) => (cfg === runtimeCfg ? runtimeData : staleData));
@@ -580,7 +579,7 @@ describe("Discord model picker interactions", () => {
     expect(loadSpy).toHaveBeenCalledWith(runtimeCfg, "main", { sessionEntry: undefined });
     expectDispatchedModelSelection({
       dispatchSpy,
-      model: "openai/gpt-5.6-terra",
+      model: "openai/gpt-4.1",
     });
     const dispatchCall = firstMockArg(dispatchSpy, "dispatchCommandInteraction") as
       | Parameters<DispatchDiscordCommandInteraction>[0]
@@ -1361,6 +1360,19 @@ describe("Discord model picker interactions", () => {
 
   it("loads model picker data from the effective bound route", async () => {
     const context = createModelPickerContext();
+    const entry = {
+      sessionId: "bound-session",
+      updatedAt: 1,
+      providerOverride: "openai",
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user" as const,
+      agentRuntimeOverride: "openclaw",
+    };
+    await upsertSessionEntry({
+      storePath: path.join(tempDir, "sessions.json"),
+      sessionKey: "agent:worker:subagent:bound",
+      entry,
+    });
     context.threadBindings = createBoundThreadBindingManager({
       accountId: "default",
       threadId: "thread-bound",
@@ -1390,7 +1402,9 @@ describe("Discord model picker interactions", () => {
       safeInteractionCall: async (_label, fn) => await fn(),
     });
 
-    expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker", { sessionEntry: undefined });
+    expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker", {
+      sessionEntry: expect.objectContaining(entry),
+    });
   });
 
   it("opens the first visible provider when the current model provider is filtered out", async () => {
