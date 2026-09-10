@@ -331,7 +331,7 @@ export async function createModelSelectionState(params: {
       runtimeModelNormalization,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    const overrideAllowed = visibilityPolicy.allowsKey(key);
+    const overrideAllowed = visibilityPolicy.allows(normalizedOverride);
     // A degraded catalog cannot prove a pin is disallowed. Preserve it while the turn falls back
     // to primary, then re-evaluate after discovery recovers; config-proven stale pins still reset.
     const shouldResetOverride =
@@ -443,8 +443,7 @@ export async function createModelSelectionState(params: {
       sessionEntry,
       runtimeModelNormalization,
     );
-    const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
-    if (modelSelectionLocked || visibilityPolicy.allowsKey(key)) {
+    if (modelSelectionLocked || visibilityPolicy.allows(normalizedStoredOverride)) {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
       requestedRouteResolution =

@@ -189,6 +189,22 @@ describe("explicit model visibility policy", () => {
     expect(policy.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(false);
   });
 
+  it("does not authorize a default from a colliding provider wildcard", () => {
+    const policy = createModelVisibilityPolicy({
+      cfg: { agents: { defaults: { modelPolicy: { allow: ["custom/*"] } } } },
+      catalog: [
+        { provider: "custom", id: "team/Reader", name: "Allowed model" },
+        { provider: "custom/team", id: "Reader", name: "Other provider default" },
+      ],
+      defaultProvider: "custom/team",
+      defaultModel: "Reader",
+    });
+
+    expect(policy.allowAny).toBe(false);
+    expect(policy.allows({ provider: "custom", model: "team/Reader" })).toBe(true);
+    expect(policy.allows({ provider: "custom/team", model: "Reader" })).toBe(false);
+  });
+
   it("matches nested prefix wildcards on canonical model-key segment boundaries", () => {
     const policy = createPolicy({
       agents: {

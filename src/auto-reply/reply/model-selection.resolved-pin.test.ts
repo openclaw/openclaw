@@ -34,8 +34,14 @@ type SelectionCase = {
   name: string;
   pin: string;
   expected: string;
+  provider?: string;
+  allow?: string[];
+  readerModel?: string;
   raw?: boolean;
   disallowed?: boolean;
+  inherited?: boolean;
+  locked?: boolean;
+  configuredProvider?: boolean;
   heartbeat?: boolean;
   oneTurn?: boolean;
   cli?: boolean;
@@ -51,17 +57,112 @@ test.each<SelectionCase>([
   { name: "one-turn override", pin: "middle", expected: "once", oneTurn: true },
   { name: "bound CLI provider", pin: "cli-model", expected: "cli-model", cli: true },
   { name: "missing auth pin", pin: "plain-model", expected: "plain-model", missingAuthPin: true },
+  {
+    name: "resolved prefix rejected by a colliding exact allowlist",
+    pin: "custom/model",
+    expected: "default",
+    allow: ["custom/default", "custom/model"],
+    disallowed: true,
+  },
+  {
+    name: "inherited resolved prefix rejected by a colliding exact allowlist",
+    pin: "custom/model",
+    expected: "default",
+    allow: ["custom/default", "custom/model"],
+    disallowed: true,
+    inherited: true,
+  },
+  {
+    name: "raw prefix allowed as the plain model",
+    pin: "custom/model",
+    expected: "model",
+    readerModel: "model",
+    allow: ["custom/default", "custom/model"],
+    raw: true,
+  },
+  {
+    name: "locked resolved prefix outside the exact allowlist",
+    pin: "custom/model",
+    expected: "custom/model",
+    allow: ["custom/default", "custom/model"],
+    locked: true,
+  },
+  {
+    name: "resolved prefix allowed by the provider wildcard",
+    pin: "custom/model",
+    expected: "custom/model",
+    allow: ["custom/*"],
+  },
+  {
+    name: "inherited resolved prefix allowed by its namespace wildcard",
+    pin: "custom/model",
+    expected: "custom/model",
+    allow: ["custom/default", "custom/custom/*"],
+    inherited: true,
+  },
+  {
+    name: "namespace wildcard rejects a different model prefix",
+    pin: "customness/model",
+    expected: "default",
+    allow: ["custom/default", "custom/custom/*"],
+    disallowed: true,
+  },
+  {
+    name: "exact model namespace does not authorize another provider",
+    provider: "custom/team",
+    pin: "Reader",
+    expected: "default",
+    allow: ["custom/default", "custom/team/Reader"],
+    disallowed: true,
+  },
+  {
+    name: "provider wildcard does not authorize another provider",
+    provider: "custom/team",
+    pin: "Reader",
+    expected: "default",
+    allow: ["custom/*"],
+    disallowed: true,
+  },
+  {
+    name: "resolved prefix allowed by its exact configured ref",
+    pin: "custom/model",
+    expected: "custom/model",
+    allow: ["custom/default", "custom/custom/model"],
+    configuredProvider: true,
+  },
+  {
+    name: "exact configured prefix does not authorize the plain model",
+    pin: "model",
+    expected: "default",
+    allow: ["custom/default", "custom/custom/model"],
+    configuredProvider: true,
+    disallowed: true,
+  },
 ])("selects $name through the reply owner", async (fixture) => {
   await withStateDirEnv("reply-resolved-pin-", async () => {
+    const allow = fixture.allow ?? (fixture.disallowed ? ["custom/default"] : undefined);
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
       agents: {
         entries: { main: {} },
         defaults: {
           model: "custom/default",
-          ...(fixture.disallowed ? { modelPolicy: { allow: ["custom/default"] } } : {}),
+          ...(allow ? { modelPolicy: { allow } } : {}),
         },
       },
+      ...(fixture.configuredProvider
+        ? {
+            models: {
+              providers: {
+                custom: {
+                  api: "openai-responses",
+                  baseUrl: "https://custom.example/v1",
+                  models: [],
+                },
+              },
+            },
+          }
+        : {}),
     };
     const registry = createEmptyPluginRegistry();
     registry.cliBackends.push({
@@ -83,29 +184,44 @@ test.each<SelectionCase>([
         }),
       ).toBe("custom");
     }
-    const provider = fixture.cli ? "demo-cli" : "custom";
-    const entry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
+    const provider = fixture.provider ?? (fixture.cli ? "demo-cli" : "custom");
+    const pinnedEntry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
     applyModelOverrideToSessionEntry({
-      entry,
+      entry: pinnedEntry,
       selection: { provider, model: fixture.pin },
       ...(fixture.missingAuthPin ? { profileOverride: "missing-test-profile" } : {}),
     });
     if (fixture.raw) {
-      delete entry.modelOverrideRouteResolution;
+      delete pinnedEntry.modelOverrideRouteResolution;
     }
     if (fixture.cli) {
-      entry.cliSessionBindings = { "demo-cli": { sessionId: "fixture-session" } };
+      pinnedEntry.cliSessionBindings = { "demo-cli": { sessionId: "fixture-session" } };
+    }
+    const entry: SessionEntry = fixture.inherited
+      ? { sessionId: "child", updatedAt: 1 }
+      : pinnedEntry;
+    if (fixture.locked) {
+      entry.modelSelectionLocked = true;
     }
     const sessionKey = "agent:main:resolved-pin";
+    const parentSessionKey = "agent:main:parent-pin";
+    const sessionStore = {
+      [sessionKey]: entry,
+      ...(fixture.inherited ? { [parentSessionKey]: pinnedEntry } : {}),
+    };
     const entries = [
       "default",
+      "model",
       "custom/model",
+      "customness/model",
+      "team/Reader",
       "middle",
       "final",
       "denied",
       "cli-model",
       "plain-model",
     ].map((id) => ({ provider: "custom", id, name: id }));
+    entries.push({ provider: "custom/team", id: "Reader", name: "Other provider" });
     const preparedModelCatalog: ModelCatalogSnapshot = {
       entries,
       routeVariants: entries,
@@ -116,10 +232,13 @@ test.each<SelectionCase>([
       async () => {
         // A failure here belongs to the reader dependency, before this owner's live-turn path.
         expect(
-          resolveDirectStoredModelOverride({ sessionEntry: entry, defaultProvider: "custom" }),
+          resolveDirectStoredModelOverride({
+            sessionEntry: pinnedEntry,
+            defaultProvider: "custom",
+          }),
         ).toMatchObject({
           provider,
-          model: fixture.raw ? "middle" : fixture.pin,
+          model: fixture.readerModel ?? (fixture.raw ? "middle" : fixture.pin),
           routeResolution: fixture.raw ? "raw" : "resolved",
         });
         const selection = await createModelSelectionState({
@@ -127,8 +246,9 @@ test.each<SelectionCase>([
           agentId: "main",
           agentCfg: cfg.agents?.defaults,
           sessionEntry: entry,
-          sessionStore: { [sessionKey]: entry },
+          sessionStore,
           sessionKey,
+          parentSessionKey: fixture.inherited ? parentSessionKey : undefined,
           defaultProvider: "custom",
           defaultModel: "default",
           provider: "custom",
@@ -142,13 +262,16 @@ test.each<SelectionCase>([
         expect(selection).toMatchObject({
           provider: "custom",
           model: fixture.expected,
-          resetModelOverride: fixture.disallowed === true,
+          resetModelOverride: fixture.disallowed === true && !fixture.inherited,
         });
-        if (fixture.disallowed) {
+        if (fixture.disallowed && !fixture.inherited) {
           expect(selection.resetModelOverrideReason).toBe("disallowed");
           expect(entry.modelOverride).toBeUndefined();
         } else {
-          expect(entry.modelOverride).toBe(fixture.pin);
+          expect(pinnedEntry.modelOverride).toBe(fixture.pin);
+        }
+        if (fixture.inherited) {
+          expect(entry.modelOverride).toBeUndefined();
         }
         if (fixture.missingAuthPin) {
           expect(entry.authProfileOverride).toBeUndefined();

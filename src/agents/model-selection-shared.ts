@@ -958,6 +958,7 @@ type AllowedModelSet = {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
+  allows: (ref: ModelRef) => boolean;
 };
 
 /** Build explicit model override authorization without widening it for automatic fallbacks. */
@@ -1063,7 +1064,7 @@ function buildAllowedModelSetFromPrepared(
     if (defaultKey) {
       allowedKeys.add(defaultKey);
     }
-    return { allowAny: true, allowedCatalog: catalog, allowedKeys };
+    return { allowAny: true, allowedCatalog: catalog, allowedKeys, allows: () => true };
   };
 
   if (allowAny) {
@@ -1073,6 +1074,7 @@ function buildAllowedModelSetFromPrepared(
   const allowedKeys = new Set<string>();
   const catalogIdentities = new Set(catalog.map(resolveModelCatalogIdentityKey));
   const allowedCatalogIdentities = new Set<string>();
+  const exactAllowedIdentities = new Set<string>();
   const allowedCaseInsensitiveIdentities = new Set<string>();
   const caseInsensitiveIdentity = (provider: string, model: string) =>
     JSON.stringify([normalizeProviderId(provider), normalizeLowercaseStringOrEmpty(model)]);
@@ -1081,10 +1083,10 @@ function buildAllowedModelSetFromPrepared(
     allowedKeys.add(wildcardKey);
   }
   const addAllowedCatalogRef = (ref: ModelRef) => {
-    allowedCatalogIdentities.add(
-      resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model }),
-    );
+    const identity = resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model });
+    allowedCatalogIdentities.add(identity);
     allowedCaseInsensitiveIdentities.add(caseInsensitiveIdentity(ref.provider, ref.model));
+    return identity;
   };
   for (const entry of expandModelCatalogWildcards(catalog, wildcardModelKeys)) {
     allowedKeys.add(modelKey(entry.provider, entry.id));
@@ -1097,7 +1099,7 @@ function buildAllowedModelSetFromPrepared(
     }
     const key = modelKey(parsed.provider, parsed.model);
     allowedKeys.add(key);
-    addAllowedCatalogRef(parsed);
+    exactAllowedIdentities.add(addAllowedCatalogRef(parsed));
     const syntheticKey = modelCatalogEntryKey({ provider: parsed.provider, id: parsed.model });
 
     if (
@@ -1130,7 +1132,10 @@ function buildAllowedModelSetFromPrepared(
   ) {
     allowedKeys.add(defaultKey);
     if (defaultRef) {
-      addAllowedCatalogRef(defaultRef);
+      const identity = addAllowedCatalogRef(defaultRef);
+      if (wildcardModelKeys.size === 0) {
+        exactAllowedIdentities.add(identity);
+      }
     }
   }
 
@@ -1151,6 +1156,15 @@ function buildAllowedModelSetFromPrepared(
     allowAny: false,
     allowedCatalog,
     allowedKeys,
+    allows: (ref) => {
+      const provider = normalizeProviderId(ref.provider);
+      return (
+        exactAllowedIdentities.has(resolveModelCatalogIdentityKey({ provider, id: ref.model })) ||
+        // Wildcard catalog expansion uses display keys; it cannot authorize resolved tuples.
+        (visibility.providerWildcards.has(provider) &&
+          isModelKeyAllowedBySet(wildcardModelKeys, `${provider}/${ref.model}`))
+      );
+    },
   };
 }
 
@@ -1703,7 +1717,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowConfigPath: visibility.configPath,
     allowRepairConfigPath: visibility.repairConfigPath,
     allowsKey,
-    allows: (ref) => allowsKey(modelKey(ref.provider, ref.model)),
+    allows: allowed.allows,
     allowsByWildcard: (ref) =>
       isModelKeyAllowedBySet(wildcardModelKeys, modelKey(ref.provider, ref.model)),
     resolveSelection: (ref) =>
