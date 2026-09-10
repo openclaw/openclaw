@@ -213,6 +213,7 @@ describe("memory embedding policy", () => {
     { code: "insufficient_quota" },
     { errorType: "insufficient_quota" },
     { errorCode: "insufficient_quota", errorType: "rate_limit_error" },
+    { code: "credit_balance_exhausted" },
   ])("fails fast for structured permanent quota without a cooldown: %j", async (fields) => {
     const quotaError = Object.assign(new Error("Too many tokens per day"), {
       status: 429,
