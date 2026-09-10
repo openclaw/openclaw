@@ -23,7 +23,6 @@ import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -508,13 +507,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
             this.clearTypingActorForSessionMessage(event.payload);
           }
           handlePageGatewayEvent(state, event, () => this.presented);
-          const changed =
-            event.event === "sessions.changed" ? readSessionChangedEvent(event.payload) : null;
-          if (
-            (changed && areUiSessionKeysEquivalent(changed.key, state.sessionKey)) ||
-            event.event === "presence" ||
-            event.event === "node.runnerInventory.changed"
-          ) {
+          if (event.event === "sessions.changed" && this.active && this.presented) {
+            this.activeSessionResources.reconcileSession(event.payload, state, {
+              requestUpdate: () => this.requestUpdate(),
+              updated: () => this.updateComplete,
+            });
+          }
+          if (event.event === "presence" || event.event === "node.runnerInventory.changed") {
             this.activeSessionResources.invalidate();
             this.requestUpdate();
           }
@@ -635,6 +634,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     const agentId = state
       ? scopedAgentParamsForSession(state, state.sessionKey).agentId
       : undefined;
+    const session = state ? selectedChatSessionRow(state) : undefined;
     this.activeSessionResources.sync(
       state &&
         client &&
@@ -650,7 +650,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
             connectionEpoch: state.connectionEpoch,
             desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
             browserAvailable: isBrowserPanelAvailable(this.context.gateway.snapshot),
-            placement: selectedChatSessionRow(state)?.placement,
+            placement: session?.placement,
+            sessionId: session?.sessionId,
+            execNode: session?.execNode,
+            archived: session?.archived,
             browserTab: [
               ...latestBrowserTabCards(state.chatMessages, state.chatToolMessages).values(),
             ].at(-1),

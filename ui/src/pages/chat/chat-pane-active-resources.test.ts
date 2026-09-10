@@ -15,6 +15,18 @@ const session = {
   updatedAt: 1,
   placement: { state: "active", environmentId: "worker-1" },
 } as GatewaySessionRow;
+const activePlacement = {
+  state: "active",
+  generation: 1,
+  createdAtMs: 1,
+  updatedAtMs: 1,
+  stateChangedAtMs: 1,
+  environmentId: "worker-1",
+  activeOwnerEpoch: 1,
+  workerBundleHash: "a".repeat(64),
+  workspaceBaseManifestRef: "base",
+  remoteWorkspaceDir: "/workspace",
+} satisfies NonNullable<GatewaySessionRow["placement"]>;
 const environment: EnvironmentsListResult["environments"][number] = {
   id: "worker-1",
   type: "worker",
@@ -84,6 +96,209 @@ function fixture() {
 }
 
 describe("session active resource discovery", () => {
+  it.each([false, true])(
+    "retains a probe when the superseded reconciliation fails (latest completes first: %s)",
+    async (latestCompletesFirst) => {
+      const f = fixture();
+      f.owner.browserAvailable = false;
+      f.owner.placement = activePlacement;
+      const inventoryRead = createDeferred<unknown>();
+      const first = createDeferred<boolean>();
+      const latest = createDeferred<boolean>();
+      const respond = f.request.getMockImplementation()!;
+      f.request.mockImplementation((method, params) =>
+        method === "environments.list" ? inventoryRead.promise : respond(method, params),
+      );
+      f.controller.sync(f.owner);
+      await settle();
+      f.controller.reconcile(() => first.promise);
+      inventoryRead.resolve({ environments: [environment] });
+      await settle();
+      f.controller.reconcile(() => latest.promise);
+      if (latestCompletesFirst) {
+        latest.resolve(true);
+        await settle();
+      }
+      first.resolve(false);
+      await settle();
+      if (!latestCompletesFirst) {
+        expect(f.commit).not.toHaveBeenCalled();
+        latest.resolve(true);
+      }
+      await settle();
+      expect(f.slots()).toEqual(["desktop"]);
+      expect(f.request).toHaveBeenCalledTimes(2);
+      expect(f.commit).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["metadata", "owner", "failed", "failed-before-result"])(
+    "holds completed discovery behind %s reconciliation",
+    async (change) => {
+      const f = fixture();
+      f.owner.browserAvailable = false;
+      f.owner.placement = activePlacement;
+      f.owner.requestUpdate = vi.fn(() => f.controller.sync(f.owner));
+      const inventoryRead = createDeferred<unknown>();
+      const reconciled = createDeferred<boolean>();
+      const respond = f.request.getMockImplementation()!;
+      f.request.mockImplementation((method, params) =>
+        method === "environments.list" ? inventoryRead.promise : respond(method, params),
+      );
+      f.controller.sync(f.owner);
+      await settle();
+      f.controller.reconcile(async () => {
+        const ok = await reconciled.promise;
+        f.owner.placement =
+          change === "owner"
+            ? { ...activePlacement, generation: 2 }
+            : { ...activePlacement, updatedAtMs: 10, lastTranscriptAckCursor: 99 };
+        f.controller.sync(f.owner);
+        return ok;
+      });
+      if (change === "failed-before-result") {
+        reconciled.resolve(false);
+        await settle();
+      }
+      inventoryRead.resolve({ environments: [environment] });
+      await settle();
+      expect(f.commit).not.toHaveBeenCalled();
+      f.request.mockResolvedValue({ session: undefined });
+      reconciled.resolve(!change.startsWith("failed"));
+      await settle();
+      expect(f.slots()).toEqual(change === "metadata" ? ["desktop"] : []);
+      expect(f.request).toHaveBeenCalledTimes(change === "owner" ? 3 : 2);
+      if (change === "failed-before-result") {
+        f.request.mockImplementation(respond);
+        f.controller.reconcile(async () => {
+          f.owner.placement = { ...activePlacement, updatedAtMs: 20 };
+          f.controller.sync(f.owner);
+          return true;
+        });
+        await settle();
+        expect(f.slots()).toEqual(["desktop"]);
+        expect(f.request).toHaveBeenCalledTimes(4);
+      }
+    },
+  );
+
+  it.each(["sessions.describe", "environments.list", "browser.request"])(
+    "keeps metadata-only placement updates out of discovery while %s is pending and after completion",
+    async (heldMethod) => {
+      const f = fixture();
+      f.owner.placement = activePlacement;
+      const pending = createDeferred<unknown>();
+      const respond = f.request.getMockImplementation()!;
+      f.request.mockImplementation((method, params) =>
+        method === heldMethod ? pending.promise : respond(method, params),
+      );
+      f.controller.sync(f.owner);
+      await settle();
+      const initialCalls = [...f.request.mock.calls];
+      for (const cursor of [1, 2, 3]) {
+        f.owner.placement = {
+          ...activePlacement,
+          updatedAtMs: cursor + 10,
+          lastTranscriptAckCursor: cursor,
+          lastLiveEventAckCursor: cursor * 2,
+          diskSpace: {
+            status: "ok",
+            availableBytes: 100 - cursor,
+            totalBytes: 100,
+            observedAtMs: cursor + 10,
+          },
+        };
+        f.controller.sync(f.owner);
+        await settle();
+        expect(f.request.mock.calls).toEqual(initialCalls);
+      }
+      pending.resolve(await respond(heldMethod));
+      await settle();
+      expect(f.slots().toSorted()).toEqual(["browser", "desktop"]);
+      expect(f.request).toHaveBeenCalledTimes(3);
+      f.owner.placement = { ...activePlacement, updatedAtMs: 100, lastTranscriptAckCursor: 99 };
+      f.controller.sync(f.owner);
+      await settle();
+      expect(f.request).toHaveBeenCalledTimes(3);
+      expect(f.commit).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    { name: "lifecycle state", placement: { ...activePlacement, state: "reclaimed" as const } },
+    { name: "generation", placement: { ...activePlacement, generation: 2 } },
+    { name: "environment", placement: { ...activePlacement, environmentId: "worker-2" } },
+    { name: "owner epoch", placement: { ...activePlacement, activeOwnerEpoch: 2 } },
+    {
+      name: "device",
+      placement: {
+        ...activePlacement,
+        runner: { kind: "device" as const, deviceId: "node-2", status: "available" as const },
+      },
+    },
+    {
+      name: "device availability",
+      placement: {
+        ...activePlacement,
+        runner: { kind: "device" as const, deviceId: "node-1", status: "offline" as const },
+      },
+    },
+  ])("re-probes and fences the pending old owner when $name changes", async ({ placement }) => {
+    const f = fixture();
+    f.owner.browserAvailable = false;
+    f.owner.placement =
+      "runner" in placement
+        ? {
+            ...activePlacement,
+            runner: { kind: "device", deviceId: "node-1", status: "available" },
+          }
+        : activePlacement;
+    const pending = createDeferred<unknown>();
+    f.request.mockImplementationOnce(async () => pending.promise);
+    f.controller.sync(f.owner);
+    f.request.mockResolvedValue({ session: undefined });
+    f.owner.placement = placement;
+    f.controller.sync(f.owner);
+    await settle();
+    expect(f.request).toHaveBeenCalledTimes(2);
+    pending.resolve({ session });
+    await settle();
+    expect(f.request).toHaveBeenCalledTimes(2);
+    expect(f.commit).not.toHaveBeenCalled();
+  });
+
+  it.each(["sessionId", "execNode", "archived"] as const)(
+    "re-probes and fences a changed %s",
+    async (field) => {
+      const f = fixture();
+      f.owner.browserAvailable = false;
+      f.owner.sessionId = "session-id";
+      f.owner.execNode = "node-1";
+      f.owner.placement = {
+        state: "local",
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+      };
+      const pending = createDeferred<unknown>();
+      f.request.mockImplementationOnce(async () => pending.promise);
+      f.controller.sync(f.owner);
+      f.request.mockResolvedValue({ session: undefined });
+      if (field === "archived") {
+        f.owner.archived = true;
+      } else {
+        f.owner[field] = "replacement";
+      }
+      f.controller.sync(f.owner);
+      await settle();
+      pending.resolve({ session });
+      await settle();
+      expect(f.request).toHaveBeenCalledTimes(2);
+      expect(f.commit).not.toHaveBeenCalled();
+    },
+  );
+
   it("reveals existing desktop and exact browser targets once without provisioning or focusing", async () => {
     const f = fixture();
     f.controller.sync(f.owner);

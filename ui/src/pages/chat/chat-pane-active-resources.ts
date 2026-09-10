@@ -6,8 +6,15 @@ import {
   listBrowserTabs,
 } from "../../components/browser/browser-client.ts";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
+import {
+  areUiSessionKeysEquivalent,
+  uiSessionEventMatches,
+  uiSessionRowMatchesSelectedChat,
+} from "../../lib/sessions/session-key.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   openSlot,
   sidebarActivePanel,
@@ -24,6 +31,9 @@ export type ActiveResourceOwner = {
   desktopAvailable: boolean;
   browserAvailable: boolean;
   placement: GatewaySessionRow["placement"];
+  sessionId?: GatewaySessionRow["sessionId"];
+  execNode?: GatewaySessionRow["execNode"];
+  archived?: boolean;
   browserTab?: BrowserTabSelection;
   layout: () => SidebarLayout;
   commit: (layout: SidebarLayout) => void;
@@ -31,11 +41,36 @@ export type ActiveResourceOwner = {
   isCurrent: () => boolean;
 };
 
+function placementResourceIdentity(placement: GatewaySessionRow["placement"]) {
+  if (!placement) {
+    return null;
+  }
+  const runner = placement.state === "active" ? placement.runner : undefined;
+  // Ack cursors, disk observations and timestamps advance during ordinary work;
+  // they do not replace the resource or revoke an in-flight discovery owner.
+  return [
+    placement.state,
+    placement.generation,
+    "environmentId" in placement ? placement.environmentId : undefined,
+    "activeOwnerEpoch" in placement ? placement.activeOwnerEpoch : undefined,
+    "providerId" in placement ? placement.providerId : undefined,
+    "profileId" in placement ? placement.profileId : undefined,
+    runner?.kind,
+    runner?.deviceId,
+    runner?.status,
+  ];
+}
+
 /** Read-only discovery belongs to the visible session, not to a global tool dock. */
 export class ChatPaneActiveResources {
   private generation = 0;
   private signature: string | undefined;
   private client: GatewayBrowserClient | undefined;
+  private pendingProbes = 0;
+  private reconciliation: Promise<boolean> | undefined;
+  private reconciliationFailed = false;
+  private probeCurrent: (() => boolean) | undefined;
+  private requestProbeUpdate: (() => void) | undefined;
   private desktop:
     | {
         client: GatewayBrowserClient;
@@ -49,6 +84,98 @@ export class ChatPaneActiveResources {
   invalidate(): void {
     this.generation += 1;
     this.signature = undefined;
+    this.pendingProbes = 0;
+    this.reconciliation = undefined;
+    this.reconciliationFailed = false;
+    this.probeCurrent = undefined;
+    this.requestProbeUpdate = undefined;
+  }
+
+  reconcileSession(
+    payload: unknown,
+    state: ChatPageHost,
+    view: { requestUpdate: () => void; updated: () => Promise<unknown> },
+  ): void {
+    const changed = readSessionChangedEvent(payload);
+    if (!changed || !uiSessionEventMatches(state, changed.key, changed.agentId)) {
+      return;
+    }
+    // The roster owner coalesces/absorbs scheduled event refreshes. Sync its
+    // post-event snapshot before releasing existing probe results, without
+    // discarding them when only metadata changed.
+    this.reconcile(async () => {
+      const result = await state.sessions.refreshReplacement(
+        scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      );
+      if (
+        !result?.sessions.some((row) =>
+          uiSessionRowMatchesSelectedChat(state, row.key, state.sessionKey, row.agentId),
+        )
+      ) {
+        // A filtered/paged roster may retain a cached selected row for display;
+        // that row is not post-event evidence of resource ownership.
+        return false;
+      }
+      view.requestUpdate();
+      await view.updated();
+      return true;
+    });
+  }
+
+  /** Hold existing results, rather than discarding/reissuing them for every event. */
+  reconcile(refresh: () => Promise<boolean>): void {
+    const current = this.probeCurrent;
+    if (
+      (!this.pendingProbes && !this.reconciliationFailed && !this.reconciliation) ||
+      !current?.()
+    ) {
+      return;
+    }
+    const retryDiscovery = this.pendingProbes === 0;
+    const requestUpdate = this.requestProbeUpdate;
+    const pending = Promise.resolve()
+      .then(() => (current() ? refresh() : false))
+      .catch(() => false);
+    this.reconciliation = pending;
+    this.reconciliationFailed = false;
+    void pending.then((ok) => {
+      if (this.reconciliation === pending) {
+        this.reconciliationFailed = !ok;
+        if (ok) {
+          this.reconciliation = undefined;
+          if (retryDiscovery && current() && this.pendingProbes === 0) {
+            // A later successful event refresh may retry a probe discarded on
+            // reconciliation failure, even when resource identity is unchanged.
+            this.signature = undefined;
+            requestUpdate?.();
+          }
+        }
+      }
+    });
+  }
+
+  private async currentAfterReconciliation(current: () => boolean): Promise<boolean> {
+    let pending: Promise<boolean> | undefined;
+    while (current() && (pending = this.reconciliation)) {
+      const ok = await pending;
+      // A newer refresh owns the decision even if the one we awaited failed.
+      if (this.reconciliation !== pending) {
+        continue;
+      }
+      if (!ok) {
+        return false;
+      }
+    }
+    return current();
+  }
+
+  private trackProbe(probe: Promise<void>, generation: number): void {
+    this.pendingProbes += 1;
+    void probe.finally(() => {
+      if (this.generation === generation) {
+        this.pendingProbes -= 1;
+      }
+    });
   }
 
   desktopSource(
@@ -78,7 +205,10 @@ export class ChatPaneActiveResources {
       owner.sessionKey,
       owner.agentId,
       owner.connectionEpoch,
-      owner.placement,
+      owner.sessionId,
+      owner.execNode,
+      owner.archived === true,
+      placementResourceIdentity(owner.placement),
       owner.desktopAvailable,
       owner.browserAvailable,
       owner.browserTab,
@@ -87,9 +217,15 @@ export class ChatPaneActiveResources {
     if (this.client === owner.client && this.signature === signature) {
       return;
     }
+    if (this.reconciliationFailed || (this.probeCurrent && !this.probeCurrent())) {
+      // A failed refresh fences its old generation, not a later authoritative identity.
+      this.reconciliation = undefined;
+      this.reconciliationFailed = false;
+    }
     this.client = owner.client;
     this.signature = signature;
     const generation = ++this.generation;
+    this.pendingProbes = 0;
     if (this.desktop) {
       if (this.desktop.sessionKey !== owner.sessionKey || this.desktop.agentId !== owner.agentId) {
         this.desktop = undefined;
@@ -111,12 +247,14 @@ export class ChatPaneActiveResources {
     }
     const current = () =>
       generation === this.generation && owner.isCurrent() && !this.dismissed(owner.layout());
+    this.probeCurrent = current;
+    this.requestProbeUpdate = owner.requestUpdate;
     // Independent probes: a broken browser route must not hide an available desktop.
     if (owner.desktopAvailable) {
-      void this.discoverDesktop(owner, current);
+      this.trackProbe(this.discoverDesktop(owner, current), generation);
     }
     if (owner.browserAvailable && owner.browserTab) {
-      void this.discoverBrowser(owner, owner.browserTab, current);
+      this.trackProbe(this.discoverBrowser(owner, owner.browserTab, current), generation);
     }
   }
 
@@ -179,7 +317,7 @@ export class ChatPaneActiveResources {
         "sessions.describe",
         { key: owner.sessionKey, ...(owner.agentId ? { agentId: owner.agentId } : {}) },
       );
-      if (!current()) {
+      if (!(await this.currentAfterReconciliation(current))) {
         return;
       }
       if (
@@ -201,7 +339,7 @@ export class ChatPaneActiveResources {
         "environments.list",
         {},
       );
-      if (!current()) {
+      if (!(await this.currentAfterReconciliation(current))) {
         return;
       }
       const environment = environments.find((entry) => entry.id === source);
@@ -220,7 +358,7 @@ export class ChatPaneActiveResources {
       }
       this.publishDesktop(owner, source);
     } catch {
-      if (current()) {
+      if (await this.currentAfterReconciliation(current)) {
         this.publishDesktop(owner, null);
       }
       // Unavailable inventory is not evidence of a live resource. Manual opening remains available.
@@ -237,7 +375,7 @@ export class ChatPaneActiveResources {
         bindBrowserRequestClient(owner.client, selection.tab, current),
       );
       if (
-        !current() ||
+        !(await this.currentAfterReconciliation(current)) ||
         !snapshot.running ||
         !snapshot.tabs.some(
           (tab) => tab.targetId === selection.tab.targetId && !tab.urlUnavailableReason,

@@ -2,12 +2,14 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
@@ -198,8 +200,47 @@ suite.define(() => {
         await installScriptedRfbServer(page);
         const composer = pane(page).locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Keep my draft and focus");
+        await gateway.deferNext("environments.list");
         await gateway.setSessionsListResponse(list(true));
         await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
+        await gateway.waitForRequest("environments.list");
+        const pendingInventoryCount = (await gateway.getRequests("environments.list")).length;
+        for (const cursor of [1, 2, 3]) {
+          await gateway.setSessionsListResponse({
+            ...list(true),
+            sessions: [
+              {
+                ...row,
+                placement: {
+                  ...row.placement,
+                  updatedAtMs: cursor,
+                  lastTranscriptAckCursor: cursor,
+                  lastLiveEventAckCursor: cursor * 2,
+                  diskSpace: {
+                    status: "ok",
+                    availableBytes: 100 - cursor,
+                    totalBytes: 100,
+                    observedAtMs: cursor,
+                  },
+                },
+              },
+              notes,
+            ],
+          });
+          await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
+          await expect
+            .poll(() =>
+              pane(page).evaluate((element, sessionKey) => {
+                const state = (element as HTMLElement & { state: ChatPageHost }).state;
+                return state.sessionsResult?.sessions.find((session) => session.key === sessionKey)
+                  ?.placement?.updatedAtMs;
+              }, key),
+            )
+            .toBe(cursor);
+        }
+        await expectRequestCountStable(gateway, "environments.list", pendingInventoryCount);
+        expect(await desktopTab(page).count()).toBe(0);
+        await gateway.resolveDeferred("environments.list", inventory);
         await desktopTab(page).waitFor();
         await pane(page).locator(".desktop-surface canvas").waitFor();
         expect(await composer.inputValue()).toBe("Keep my draft and focus");
@@ -218,6 +259,57 @@ suite.define(() => {
       },
     );
   });
+
+  it.each([false, true])(
+    "does not accept old desktop discovery while a newer snapshot is pending (filtered: %s)",
+    async (filtered) => {
+      await suite.withPage(
+        { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            sessionKey: key,
+            featureMethods,
+            historyMessages: [{ role: "assistant", content: "Resource ownership proof." }],
+            methodResponses: { "sessions.list": list(false), "environments.list": inventory },
+          });
+          await page.goto(`${suite.server.baseUrl}chat/main/resource-demo`);
+          await ready(page);
+          await gateway.waitForRequest("sessions.describe");
+          await gateway.deferNext("environments.list");
+          await gateway.setSessionsListResponse(list(true));
+          await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
+          await gateway.waitForRequest("environments.list");
+          const listReads = (await gateway.getRequests("sessions.list", { includeGlobal: true }))
+            .length;
+          await gateway.deferNext("sessions.list", { includeGlobal: true });
+          await gateway.setSessionsListResponse(
+            filtered ? { ...list(false), sessions: [notes] } : list(false),
+          );
+          await gateway.emitGatewayEvent("sessions.changed", { key, reason: "patch" });
+          await gateway.waitForRequest("sessions.list", {
+            after: listReads,
+            match: { includeGlobal: true },
+          });
+          await gateway.resolveDeferred("environments.list", inventory);
+          await expectRequestCountStable(gateway, "desktop.observe", 0);
+          expect(await desktopTab(page).count()).toBe(0);
+          await gateway.resolveDeferred("sessions.list");
+          await expect
+            .poll(() =>
+              pane(page).evaluate((element, sessionKey) => {
+                const state = (element as HTMLElement & { state: ChatPageHost }).state;
+                return state.sessionsResult?.sessions.find((session) => session.key === sessionKey)
+                  ?.placement?.state;
+              }, key),
+            )
+            .toBe(filtered ? undefined : "local");
+          await expectRequestCountStable(gateway, "desktop.observe", 0);
+          expect(await desktopTab(page).count()).toBe(0);
+          await assertNoProvisioning(gateway);
+        },
+      );
+    },
+  );
 
   it("reveals the exact live browser result on initial load without opening another browser tab", async () => {
     await suite.withPage(
