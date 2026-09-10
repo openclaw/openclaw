@@ -5,6 +5,8 @@ import {
   startMatrixQaFaultProxy,
   type MatrixQaFaultProxyExchange,
   type MatrixQaFaultProxyObserver,
+  type MatrixQaFaultProxyRule,
+  type MatrixQaFaultProxyRuleHandle,
 } from "./fault-proxy.js";
 
 const MATRIX_QA_RECORDING_PROFILE = "matrix-qa-v1";
@@ -109,6 +111,7 @@ export type MatrixQaRecordingProxy = MatrixQaFaultProxyObserver & {
     scenarioIds: string[];
     substrate: MatrixQaRouteStateManifest["substrate"];
   }): MatrixQaRouteStateManifest;
+  installFaultRule(rule: MatrixQaFaultProxyRule): MatrixQaFaultProxyRuleHandle;
   records(): MatrixQaRecordedExchange[];
   setScenarioId(scenarioId: string): void;
   stop(): Promise<void>;
@@ -712,6 +715,7 @@ export async function startMatrixQaRecordingProxy(params: {
         substrate,
       };
     },
+    installFaultRule: (rule) => proxy.installRule(rule),
     records: () =>
       structuredClone(
         records

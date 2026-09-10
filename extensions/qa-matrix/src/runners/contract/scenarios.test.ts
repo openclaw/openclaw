@@ -1128,13 +1128,12 @@ describe("matrix live qa scenarios", () => {
           },
         },
       });
-      const proxyStop = vi.fn().mockResolvedValue(undefined);
-      const proxyHits = vi.fn().mockReturnValue([]);
-      startMatrixQaFaultProxy.mockResolvedValue({
-        baseUrl: "http://127.0.0.1:39879",
-        hits: proxyHits,
-        stop: proxyStop,
-      });
+      const faultRuleRemove = vi.fn();
+      const faultRuleHits = vi.fn().mockReturnValue([]);
+      const installFaultRule = vi.fn((_rule: unknown) => ({
+        hits: faultRuleHits,
+        remove: faultRuleRemove,
+      }));
       let replyToken = "";
       const driverStop = vi.fn().mockResolvedValue(undefined);
       const driverClient = {
@@ -1171,6 +1170,7 @@ describe("matrix live qa scenarios", () => {
           OPENCLAW_CONFIG_PATH: gatewayConfigPath,
           PATH: process.env.PATH,
         },
+        installFaultRule,
         outputDir,
         restartGatewayAfterStateMutation,
         sutAccountId: "sut",
@@ -1225,44 +1225,39 @@ describe("matrix live qa scenarios", () => {
         "http://127.0.0.1:28008/",
       );
       expect(restoredConfig.channels.matrix.accounts.sut.network).toEqual({ existing: true });
-      expect(restartGatewayAfterStateMutation).toHaveBeenCalledTimes(2);
-      expect(proxyStop).toHaveBeenCalledTimes(1);
+      expect(restartGatewayAfterStateMutation).toHaveBeenCalledTimes(1);
+      expect(faultRuleRemove).toHaveBeenCalledTimes(1);
 
-      const proxyArgs = mockObjectArg(startMatrixQaFaultProxy, "startMatrixQaFaultProxy") as {
-        rules: Array<{
-          match: (params: {
-            bearerToken?: string;
-            headers: Record<string, string>;
-            method: string;
-            path: string;
-            search: string;
-          }) => boolean;
-          mutateResponse: (params: {
-            request: unknown;
-            response: {
+      const faultRule = installFaultRule.mock.calls[0]?.[0] as {
+        match: (params: {
+          bearerToken?: string;
+          headers: Record<string, string>;
+          method: string;
+          path: string;
+          search: string;
+        }) => boolean;
+        mutateResponse: (params: {
+          request: unknown;
+          response: {
+            body: Buffer;
+            headers: Headers;
+            status: number;
+          };
+        }) =>
+          | {
               body: Buffer;
               headers: Headers;
               status: number;
-            };
-          }) =>
-            | {
-                body: Buffer;
-                headers: Headers;
-                status: number;
-              }
-            | Promise<{
-                body: Buffer;
-                headers: Headers;
-                status: number;
-              }>;
-        }>;
-        targetBaseUrl?: unknown;
+            }
+          | Promise<{
+              body: Buffer;
+              headers: Headers;
+              status: number;
+            }>;
       };
-      const [faultRule] = proxyArgs.rules;
       if (!faultRule) {
         throw new Error("expected Matrix QA fault proxy rule");
       }
-      expect(proxyArgs.targetBaseUrl).toBe("http://127.0.0.1:28008/");
       expect(
         faultRule.match({
           bearerToken: "sut-token",

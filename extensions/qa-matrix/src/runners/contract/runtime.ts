@@ -956,6 +956,7 @@ export async function runMatrixQaLive(params: {
                 driverUserId: provisioning.driver.userId,
                 faultProxyObserver: harness.recording,
                 faultProxyTargetBaseUrl: harness.upstreamBaseUrl,
+                installFaultRule: (rule) => harness.recording.installFaultRule(rule),
                 interruptTransport: async () => {
                   writeMatrixQaProgress(`transport interrupt start ${scenario.id}`);
                   const measuredInterrupt = await measureMatrixQaStep(async () => {
