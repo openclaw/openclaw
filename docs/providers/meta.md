@@ -73,8 +73,9 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 ```
 
 `--mode` defaults to `local`, so this is the same run as the **Direct flag**
-command above. Pass `--mode remote --remote-url wss://<host>:18789` instead when
-onboarding against a remote Gateway.
+command above. Run it on the Gateway host: remote-client onboarding
+(`--mode remote`) only configures the local client connection and does not set
+up provider credentials on the server.
 
 ## Built-in catalog
 

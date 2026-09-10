@@ -93,9 +93,10 @@ openclaw onboard --non-interactive \
 
 <Note>
 `--accept-risk` is required alongside `--non-interactive`. `--mode` defaults to
-`local`, so these are the same runs as the **direct flag** commands above; pass
-`--mode remote --remote-url wss://<host>:18789` instead when onboarding against
-a remote Gateway.
+`local`, so these are the same runs as the **direct flag** commands above. Run
+them on the Gateway host: remote-client onboarding (`--mode remote`) only
+configures the local client connection and does not set up provider credentials
+on the server.
 </Note>
 
 ## Built-in catalog
