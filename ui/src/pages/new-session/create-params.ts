@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -11,12 +12,12 @@ const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
  */
 export type NewSessionVisibility = "normal" | "draft" | "incognito";
 export type DraftSessionCreateOverrides = Partial<
-  Pick<SessionCreateParams, "message" | "attachments" | "displayName">
+  Pick<SessionCreateParams, "message" | "attachments" | "displayName" | "titleSource">
 > & { mentions?: readonly HumanMention[]; visibility?: NewSessionVisibility };
 export type DraftSessionCreateSelection = Partial<
   Pick<
     SessionCreateParams,
-    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName"
+    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName" | "titleSource"
   >
 > & {
   message: string;
@@ -46,6 +47,7 @@ export function buildDraftSessionCreateParams(draft: {
   message: string;
   mentions?: readonly HumanMention[];
   displayName?: string;
+  titleSource?: string;
   model?: string;
   contextWindow?: string;
   thinkingLevel?: string;
@@ -89,6 +91,9 @@ export function buildDraftSessionCreateParams(draft: {
       : {}),
     ...(normalizeOptionalString(draft.displayName)
       ? { displayName: normalizeOptionalString(draft.displayName) }
+      : {}),
+    ...(draft.titleSource?.trim()
+      ? { titleSource: truncateUtf16Safe(draft.titleSource.trim(), 1_000) }
       : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),

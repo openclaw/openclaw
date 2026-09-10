@@ -9976,6 +9976,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let agentid: String?
     public let label: String?
     public let displayname: String?
+    public let titlesource: String?
     public let category: String?
     public let model: String?
     public let contextwindow: String?
@@ -10012,6 +10013,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         agentid: String? = nil,
         label: String? = nil,
         displayname: String? = nil,
+        titlesource: String? = nil,
         category: String? = nil,
         model: String? = nil,
         contextwindow: String? = nil,
@@ -10047,6 +10049,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.agentid = agentid
         self.label = label
         self.displayname = displayname
+        self.titlesource = titlesource
         self.category = category
         self.model = model
         self.contextwindow = contextwindow
@@ -10084,6 +10087,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case agentid = "agentId"
         case label
         case displayname = "displayName"
+        case titlesource = "titleSource"
         case category
         case model
         case contextwindow = "contextWindow"

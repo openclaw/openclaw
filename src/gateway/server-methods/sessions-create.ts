@@ -44,6 +44,7 @@ import {
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
+import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
@@ -616,8 +617,24 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       armSessionDiffBaselineCapture: !repository,
       loadGatewayModelCatalog: () => context.loadGatewayModelCatalog({ agentId: sessionAgentId }),
       commitGuard,
-      afterCreate: async ({ key, agentId }) => {
-        if (!authority.hasActive() || !hasInitialTurn) {
+      afterCreate: async ({ key, agentId, entry, storePath, isNew }) => {
+        if (!authority.hasActive()) {
+          return;
+        }
+        if (!hasInitialTurn) {
+          // Remote placement delays the first turn, but naming belongs to the admitted session.
+          if (isNew && !entry.incognito && p.titleSource) {
+            scheduleCreatedDashboardSessionTitle({
+              admittedSessionId: entry.sessionId,
+              agentId,
+              cfg,
+              context,
+              request: { rawMessage: p.titleSource, normalizedAttachments: [] },
+              sessionKey: key,
+              sessionLoadOptions: { agentId },
+              storePath,
+            });
+          }
           return;
         }
         const sendChat = expectDefined(chatHandlers["chat.send"], "chat.send handler");

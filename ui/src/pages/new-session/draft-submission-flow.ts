@@ -475,6 +475,8 @@ export class DraftSubmissionFlow {
         startup?.params ??
         this.buildDraftSessionCreateParams({
           message: placementTarget ? "" : message,
+          titleSource:
+            placementTarget && this.visibilityValue !== "incognito" ? message : undefined,
           mentions: placementTarget ? undefined : mentions,
           displayName: preparedTitle,
           visibility:

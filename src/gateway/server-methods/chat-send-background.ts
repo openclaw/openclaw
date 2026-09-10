@@ -36,7 +36,7 @@ export function resolveWebchatPromptCacheKey(params: {
   return `openclaw-webchat-${digest}`;
 }
 
-export function scheduleChatDashboardSessionTitle(params: {
+type DashboardSessionTitleRequest = {
   admittedSessionId: string;
   agentId: string;
   cfg: OpenClawConfig;
@@ -45,7 +45,22 @@ export function scheduleChatDashboardSessionTitle(params: {
   sessionKey: string;
   sessionLoadOptions: Parameters<typeof loadSessionEntry>[1];
   storePath: string;
-}): void {
+};
+
+export function scheduleChatDashboardSessionTitle(params: DashboardSessionTitleRequest): void {
+  scheduleDashboardSessionTitle(params, "session");
+}
+
+export function scheduleCreatedDashboardSessionTitle(params: DashboardSessionTitleRequest): void {
+  // Creation metadata must not hold the execution lease that cloud dispatch drains.
+  // The title writer still checks the exact session generation and existing name.
+  scheduleDashboardSessionTitle(params, "gateway");
+}
+
+function scheduleDashboardSessionTitle(
+  params: DashboardSessionTitleRequest,
+  admissionScope: "session" | "gateway",
+): void {
   const titleSource = buildDashboardSessionTitleSource({
     message: params.request.rawMessage,
     attachments: params.request.normalizedAttachments,
@@ -56,35 +71,40 @@ export function scheduleChatDashboardSessionTitle(params: {
     return;
   }
   void runWithGatewayIndependentRootWorkContinuation(async () => {
+    const generateTitle = async () => {
+      const titleEntry = loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
+      if (titleEntry?.sessionId !== params.admittedSessionId) {
+        return;
+      }
+      const updated = await maybeGenerateDashboardSessionTitle({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        entry: titleEntry,
+        sessionId: params.admittedSessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        currentUserMessage: params.request.rawMessage,
+        userMessage: titleSource,
+      });
+      if (updated) {
+        emitSessionsChanged(params.context, {
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          reason: "chat.title",
+        });
+      }
+    };
+    if (admissionScope === "gateway") {
+      await generateTitle();
+      return;
+    }
     const admission = await beginSessionWorkAdmission({
       scope: params.storePath,
       identities: [params.sessionKey, params.admittedSessionId],
       assertAllowed: () => {},
     });
     try {
-      await admission.run(async () => {
-        const titleEntry = loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
-        if (titleEntry?.sessionId !== params.admittedSessionId) {
-          return;
-        }
-        const updated = await maybeGenerateDashboardSessionTitle({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          entry: titleEntry,
-          sessionId: params.admittedSessionId,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          currentUserMessage: params.request.rawMessage,
-          userMessage: titleSource,
-        });
-        if (updated) {
-          emitSessionsChanged(params.context, {
-            sessionKey: params.sessionKey,
-            agentId: params.agentId,
-            reason: "chat.title",
-          });
-        }
-      });
+      await admission.run(generateTitle);
     } finally {
       admission.release();
     }

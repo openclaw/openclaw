@@ -440,6 +440,7 @@ suite.define(() => {
       expect(create.params).toMatchObject({
         agentId: "cloud",
         message: "",
+        titleSource: message,
         projectId: "openclaw",
         worktree: true,
         worktreeBaseRef: "main",

@@ -37,6 +37,7 @@ describe("buildDraftSessionCreateParams", () => {
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "",
+        titleSource: `${"x".repeat(999)}🦞 longer prompt`,
         repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
         projectId: "old-clone",
         worktree: true,
@@ -48,6 +49,7 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({
       agentId: "main",
       message: "",
+      titleSource: "x".repeat(999),
       repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
     });
   });

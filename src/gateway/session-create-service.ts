@@ -248,6 +248,7 @@ type CreatedGatewaySession = {
   agentId: string;
   entry: SessionEntry;
   storePath: string;
+  isNew: boolean;
 };
 
 type TrustedInitialSessionEntry = {
@@ -1484,6 +1485,7 @@ export async function createGatewaySession(params: {
       agentId: target.agentId,
       entry: projectPublicSessionEntry(created.entry),
       storePath: target.storePath,
+      isNew: createdNewEntry,
     };
     lifecyclePreparationCommitted = true;
     if (createdNewEntry) {
