@@ -244,10 +244,15 @@ describe("plugin release cohort package reconciliation", () => {
     },
   );
 
-  it("removes the legacy load path after a successful post-core owner migration", async () => {
+  it.each(["update", "repair"])("reconciles the %s owner migration", async (phase) => {
     const legacyRoot = "/plugins/qqbot-legacy";
     const canonicalRoot = "/plugins/openclaw-qqbot";
     const legacyRecords = {
+      unrelated: {
+        source: "npm",
+        spec: "@example/unrelated",
+        installPath: "/plugins/unrelated",
+      },
       qqbot: {
         source: "npm",
         spec: "@openclaw/qqbot@1.9.0",
@@ -260,6 +265,7 @@ describe("plugin release cohort package reconciliation", () => {
       },
     } satisfies Record<string, PluginInstallRecord>;
     const canonicalRecords = {
+      unrelated: legacyRecords.unrelated,
       "openclaw-qqbot": {
         source: "npm",
         spec: "@tencent-connect/openclaw-qqbot@2.0.3",
@@ -294,6 +300,16 @@ describe("plugin release cohort package reconciliation", () => {
           }),
         }),
       );
+    if (phase === "repair") {
+      collectMissingPluginInstallPayloadsMock.mockResolvedValueOnce([
+        { pluginId: "qqbot", installPath: legacyRoot, reason: "missing-package-json" },
+      ]);
+    }
+    updateNpmInstalledPluginsMock.mockImplementation(async ({ config: current }) => ({
+      config: current,
+      changed: false,
+      outcomes: [],
+    }));
     updateNpmInstalledPluginsMock.mockResolvedValueOnce(
       attachPluginInstallOwnerMigrations(
         { config: updatedConfig, changed: true, outcomes: [] },
@@ -307,6 +323,11 @@ describe("plugin release cohort package reconciliation", () => {
       timeoutMs: 60_000,
     });
 
+    if (phase === "repair") {
+      const ordinaryUpdateRequest = updateNpmInstalledPluginsMock.mock.lastCall?.[0];
+      expect(ordinaryUpdateRequest?.config).toEqual(updatedConfig);
+      expect(ordinaryUpdateRequest?.skipIds).toEqual(new Set(["qqbot", "openclaw-qqbot"]));
+    }
     expect(result.changed).toBe(true);
     expect(result.config.channels?.qqbot).toEqual(config.channels.qqbot);
     expect(result.config.plugins?.installs).toEqual(canonicalRecords);

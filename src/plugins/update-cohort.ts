@@ -124,6 +124,7 @@ export async function convergePluginReleaseCohort(params: {
       ...sync.summary.switchedToClawHub,
       ...sync.summary.switchedToNpm,
       ...repairedMissingPayloadIds,
+      ...Object.values(installOwnerMigrations),
     ]),
     versionBoundPluginIds: params.versionBoundPluginIds,
     skipDisabledPlugins: true,
