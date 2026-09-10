@@ -399,6 +399,12 @@ requests. Use a current auth profile or authored request configuration instead.
 The session SDK preserves authored `models.json` keys and headers while merging
 generated model metadata below authored rows.
 
+Provider aliases in `models.providers.*.models` resolve once before discovery.
+If an alias and its exact destination are both configured, the destination row
+owns the model fields; omitted fields are not copied from the alias row.
+Catalog IDs from `models.json` and plugin discovery stay literal during refresh,
+apart from built-in corrections for retired Google and Together model names.
+
 <AccordionGroup>
   <Accordion title="Merge mode precedence">
     For matching provider IDs:
