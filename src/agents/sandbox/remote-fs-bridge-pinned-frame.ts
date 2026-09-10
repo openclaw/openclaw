@@ -21,21 +21,21 @@ import {
 } from "./remote-fs-bridge-paths.js";
 
 /** Maps a resolver action to the mutation action label used in errors. */
+const REMOTE_PINNED_ACTION_LABELS: Record<
+  "write" | "create" | "mkdir" | "remove" | "copy-destination",
+  string
+> = {
+  write: "write files",
+  create: "create files",
+  mkdir: "create directories",
+  remove: "remove files",
+  "copy-destination": "copy files",
+};
+
 export function remotePinnedActionLabel(
   action: "write" | "create" | "mkdir" | "remove" | "copy-destination",
 ): string {
-  switch (action) {
-    case "write":
-      return "write files";
-    case "create":
-      return "create files";
-    case "mkdir":
-      return "create directories";
-    case "remove":
-      return "remove files";
-    case "copy-destination":
-      return "copy files";
-  }
+  return REMOTE_PINNED_ACTION_LABELS[action];
 }
 
 /**
@@ -44,7 +44,7 @@ export function remotePinnedActionLabel(
  * and re-attached by the caller); directory operations pin the directory
  * itself, which an existing alias may have renamed.
  */
-export async function resolveRemotePinnedCanonicalFrame(params: {
+async function resolveRemotePinnedCanonicalFrame(params: {
   pinnedPath: string;
   directory: boolean;
   mountRootPath: string;
@@ -164,7 +164,7 @@ export async function resolveRemotePinnedTarget(
           mountRootPath: params.mountRootPath,
           action: params.action,
           signal: params.signal,
-          runRemoteShellScript: deps.runRemoteShellScript,
+          runRemoteShellScript: (command) => deps.runRemoteShellScript(command),
         })
       : await deps.resolveCanonicalPath({
           // mkdirp pins the directory itself; file operations pin their parent and

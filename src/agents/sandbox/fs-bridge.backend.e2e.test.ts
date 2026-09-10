@@ -329,12 +329,21 @@ describe("sandbox fs bridge local backend e2e", () => {
           code: "ENOENT",
         });
 
+        // Restore the alias so the remaining scenarios resolve against realDir
+        // (the swap above must not poison subsequent pins).
+        await fs.unlink(path.join(workspaceDir, "alias"));
+        await fs.symlink(realDir, path.join(workspaceDir, "alias"));
+
         // Copy: the destination pin lands on the canonical target.
         const copyTarget = await bridge.resolvePinnedMutationTarget!({
           filePath: "alias/config.txt",
           action: "copy-destination",
         });
-        await bridge.copyFile({
+        const copyFile = bridge.copyFile?.bind(bridge);
+        if (!copyFile) {
+          throw new Error("The mounted bridge must support streaming copies.");
+        }
+        await copyFile({
           sourcePath: "source.txt",
           destinationPath: "alias/config.txt",
           mkdir: true,
