@@ -62,6 +62,7 @@ import {
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+import { publishOpenClawStateDatabaseReadiness } from "./openclaw-state-db-readiness.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   ensureAdditiveStateColumns,
@@ -541,6 +542,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
         deferredStateDatabases.delete(cached.db);
       }
     }
+    publishOpenClawStateDatabaseReadiness(pathname, "active");
     return cached;
   }
   try {
@@ -591,6 +593,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
     deferredStateDatabases.add(database.db);
     reconcileOpenClawStateSchemaPublication(options);
   }
+  publishOpenClawStateDatabaseReadiness(pathname, "active");
   return database;
 }
 
@@ -747,6 +750,7 @@ export {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabase,
   isOpenClawStateDatabaseOpen,
-  closeOpenClawStateDatabaseForTest,
   confirmOpenClawStateDatabaseIntegrity,
 } from "./openclaw-state-db-cache.js";
+
+export { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db-readiness.js";

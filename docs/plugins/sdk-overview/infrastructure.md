@@ -37,8 +37,68 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
+| `api.registerReadinessCriterion(criterion)`       | Bounded advisory readiness observation                                 |
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
+
+### Readiness criteria
+
+Readiness criteria let a plugin report whether a dependency it owns is usable:
+
+```ts
+api.registerReadinessCriterion({
+  id: "backend",
+  description: "Reports whether the plugin backend can accept work.",
+  async check({ pluginConfig, signal, subjects }) {
+    const accountId =
+      typeof pluginConfig?.accountId === "string" ? pluginConfig.accountId : "default";
+    const generation =
+      typeof pluginConfig?.generation === "string" ? pluginConfig.generation : undefined;
+    const backend = subjects.declare({
+      kind: "backend",
+      key: "primary",
+      identity: { id: accountId, generation },
+    });
+    const reachable = await probeBackend(pluginConfig, { signal });
+    return reachable
+      ? {
+          subjectRef: backend,
+          observedAtMs: Date.now(),
+          status: "True",
+          reason: "BackendReady",
+          message: "Backend is reachable.",
+        }
+      : {
+          subjectRef: backend,
+          observedAtMs: Date.now(),
+          status: "False",
+          reason: "BackendUnavailable",
+          message: "Backend is unreachable.",
+        };
+  },
+});
+```
+
+Core publishes this example as `plugin.<plugin-id>.backend`, evaluates it with a
+bounded timeout, and caches the result briefly. Plugin criteria are
+advisory when registered. Only an operator can promote one to required through
+`gateway.readiness`; plugins cannot make their own checks block readiness.
+Unselected plugin criteria are not evaluated or exposed in readiness results;
+only criteria named in `requiredCriteria` or `advisoryCriteria` appear.
+`subjects.declare(...)` returns a reference in the plugin's namespace. Local
+criterion IDs, subject kinds, and keys are limited to 64 characters. Subject
+declarations may be parented in any order; core validates the completed graph.
+Identity inputs must not be credentials or connection material. OpenClaw emits
+one-way fingerprints for plugin-supplied IDs and generations, bounds and
+reconciles the graph, and retains only subjects referenced by the final result.
+
+One criterion invocation emits one condition. Use its primary subject for the
+resource accountable for that condition and `relatedSubjectRefs` for bounded
+dependencies. Register separate criteria when individual resources need
+independent status and reasons; use an aggregate subject when the collection is
+not bounded. A timed-out callback is aborted and quarantined until its original
+promise settles, including across config reload, so an abort-ignoring plugin
+cannot create overlapping probe work.
 
 ### File-watch capacity errors
 

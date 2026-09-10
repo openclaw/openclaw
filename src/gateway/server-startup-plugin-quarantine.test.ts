@@ -33,6 +33,50 @@ describe("Gateway startup plugin quarantine", () => {
     }
   });
 
+  it("opts into canonical runtime conditions only when readiness is configured", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    const token = "readiness-rpc-test-token";
+    const gateway = {
+      mode: "local" as const,
+      bind: "loopback" as const,
+      auth: { mode: "token" as const, token },
+    };
+
+    await writeConfigFile({ gateway });
+    let port = await getGatewayTestPort();
+    server = await startTestGatewayServer(port, { auth: { mode: "token", token } });
+    const legacyResponse = await fetch(`http://127.0.0.1:${port}/readyz`);
+    expect(legacyResponse.status).toBe(200);
+    const legacy = (await legacyResponse.json()) as { conditions?: Array<{ type: string }> };
+    expect(legacy.conditions?.map((condition) => condition.type)).not.toContain("ConfigLoaded");
+
+    await server.close();
+    server = undefined;
+    await writeConfigFile({ gateway: { ...gateway, readiness: {} } });
+    port = await getGatewayTestPort();
+    server = await startTestGatewayServer(port, { auth: { mode: "token", token } });
+    const canonicalResponse = await fetch(`http://127.0.0.1:${port}/readyz`);
+    expect(canonicalResponse.status).toBe(200);
+    const canonical = (await canonicalResponse.json()) as {
+      conditions?: Array<{ type: string }>;
+    };
+    expect(canonical.conditions?.map((condition) => condition.type)).toContain("ConfigLoaded");
+
+    const { callGateway } = await import("./call.js");
+    const rpcReadiness = await callGateway<{ ready: boolean; conditions: Array<{ type: string }> }>(
+      {
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        method: "ready",
+        params: {},
+        timeoutMs: 15_000,
+        deviceIdentity: null,
+      },
+    );
+    expect(rpcReadiness.ready).toBe(true);
+    expect(rpcReadiness.conditions.map((condition) => condition.type)).toContain("ConfigLoaded");
+  });
+
   it("reaches readiness with a quarantined plugin beside a valid declared extension", async () => {
     const brokenPluginId = "broken-payload";
     const validPluginId = "valid-declared-extension";
@@ -153,7 +197,12 @@ describe("Gateway startup plugin quarantine", () => {
     setTestPluginRegistry(registry);
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
-      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "none" },
+        readiness: {},
+      },
       plugins: pluginConfig,
     });
 
@@ -162,7 +211,18 @@ describe("Gateway startup plugin quarantine", () => {
     const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
     expect(ready.status).toBe(200);
-    await expect(ready.json()).resolves.toMatchObject({ ready: true });
+    await expect(ready.json()).resolves.toMatchObject({
+      ready: true,
+      advisories: expect.arrayContaining(["PluginLoadFailures"]),
+      conditions: expect.arrayContaining([
+        expect.objectContaining({
+          type: "PluginsLoaded",
+          status: "False",
+          requirement: "advisory",
+          reason: "PluginLoadFailures",
+        }),
+      ]),
+    });
     expect((globalThis as Record<string, unknown>).brokenPluginImported).toBeUndefined();
     expect((globalThis as Record<string, unknown>).selectedPluginImported).toBe(true);
   });

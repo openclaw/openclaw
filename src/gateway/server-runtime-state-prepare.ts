@@ -9,7 +9,23 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
+import {
+  listActiveDegradedPlugins,
+  toPublicPluginVerificationDiagnostic,
+} from "../plugins/runtime-degraded-state.js";
 import { isGatewayDraining } from "../process/command-queue.js";
+import {
+  isReadinessCriterionSelected,
+  MODEL_ROUTE_READY_CRITERION_ID,
+} from "../readiness/activation.js";
+import {
+  buildRuntimeReadiness,
+  ReadinessEvaluationSupersededError,
+  type PluginReadinessInput,
+} from "../readiness/conditions.js";
+import { captureExecutionCapabilityReadinessSnapshot } from "../readiness/execution-capabilities.js";
+import { createSelectedReadinessResolver } from "../readiness/selection.js";
+import { createGatewayReadinessIdentity } from "../readiness/subjects.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
@@ -31,7 +47,12 @@ import { createGatewayTransportBridge } from "./server-transport-bridge.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
-import { createReadinessChecker, createStartupChecker } from "./server/readiness.js";
+import {
+  createReadinessChecker,
+  createStartupChecker,
+  evaluateConfiguredGatewayReadiness,
+  type CanonicalGatewayReadinessResult,
+} from "./server/readiness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 type GatewayBootstrap = Awaited<ReturnType<typeof prepareGatewayServerBootstrap>>;
@@ -39,6 +60,32 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type ChannelRuntime = ReturnType<
   (typeof import("../plugins/runtime/runtime-channel.js"))["createRuntimeChannel"]
 >;
+
+function buildGatewayPluginReadinessInput(
+  registry: GatewayBootstrap["pluginBootstrap"]["pluginRegistry"],
+): PluginReadinessInput {
+  const errors = registry.plugins
+    .filter((plugin) => plugin.status === "error")
+    .map((plugin): PluginReadinessInput["errors"][number] => {
+      const error: PluginReadinessInput["errors"][number] = {
+        id: plugin.id,
+        activated: plugin.activated === true,
+        error: plugin.error ?? "unknown plugin load error",
+      };
+      if (plugin.activationSource) {
+        error.activationSource = plugin.activationSource;
+      }
+      return error;
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  const unavailable = listActiveDegradedPlugins()
+    .map((plugin) => ({
+      id: plugin.pluginId,
+      diagnostic: toPublicPluginVerificationDiagnostic(plugin.diagnostic),
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  return { errors, unavailable };
+}
 
 export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
@@ -85,9 +132,20 @@ export async function prepareGatewayKernelState(params: {
     pluginGatewayContext,
     resolvePluginGatewayContext,
   } = bootstrap;
+  const makeState = (config: OpenClawConfig, registry: typeof pluginBootstrap.pluginRegistry) => ({
+    config,
+    registry,
+    executionCapabilities: captureExecutionCapabilityReadinessSnapshot(config),
+  });
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
     baseGatewayMethods: pluginBootstrap.baseGatewayMethods,
+    makeState,
+    modelRouteReadinessStartupOptions: (config: OpenClawConfig) =>
+      isReadinessCriterionSelected(config, MODEL_ROUTE_READY_CRITERION_ID)
+        ? { enabled: true as const }
+        : {},
+    readinessSnapshot: makeState(cfgAtStart, pluginBootstrap.pluginRegistry),
   };
   const listGatewayStartupChannelPlugins = () =>
     listLoadedChannelPluginsForRegistry(pluginRuntime.registry);
@@ -418,7 +476,7 @@ export async function prepareGatewayKernelState(params: {
     getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
   const getStartup = createStartupChecker(startupCheckerDeps);
-  const getReadiness = createReadinessChecker({
+  const getGatewayReadiness = createReadinessChecker({
     channelManager,
     ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
@@ -428,6 +486,42 @@ export async function prepareGatewayKernelState(params: {
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
+  const readinessIdentity = createGatewayReadinessIdentity();
+  const resolveSelectedReadiness = createSelectedReadinessResolver();
+  const getReadiness = async (): Promise<CanonicalGatewayReadinessResult> => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const snapshot = pluginRuntime.readinessSnapshot;
+      const result = await evaluateConfiguredGatewayReadiness({
+        config: snapshot.config,
+        identity: readinessIdentity,
+        evaluateGateway: getGatewayReadiness,
+        evaluateRuntime: async () => {
+          const contribution = await resolveSelectedReadiness({
+            config: snapshot.config,
+            registry: snapshot.registry,
+            executionCapabilities: snapshot.executionCapabilities,
+            env: process.env,
+            stateServices: {
+              scheduler: runtimeStateRef.current?.cronState.cron.getReadinessSnapshot(),
+            },
+          });
+          return buildRuntimeReadiness({
+            identity: readinessIdentity,
+            configLoaded: true,
+            gateway: "responding",
+            plugins: buildGatewayPluginReadinessInput(snapshot.registry),
+            additionalConditions: contribution.conditions,
+            additionalSubjects: contribution.subjects,
+          });
+        },
+      });
+      if (snapshot !== pluginRuntime.readinessSnapshot) {
+        continue;
+      }
+      return result;
+    }
+    throw new ReadinessEvaluationSupersededError();
+  };
   const watchNodeRequestHandler: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};
@@ -551,6 +645,7 @@ export async function prepareGatewayKernelState(params: {
     runtimeStateRef,
     cronStartState,
     gatewayTls,
+    getReadiness,
     readinessEventLoopHealth,
     startupState,
     lifecycle,

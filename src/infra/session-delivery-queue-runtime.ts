@@ -12,6 +12,7 @@ import {
   loadPendingSessionDelivery,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
+import { publishSessionDeliveryRuntimeReadiness } from "./session-delivery-runtime-readiness.js";
 
 type SessionDeliveryRuntime = {
   deliver: DeliverSessionDeliveryFn;
@@ -151,11 +152,13 @@ export function startSessionDeliveryRuntime(params: SessionDeliveryRuntime): () 
   const activeRuntime = { ...params, runningEntries: new Map<string, Promise<void>>() };
   runtime = activeRuntime;
   let stopPromise: Promise<void> | undefined;
+  publishSessionDeliveryRuntimeReadiness({ active: true, generation });
   return () => {
     if (runtimeGeneration === generation) {
       runtimeGeneration += 1;
       runtime = undefined;
       clearScheduledEntries();
+      publishSessionDeliveryRuntimeReadiness({ active: false, generation: runtimeGeneration });
     }
     // A replacement owns its own drains. Retained stops join only this owner,
     // including settlement writes after its delivery callback has returned.

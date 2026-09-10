@@ -347,6 +347,11 @@ describe("getStatusSummary", () => {
       const summary = await getStatusSummary({ includeSensitive });
 
       expect(summary.runtimeVersion).toBe("2026.3.8");
+      expect(summary.readiness).toMatchObject({
+        ready: false,
+        failures: expect.arrayContaining(["GatewayNotChecked"]),
+        advisories: expect.arrayContaining(["PluginStatusUnavailable"]),
+      });
       expect(summary.heartbeat.defaultAgentId).toBe("main");
       expect(summary.heartbeat.agents).toEqual([
         {

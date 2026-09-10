@@ -2257,6 +2257,31 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(testing.providerAuthPrewarmStartDelayMs).toBe(5_000);
   });
 
+  it("rewarms provider auth after an explicit runtime request", async () => {
+    vi.useFakeTimers();
+    const cfg = { marker: "reloaded" } as never;
+    const sidecar = testing.scheduleProviderAuthStatePrewarm({
+      getConfig: () => cfg,
+      log: { info: vi.fn(), warn: vi.fn() },
+      startupWarmEnabled: false,
+    });
+
+    try {
+      sidecar.requestRewarm("config-reload");
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await waitForGatewayTestState(() => {
+        expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(
+          cfg,
+          expect.anything(),
+        );
+      });
+    } finally {
+      await sidecar.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("uses the current provider auth config when the delayed prewarm fires", async () => {
     vi.useFakeTimers();
     const startupCfg = { marker: "startup" } as never;

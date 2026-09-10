@@ -21,7 +21,7 @@ export async function resolveStatusJsonOutput(params: {
   suppressHealthErrors?: boolean;
 }) {
   const { scan, opts } = params;
-  const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } =
+  const { securityAudit, usage, readiness, health, lastHeartbeat, gatewayService, nodeService } =
     await resolveStatusRuntimeSnapshot({
       config: scan.cfg,
       sourceConfig: scan.sourceConfig,
@@ -29,6 +29,7 @@ export async function resolveStatusJsonOutput(params: {
       ...(opts.agent ? { agentId: opts.agent } : {}),
       usage: opts.usage,
       deep: opts.deep,
+      includeReadiness: true,
       gatewayReachable: scan.gatewayReachable,
       includeSecurityAudit: params.includeSecurityAudit,
       suppressHealthErrors: params.suppressHealthErrors,
@@ -48,6 +49,7 @@ export async function resolveStatusJsonOutput(params: {
     configDiagnostics: scan.configDiagnostics,
     secretDiagnostics: scan.secretDiagnostics,
     securityAudit,
+    readiness,
     health,
     usage,
     lastHeartbeat,

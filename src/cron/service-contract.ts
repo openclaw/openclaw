@@ -37,10 +37,18 @@ export type CronServiceRunOptions = {
   commitGuard?: () => void;
 };
 
+export type CronSchedulerReadinessSnapshot = {
+  enabled: boolean;
+  phase: "disabled" | "idle" | "starting" | "started" | "paused" | "stopped";
+  recoveryPending: boolean;
+};
+
 /** Public cron service facade used by gateway, plugin SDK, and tests. */
 export interface CronServiceContract {
   start(): Promise<void>;
   stop(): void;
+  /** Synchronous scheduler lifecycle observation for hosts that select it. */
+  getReadinessSnapshot?(): CronSchedulerReadinessSnapshot;
   status(): Promise<CronStatusSummary>;
   list(opts?: { includeDisabled?: boolean }): Promise<CronListResult>;
   listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;

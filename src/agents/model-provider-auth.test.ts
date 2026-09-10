@@ -101,6 +101,7 @@ vi.mock("./prepared-model-catalog.js", () => ({
       entries: await modelCatalogMocks.loadModelCatalog(params),
       routeVariants: [],
     },
+    metadataSnapshot: { plugins: [] },
   }),
 }));
 
@@ -131,6 +132,8 @@ vi.mock("./workspace.js", () => ({
 
 vi.mock("./agent-scope-config.js", () => ({
   listAgentIds: () => ["default"],
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
+    cfg.agents?.list?.find((agent) => agent.id === agentId),
   resolveAgentDir: () => "/warm/default-agent",
   resolveDefaultAgentDir: () => "/warm/default-agent",
   resolveAgentWorkspaceDir: () => "/warm/default-workspace",
@@ -302,6 +305,46 @@ describe("prepared provider auth state", () => {
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
       "workspaceDir",
     );
+  });
+
+  it("publishes route-scoped auth evidence for the configured default model", async () => {
+    const cfg = { agents: { defaults: { model: { primary: "openai/gpt" } } } } as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "GPT", provider: "openai", api: "openai-responses" },
+    ]);
+    const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
+      readOnlyAuthStore: true,
+    });
+
+    expect(snapshot.agents[0]?.defaultModelRoute).toEqual({
+      provider: "openai",
+      modelId: "gpt",
+      available: false,
+    });
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledWith("openai", {
+      modelId: "gpt",
+      api: "openai-responses",
+      baseUrl: undefined,
+      observedRoutes: [],
+    });
+  });
+
+  it("omits false route evidence when synthetic auth discovery is incomplete", async () => {
+    const primary = "plugin-provider/plugin-model";
+    const cfg = { agents: { defaults: { model: { primary } } } } as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "plugin-model", name: "Plugin Model", provider: "plugin-provider" },
+    ]);
+    modelAuthMocks.createRuntimeProviderAuthLookup.mockReturnValueOnce({
+      envApiKey: { aliasMap: {}, candidateMap: {}, authEvidenceMap: {} },
+      syntheticAuthProviderRefs: [],
+      syntheticAuthProviderRefsComplete: false,
+    });
+    const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
+      readOnlyAuthStore: true,
+    });
+
+    expect(snapshot.agents[0]?.defaultModelRoute).toBeUndefined();
   });
 
   it("uses the prepared owner's authoritative workspace for auth discovery", async () => {

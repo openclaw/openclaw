@@ -8,6 +8,7 @@ import { registerStatusHealthSessionsCommands } from "./register.status-health-s
 const mocks = vi.hoisted(() => ({
   statusCommand: vi.fn(),
   healthCommand: vi.fn(),
+  readyCommand: vi.fn(),
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
   sessionsTailCommand: vi.fn(),
@@ -30,6 +31,7 @@ const mocks = vi.hoisted(() => ({
 
 const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
+const readyCommand = mocks.readyCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
@@ -67,6 +69,10 @@ vi.mock("../../commands/status.js", () => ({
 
 vi.mock("../../commands/health.js", () => ({
   healthCommand: mocks.healthCommand,
+}));
+
+vi.mock("../../commands/ready.js", () => ({
+  readyCommand: mocks.readyCommand,
 }));
 
 vi.mock("../../commands/sessions.js", () => ({
@@ -139,6 +145,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     runtime.exit.mockImplementation(() => {});
     statusCommand.mockResolvedValue(undefined);
     healthCommand.mockResolvedValue(undefined);
+    readyCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
     sessionsTailCommand.mockResolvedValue(undefined);
@@ -279,6 +286,20 @@ describe("registerStatusHealthSessionsCommands", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(healthCommand).not.toHaveBeenCalled();
+  });
+
+  it("runs ready command with JSON and parsed timeout", async () => {
+    await runCli(["ready", "--json", "--timeout", "2500"]);
+    expectCommandOptions(readyCommand, { json: true, timeoutMs: 2500 });
+  });
+
+  it("rejects invalid ready timeout without calling ready command", async () => {
+    await runCli(["ready", "--timeout", "nope"]);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--timeout must be a positive integer (milliseconds)",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(readyCommand).not.toHaveBeenCalled();
   });
 
   it("runs sessions command with forwarded options", async () => {

@@ -33,6 +33,10 @@ import {
   listActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
 } from "../plugins/runtime-degraded-state.js";
+import {
+  buildRuntimeReadiness,
+  buildUnobservedGatewayConditions,
+} from "../readiness/conditions.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSecretEgressCertificateStatus } from "../secrets/egress-proxy/registry.js";
 import {
@@ -516,6 +520,11 @@ export async function getStatusSummary(
   return {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
     hostDesktop: hostDesktopStatus,
+    readiness: buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "not-checked",
+      coreConditions: buildUnobservedGatewayConditions(),
+    }),
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,

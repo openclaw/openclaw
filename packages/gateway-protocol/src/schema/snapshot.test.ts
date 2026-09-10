@@ -139,4 +139,73 @@ describe("SnapshotSchema", () => {
 
     expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
   });
+
+  it("accepts canonical readiness subjects and condition references", () => {
+    const snapshot = {
+      ...snapshotWithPresence({ ts: 1 }),
+      health: {
+        readiness: {
+          contractVersion: 1,
+          evaluatedAtMs: 1_000,
+          identity: {
+            producerRef: "openclaw/gateway/current",
+            subjects: [
+              {
+                ref: "openclaw/gateway/current",
+                kind: "openclaw.gateway",
+                id: "gateway-1",
+              },
+            ],
+          },
+          ready: true,
+          failing: [],
+          suppressed: ["ambient-dev-channel"],
+          uptimeMs: 5_000,
+          eventLoop: {
+            degraded: false,
+            degradedSinceMs: null,
+            reasons: [],
+            intervalMs: 1_000,
+            delayP99Ms: 2,
+            delayMaxMs: 3,
+            utilization: 0.1,
+            cpuCoreRatio: 0.2,
+          },
+          conditions: [
+            {
+              type: "GatewayResponding",
+              subjectRef: "openclaw/gateway/current",
+              observedAtMs: 1_000,
+              status: "True",
+              requirement: "required",
+              reason: "GatewayResponding",
+              message: "Gateway accepted the readiness request.",
+            },
+          ],
+          failures: [],
+          advisories: [],
+        },
+      },
+    };
+
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+  });
+
+  it("rejects a partial unversioned canonical readiness package", () => {
+    const snapshot = {
+      ...snapshotWithPresence({ ts: 1 }),
+      health: {
+        readiness: {
+          evaluatedAtMs: 1_000,
+          identity: { producerRef: "openclaw/gateway/current", subjects: [] },
+          ready: true,
+          conditions: [],
+          failures: [],
+          advisories: [],
+        },
+      },
+    };
+
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(false);
+  });
 });

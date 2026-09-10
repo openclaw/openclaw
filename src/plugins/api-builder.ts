@@ -35,6 +35,7 @@ const noops = {
   registerNodeHostCommand: () => {},
   registerNodeInvokePolicy: () => {},
   registerSecurityAuditCollector: () => {},
+  registerReadinessCriterion: () => {},
   registerService: () => {},
   registerGatewayDiscoveryService: () => {},
   registerCliBackend: () => {},
@@ -159,6 +160,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerNodeInvokePolicy: handlers.registerNodeInvokePolicy ?? noops.registerNodeInvokePolicy,
     registerSecurityAuditCollector:
       handlers.registerSecurityAuditCollector ?? noops.registerSecurityAuditCollector,
+    registerReadinessCriterion:
+      handlers.registerReadinessCriterion ?? noops.registerReadinessCriterion,
     registerService: handlers.registerService ?? noops.registerService,
     registerGatewayDiscoveryService:
       handlers.registerGatewayDiscoveryService ?? noops.registerGatewayDiscoveryService,

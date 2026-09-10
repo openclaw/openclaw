@@ -76,7 +76,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
     async (program) => (await import("./register.agent.js")).registerAgentsCommands(program),
   ],
   [
-    ["status", "health", "sessions", "tasks"],
+    ["status", "health", "ready", "sessions", "tasks"],
     async (program) =>
       (await import("./register.status-health-sessions.js")).registerStatusHealthSessionsCommands(
         program,
