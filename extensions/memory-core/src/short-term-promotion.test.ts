@@ -9,12 +9,14 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   listMemoryArtifactProvenance,
   replaceMemoryArtifactFileWithProvenance,
+  withMemoryArtifactWriteLock,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -3292,6 +3294,52 @@ describe("short-term promotion", () => {
   });
 
   describe("MEMORY.md atomic promotion write", () => {
+    it("uses workspace-before-artifact order when phase publication overlaps promotion", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const dailyText = "Keep phase publication and promotion free of lock cycles.";
+        await writeDailyMemoryNote(workspaceDir, "2026-04-29", [dailyText]);
+        await recordMemoryRecalls(
+          workspaceDir,
+          "lock hierarchy",
+          [memoryRecallResult("memory/2026-04-29.md", 1, 1, 0.96, dailyText)],
+          { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+        );
+        const ranked = await rankAllCandidates(workspaceDir);
+        const phaseOwnsWorkspace = createDeferred<void>();
+        const releasePhasePublication = createDeferred<void>();
+        const artifactLock = vi.mocked(withMemoryArtifactWriteLock);
+        artifactLock.mockClear();
+
+        const phasePublication = withMemoryWorkspaceLock(workspaceDir, async () => {
+          phaseOwnsWorkspace.resolve();
+          await releasePhasePublication.promise;
+          await writeDailyDreamingPhaseBlock({
+            workspaceDir,
+            phase: "light",
+            bodyLines: ["- Candidate: retain one lock hierarchy."],
+            hasContent: true,
+            nowMs: Date.parse("2026-04-29T10:00:01.000Z"),
+            timezone: "UTC",
+            storage: { mode: "inline", separateReports: false },
+          });
+        });
+        await phaseOwnsWorkspace.promise;
+        const promotion = applyAllCandidates(workspaceDir, ranked);
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25);
+        });
+        expect(artifactLock).not.toHaveBeenCalled();
+        releasePhasePublication.resolve();
+
+        const [, applied] = await Promise.all([phasePublication, promotion]);
+        expect(applied).toMatchObject({ applied: 1, appended: 1 });
+        await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).resolves.toContain(
+          dailyText,
+        );
+      });
+    });
+
     for (const testCase of [
       { name: "atomic replace", forceInPlaceFallback: false },
       { name: "in-place fallback", forceInPlaceFallback: true },

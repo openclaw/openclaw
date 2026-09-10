@@ -380,8 +380,8 @@ export async function applyShortTermPromotions(
   let committedMemoryContent: string | undefined;
   let appendedCandidates = 0;
   let rewriteSkippedReason: string | undefined;
-  await withMemoryArtifactWriteLock(workspaceDir, async () => {
-    await withMemoryWorkspaceLock(workspaceDir, async () => {
+  await withMemoryWorkspaceLock(workspaceDir, async () => {
+    await withMemoryArtifactWriteLock(workspaceDir, async () => {
       const latestStore = await readStore(workspaceDir, nowIso);
       let retainedPreimageKeys: Set<string> | undefined;
       const authoritativeSelected: PromotionCandidate[] = [];
