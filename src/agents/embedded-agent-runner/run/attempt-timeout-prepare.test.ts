@@ -197,8 +197,8 @@ describe("prepareEmbeddedAttemptTimeout", () => {
     const harness = createTimeoutHarness();
 
     await vi.advanceTimersByTimeAsync(30);
-    emitApproval("waiting-approval", "clock-step");
     vi.setSystemTime(60_000);
+    emitApproval("waiting-approval", "clock-step");
     emitApproval("approval-resolved", "clock-step");
 
     expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(60_070);
