@@ -423,8 +423,9 @@ async function trackProjectWithGit(tmp: string) {
 type RunNodeTestOptions = NonNullable<Parameters<typeof runNodeMain>[0]> & {
   stdout?: NodeJS.WriteStream;
 };
+type RunNodeResult = Awaited<ReturnType<typeof runNodeMain>>;
 
-async function runNodeCommand(tmp: string, options: RunNodeTestOptions): Promise<number> {
+async function runNodeCommand(tmp: string, options: RunNodeTestOptions): Promise<RunNodeResult> {
   const { env, ...overrides } = options;
   return await runNodeMain({
     cwd: tmp,
@@ -449,11 +450,11 @@ type RunCommandParams = {
   }) => void | Promise<void>;
 };
 
-async function runStatusCommand({ tmp, ...options }: RunCommandParams): Promise<number> {
+async function runStatusCommand({ tmp, ...options }: RunCommandParams): Promise<RunNodeResult> {
   return await runNodeCommand(tmp, options);
 }
 
-async function runQaCommand(params: RunCommandParams): Promise<number> {
+async function runQaCommand(params: RunCommandParams): Promise<RunNodeResult> {
   return await runStatusCommand({
     ...params,
     args: ["qa", "suite", "--transport", "qa-channel", "--provider-mode", "mock-openai"],
@@ -1329,6 +1330,29 @@ describe("run-node script", () => {
     expect(spawn).toHaveBeenCalledOnce();
     expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
   });
+
+  it.for([
+    { platform: "linux", signal: "SIGKILL", expected: "SIGKILL" },
+    { platform: "linux", signal: "SIGTERM", expected: "SIGTERM" },
+    { platform: "win32", signal: "SIGKILL", expected: 1 },
+    { platform: "win32", signal: "SIGTERM", expected: 143 },
+  ] as const)(
+    "preserves child signal outcomes without changing Windows exits: %j",
+    async ({ platform, signal, expected }, { tmp }) => {
+      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      for (const rebuild of [false, true]) {
+        const spawn = vi.fn(() => createExitedProcess(null, signal));
+        const outcome = await runNodeCommand(tmp, {
+          env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0" },
+          platform,
+          spawn,
+          runRuntimePostBuild: skipRuntimePostBuild,
+        });
+        expect(outcome).toBe(expected);
+        expect(spawn).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it.for([false, true])(
     "forwards SIGTERM to the active child and returns 143 (rebuild: %s)",
