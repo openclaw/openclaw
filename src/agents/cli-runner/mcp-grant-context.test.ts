@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureRequesterToolCap, runWithRequesterToolCap } from "../requester-tool-cap.js";
 import {
   buildCliMcpDelegationCapabilityBinding,
   buildCliMcpGrantContext,
@@ -36,6 +37,12 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext source-reply authority", () => {
+  it("carries an exact empty delegation cap independently of the CLI tool selector", () => {
+    const cap = captureRequesterToolCap([]);
+    const grant = runWithRequesterToolCap(cap, () => buildGrant());
+    expect(grant.requesterToolCap).toEqual({ names: [], deny: [] });
+  });
+
   it.each(["heartbeat", "cron-event", "exec-event"])(
     "keeps the reply channel separate from the %s turn source",
     (messageProvider) => {

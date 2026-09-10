@@ -37,6 +37,8 @@ function rememberToolPolicyWarning(warning: string): boolean {
 /** One named policy layer in the effective runtime tool policy pipeline. */
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
+  /** Host-exported concrete names; empty denies all, with no alias or group expansion. */
+  exactToolNames?: readonly string[];
   label: string;
   stripPluginOnlyAllowlist?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
@@ -153,6 +155,10 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
 
   let filtered = params.tools;
   for (const step of params.steps) {
+    if (step.exactToolNames !== undefined) {
+      const names = new Set(step.exactToolNames);
+      filtered = filtered.filter((tool) => names.has(tool.name));
+    }
     if (!step.policy) {
       continue;
     }

@@ -18,6 +18,7 @@ import {
   resolveTrustedGroupId,
   sessionKeyNamesGroupConversation,
 } from "./agent-tools.policy.js";
+import { getRequesterToolCap } from "./requester-tool-cap.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
@@ -280,6 +281,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       snapshot: params.skillsSnapshot,
     },
     policy: {
+      requesterToolCap: getRequesterToolCap(),
       agentId: effective.agentId,
       sessionKey: params.sessionKey,
       subagentSessionKey,

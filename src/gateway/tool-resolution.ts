@@ -12,6 +12,13 @@ import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
+import {
+  captureRequesterToolCap,
+  filterToolsByRequesterCap,
+  getRequesterToolCap,
+  runWithRequesterToolCap,
+  type RequesterToolCapRef,
+} from "../agents/requester-tool-cap.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
@@ -67,6 +74,7 @@ export function resolveGatewayScopedTools(
     | "cronCreatorCallerOrigin"
   > & {
     cfg: OpenClawConfig;
+    sessionSendToolCapRef?: RequesterToolCapRef;
     rootedExecution?: PreparedRootedExecutionCapability;
     authProfileStore?: AuthProfileStore;
     agentDir?: string;
@@ -93,6 +101,14 @@ export function resolveGatewayScopedTools(
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
     skillWorkshop?: SkillWorkshopRunOptions;
   },
+) {
+  return runWithRequesterToolCap(params.requesterToolCap, () =>
+    resolveGatewayScopedToolsWithinCap(params),
+  );
+}
+
+function resolveGatewayScopedToolsWithinCap(
+  params: Parameters<typeof resolveGatewayScopedTools>[0],
 ) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const sessionAgentId = resolveSessionAgentIds({
@@ -246,24 +262,27 @@ export function resolveGatewayScopedTools(
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
+  const sessionSendToolCapRef = params.sessionSendToolCapRef ?? {};
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
-  const shouldInheritEffectiveToolAllowlist = [
-    profilePolicy,
-    providerProfilePolicy,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    groupPolicy,
-    senderPolicy,
-    sandboxPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-  ].some(hasRestrictiveAllowPolicy);
+  const shouldInheritEffectiveToolAllowlist =
+    Boolean(getRequesterToolCap()) ||
+    [
+      profilePolicy,
+      providerProfilePolicy,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      senderPolicy,
+      sandboxPolicy,
+      subagentPolicy,
+      inheritedToolPolicy,
+      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+    ].some(hasRestrictiveAllowPolicy);
 
   const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
@@ -350,6 +369,7 @@ export function resolveGatewayScopedTools(
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,
+    sessionSendToolCapRef,
     inheritedToolDenylist,
   });
   const execDefaults =
@@ -552,9 +572,18 @@ export function resolveGatewayScopedTools(
       ...excludedToolNames,
     ].map(normalizeToolPolicyName),
   );
-  const tools = applyDelegationCapability(
-    policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
-    params.delegationCapability,
+  const tools = filterToolsByRequesterCap(
+    applyDelegationCapability(
+      policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+      params.delegationCapability,
+    ),
+  );
+  sessionSendToolCapRef.current = captureRequesterToolCap(
+    filterToolsByRequesterCap([
+      ...filterRequesterYieldTools(tools, params.sessionKey),
+      ...(params.nativeCronCreatorToolAllowlist ?? []).map((name) => ({ name })),
+    ]),
+    explicitDenylist,
   );
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.

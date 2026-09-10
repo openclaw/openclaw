@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
+import { captureRequesterToolCap, type RequesterToolCapRef } from "../agents/requester-tool-cap.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -209,6 +210,35 @@ describe("resolveMcpLoopbackScopedTools", () => {
       "cron",
     ]);
   });
+
+  it.each([false, true])(
+    "exports final MCP authority without widening a delegated cap (%s)",
+    async (delegated) => {
+      let source: RequesterToolCapRef | undefined;
+      resolveGatewayScopedTools.mockImplementationOnce((params) => {
+        source = params.sessionSendToolCapRef;
+        return scopedToolFixture(["sessions_send", "message", "read"]);
+      });
+      const scoped = await resolveMcpLoopbackScopedTools(
+        scopeParams({
+          toolsAllow: ["sessions_send", "read"],
+          nativeCronCreatorToolAllowlist: ["read", "write"],
+          ...(delegated
+            ? {
+                requesterToolCap: captureRequesterToolCap([
+                  { name: "sessions_send" },
+                  { name: "read" },
+                ]),
+              }
+            : {}),
+        }),
+      );
+      expect(scoped.tools.map((tool) => tool.name)).toEqual(["sessions_send", "read"]);
+      expect(source?.current?.names).toEqual(
+        delegated ? ["read", "sessions_send"] : ["read", "sessions_send", "write"],
+      );
+    },
+  );
 
   it("hard-filters the surface to the grant allowlist", async () => {
     const scoped = await resolveMcpLoopbackScopedTools(

@@ -29,6 +29,7 @@ import {
 } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
+import type { RequesterToolCapRef } from "../../requester-tool-cap.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
@@ -153,6 +154,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
+  const sessionSendToolCapRef: RequesterToolCapRef = {};
   const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
@@ -324,6 +326,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             enableHeartbeatTool: attempt.enableHeartbeatTool,
             forceHeartbeatTool: attempt.forceHeartbeatTool,
             inheritedToolAllowlistRef: inheritedToolAllowlist,
+            sessionSendToolCapRef,
             cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef,
             authProfileStore: attempt.authProfileStore,
@@ -407,6 +410,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     forceDirectMessageTool,
     requireExplicitMessageTarget,
     inheritedToolAllowlist,
+    sessionSendToolCapRef,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     replaySafetyOptions,

@@ -127,6 +127,11 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       label: "inherited tools",
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     },
+    {
+      policy: undefined,
+      exactToolNames: params.capabilityProfile.policy.requesterToolCap?.names,
+      label: "requester tools",
+    },
   ];
 }
 

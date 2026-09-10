@@ -128,6 +128,7 @@ import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { getRequesterToolCap } from "../requester-tool-cap.js";
 import {
   prepareRootedExecutionCapability,
   type PreparedRootedExecutionCapability,
@@ -138,6 +139,7 @@ import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
+import { createRuntimeToolMatcher } from "../tool-policy-match.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import { resolveQuestionTimeoutMs } from "../tools/ask-user-tool-normalization.js";
 import { assertNativeCronCreatorCapabilities } from "../tools/cron-tool-creator-cap.js";
@@ -544,6 +546,7 @@ async function prepareCliRunContextWithinReadFence(
   > => {
     const admittedRunContext = await resolvePreparedRunAdmission({
       runId: candidate.runId,
+      abortSignal: candidate.abortSignal,
       runtimeKind: "embedded",
       admittedRunContext: candidate.admittedRunContext,
       preparedRunAdmission: candidate.preparedRunAdmission,
@@ -647,6 +650,21 @@ async function prepareCliRunContextWithinReadFence(
           spawnedBy: params.spawnedBy ?? undefined,
         },
       });
+  const requesterToolCap = getRequesterToolCap();
+  if (requesterToolCap) {
+    // Exact delegated runs use the mediated OpenClaw surface, including coding tools.
+    const matches = createRuntimeToolMatcher(params.toolsAllow);
+    const names = requesterToolCap.names.filter(matches);
+    params = params.cliToolAvailability
+      ? {
+          ...params,
+          cliToolAvailability: {
+            native: [],
+            openClaw: params.cliToolAvailability.openClaw.filter((name) => names.includes(name)),
+          },
+        }
+      : { ...params, toolsAllow: names };
+  }
   let runtimeToolsAllowPolicy: string[] | undefined;
   const rootedToolsAllow = params.rootedExecution
     ? params.cliToolAvailability?.openClaw

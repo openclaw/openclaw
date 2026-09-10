@@ -503,6 +503,7 @@ export async function prepareEmbeddedRunRuntime(input: {
 
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.runId,
+    abortSignal: params.abortSignal,
     runtimeKind: pluginHarnessOwnsTransport ? "plugin-harness" : "embedded",
     admittedRunContext: params.admittedRunContext,
     preparedRunAdmission: params.preparedRunAdmission,

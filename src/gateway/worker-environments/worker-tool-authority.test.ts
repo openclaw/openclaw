@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  captureRequesterToolCap,
+  runWithRequesterToolCap,
+} from "../../agents/requester-tool-cap.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
@@ -27,6 +31,18 @@ function authority(overrides: Partial<SessionPlacementTurnParams> = {}, portalAv
 }
 
 describe("resolveWorkerToolAuthority", () => {
+  it.each([[], ["write"]].map((names) => ({ names })))(
+    "keeps exact delegated worker authority $names",
+    ({ names }) => {
+      const allowed = runWithRequesterToolCap(
+        captureRequesterToolCap(names.map((name) => ({ name }))),
+        () => authority(),
+      );
+      expect(allowed).toEqual(names);
+      expect(authority()).toContain("apply_patch");
+    },
+  );
+
   it.each([
     { modelHasVision: true, allowed: true },
     { modelHasVision: false, allowed: false },

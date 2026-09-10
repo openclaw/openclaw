@@ -16,6 +16,7 @@ import {
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
@@ -26,8 +27,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommandMock,
@@ -46,6 +49,7 @@ installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let gatewayPort: number;
+let gatewayContext: GatewayRequestContext;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -160,7 +164,15 @@ beforeAll(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  const registry = createTestRegistry();
+  registry.gatewayHandlers["test.capture-context"] = ({ context, respond }) => {
+    gatewayContext = context;
+    respond(true, {});
+  };
+  setTestPluginRegistry(registry);
   server = await startTestGatewayServer(gatewayPort);
+  const { callGateway } = await import("./call.js");
+  await callGateway({ method: "test.capture-context", params: {}, scopes: ["operator.admin"] });
   // Prepare the real history handler before the RPC deadline starts.
   await import("./server-methods/chat.js");
 });
@@ -178,6 +190,67 @@ afterAll(async () => {
 });
 
 describe("sessions_send gateway loopback", () => {
+  it("retains final source tool authority through Gateway admission", async () => {
+    const spy = agentCommandMock as unknown as Mock<
+      (opts: AgentCommandGatewayIngressOpts) => Promise<void>
+    >;
+    const config: OpenClawConfig = {
+      tools: { sessions: { visibility: "all" }, deny: ["message"] },
+    };
+    const receiverSurfaces: string[][] = [];
+    spy.mockImplementation(async (opts) => {
+      await opts.userTurnTranscriptRecorder?.persistApproved();
+      receiverSurfaces.push(
+        createOpenClawCodingTools({
+          config: {},
+          agentId: "main",
+          sessionKey: opts.sessionKey,
+          senderIsOwner: true,
+        }).map((tool) => tool.name),
+      );
+      await emitLifecycleAssistantReply({
+        opts,
+        defaultSessionId: "main",
+        resolveText: () => "ANNOUNCE_SKIP",
+      });
+    });
+    const sourceTools = createOpenClawCodingTools({
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:source",
+      senderIsOwner: true,
+    });
+    expect(sourceTools.map((tool) => tool.name)).not.toContain("message");
+    const result = await withPluginRuntimeGatewayContextResolver(
+      () => gatewayContext,
+      () =>
+        sourceTools
+          .find((tool) => tool.name === "sessions_send")!
+          .execute("capped-gateway", {
+            sessionKey: "main",
+            message: "hello",
+            timeoutSeconds: 5,
+          }),
+    );
+    expect(result.details, JSON.stringify(result.details)).toMatchObject({
+      status: "ok",
+      reply: "ANNOUNCE_SKIP",
+    });
+    await waitForGatewayActiveWork();
+    expect(receiverSurfaces.length).toBeGreaterThan(0);
+    for (const names of receiverSurfaces) {
+      expect(names).not.toContain("message");
+    }
+    expect(
+      createOpenClawCodingTools({
+        config: {},
+        agentId: "main",
+        sessionKey: "main",
+        senderIsOwner: true,
+      }).map((tool) => tool.name),
+    ).toContain("message");
+  });
+
   it("rejects a missing explicit key without creating or running a session", async () => {
     const dir = tempDirs.make("openclaw-sessions-send-missing-");
     const missingKey = "agent:main:missing";

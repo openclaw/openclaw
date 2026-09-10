@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -11,6 +11,11 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "./admitted-run-context.js";
 import { attachAgentCommandAdmissionFacts } from "./agent-command-admission-facts.js";
 import {
   readAgentCommandExecutionIdentitySpawnFacts,
@@ -22,6 +27,11 @@ import {
 } from "./agent-command-execution-identity.js";
 import { createAgentAttemptLifecycleCallbacks } from "./command/attempt-callbacks.js";
 import type { AgentCommandIngressOpts } from "./command/types.js";
+import { captureRequesterToolCap, runWithRequesterToolCap } from "./requester-tool-cap.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 let cleanupSink: (() => void) | undefined;
 
@@ -56,6 +66,77 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
 });
 
 describe("Gateway agent command execution identity", () => {
+  it.each(["never", "during-admission", "after-admission"])(
+    "fences direct delegated effects when source closes %s",
+    async (closedAt) => {
+      const runId = `announce-source-${closedAt}`;
+      const source = prepareAgentRunAdmission({
+        cfg: {},
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        facts: {
+          runId,
+          agentId: "main",
+          ingress: { kind: "system", boundary: "sessions-send-followup", state: "present" },
+        },
+      });
+      const admittedRunContext = await source.admit("embedded");
+      const sink = vi.fn();
+      const receiver = await runWithRequesterToolCap(
+        captureRequesterToolCap([{ name: "read" }]),
+        () =>
+          withGatewayToolCallerIdentity(
+            createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext,
+              agentId: "main",
+              sessionKey: "agent:main:main",
+            }),
+            () =>
+              prepareAgentCommandExecutionIdentity({
+                opts: {
+                  message: "announce",
+                  transcriptMessage: "",
+                  onAdmittedRunContext: async () => {
+                    await Promise.resolve();
+                    if (closedAt === "during-admission") {
+                      source.close();
+                    }
+                  },
+                },
+                prepared: {
+                  cfg: {},
+                  runId: `receiver-${closedAt}`,
+                  sessionAgentId: "main",
+                  sessionId: `receiver-session-${closedAt}`,
+                },
+                ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+                lifecycleGeneration: getAgentEventLifecycleGeneration(),
+              }),
+          ),
+      );
+      try {
+        const effect = async () => {
+          const admitted = await receiver.admit("embedded");
+          const assertActive = resolveAdmittedRunActiveAssertion(admitted);
+          expect(assertActive).toBeTypeOf("function");
+          if (closedAt === "after-admission") {
+            source.close();
+          }
+          assertActive!();
+          sink();
+        };
+        if (closedAt === "never") {
+          await expect(effect()).resolves.toBeUndefined();
+        } else {
+          await expect(effect()).rejects.toThrow();
+        }
+        expect(sink).toHaveBeenCalledTimes(closedAt === "never" ? 1 : 0);
+      } finally {
+        receiver.close();
+        source.close();
+      }
+    },
+  );
+
   it.each(
     [false, true].flatMap((audit) =>
       [

@@ -4,6 +4,12 @@ import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import type { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../../agents/openclaw-tools.requester-yield.js";
+import {
+  captureRequesterToolCap,
+  filterToolsByRequesterCap,
+  getRequesterToolCap,
+  type RequesterToolCapRef,
+} from "../../agents/requester-tool-cap.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
@@ -148,6 +154,7 @@ export function resolveSkillDispatchTools(
   ];
   const explicitDenylist = collectExplicitDenylist(explicitPolicyList);
   const inheritedToolAllowlist: string[] = [];
+  const sessionSendToolCapRef: RequesterToolCapRef = {};
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const beforeToolCallHookContext = params.skillCommand
     ? {
@@ -166,6 +173,7 @@ export function resolveSkillDispatchTools(
       }
     : undefined;
   const tools = dependencies.createOpenClawTools({
+    sessionSendToolCapRef,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
     agentAccountId: params.message.accountId,
@@ -196,38 +204,44 @@ export function resolveSkillDispatchTools(
     inheritedToolAllowlist,
     inheritedToolDenylist: explicitDenylist,
   });
-  const policyFiltered = applyToolPolicyPipeline({
-    tools,
-    toolMeta: (tool) => getPluginToolMeta(tool),
-    warn: logVerbose,
-    steps: [
-      ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
-        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
-        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        senderPolicy,
-        agentId: resolvedAgentId,
+  const policyFiltered = filterToolsByRequesterCap(
+    applyToolPolicyPipeline({
+      tools,
+      toolMeta: (tool) => getPluginToolMeta(tool),
+      warn: logVerbose,
+      steps: [
+        ...buildDefaultToolPolicyPipelineSteps({
+          profilePolicy: profilePolicyWithAlsoAllow,
+          profile,
+          profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
+          providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
+          providerProfile,
+          providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
+          globalPolicy,
+          globalProviderPolicy,
+          agentPolicy,
+          agentProviderPolicy,
+          groupPolicy,
+          senderPolicy,
+          agentId: resolvedAgentId,
+        }),
+        { policy: sandboxPolicy, label: "sandbox tools.allow" },
+        { policy: subagentPolicy, label: "subagent tools.allow" },
+        { policy: inheritedToolPolicy, label: "inherited tools" },
+        { policy: ownerOnlyCoreToolPolicy, label: "gateway sender owner-only tools" },
+      ],
+      declaredToolAllowlist: buildDeclaredToolAllowlistContext({
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        toolDenylist: explicitDenylist,
       }),
-      { policy: sandboxPolicy, label: "sandbox tools.allow" },
-      { policy: subagentPolicy, label: "subagent tools.allow" },
-      { policy: inheritedToolPolicy, label: "inherited tools" },
-      { policy: ownerOnlyCoreToolPolicy, label: "gateway sender owner-only tools" },
-    ],
-    declaredToolAllowlist: buildDeclaredToolAllowlistContext({
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      toolDenylist: explicitDenylist,
     }),
-  });
-  if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
+  );
+  sessionSendToolCapRef.current = captureRequesterToolCap(
+    filterRequesterYieldTools(policyFiltered, params.sessionKey),
+    explicitDenylist,
+  );
+  if (getRequesterToolCap() || explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
   }
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, policyFiltered, (tool) =>

@@ -54,6 +54,7 @@ import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { QuestionAnswerUnconfirmedError } from "../harness/gateway-question-dispatch.js";
+import { getRequesterToolCap, isRequesterToolCapCompatible } from "../requester-tool-cap.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
@@ -617,7 +618,36 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   text: string,
   options?: ReplyMessageInjectionOptions,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
-  return queueEmbeddedAgentMessageAsync(sessionId, text, options);
+  const cap = getRequesterToolCap();
+  const caller = getGatewayToolCallerIdentity();
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  if (
+    cap &&
+    handle &&
+    resolveEmbeddedInjection(sessionId, handle) &&
+    !isRequesterToolCapCompatible(registration?.requesterToolCap, cap)
+  ) {
+    return createQueueFailureOutcome(sessionId, "tool_authority_mismatch");
+  }
+  return queueEmbeddedAgentMessageAsync(
+    sessionId,
+    text,
+    options,
+    cap
+      ? () =>
+          Boolean(
+            (!caller?.operationalRunInstance ||
+              (caller.receiptAuthority &&
+                caller.receiptAuthority() !== false &&
+                !caller.approvalSignals?.some((signal) => signal.aborted))) &&
+            handle &&
+            ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle &&
+            ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration &&
+            isRequesterToolCapCompatible(registration?.requesterToolCap, cap),
+          )
+      : undefined,
+  );
 }
 
 /** TUI preflight requires V2 ownership; failure leaves ordinary input to local queue policy. */
@@ -789,6 +819,9 @@ function prepareEmbeddedAgentQueueMessage(
   }
   const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
   if (sourceCanInject && handle.messageInjectionV2?.version !== 2) {
+    if (!resolveEmbeddedInjection(sessionId, handle)) {
+      return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
+    }
     return {
       kind: "complete",
       outcome: createQueueFailureOutcome(sessionId, "guarded_injection_unsupported"),
@@ -1711,6 +1744,7 @@ export function setActiveEmbeddedRun(
   const operationalRunInstance = caller?.operationalRunInstance;
   const runContext = handle.runId ? getAgentRunContext(handle.runId) : undefined;
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(handle, {
+    requesterToolCap: getRequesterToolCap(),
     projectSessionActive:
       runContext?.lifecycleGeneration === incomingLifecycleGeneration
         ? runContext.projectSessionActive

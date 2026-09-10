@@ -12,6 +12,7 @@ import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getAdmittedRunDelegatedAuthority,
+  resolveAdmittedRunContinuationAssertion,
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
@@ -42,6 +43,8 @@ type GatewayToolCallerIdentity = {
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Synchronous host-owned fence for before-tool decision receipts. */
   receiptAuthority?: () => boolean | void;
+  /** Source cancellation survives normal foreground completion for admitted follow-up. */
+  continuationAuthorityCheck?: () => void;
   /** Exact Gateway-owned worker claim; never sourced from model or RPC arguments. */
   workerTurnClaim?: WorkerSessionTurnClaim;
   /** Closure-bound Gateway capability; revalidates both owners at child admission. */
@@ -152,6 +155,13 @@ export function createAdmittedGatewayToolCallerIdentity(
     agentId,
     sessionKey,
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    ...(delegatedAuthority
+      ? {
+          continuationAuthorityCheck: resolveAdmittedRunContinuationAssertion(
+            params.admittedRunContext,
+          ),
+        }
+      : {}),
     ...(delegatedAuthority ? { approvalAuthority: delegatedAuthority } : {}),
     ...(params.receiptAuthority ? { approvalAuthorityCheck: params.receiptAuthority } : {}),
     executionIdentityToken: params.admittedRunContext.executionIdentityToken,
@@ -262,6 +272,8 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(cronManagementGrant ? { cronManagementGrant } : {}),
       ...(executionIdentityToken ? { executionIdentityToken } : {}),
       ...(receiptAuthority ? { receiptAuthority } : {}),
+      continuationAuthorityCheck:
+        inheritedOwner?.continuationAuthorityCheck ?? identity.continuationAuthorityCheck,
       ...(approvalSignals.length ? { approvalSignals } : {}),
       ...(workerTurnClaim ? { workerTurnClaim } : {}),
       ...(workerTurnExecutionIdentityCapability ? { workerTurnExecutionIdentityCapability } : {}),

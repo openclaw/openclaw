@@ -12,6 +12,11 @@ import {
 } from "../agents/core-tool-factory-descriptors.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
+import {
+  captureRequesterToolCap,
+  filterToolsByRequesterCap,
+  type RequesterToolCapRef,
+} from "../agents/requester-tool-cap.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -202,7 +207,9 @@ function resolveMcpLoopbackTools(
     context.skillWorkshop || params.skillLibraryAuthoring
       ? { ...context.skillWorkshop, libraryAuthoring: params.skillLibraryAuthoring }
       : undefined;
+  const sessionSendToolCapRef: RequesterToolCapRef = {};
   const scoped = resolveGatewayScopedTools({
+    sessionSendToolCapRef,
     ...context,
     rootedExecution: params.rootedExecution,
     cfg: params.cfg,
@@ -219,14 +226,18 @@ function resolveMcpLoopbackTools(
     nodeExecAvailable: params.nodeExecAvailability?.isAvailable,
     pairedNodeComputerUse: params.pairedComputerUseAvailability?.prepared,
   });
-  return {
-    agentId: scoped.agentId,
-    workspaceDir: scoped.workspaceDir,
-    tools:
-      mode === "exact"
-        ? applyGrantToolsAllow(scoped.tools, toolsAllow)
-        : applyPolicyToolsAllow(scoped.tools, toolsAllow),
-  };
+  const tools =
+    mode === "exact"
+      ? applyGrantToolsAllow(scoped.tools, toolsAllow)
+      : applyPolicyToolsAllow(scoped.tools, toolsAllow);
+  sessionSendToolCapRef.current = captureRequesterToolCap(
+    filterToolsByRequesterCap(
+      [...tools, ...(context.nativeCronCreatorToolAllowlist ?? []).map((name) => ({ name }))],
+      context.requesterToolCap,
+    ),
+    sessionSendToolCapRef.current?.deny,
+  );
+  return { agentId: scoped.agentId, workspaceDir: scoped.workspaceDir, tools };
 }
 
 /** Resolves loopback-visible tools from the exact names carried by a minted grant. */

@@ -46,6 +46,7 @@ type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
   foregroundClosed: boolean;
   assertSourceCurrent?: () => void;
+  cancellationSignal?: AbortSignal;
 };
 
 const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
@@ -54,13 +55,14 @@ const activeNativeHookRecoveryLeases = new Map<string, DelegatedAuthorityLease>(
 function bindAdmittedRunDelegatedAuthority(
   context: AdmittedRunContext,
   assertSourceCurrent?: () => void,
+  cancellationSignal?: AbortSignal,
 ): void {
   const authority = claimAgentRunDelegatedAuthority(
     context.operationalRunInstance,
     assertSourceCurrent,
   );
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
-  const lease = { authority, foregroundClosed: false, assertSourceCurrent };
+  const lease = { authority, foregroundClosed: false, assertSourceCurrent, cancellationSignal };
   delegatedAuthorityLeases.set(context, lease);
 }
 
@@ -72,6 +74,22 @@ export function getAdmittedRunDelegatedAuthority(
   return lease && !lease.foregroundClosed && validateAgentRunDelegatedAuthority(lease.authority)
     ? lease.authority
     : undefined;
+}
+
+/** Captures source revocation for bounded work admitted before foreground completion. */
+export function resolveAdmittedRunContinuationAssertion(context: AdmittedRunContext): () => void {
+  const lease = delegatedAuthorityLeases.get(context);
+  if (!lease || !getAdmittedRunDelegatedAuthority(context)) {
+    throw new Error("continuation requires an active admitted source");
+  }
+  const generation = lease.authority.lifecycleGeneration;
+  return () => {
+    lease.cancellationSignal?.throwIfAborted();
+    lease.assertSourceCurrent?.();
+    if (getAgentRunLifecycleGeneration() !== generation) {
+      throw new Error("continuation source lifecycle changed");
+    }
+  };
 }
 
 /** Captures an exact admitted-run assertion for work that may cross an await boundary. */
@@ -219,6 +237,7 @@ export function prepareAgentRunAdmission(params: {
   recovery?: ExecutionIdentityRecoveryAdmission;
   onAdmitted?: (context: AdmittedRunContext) => void | Promise<void>;
   assertSourceCurrent?: () => void;
+  cancellationSignal?: AbortSignal;
 }): PreparedAgentRunAdmission {
   const operationalRunInstance = params.operationalRunInstance;
   const sourceAssertion = params.assertSourceCurrent;
@@ -277,7 +296,7 @@ export function prepareAgentRunAdmission(params: {
           runtimeInstanceId: admittedRuntimeInstanceId,
           ...(params.recovery ? { recovery: params.recovery } : {}),
         });
-        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent);
+        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, params.cancellationSignal);
         admittedContext = context;
         try {
           await params.onAdmitted?.(context);
@@ -300,6 +319,7 @@ export async function resolvePreparedRunAdmission(params: {
   runId: string;
   runtimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"];
   runtimeInstanceId?: string;
+  abortSignal?: AbortSignal;
   admittedRunContext?: AdmittedRunContext;
   preparedRunAdmission?: PreparedAgentRunAdmission;
 }): Promise<AdmittedRunContext> {
@@ -315,6 +335,13 @@ export async function resolvePreparedRunAdmission(params: {
   const lease = delegatedAuthorityLeases.get(admitted);
   if (lease && !getAdmittedRunDelegatedAuthority(admitted)) {
     throw new Error("prepared execution authority is no longer active");
+  }
+  params.abortSignal?.throwIfAborted();
+  if (lease && params.abortSignal && lease.cancellationSignal !== params.abortSignal) {
+    // Runtime entry points also admit channel runs without an agent-command owner.
+    lease.cancellationSignal = lease.cancellationSignal
+      ? AbortSignal.any([lease.cancellationSignal, params.abortSignal])
+      : params.abortSignal;
   }
   return admitted;
 }

@@ -51,6 +51,7 @@ vi.mock("../../gateway/call.js", async (importOriginal) => {
   };
 });
 vi.mock("./in-process-gateway.js", () => ({
+  runWithGatewayToolContinuationContext: (_config: unknown, run: () => Promise<unknown>) => run(),
   callAgentToolGatewayRequest: (opts: unknown) => inProcessGatewayRequestMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),

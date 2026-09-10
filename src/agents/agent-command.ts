@@ -66,6 +66,7 @@ import type {
 import { createInternalSessionEffectsCleanup } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
+import { getRequesterToolCap } from "./requester-tool-cap.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
@@ -382,6 +383,11 @@ async function agentCommandInternal(
       await prepareDeliveryForRun(sessionEntry);
 
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
+        if (getRequesterToolCap()) {
+          throw new Error(
+            "This ACP session cannot enforce the sessions_send tool cap. Use an OpenClaw-managed target session.",
+          );
+        }
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         preparedRunAdmission = prepareAgentCommandExecutionIdentity({
           opts,

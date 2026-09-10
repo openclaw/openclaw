@@ -5,6 +5,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import * as openClawToolFactory from "../agents/openclaw-tools.js";
+import { captureRequesterToolCap, type RequesterToolCapRef } from "../agents/requester-tool-cap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   McpLoopbackToolCache,
@@ -22,6 +24,39 @@ describe("resolveGatewayScopedTools", () => {
       inboundEventKind: "room_event",
       surface: "loopback",
     });
+  });
+
+  it("bounds child inheritance and native source exports by delegated authority", () => {
+    const source: RequesterToolCapRef = {};
+    const original = openClawToolFactory.createOpenClawTools;
+    const factory = vi
+      .spyOn(openClawToolFactory, "createOpenClawTools")
+      .mockImplementation(original);
+    try {
+      const scoped = resolveGatewayScopedTools({
+        cfg: {},
+        sessionKey: "agent:main:main",
+        surface: "loopback",
+        senderIsOwner: true,
+        requesterToolCap: captureRequesterToolCap([
+          { name: "sessions_send" },
+          { name: "sessions_spawn" },
+        ]),
+        sessionSendToolCapRef: source,
+        nativeCronCreatorToolAllowlist: ["read", "write"],
+      });
+      expect(scoped.tools.map((tool) => tool.name).toSorted()).toEqual([
+        "sessions_send",
+        "sessions_spawn",
+      ]);
+      expect(factory.mock.lastCall?.[0]?.inheritedToolAllowlist?.toSorted()).toEqual([
+        "sessions_send",
+        "sessions_spawn",
+      ]);
+      expect(source.current?.names).toEqual(["sessions_send", "sessions_spawn"]);
+    } finally {
+      factory.mockRestore();
+    }
   });
 
   it("force-allows the message tool for room-event loopback turns", () => {

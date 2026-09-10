@@ -8,6 +8,7 @@ import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
+import type { RequesterToolCap } from "../agents/requester-tool-cap.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
@@ -23,6 +24,8 @@ import type { SkillLibraryAuthoringCapability } from "../skills/library/authorin
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 
 export type McpLoopbackRequestContext = {
+  /** Host-owned transient delegation cap; never read from client headers. */
+  requesterToolCap?: RequesterToolCap;
   sessionKey: string;
   runtimePolicySessionKey?: string;
   /** Agent whose execution policy applies when it differs from the durable session owner. */

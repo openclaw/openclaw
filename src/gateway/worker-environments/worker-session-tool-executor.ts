@@ -4,6 +4,7 @@ import type {
   WorkerSessionToolResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
+import { captureRequesterToolCap } from "../../agents/requester-tool-cap.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
@@ -601,6 +602,13 @@ export function createWorkerSessionToolExecutor(params: {
                   authority,
                 )
               : await executeWorkerSessionSend({
+                  sessionSendToolCapRef: {
+                    current: captureRequesterToolCap(
+                      WORKER_TOOL_NAMES.filter((name) =>
+                        params.placements.isWorkerTurnToolAuthorized(source.turnClaim, name),
+                      ).map((name) => ({ name })),
+                    ),
+                  },
                   assertSource: authority.assertSource,
                   callGateway: authority.callGateway,
                   source,
