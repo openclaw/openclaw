@@ -101,7 +101,7 @@ your custom name.
 
 ### Session menu
 
-Only root sessions can be pinned; child/subagent sessions live in their parent's tree and reject pin requests, including when they appear as top-level threads.
+Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions live in their parent's tree and reject pin requests, including when they appear as top-level threads.
 
 The menu groups routine actions first: **Pin/Unpin**, **Rename**, **Mark as unread/read**, and **Archive/Unarchive**. **Delete** stays separate at the bottom.
 

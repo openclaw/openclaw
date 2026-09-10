@@ -487,7 +487,7 @@ describe("gateway sessions patch", () => {
 
   test.each([
     ["agent:main:dashboard:child", { spawnedBy: MAIN_SESSION_KEY }],
-    ["agent:main:dashboard:child", { parentSessionKey: MAIN_SESSION_KEY }],
+    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:dashboard:parent" }],
     ["agent:main:subagent:child", {}],
   ] as const)("rejects child pins on %s with %j", async (key, lineage) => {
     const original: SessionEntry = { sessionId: "child", updatedAt: 1, pinnedAt: 10, ...lineage };
@@ -535,6 +535,39 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(pinned.pinnedAt).toEqual(expect.any(Number));
+  });
+
+  test.each([
+    ["agent:main:dashboard:work", { parentSessionKey: MAIN_SESSION_KEY }],
+    ["agent:other:dashboard:work", { parentSessionKey: "agent:other:main" }],
+  ] as const)("allows pins on Home-parented sessions on %s", async (key, lineage) => {
+    const pinned = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: { [key]: { sessionId: "work", updatedAt: 1, ...lineage } },
+        patch: { key, pinned: true },
+      }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+  });
+
+  test("preserves existing pins on Home-parented sessions through metadata patches", async () => {
+    const key = "agent:main:dashboard:work";
+    const updated = expectPatchOk(
+      await runPatch({
+        storeKey: key,
+        store: {
+          [key]: {
+            sessionId: "work",
+            updatedAt: 1,
+            pinnedAt: 10,
+            parentSessionKey: MAIN_SESSION_KEY,
+          },
+        },
+        patch: { key, label: "Work session" },
+      }),
+    );
+    expect(updated.pinnedAt).toBe(10);
   });
 
   test("marks archived sessions unread and clears the marker when read", async () => {

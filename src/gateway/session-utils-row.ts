@@ -12,6 +12,7 @@ import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
+  resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
   resolveProjectedSessionContextBudgetStatus,
@@ -200,7 +201,8 @@ export function buildGatewaySessionRow(params: {
     })
   ).get(key);
   const pinnedAt =
-    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
+    entry?.pinnedAt !== undefined &&
+    isPinnableSessionEntry(key, entry, resolveAgentMainSessionKey({ cfg, agentId: params.agentId }))
       ? entry.pinnedAt
       : undefined;
   const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);

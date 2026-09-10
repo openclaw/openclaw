@@ -776,7 +776,7 @@ describe("gateway session utils", () => {
 
   test.each([
     ["agent:main:dashboard:child", { spawnedBy: "agent:main:main" }],
-    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:main" }],
+    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:dashboard:parent" }],
     ["agent:main:subagent:child", {}],
   ] as const)(
     "ignores stale child pins in session list projection and ordering: %s %j",
