@@ -15,7 +15,11 @@ import {
 } from "../config/sessions/session-store-owner.js";
 import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+} from "../infra/http-body.js";
 import {
   normalizeAgentId,
   normalizeAgentIdStrict,
@@ -219,29 +223,50 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
   return undefined;
 }
 
+export type HookRequestBody = {
+  /** Exact bytes the sender signed; signature schemes hash this, never a re-serialization. */
+  raw: string;
+  value: unknown;
+};
+
+/** Read a hook request body once, keeping the raw text for signature verification. */
+export async function readHookRequestBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<Result<HookRequestBody, string>> {
+  let raw: string;
+  try {
+    raw = await readRequestBodyWithLimit(req, { maxBytes, destroyOnLimit: false });
+  } catch (error) {
+    if (isRequestBodyLimitError(error)) {
+      if (error.code === "PAYLOAD_TOO_LARGE") {
+        return { ok: false, error: "payload too large" };
+      }
+      if (error.code === "REQUEST_BODY_TIMEOUT") {
+        return { ok: false, error: "request body timeout" };
+      }
+      return { ok: false, error: requestBodyErrorToText(error.code) };
+    }
+    return { ok: false, error: requestBodyErrorToText("CONNECTION_CLOSED") };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ok: true, value: { raw, value: {} } };
+  }
+  try {
+    return { ok: true, value: { raw, value: JSON.parse(trimmed) as unknown } };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** Read and normalize a hook JSON request body with gateway-friendly error text. */
 export async function readJsonBody(
   req: IncomingMessage,
   maxBytes: number,
 ): Promise<Result<unknown, string>> {
-  const result = await readJsonBodyWithLimit(req, {
-    maxBytes,
-    emptyObjectOnEmpty: true,
-    destroyOnLimit: false,
-  });
-  if (result.ok) {
-    return result;
-  }
-  if (result.code === "PAYLOAD_TOO_LARGE") {
-    return { ok: false, error: "payload too large" };
-  }
-  if (result.code === "REQUEST_BODY_TIMEOUT") {
-    return { ok: false, error: "request body timeout" };
-  }
-  if (result.code === "CONNECTION_CLOSED") {
-    return { ok: false, error: requestBodyErrorToText("CONNECTION_CLOSED") };
-  }
-  return { ok: false, error: result.error };
+  const body = await readHookRequestBody(req, maxBytes);
+  return body.ok ? { ok: true, value: body.value.value } : body;
 }
 
 /** Normalize request headers into lowercase string values for hook template matching. */

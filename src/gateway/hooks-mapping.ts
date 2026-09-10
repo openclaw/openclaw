@@ -11,6 +11,11 @@ import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/
 import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { isPathInside } from "../infra/path-guards.js";
+import {
+  findHookSignatureMappingConflict,
+  type HookMappingSignatureResolved,
+  normalizeHookMappingSignature,
+} from "./hooks-signature.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -36,6 +41,8 @@ export type HookMappingResolved = {
   forEach?: string;
   /** Path-scoped request body bound derived from the producer contract (e.g. gog gmail batches). */
   maxBodyBytes?: number;
+  /** Sender signature the path requires instead of the shared hook token. */
+  signature?: HookMappingSignatureResolved;
 };
 
 type HookMappingTransformResolved = {
@@ -54,6 +61,8 @@ type HookAction =
   | {
       kind: "wake";
       mappingId: string;
+      /** Position of the source item in the fan-out array; single actions omit it. */
+      itemIndex?: number;
       text: string;
       mode: "now" | "next-heartbeat";
       agentId?: string;
@@ -63,6 +72,8 @@ type HookAction =
   | {
       kind: "agent";
       mappingId: string;
+      /** Position of the source item in the fan-out array; single actions omit it. */
+      itemIndex?: number;
       message: string;
       name?: string;
       agentId?: string;
@@ -210,7 +221,7 @@ export function resolveHookMappings(
   const gmailMaxBodyBytes = resolveGmailHookMaxBodyBytes(
     resolveGmailHookMaxBytes(hooks?.gmail?.maxBytes),
   );
-  return mappings.map((mapping, index) => {
+  const resolved = mappings.map((mapping, index) => {
     const normalized = normalizeHookMapping(mapping, index, transformsDir);
     // Every gmail-path mapping (preset or the documented custom restricted
     // reader) receives gog's batch payloads, so all of them inherit the
@@ -220,6 +231,11 @@ export function resolveHookMappings(
     }
     return normalized;
   });
+  const signatureConflict = findHookSignatureMappingConflict(resolved);
+  if (signatureConflict) {
+    throw new Error(signatureConflict);
+  }
+  return resolved;
 }
 
 export async function applyHookMappings(
@@ -285,7 +301,7 @@ async function applyFanOutMapping(
   const allItems = Array.isArray(raw) ? raw : [];
   const items = allItems.slice(0, HOOK_MAPPING_FAN_OUT_MAX_ITEMS);
   const actions: HookAction[] = [];
-  for (const item of items) {
+  for (const [itemIndex, item] of items.entries()) {
     // Each item renders against a payload where the fan-out array holds only
     // that item, so single-message templates like {{messages[0].id}} keep
     // working per item and transforms see a per-item payload.
@@ -301,7 +317,9 @@ async function applyFanOutMapping(
       return result;
     }
     if (result.action) {
-      actions.push(result.action);
+      // The original position survives transforms that drop earlier items, so a
+      // signed delivery's item identity does not shift between redeliveries.
+      actions.push({ ...result.action, itemIndex });
     }
   }
   return {
@@ -329,6 +347,9 @@ function normalizeHookMapping(
         exportName: normalizeOptionalString(mapping.transform.export),
       }
     : undefined;
+  const signature = mapping.signature
+    ? normalizeHookMappingSignature(mapping.signature, id)
+    : undefined;
 
   return {
     id,
@@ -351,6 +372,7 @@ function normalizeHookMapping(
     thinking: mapping.thinking,
     timeoutSeconds: mapping.timeoutSeconds,
     transform,
+    signature,
   };
 }
 

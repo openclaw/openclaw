@@ -201,6 +201,14 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Relative transform module path loaded from hooks.transformsDir to rewrite incoming payloads before delivery. Keep modules local, reviewed, and free of path traversal patterns.",
   "hooks.mappings[].transform.export":
     "Named export to invoke from the transform module; defaults to module default export when omitted. Set this when one file hosts multiple transform handlers.",
+  "hooks.mappings[].signature":
+    "Sender signature verification for this mapped path. When set, requests to the path must carry a valid signature and the shared hook token is not required, so SaaS senders that cannot add custom headers can call the Gateway directly.",
+  "hooks.mappings[].signature.scheme":
+    'Signature scheme the sender uses. "standard-webhooks" covers Standard Webhooks and Svix-compatible senders: webhook-id, webhook-timestamp, and webhook-signature headers with HMAC-SHA256 over "<id>.<timestamp>.<body>".',
+  "hooks.mappings[].signature.secret":
+    "whsec_-prefixed base64 signing secret issued by the sender. Provide an array to accept both the old and the new secret while a rotation overlap is in effect, then remove the retired one.",
+  "hooks.mappings[].signature.toleranceSeconds":
+    "Maximum allowed clock skew in seconds between the sender's webhook-timestamp and the Gateway clock; older or future-dated deliveries are rejected as replays. Defaults to 300.",
   "hooks.gmail":
     "Gmail push integration settings used for Pub/Sub notifications and optional local callback serving. Keep this scoped to dedicated Gmail automation accounts where possible.",
   "hooks.gmail.account":
