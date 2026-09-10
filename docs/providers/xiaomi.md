@@ -129,7 +129,7 @@ message.
     provider: "xiaomi",
     providers: {
       xiaomi: {
-        apiKey: "xiaomi_api_key",
+        apiKey: "${XIAOMI_API_KEY}",
         model: "mimo-v2.5-tts",
         speakerVoice: "mimo_default",
         format: "mp3",

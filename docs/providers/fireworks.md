@@ -74,6 +74,10 @@ openclaw onboard --non-interactive \
   --accept-risk
 ```
 
+`--mode` defaults to `local`, so this is the same run as the **Direct flag**
+command above. Pass `--mode remote --remote-url wss://<host>:18789` instead when
+onboarding against a remote Gateway.
+
 ## Built-in catalog
 
 Setup saves connection settings and aliases without copying generated catalog rows into your config.

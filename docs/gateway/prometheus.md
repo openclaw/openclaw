@@ -60,6 +60,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
   </Step>
   <Step title="Restart the Gateway">
     The HTTP route is registered at plugin startup, so reload after enabling.
+
+    ```bash
+    openclaw gateway restart
+    ```
+
   </Step>
   <Step title="Scrape the protected route">
     Send the same gateway auth your operator clients use:

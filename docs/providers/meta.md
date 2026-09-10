@@ -72,6 +72,10 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --meta-api-key "$MODEL_API_KEY"
 ```
 
+`--mode` defaults to `local`, so this is the same run as the **Direct flag**
+command above. Pass `--mode remote --remote-url wss://<host>:18789` instead when
+onboarding against a remote Gateway.
+
 ## Built-in catalog
 
 Prices and data-use terms come from Meta's
