@@ -10,9 +10,11 @@ import {
   withToolApprovalReviews,
 } from "../../lib/chat/tool-approval-reviews.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { getChatRunOwner } from "./history-merge.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -286,6 +288,69 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
   }
   const data = payload.data ?? {};
   const phase = toTrimmedString(data.phase);
+  if (systemNotice && phase === "provider_policy") {
+    if (data.category !== "cyber" || data.provider !== "openai") {
+      return true;
+    }
+    const state = data.state;
+    if (
+      state !== "buffering" &&
+      state !== "blocked" &&
+      state !== "fallback" &&
+      state !== "cleared"
+    ) {
+      return true;
+    }
+    const owner = host.chatRunId ?? getChatRunOwner(host) ?? host.providerPolicyNotice?.runId;
+    const pendingSend = host.chatQueue?.some(
+      (item) =>
+        item.sendState === "sending" &&
+        item.sendRunId === payload.runId &&
+        item.sessionKey &&
+        uiSessionEventMatches(host, item.sessionKey, item.agentId),
+    );
+    if (owner !== payload.runId && !pendingSend) {
+      return true;
+    }
+    const identity = `provider-policy:${payload.runId}`;
+    const previous = Math.max(
+      host.activityEventSeqById?.get(identity) ?? -1,
+      host.providerPolicyNotice?.runId === payload.runId ? host.providerPolicyNotice.seq : -1,
+    );
+    if (!Number.isSafeInteger(payload.seq) || payload.seq <= previous) {
+      return true;
+    }
+    (host.activityEventSeqById ??= new Map()).set(identity, payload.seq);
+    const currentNotice = host.providerPolicyNotice;
+    if (
+      currentNotice?.runId === payload.runId &&
+      (currentNotice.state === "blocked" ||
+        (currentNotice.state === "fallback" && state === "buffering"))
+    ) {
+      return true;
+    }
+    if (state === "cleared") {
+      if (
+        host.providerPolicyNotice?.runId === payload.runId &&
+        host.providerPolicyNotice.state === "buffering"
+      ) {
+        host.providerPolicyNotice = null;
+      }
+      return true;
+    }
+    const model = toTrimmedString(data.model);
+    const fallbackModel = toTrimmedString(data.fallbackModel);
+    host.providerPolicyNotice = {
+      runId: payload.runId,
+      seq: payload.seq,
+      state,
+      ...(model ? { model: formatUiExternalText(model.slice(0, 256)) } : {}),
+      ...(fallbackModel
+        ? { fallbackModel: formatUiExternalText(fallbackModel.slice(0, 256)) }
+        : {}),
+    };
+    return true;
+  }
   const status = toTrimmedString(data.status);
   const reviewId = toTrimmedString(data.reviewId);
   const threadId = toTrimmedString(data.threadId);

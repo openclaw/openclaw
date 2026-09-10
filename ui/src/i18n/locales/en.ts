@@ -4727,6 +4727,15 @@ export const en: TranslationMap & {
     errorDetails: "Error details",
     details: "Details",
     copyError: "Copy error",
+    providerPolicy: {
+      bufferingTitle: "Cyber safety review",
+      bufferingBody: "OpenAI is reviewing this response for cyber safety.",
+      blockedTitle: "Cyber policy block",
+      blockedBody: "OpenAI blocked this response under its cyber policy.",
+      fallbackTitle: "Provider changed the model",
+      fallbackBody: "OpenAI routed this response to {model}.",
+      fallbackUnknownBody: "OpenAI routed this response to another model.",
+    },
     diskSpace: {
       warningTitle: "Cloud session disk space is low",
       criticalTitle: "Cloud session disk space is critically low",

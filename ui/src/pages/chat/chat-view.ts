@@ -50,6 +50,7 @@ import {
 } from "./components/chat-thread-interactions.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
 export type ChatProps = Omit<
@@ -77,6 +78,7 @@ export type ChatProps = Omit<
     onSessionKeyChange: (next: string) => void;
     thinkingLevel: string | null;
     startupStatus?: ChatRunStartupStatus | null;
+    providerPolicyNotice?: ProviderPolicyNotice | null;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     inlineApproval?: ExecApprovalRequest | null;

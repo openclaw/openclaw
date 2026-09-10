@@ -88,6 +88,24 @@ OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
 
+## Cyber safety notices
+
+The Control UI shows a notice above the composer when Codex reports cyber
+safety buffering, a cyber-policy refusal, or a provider model reroute for
+high-risk cyber activity. These notices use structured app-server events;
+OpenClaw does not infer classifier activity from the assistant's wording.
+
+Buffering means the provider is still processing the request. Its notice clears
+when assistant output starts or the turn ends. A blocked notice remains until
+the next turn or a session reset. A reroute notice reports the model selected
+by the provider. Notices do not retry requests or change the selected model.
+
+Gateway agent-event consumers receive these updates on the `notice` stream
+with `phase: "provider_policy"`, `provider: "openai"`, `category: "cyber"`, and
+a `state` of `buffering`, `blocked`, `fallback`, or `cleared`. Model fields are
+present when the upstream event provides them. A suggested fallback model is
+informational and does not prove that the account can use it.
+
 ## Parallel chats and thread ownership
 
 Independent chats can share a Codex app-server and run concurrently. Resuming

@@ -9,6 +9,7 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
+import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
 export type ChatPlacementStartupNoticeProps = {
@@ -28,6 +29,7 @@ type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
   messages: readonly unknown[];
+  providerPolicyNotice?: ProviderPolicyNotice | null;
   runError?: { summary: string } | null;
   onDismissWorkspaceConflict?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
@@ -150,6 +152,7 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
 
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   return html`
+    ${renderProviderPolicyNotice(props.providerPolicyNotice)}
     ${props.runError ? renderErrorNotice(props.runError.summary) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
@@ -160,6 +163,34 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
       props.messages,
       props.onRetrySessionPlacementStartup,
     )}
+  `;
+}
+
+function renderProviderPolicyNotice(notice: ProviderPolicyNotice | null | undefined) {
+  if (!notice) {
+    return nothing;
+  }
+  const blocked = notice.state === "blocked";
+  const model = notice.fallbackModel ?? notice.model;
+  const body =
+    notice.state === "fallback"
+      ? model
+        ? t("chat.providerPolicy.fallbackBody", { model })
+        : t("chat.providerPolicy.fallbackUnknownBody")
+      : t(`chat.providerPolicy.${notice.state}Body`);
+  return html`
+    <div
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--${blocked ? "danger" : "warn"} chat-provider-policy-notice"
+      role=${blocked ? "alert" : "status"}
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
+        >${icons.alertTriangle}</span
+      >
+      <div class="chat-composer-neighbor-card__copy">
+        <strong>${t(`chat.providerPolicy.${notice.state}Title`)}</strong>
+        <span>${body}</span>
+      </div>
+    </div>
   `;
 }
 

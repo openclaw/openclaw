@@ -388,6 +388,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
+      providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
       progressCard: this.progressCard.card,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
       onDismissProgressCard,

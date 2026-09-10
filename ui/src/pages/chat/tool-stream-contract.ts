@@ -1,7 +1,11 @@
 // Leaf contract for the tool-stream lane: the host-state shape and event
 // payload types shared by tool-stream, its status/preamble modules, and the
 // chat state owners. Keep this module import-light so the lane stays acyclic.
-import type { ChatGuardianNotice, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatGuardianNotice,
+  ChatQueueItem,
+  ChatStreamSegment,
+} from "../../lib/chat/chat-types.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
@@ -39,6 +43,14 @@ export type ToolStreamEntry = {
 
 export type RunOutputUsage = { outputTokens: number; seq: number };
 
+export type ProviderPolicyNotice = {
+  runId: string;
+  seq: number;
+  state: "buffering" | "blocked" | "fallback";
+  model?: string;
+  fallbackModel?: string;
+};
+
 export type CompactionStatus = {
   phase: "active" | "retrying" | "complete";
   runId: string | null;
@@ -69,6 +81,7 @@ export type ToolStreamHost = {
   agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: { snapshot?: unknown } | null;
   chatRunId: string | null;
+  chatQueue?: readonly ChatQueueItem[];
   chatMessages?: unknown[];
   chatRunUsageById?: Map<string, RunOutputUsage>;
   chatStream: string | null;
@@ -80,6 +93,7 @@ export type ToolStreamHost = {
   activityEventSeqById?: Map<string, number>;
   chatToolMessages: Record<string, unknown>[];
   guardianNotices?: ChatGuardianNotice[];
+  providerPolicyNotice?: ProviderPolicyNotice | null;
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
