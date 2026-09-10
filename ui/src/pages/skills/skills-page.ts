@@ -40,7 +40,8 @@ import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
 import { SkillLibraryController } from "./library-controller.ts";
 import { renderSkillLibrary, renderSkillLibraryDialogs } from "./library-view.ts";
-import { renderSkills, type SkillDetailTab, type SkillsStatusFilter } from "./view.ts";
+import type { SkillDetailTab, SkillsStatusFilter } from "./view-types.ts";
+import { renderSkills } from "./view.ts";
 
 export type SkillsRouteData = {
   gateway: ApplicationContext["gateway"];

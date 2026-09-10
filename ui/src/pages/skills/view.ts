@@ -4,12 +4,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 // headings outside one group surface, rows with a control cluster, dot+text
 // status instead of pills. The detail/ClawHub dialogs keep their specialized
 // markup.
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import "../../components/agent-select-registration.ts";
-import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import type { SkillStatusEntry } from "../../api/types.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
@@ -37,15 +36,10 @@ import {
   isSkillAvailable,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
-import type {
-  ClawHubSkillSecurityVerdict,
-  ClawHubSkillDetail,
-  SkillOperation,
-  SkillMessageMap,
-} from "../../lib/skills/index.ts";
+import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { renderSkillDiscovery } from "./discovery-view.ts";
 import { renderSkillStateStatus, verdictForSkill } from "./skill-status.ts";
+import type { SkillDetailTab, SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
 registerSkillLibraryEnglish();
 
@@ -55,66 +49,6 @@ function safeExternalHref(raw?: string): string | null {
   }
   return resolveSafeExternalUrl(raw, window.location.href);
 }
-
-export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
-export type SkillDetailTab = "overview" | "card";
-
-export type SkillsProps = {
-  surface?: "discovery" | "settings";
-  libraryEntries?: SkillLibraryEntry[];
-  onLibraryOpen?: (skillId: string) => void;
-  library?: TemplateResult;
-  showInventory?: boolean;
-  personalImport?: boolean;
-  canUpdate: boolean;
-  canInstall: boolean;
-  connected: boolean;
-  loading: boolean;
-  report: SkillStatusReport | null;
-  agentsList: AgentsListResult | null;
-  selectedAgentId: string | null;
-  error: string | null;
-  filter: string;
-  statusFilter: SkillsStatusFilter;
-  edits: Record<string, string>;
-  operation: SkillOperation;
-  messages: SkillMessageMap;
-  detailKey: string | null;
-  detailTab: SkillDetailTab;
-  clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
-  clawhubVerdictsLoading: boolean;
-  clawhubVerdictsError: string | null;
-  skillCardContents: Record<string, string>;
-  skillCardLoadingKey: string | null;
-  skillCardErrors: Record<string, string>;
-  clawhubQuery: string;
-  clawhubResults: ClawHubSearchResult[] | null;
-  clawhubSearchLoading: boolean;
-  clawhubSearchError: string | null;
-  clawhubDetail: ClawHubSkillDetail | null;
-  clawhubDetailRef: string | null;
-  clawhubDetailLoading: boolean;
-  clawhubDetailError: string | null;
-  clawhubInstallMessage: {
-    kind: "success" | "error";
-    text: string;
-  } | null;
-  onFilterChange: (next: string) => void;
-  onAgentChange: (agentId: string) => void;
-  onStatusFilterChange: (next: SkillsStatusFilter) => void;
-  onRefresh: () => void;
-  onToggle: (skillKey: string, enabled: boolean) => void;
-  onEdit: (skillKey: string, value: string) => void;
-  onSaveKey: (skillKey: string) => void;
-  onInstall: (skillKey: string, name: string, installId: string) => void;
-  onDetailOpen: (skillKey: string) => void;
-  onDetailClose: () => void;
-  onDetailTabChange: (tab: SkillDetailTab) => void;
-  onClawHubQueryChange: (query: string) => void;
-  onClawHubDetailOpen: (ref: string) => void;
-  onClawHubDetailClose: () => void;
-  onClawHubInstall: (ref: string, version?: string) => void;
-};
 
 type StatusTabDef = { id: SkillsStatusFilter; labelKey: string };
 

@@ -8,7 +8,7 @@ import { clawHubSkillRef } from "../../lib/skills/clawhub-search.ts";
 import { renderPluginCardSummary } from "../plugins/plugin-card.ts";
 import { skillDiscoveryEntries, type SkillDiscoveryEntry } from "./discovery.ts";
 import { renderSkillStateStatus, verdictForSkill } from "./skill-status.ts";
-import type { SkillsProps } from "./view.ts";
+import type { SkillsProps } from "./view-types.ts";
 import "../../styles/skills-discovery.css";
 
 function renderCard(entry: SkillDiscoveryEntry, props: SkillsProps) {
