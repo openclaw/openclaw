@@ -105,8 +105,8 @@ describe("provider channel login runtime", () => {
     );
     expect(buttons).toHaveLength(12);
     for (const button of buttons ?? []) {
-      expect(button.action.type).toBe("command");
-      if (button.action.type === "command") {
+      expect(button.action?.type).toBe("command");
+      if (button.action?.type === "command") {
         expect(reply.text).toContain(`${button.label}: \`${button.action.command}\``);
       }
     }
