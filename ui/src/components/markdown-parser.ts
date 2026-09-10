@@ -25,6 +25,7 @@ import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
+import { isAllowedRemoteImageSource } from "./remote-image-origins.ts";
 
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
@@ -696,6 +697,14 @@ export function createMarkdownParser(): MarkdownItParser {
       (env as Partial<MarkdownRenderEnv> | undefined)?.interactiveImages === true,
     allowRemoteImages: (env) =>
       (env as Partial<MarkdownRenderEnv> | undefined)?.remoteImages === true,
+    isAllowedRemoteImage: (src, env) => {
+      // SAFETY: markdown-it invokes this renderer with the caller-provided MarkdownRenderEnv.
+      const options = env as Partial<MarkdownRenderEnv> | undefined;
+      // Document previews retain their existing explicit remote-image behavior.
+      return (
+        options?.mode === "document" || isAllowedRemoteImageSource(src, options?.remoteImageOrigins)
+      );
+    },
   });
 
   // Fenced and indented blocks share one interaction and overflow surface.

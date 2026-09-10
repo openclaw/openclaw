@@ -5,6 +5,47 @@ import { describe, expect, it } from "vitest";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 
 describe("buildControlUiCspHeader", () => {
+  it("normalizes exact bare HTTP(S) remote image origins and rejects URL extensions", () => {
+    const csp = buildControlUiCspHeader({
+      remoteImageOrigins: [
+        " HTTPS://Images.Example.test:443 ",
+        "http://images.example.test:8080",
+        "https://*.example.test",
+        "https://user@example.test",
+        "https://images.example.test/path",
+        "https://images.example.test?query",
+        "https://images.example.test#fragment",
+        "file:///tmp/image.png",
+      ],
+    });
+    const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
+
+    expect(imgSrc?.split(" ")).toContain("https://images.example.test");
+    expect(imgSrc?.split(" ")).toContain("http://images.example.test:8080");
+    expect(imgSrc).not.toContain("*.example.test");
+    expect(imgSrc).not.toContain("user@");
+    expect(imgSrc).not.toContain("/path");
+    expect(imgSrc).not.toContain("?query");
+    expect(imgSrc).not.toContain("#fragment");
+    expect(imgSrc).not.toContain("file:");
+  });
+
+  it("deduplicates canonical remote image origins in deterministic order", () => {
+    const csp = buildControlUiCspHeader({
+      remoteImageOrigins: [
+        "https://b.example.test",
+        "HTTPS://A.example.test:443",
+        "https://b.example.test",
+      ],
+    });
+    const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
+
+    expect(imgSrc?.split(" ").slice(-2)).toEqual([
+      "https://a.example.test",
+      "https://b.example.test",
+    ]);
+  });
+
   it("blocks inline scripts while allowing inline styles", () => {
     const csp = buildControlUiCspHeader();
     expect(csp).toContain("frame-ancestors 'none'");
@@ -61,6 +102,22 @@ describe("buildControlUiCspHeader", () => {
       "https://avatars.githubusercontent.com",
     ]);
     expect(imgSrc?.split(" ")).not.toContain("https:");
+  });
+
+  it("adds only normalized exact remote image origins", () => {
+    const csp = buildControlUiCspHeader({
+      remoteImageOrigins: [
+        " HTTPS://Images.Example.test:443 ",
+        "http://images.example.test:8080",
+        "https://images.example.test/path",
+        "https://*.example.test",
+      ],
+    });
+    const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
+    expect(imgSrc?.split(" ")).toContain("https://images.example.test");
+    expect(imgSrc?.split(" ")).toContain("http://images.example.test:8080");
+    expect(imgSrc).not.toContain("/path");
+    expect(imgSrc).not.toContain("*");
   });
 
   it("allows same-origin and inline audio/video playback", () => {

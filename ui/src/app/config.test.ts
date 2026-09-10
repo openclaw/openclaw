@@ -15,6 +15,7 @@ function bootstrapResponse(
   automaticallyFetchFavicons = false,
   pluginAssetsRequireAuth?: boolean,
   communityInvite = true,
+  remoteImageOrigins?: string[],
 ): Response {
   const payload: ControlUiBootstrapConfig = {
     basePath: "",
@@ -26,6 +27,7 @@ function bootstrapResponse(
     cliAgentsEnabled: true,
     automaticallyFetchFavicons,
     communityInvite,
+    ...(remoteImageOrigins ? { remoteImageOrigins } : {}),
     ...(pluginAssetsRequireAuth === undefined ? {} : { pluginAssetsRequireAuth }),
     pluginFrameGrants: [],
   };
@@ -119,6 +121,21 @@ describe("createApplicationConfigCapability", () => {
     await expect(config.refresh()).resolves.toMatchObject({ automaticallyFetchFavicons: true });
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/control-ui-config.json");
     expect(config.current.automaticallyFetchFavicons).toBe(true);
+  });
+
+  it("accepts the Gateway's canonical remote image origins", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        bootstrapResponse("test", false, undefined, true, ["https://images.example.test"]),
+      ),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+
+    expect(config.current.remoteImageOrigins).toEqual([]);
+    await expect(config.refresh()).resolves.toMatchObject({
+      remoteImageOrigins: ["https://images.example.test"],
+    });
   });
 
   it.each([null, { pluginFrameGrants: {} }])(

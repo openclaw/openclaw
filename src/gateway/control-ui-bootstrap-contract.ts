@@ -60,6 +60,8 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   automaticallyFetchFavicons?: boolean;
+  /** Canonical exact origins browsers may load directly from chat Markdown. */
+  remoteImageOrigins?: string[];
   seamColor?: string;
   environment?: ControlUiEnvironment;
   /** Whether this Gateway's served UI may show the Discord community invitation. */

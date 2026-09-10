@@ -35,6 +35,7 @@ type ApplicationConfig = {
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
+  remoteImageOrigins: readonly string[];
   communityInvite: boolean;
   terminalEnabled: boolean;
   cliAgentsEnabled?: boolean;
@@ -68,6 +69,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
+  remoteImageOrigins: [],
   communityInvite: false,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   cliAgentsEnabled: false,
@@ -114,6 +116,9 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     embedSandboxMode: parsed.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
+    remoteImageOrigins: Array.isArray(parsed.remoteImageOrigins)
+      ? parsed.remoteImageOrigins.filter((origin): origin is string => typeof origin === "string")
+      : [],
     communityInvite: parsed.communityInvite === true,
     terminalEnabled: Boolean(parsed.terminalEnabled),
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),

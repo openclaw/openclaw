@@ -43,6 +43,7 @@ type StreamMessageOptions = Pick<
   | "onAssistantAttachmentLoaded"
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
+  | "remoteImageOrigins"
   | "fetchLinkFavicon"
   | "githubRepo"
   | "onOpenWorkspaceFile"

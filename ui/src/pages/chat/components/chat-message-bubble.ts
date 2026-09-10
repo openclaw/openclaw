@@ -247,6 +247,7 @@ export function renderGroupedMessage(
     onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    remoteImageOrigins?: MarkdownRenderOptions["remoteImageOrigins"];
     fetchLinkFavicon?: LinkFaviconFetcher;
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
@@ -330,6 +331,9 @@ export function renderGroupedMessage(
     sessionLinks: true,
     tableInteractions: "enabled",
     linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
+    ...(opts.remoteImageOrigins?.length
+      ? { remoteImages: true, remoteImageOrigins: opts.remoteImageOrigins }
+      : {}),
   };
 
   // Detect pure-JSON messages and render as collapsible block
