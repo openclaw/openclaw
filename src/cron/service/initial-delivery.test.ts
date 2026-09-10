@@ -149,35 +149,38 @@ describe("CronService initial delivery", () => {
     }
   });
 
-  it("preserves an independent thread for a provider-prefixed chat target", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createDirectCronService(storePath);
-    await cron.start();
+  it.each(["telegram:12345", "tg:12345", "telegram:tg:group:12345"])(
+    "preserves an independent thread for provider-prefixed chat target %s",
+    async (to) => {
+      const { storePath } = await makeStorePath();
+      const cron = createDirectCronService(storePath);
+      await cron.start();
 
-    try {
-      const added = await cron.add(
-        createInput({
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", message: "hello" },
-          delivery: {
-            mode: "announce",
-            channel: "telegram",
-            to: "telegram:12345",
-            threadId: "12345",
-          },
-        }),
-      );
+      try {
+        const added = await cron.add(
+          createInput({
+            sessionTarget: "isolated",
+            payload: { kind: "agentTurn", message: "hello" },
+            delivery: {
+              mode: "announce",
+              channel: "telegram",
+              to,
+              threadId: "12345",
+            },
+          }),
+        );
 
-      expect(added.delivery).toEqual({
-        mode: "announce",
-        channel: "telegram",
-        to: "telegram:12345",
-        threadId: "12345",
-      });
-    } finally {
-      cron.stop();
-    }
-  });
+        expect(added.delivery).toEqual({
+          mode: "announce",
+          channel: "telegram",
+          to,
+          threadId: "12345",
+        });
+      } finally {
+        cron.stop();
+      }
+    },
+  );
 
   it("normalizes legacy split Telegram topic routing during an unrelated update", async () => {
     const { storePath } = await makeStorePath();

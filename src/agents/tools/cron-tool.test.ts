@@ -2877,6 +2877,7 @@ describe("cron tool", () => {
           mode: "announce",
           channel: "telegram",
           to: "telegram:-1001234567890:topic:99",
+          threadId: "99",
         },
       },
     });

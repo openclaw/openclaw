@@ -5,7 +5,20 @@ export function cronDeliveryHasRedundantTelegramThreadId(delivery: {
   threadId?: unknown;
 }): boolean {
   const to = typeof delivery.to === "string" ? delivery.to.trim() : "";
-  const telegramTarget = to.replace(/^telegram:/iu, "");
+  let telegramTarget = to;
+  let strippedTelegramPrefix = false;
+  while (true) {
+    if (/^(?:telegram|tg):/iu.test(telegramTarget)) {
+      strippedTelegramPrefix = true;
+      telegramTarget = telegramTarget.replace(/^(?:telegram|tg):/iu, "").trim();
+      continue;
+    }
+    if (strippedTelegramPrefix && /^group:/iu.test(telegramTarget)) {
+      telegramTarget = telegramTarget.replace(/^group:/iu, "").trim();
+      continue;
+    }
+    break;
+  }
   const topicId = /^.+(?::topic:|:)(\d+)$/iu.exec(telegramTarget)?.[1];
   if (
     !topicId ||
@@ -14,7 +27,7 @@ export function cronDeliveryHasRedundantTelegramThreadId(delivery: {
     return false;
   }
   const channel = typeof delivery.channel === "string" ? delivery.channel.trim().toLowerCase() : "";
-  const isTelegram = channel === "telegram" || /^telegram:/iu.test(to);
+  const isTelegram = channel === "telegram" || strippedTelegramPrefix;
   const threadId = String(delivery.threadId).trim();
   if (!isTelegram || !/^\d+$/u.test(threadId)) {
     return false;
