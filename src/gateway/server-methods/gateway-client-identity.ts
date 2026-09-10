@@ -32,6 +32,15 @@ export function gatewayClientSenderFields(client: GatewayClient | null): {
   if (client?.internal?.senderAttribution) {
     return { sender: client.internal.senderAttribution };
   }
+  const runtimeAgentId = normalizeOptionalString(client?.internal?.agentRuntimeIdentity?.agentId);
+  if (runtimeAgentId) {
+    return {
+      sender: {
+        id: runtimeAgentId,
+        identity: { type: "agent", id: runtimeAgentId },
+      },
+    };
+  }
   const profile = client?.authenticatedUserProfile;
   if (profile) {
     return {

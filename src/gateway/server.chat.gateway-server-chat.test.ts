@@ -242,6 +242,57 @@ describe("gateway server chat", () => {
     expect(res.payload?.startedAt).toBe(startedAt);
   };
 
+  test("chat.history preserves visible agent-authored spawn attribution and filters hidden turns", async () => {
+    const history = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: "visible delegated task",
+        timestamp: 1,
+        provenance: {
+          kind: "internal_system",
+          sourceSessionKey: "agent:coordinator:dashboard:parent",
+          sourceTool: "sessions_spawn",
+        },
+        __openclaw: {
+          senderId: "coordinator",
+          senderName: "Coordinator",
+          senderIdentity: { type: "agent", id: "coordinator" },
+          senderIsOwner: false,
+        },
+      },
+      {
+        role: "user",
+        content: "hidden delegated task",
+        timestamp: 2,
+        display: false,
+        provenance: { kind: "internal_system", sourceTool: "sessions_spawn" },
+        __openclaw: {
+          senderId: "coordinator",
+          senderName: "Coordinator",
+          senderIdentity: { type: "agent", id: "coordinator" },
+          senderIsOwner: false,
+        },
+      },
+    ]);
+
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      role: "user",
+      content: "visible delegated task",
+      provenance: {
+        kind: "internal_system",
+        sourceSessionKey: "agent:coordinator:dashboard:parent",
+        sourceTool: "sessions_spawn",
+      },
+      __openclaw: {
+        senderId: "coordinator",
+        senderName: "Coordinator",
+        senderIdentity: { type: "agent", id: "coordinator" },
+        senderIsOwner: false,
+      },
+    });
+  });
+
   const sendChatAndExpectStarted = async (runId: string, message = "/context list") => {
     const res = await rpcReq(ws, "chat.send", {
       sessionKey: "main",

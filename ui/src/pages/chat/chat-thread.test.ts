@@ -2377,6 +2377,40 @@ describe("buildCachedChatItems", () => {
     expect(items[2]).toMatchObject({ kind: "group", role: "assistant" });
   });
 
+  it("keeps agent-authored sessions_spawn turns as attributed user groups", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          userMessage("Visible delegated task", 1000, {
+            provenance: {
+              kind: "internal_system",
+              sourceSessionKey: "agent:coordinator:dashboard:parent",
+              sourceTool: "sessions_spawn",
+            },
+            __openclaw: {
+              senderId: "coordinator",
+              senderName: "Coordinator",
+              senderIdentity: { type: "agent", id: "coordinator" },
+              senderIsOwner: false,
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "group",
+      role: "user",
+      senderLabel: "Coordinator",
+      sender: {
+        id: "coordinator",
+        name: "Coordinator",
+        identity: { type: "agent", id: "coordinator" },
+      },
+    });
+  });
+
   it("attributes assistant groups to the latest user in multi-sender threads", () => {
     const groups = messageGroups({
       messages: [

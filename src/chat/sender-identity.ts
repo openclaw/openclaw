@@ -6,7 +6,7 @@ import {
 
 export type TranscriptSenderIdentity = Extract<
   SessionParticipantIdentity,
-  { type: "profile" | "remote" | "observation" }
+  { type: "profile" | "agent" | "remote" | "observation" }
 >;
 
 /** Transcript attribution uses the closed product vocabulary, never raw-id inference. */
@@ -15,7 +15,10 @@ export function readTranscriptSenderIdentity(value: unknown): TranscriptSenderId
     typeof value !== "object" ||
     value === null ||
     !Value.Check(SessionParticipantIdentitySchema, value) ||
-    (value.type !== "profile" && value.type !== "remote" && value.type !== "observation") ||
+    (value.type !== "profile" &&
+      value.type !== "agent" &&
+      value.type !== "remote" &&
+      value.type !== "observation") ||
     Object.values(value).some((part) => part !== null && (!part.trim() || part.length > 512))
   ) {
     return undefined;

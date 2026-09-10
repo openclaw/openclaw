@@ -70,4 +70,18 @@ describe("gateway client identity", () => {
     expect(gatewayClientSenderFields(client)).toEqual({});
     expect(gatewayClientSessionCreator(client)).toBeUndefined();
   });
+
+  it("attributes a trusted agent runtime without replacing its operator authority", () => {
+    const client = {
+      connect: { scopes: ["operator.admin"] },
+      internal: {
+        syntheticClient: true,
+        agentRuntimeIdentity: { agentId: "coordinator" },
+      },
+    } as GatewayClient;
+
+    expect(gatewayClientSenderFields(client)).toEqual({
+      sender: { id: "coordinator", identity: { type: "agent", id: "coordinator" } },
+    });
+  });
 });

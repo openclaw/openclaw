@@ -100,6 +100,11 @@ export function buildSubagentLaunchRequest(params: {
     extraSystemPrompt: params.childSystemPrompt,
     thinking: params.thinkingOverride,
     timeout: params.runTimeoutSeconds,
+    inputProvenance: {
+      kind: "internal_system",
+      sourceSessionKey: params.spawnedByKey,
+      sourceTool: "sessions_spawn",
+    },
     // Creation owns the label; delayed launches must preserve operator renames.
     ...(bootstrapContextMode
       ? {

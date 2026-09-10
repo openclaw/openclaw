@@ -11,6 +11,7 @@ import {
 } from "../../agents/bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
@@ -153,6 +154,12 @@ export async function prepareAgentRunUserTurn(params: {
       const slots = persistedMedia.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
       );
+      const senderFields = gatewayClientSenderFields(params.client);
+      const sender = senderFields.sender;
+      const runtimeAgentName =
+        sender?.identity?.type === "agent"
+          ? resolveAgentIdentity(params.cfg, sender.identity.id)?.name?.trim()
+          : undefined;
       const input: UserTurnInput = {
         text:
           persistedMedia.omission === "inline-image-save-failed"
@@ -162,7 +169,9 @@ export async function prepareAgentRunUserTurn(params: {
             : effectiveTranscriptInputText,
         timestamp: Date.now(),
         idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
-        ...gatewayClientSenderFields(params.client),
+        ...(sender
+          ? { sender: { ...sender, ...(runtimeAgentName ? { name: runtimeAgentName } : {}) } }
+          : {}),
         senderIsOwner,
         ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
         ...(media.length > 0 ? { media } : {}),

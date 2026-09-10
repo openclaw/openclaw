@@ -50,9 +50,13 @@ export function buildPersistedUserTurnMetadata(
   const senderId = normalizeOptionalString(input.sender?.id);
   const senderName = normalizeOptionalString(input.sender?.name);
   const senderUsername = normalizeOptionalString(input.sender?.username);
+  const candidateSenderIdentity = readTranscriptSenderIdentity(input.sender?.identity);
   const senderIdentity =
-    input.display !== false && (!input.provenance || input.provenance.kind === "external_user")
-      ? readTranscriptSenderIdentity(input.sender?.identity)
+    input.display !== false &&
+    (!input.provenance ||
+      input.provenance.kind === "external_user" ||
+      (input.provenance.kind === "internal_system" && candidateSenderIdentity?.type === "agent"))
+      ? candidateSenderIdentity
       : undefined;
   const replyToId = normalizeOptionalString(input.replyToId);
   const replyPreviewText = normalizeOptionalString(input.replyToPreview?.text);

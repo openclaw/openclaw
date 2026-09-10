@@ -129,6 +129,32 @@ describe("user turn transcript persistence", () => {
         __openclaw: { senderIsOwner: false },
       });
     });
+
+    it("persists internal agent authorship separately from owner authority", () => {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "delegated task",
+          senderIsOwner: true,
+          sender: {
+            id: "coordinator",
+            name: "Coordinator",
+            identity: { type: "agent", id: "coordinator" },
+          },
+          provenance: { kind: "internal_system", sourceTool: "sessions_spawn" },
+        },
+        target: unusedRecorderTarget,
+      });
+
+      expect(recorder.message).toMatchObject({
+        provenance: { kind: "internal_system", sourceTool: "sessions_spawn" },
+        __openclaw: {
+          senderIsOwner: false,
+          senderId: "coordinator",
+          senderName: "Coordinator",
+          senderIdentity: { type: "agent", id: "coordinator" },
+        },
+      });
+    });
   });
 
   describe("mergePreparedUserTurnMessageForRuntime", () => {

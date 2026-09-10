@@ -268,7 +268,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
 
     const provenance = asRecord(raw.provenance);
-    if (role === "user" && provenance?.kind === "internal_system") {
+    const senderIdentity = asRecord(asRecord(raw.__openclaw)?.senderIdentity);
+    const isAgentAuthoredInternalTurn =
+      senderIdentity?.type === "agent" && typeof senderIdentity.id === "string";
+    if (role === "user" && provenance?.kind === "internal_system" && !isAgentAuthoredInternalTurn) {
       const noticeKind = resolveSystemNoticeKind(
         typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
       );

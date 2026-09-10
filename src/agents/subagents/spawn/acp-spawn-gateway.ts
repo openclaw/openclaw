@@ -38,6 +38,10 @@ export async function launchAcpChildThroughGateway(params: {
           deliver: params.deliveryPlan.useInlineDelivery,
           lane: AGENT_LANE_SUBAGENT,
           acpTurnSource: "manual_spawn",
+          inputProvenance: {
+            kind: "internal_system",
+            sourceTool: "sessions_spawn",
+          },
           timeout: params.runTimeoutSeconds,
           label: params.label || undefined,
           ...(params.attachments ? { attachments: params.attachments } : {}),
