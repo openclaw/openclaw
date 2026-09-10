@@ -1677,9 +1677,7 @@ src/agents/config.ts	1
 src/agents/content-blocks.ts	1
 src/agents/context-cache-projection.ts	1
 src/agents/context-cache.ts	1
-src/agents/context-resolution.ts	1
 src/agents/context-runtime-state.ts	4
-src/agents/context-window-guard.ts	1
 src/agents/context.ts	2
 src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	2
