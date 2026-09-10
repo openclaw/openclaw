@@ -2293,48 +2293,69 @@ describe("frozen admission workflow barriers", () => {
   });
 
   it.each([
-    [FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"],
-    [RELEASE_CHECKS_WORKFLOW, "resolve_target"],
-    [LIVE_E2E_WORKFLOW, "validate_selected_ref"],
-  ])("fails the selected trusted parser prerequisite before admission in %s", (file, jobName) => {
-    const job = workflowJob(file, jobName);
-    const steps = job.steps ?? [];
-    const plan = workflowStep(job, "Plan frozen source admission");
-    const provision = workflowStep(job, "Provision trusted admission parser");
-    const admission = workflowStep(job, "Admit frozen source contracts");
-    expect(steps.indexOf(plan)).toBeLessThan(steps.indexOf(provision));
-    expect(steps.indexOf(provision)).toBeLessThan(steps.indexOf(admission));
-    expect(provision.if).toBe("steps.frozen_selection.outputs.parser_required == 'true'");
-    let install = provision.run;
-    if (provision.uses) {
-      expect(provision.uses).toBe("./.release-harness/.github/actions/setup-release-harness");
-      const action = parse(readFileSync(SETUP_RELEASE_HARNESS_ACTION, "utf8")) as {
-        runs: { steps: WorkflowStep[] };
-      };
-      install = action.runs.steps.find((step) => step.run?.includes("pnpm install"))?.run;
-    } else {
-      expect(provision["working-directory"]).toBe("workflow");
-      expect(workflowStep(job, "Setup trusted admission package manager").with).toMatchObject({
-        "package-manager-file": "workflow/package.json",
-        "lockfile-path": "workflow/pnpm-lock.yaml",
-        "cache-mode": "off",
-      });
-    }
-    expect(install).toContain("pnpm install --frozen-lockfile --prefer-offline --ignore-scripts");
-    const root = tempDirs.make("frozen-parser-prerequisite-");
-    writeFileSync(join(root, "pnpm"), "#!/bin/sh\nexit 79\n", { mode: 0o755 });
-    const result = spawnSync(
-      "bash",
-      ["-c", `set -euo pipefail\n${install}\nprintf 'producer-ran\\n'`],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: { PATH: `${root}:${process.env.PATH}` },
-      },
-    );
-    expect(result.status).toBe(79);
-    expect(result.stdout).not.toContain("producer-ran");
-  });
+    [
+      FULL_RELEASE_VALIDATION_WORKFLOW,
+      "resolve_target",
+      "Plan frozen source admission",
+      "workflow",
+    ],
+    [RELEASE_CHECKS_WORKFLOW, "resolve_target", "Capture selected inputs", "workflow"],
+    [
+      LIVE_E2E_WORKFLOW,
+      "validate_selected_ref",
+      "Plan frozen source admission",
+      ".release-harness",
+    ],
+  ])(
+    "initializes Node before planning and fails selected parser installation in %s",
+    (file, jobName, firstPlan, toolingRoot) => {
+      const job = workflowJob(file, jobName);
+      const steps = job.steps ?? [];
+      const setup = workflowStep(job, "Setup admission Node.js");
+      expect(setup.if).toBeUndefined();
+      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+      expect(setup.run).toContain(
+        `source ${toolingRoot}/.github/actions/setup-pnpm-store-cache/ensure-node.sh`,
+      );
+      expect(setup.run).toContain('openclaw_ensure_node "$REQUESTED_NODE_VERSION"');
+      expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(workflowStep(job, firstPlan)));
+      const plan = workflowStep(job, "Plan frozen source admission");
+      const provision = workflowStep(job, "Provision trusted admission parser");
+      const admission = workflowStep(job, "Admit frozen source contracts");
+      expect(steps.indexOf(plan)).toBeLessThan(steps.indexOf(provision));
+      expect(steps.indexOf(provision)).toBeLessThan(steps.indexOf(admission));
+      expect(provision.if).toBe("steps.frozen_selection.outputs.parser_required == 'true'");
+      let install = provision.run;
+      if (provision.uses) {
+        expect(provision.uses).toBe("./.release-harness/.github/actions/setup-release-harness");
+        const action = parse(readFileSync(SETUP_RELEASE_HARNESS_ACTION, "utf8")) as {
+          runs: { steps: WorkflowStep[] };
+        };
+        install = action.runs.steps.find((step) => step.run?.includes("pnpm install"))?.run;
+      } else {
+        expect(provision["working-directory"]).toBe("workflow");
+        expect(workflowStep(job, "Setup trusted admission package manager").with).toMatchObject({
+          "package-manager-file": "workflow/package.json",
+          "lockfile-path": "workflow/pnpm-lock.yaml",
+          "cache-mode": "off",
+        });
+      }
+      expect(install).toContain("pnpm install --frozen-lockfile --prefer-offline --ignore-scripts");
+      const root = tempDirs.make("frozen-parser-prerequisite-");
+      writeFileSync(join(root, "pnpm"), "#!/bin/sh\nexit 79\n", { mode: 0o755 });
+      const result = spawnSync(
+        "bash",
+        ["-c", `set -euo pipefail\n${install}\nprintf 'producer-ran\\n'`],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { PATH: `${root}:${process.env.PATH}` },
+        },
+      );
+      expect(result.status).toBe(79);
+      expect(result.stdout).not.toContain("producer-ran");
+    },
+  );
 
   it.each(["June", "July"])(
     "runs the actual %s workflow request and shared parser before producers",
