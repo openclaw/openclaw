@@ -7,6 +7,7 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
+import { t } from "../../i18n/index.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
   requestSessionUsage,
@@ -20,8 +21,10 @@ import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import { createUsageRequest } from "./request.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
 
-function sameUsageTarget(a: SessionUsageTarget | undefined, b: SessionUsageTarget): boolean {
-  return a?.key === b.key && a.agentId === b.agentId;
+type UsageDetailTarget = Pick<UsageSessionEntry, "key" | "agentId" | "sessionId">;
+
+function sameUsageTarget(a: UsageDetailTarget | undefined, b: UsageDetailTarget): boolean {
+  return a?.key === b.key && a.agentId === b.agentId && a.sessionId === b.sessionId;
 }
 
 function createUsageDetailRequest<T>(
@@ -31,17 +34,18 @@ function createUsageDetailRequest<T>(
     client: GatewayBrowserClient,
     target: SessionUsageTarget,
     signal: AbortSignal,
+    sessionId: string | undefined,
   ) => Promise<T>,
-  resolveTarget: (key: string) => SessionUsageTarget,
+  resolveTarget: (key: string) => UsageDetailTarget,
   canLoad?: (key: string) => boolean,
 ) {
-  let value: { target: SessionUsageTarget; data?: T } | null = null;
+  let value: { target: UsageDetailTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
   let pending: Promise<void> | null = null;
   let generation = 0;
   const task = createUsageRequest(host, {
     task: async (
-      [client, target]: readonly [GatewayBrowserClient, SessionUsageTarget],
+      [client, target]: readonly [GatewayBrowserClient, UsageDetailTarget],
       { signal },
     ) => ({
       target,
@@ -49,8 +53,14 @@ function createUsageDetailRequest<T>(
       // Keep key-only wire routing while retaining the full local target identity.
       data: await request(
         client,
-        parseAgentSessionKeyParts(target.key.trim()) ? { key: target.key } : target,
+        {
+          key: target.key,
+          ...(!parseAgentSessionKeyParts(target.key.trim()) && target.agentId
+            ? { agentId: target.agentId }
+            : {}),
+        },
         signal,
+        target.sessionId,
       ),
     }),
     onComplete: (result) => {
@@ -144,9 +154,10 @@ export class UsageDetailsController {
     query: () => SessionUsageQuery,
     sessions: () => UsageSessionEntry[],
   ) {
-    const resolveTarget = (key: string): SessionUsageTarget => {
-      const agentId = sessions().find((session) => session.key === key)?.agentId ?? query().agentId;
-      return { key, ...(agentId ? { agentId } : {}) };
+    const resolveTarget = (key: string): UsageDetailTarget => {
+      const session = sessions().find((entry) => entry.key === key);
+      const agentId = session?.agentId ?? query().agentId;
+      return { key, ...(agentId ? { agentId } : {}), sessionId: session?.sessionId };
     };
     this.timeSeries = createUsageDetailRequest(
       host,
@@ -167,7 +178,7 @@ export class UsageDetailsController {
     this.contextWeight = createUsageDetailRequest(
       host,
       gateway,
-      async (client, target, signal) => {
+      async (client, target, signal, sessionId) => {
         const result = await requestSessionUsage(
           client,
           { ...query(), agentId: target.agentId },
@@ -177,7 +188,15 @@ export class UsageDetailsController {
             signal,
           },
         );
-        return result.sessions[0]?.contextWeight;
+        const session = result.sessions[0];
+        if (
+          sessionId !== undefined &&
+          session?.sessionId !== undefined &&
+          session.sessionId !== sessionId
+        ) {
+          throw new Error(t("usage.details.contextOutOfDate"));
+        }
+        return session?.contextWeight;
       },
       resolveTarget,
       (key) => sessions().some((session) => session.key === key && session.hasContextWeight),

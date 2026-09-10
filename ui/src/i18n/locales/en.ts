@@ -4652,6 +4652,7 @@ export const en: TranslationMap & {
       tokensWrittenToCache: "Tokens written to cache",
       tokensReadFromCache: "Tokens read from cache",
       noContextData: "No context data",
+      contextOutOfDate: "These context details are out of date. Refresh usage and try again.",
       systemPromptBreakdown: "System Prompt Breakdown",
       collapse: "Collapse",
       collapseAll: "Collapse All",
