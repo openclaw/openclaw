@@ -5,14 +5,15 @@ import {
   type MemoryCorpusSearchResult,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
+  checkMemorySearchDeadline,
   createMemorySearchDeadlineError,
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   isMemorySearchDeadlineError,
+  runMemoryOperationWithDeadline,
   resolveMemorySearchAbortError,
 } from "./memory/search-deadline.js";
 
 type MemoryCorpus = "memory" | "wiki";
-const memoryCorpusDeadlineChecks = new WeakMap<AbortSignal, () => void>();
 type MemorySupplement = ReturnType<typeof listMemoryCorpusSupplements>[number];
 type MemorySupplementGetResult = NonNullable<
   Awaited<ReturnType<MemorySupplement["supplement"]["get"]>>
@@ -72,7 +73,7 @@ async function raceMemoryCorpusSignal<T>(signal: AbortSignal, run: () => Promise
   try {
     const task = Promise.resolve().then(run);
     const result = await Promise.race([task, aborted]);
-    memoryCorpusDeadlineChecks.get(signal)?.();
+    checkMemorySearchDeadline(signal);
     if (signal.aborted) {
       throw resolveMemorySearchAbortError(signal);
     }
@@ -109,45 +110,19 @@ export async function runMemoryCorpusDeadline<T>(params: {
   parentSignal?: AbortSignal;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
-  if (params.parentSignal?.aborted) {
-    throw resolveMemorySearchAbortError(params.parentSignal);
-  }
-  const controller = new AbortController();
-  const startedAt = performance.now();
   const timeoutError = createMemorySearchDeadlineError(
     `${params.operation} timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
   );
-  const expire = () => controller.abort(timeoutError);
-  const checkDeadline = () => {
-    // A synchronous database operation can finish before an overdue timer is serviced.
-    if (
-      !controller.signal.aborted &&
-      performance.now() - startedAt >= DEFAULT_MEMORY_SEARCH_TIMEOUT_MS
-    ) {
-      expire();
-    }
-  };
-  memoryCorpusDeadlineChecks.set(controller.signal, checkDeadline);
-  const timer = setTimeout(expire, DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
-  timer.unref?.();
-  const onParentAbort = () => controller.abort(resolveMemorySearchAbortError(params.parentSignal!));
-  params.parentSignal?.addEventListener("abort", onParentAbort, { once: true });
-  try {
-    const result = await params.run(controller.signal);
-    if (params.parentSignal?.aborted) {
-      throw resolveMemorySearchAbortError(params.parentSignal);
-    }
-    const alreadyAborted = controller.signal.aborted;
-    checkDeadline();
-    if (!alreadyAborted && controller.signal.aborted) {
-      throw timeoutError;
-    }
-    return result;
-  } finally {
-    clearTimeout(timer);
-    memoryCorpusDeadlineChecks.delete(controller.signal);
-    params.parentSignal?.removeEventListener("abort", onParentAbort);
-  }
+  return await runMemoryOperationWithDeadline({
+    timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+    timeoutError,
+    now: () => performance.now(),
+    parentSignal: params.parentSignal,
+    suspendable: params.operation === "memory_search",
+    // Corpus attempts consume the abort and may return useful partial results.
+    settleAfterTimeout: true,
+    run: params.run,
+  });
 }
 
 export function composeMemoryCorpusMetadata(

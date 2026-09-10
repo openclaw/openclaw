@@ -4,6 +4,7 @@ import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-pro
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runMemoryCorpusDeadline } from "../memory-corpus.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
   createEmbeddingProvider,
@@ -11,7 +12,6 @@ import {
   resolveEmbeddingProviderFallbackRemote,
   resolveEmbeddingProviderIndexIdentity,
 } from "./embeddings.js";
-import { runMemorySearchWithDeadline } from "./search-deadline.js";
 
 const mockEmbeddingRegistry = vi.hoisted(() => ({
   genericAdapters: [] as EmbeddingProviderAdapter[],
@@ -475,8 +475,8 @@ describe("createEmbeddingProvider", () => {
       throw new Error("expected embedding provider");
     }
 
-    const result = runMemorySearchWithDeadline({
-      timeoutMs: 15_000,
+    const result = runMemoryCorpusDeadline({
+      operation: "memory_search",
       run: async (signal) => await provider.embed("hello", { signal }),
     });
     const resultAssertion = expect(result).resolves.toEqual([1]);

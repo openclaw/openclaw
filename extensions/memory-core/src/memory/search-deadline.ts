@@ -24,6 +24,7 @@ type MemorySearchDeadlineScope = {
 // Search managers are shared across concurrent requests. Async context keeps each
 // request's pausable budget attached to its own provider-acquisition chain.
 const memorySearchDeadlineScope = new AsyncLocalStorage<MemorySearchDeadlineScope>();
+const memorySearchDeadlineChecks = new WeakMap<AbortSignal, () => void>();
 
 export async function runWithMemorySearchDeadlineSuspended<T>(run: () => Promise<T>): Promise<T> {
   const scope = memorySearchDeadlineScope.getStore();
@@ -42,13 +43,21 @@ function createMemorySearchTimeoutError(timeoutMs: number): Error {
   );
 }
 
+export function checkMemorySearchDeadline(signal: AbortSignal): void {
+  memorySearchDeadlineChecks.get(signal)?.();
+}
+
 export function isMemorySearchDeadlineError(error: unknown): boolean {
   return typeof error === "object" && error !== null && memorySearchDeadlineErrors.has(error);
 }
 
-export async function runMemorySearchWithDeadline<T>(params: {
+export async function runMemoryOperationWithDeadline<T>(params: {
+  timeoutError: Error;
   timeoutMs: number;
+  now?: () => number;
   parentSignal?: AbortSignal;
+  suspendable?: boolean;
+  settleAfterTimeout?: boolean;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   if (params.parentSignal?.aborted) {
@@ -56,11 +65,12 @@ export async function runMemorySearchWithDeadline<T>(params: {
   }
 
   const controller = new AbortController();
-  const timeoutError = createMemorySearchTimeoutError(params.timeoutMs);
+  const timeoutError = params.timeoutError;
   const timeoutOutcome = { type: "timeout" } as const;
   const parentAbortOutcome = { type: "parent-abort" } as const;
+  const now = params.now ?? Date.now;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let activeBudgetStartedAt = Date.now();
+  let activeBudgetStartedAt = now();
   let remainingMs = params.timeoutMs;
   let suspendDepth = 0;
   let deadlineReached = false;
@@ -87,7 +97,7 @@ export async function runMemorySearchWithDeadline<T>(params: {
       reachDefaultDeadline();
       return;
     }
-    activeBudgetStartedAt = Date.now();
+    activeBudgetStartedAt = now();
     timer = setTimeout(() => {
       timer = undefined;
       remainingMs = 0;
@@ -101,8 +111,21 @@ export async function runMemorySearchWithDeadline<T>(params: {
     }
     clearTimeout(timer);
     timer = undefined;
-    remainingMs = Math.max(0, remainingMs - (Date.now() - activeBudgetStartedAt));
+    remainingMs = Math.max(0, remainingMs - (now() - activeBudgetStartedAt));
     if (remainingMs <= 0) {
+      reachDefaultDeadline();
+    }
+  };
+  const checkDeadline = () => {
+    // A synchronous operation can finish before an overdue timer is serviced.
+    if (
+      timer !== undefined &&
+      !controller.signal.aborted &&
+      now() - activeBudgetStartedAt >= remainingMs
+    ) {
+      clearTimeout(timer);
+      timer = undefined;
+      remainingMs = 0;
       reachDefaultDeadline();
     }
   };
@@ -122,6 +145,7 @@ export async function runMemorySearchWithDeadline<T>(params: {
       }
     },
   };
+  memorySearchDeadlineChecks.set(controller.signal, checkDeadline);
   startTimer();
   const parentSignal = params.parentSignal;
   const parentAbortPromise = parentSignal
@@ -134,15 +158,19 @@ export async function runMemorySearchWithDeadline<T>(params: {
         removeParentAbort = () => parentSignal.removeEventListener("abort", onAbort);
       })
     : undefined;
-  const task = memorySearchDeadlineScope.run(scope, () =>
-    Promise.resolve().then(() => params.run(controller.signal)),
-  );
+  const startTask = () => Promise.resolve().then(() => params.run(controller.signal));
+  const task = params.suspendable ? memorySearchDeadlineScope.run(scope, startTask) : startTask();
   task.catch(() => undefined);
 
   try {
-    const result = await Promise.race(
-      parentAbortPromise ? [task, timeoutPromise, parentAbortPromise] : [task, timeoutPromise],
-    );
+    const outcomes: Array<Promise<T | typeof timeoutOutcome | typeof parentAbortOutcome>> = [task];
+    if (!params.settleAfterTimeout) {
+      outcomes.push(timeoutPromise);
+    }
+    if (parentAbortPromise) {
+      outcomes.push(parentAbortPromise);
+    }
+    const result = await Promise.race(outcomes);
     if (result === parentAbortOutcome) {
       throw resolveMemorySearchAbortError(parentSignal!);
     }
@@ -152,8 +180,9 @@ export async function runMemorySearchWithDeadline<T>(params: {
     if (parentSignal?.aborted) {
       throw resolveMemorySearchAbortError(parentSignal);
     }
-    if (timer !== undefined && Date.now() - activeBudgetStartedAt >= remainingMs) {
-      reachDefaultDeadline();
+    const alreadyAborted = controller.signal.aborted;
+    checkDeadline();
+    if (!alreadyAborted && controller.signal.aborted) {
       throw timeoutError;
     }
     return result as T;
@@ -161,6 +190,19 @@ export async function runMemorySearchWithDeadline<T>(params: {
     if (timer) {
       clearTimeout(timer);
     }
+    memorySearchDeadlineChecks.delete(controller.signal);
     removeParentAbort?.();
   }
+}
+
+export async function runMemorySearchWithDeadline<T>(params: {
+  timeoutMs: number;
+  parentSignal?: AbortSignal;
+  run: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  return await runMemoryOperationWithDeadline({
+    ...params,
+    timeoutError: createMemorySearchTimeoutError(params.timeoutMs),
+    suspendable: true,
+  });
 }
