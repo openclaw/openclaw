@@ -265,18 +265,23 @@ describe("applyModelDefaults", () => {
     });
   });
 
-  it.each(["google", "google-vertex", "google-gemini-cli", "myproxy/google"])(
-    "normalizes retired Gemini primary and fallback refs under %s",
-    (provider) => {
-      const retired = `${provider}/gemini-3-pro-preview`;
-      const replacement = `${provider}/gemini-3.1-pro-preview`;
+  it.each([
+    ["google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview"],
+    ["google-vertex/gemini-3-pro-preview", "google-vertex/gemini-3.1-pro-preview"],
+    ["google-gemini-cli/gemini-3-pro-preview", "google-gemini-cli/gemini-3.1-pro-preview"],
+    ["myproxy/google/gemini-3-pro-preview", "myproxy/google/gemini-3.1-pro-preview"],
+    ["custom/custom/model", "custom/custom/model"],
+  ])(
+    "normalizes primary, fallback, and policy refs without merging literal namespaces: %s",
+    (authored, replacement) => {
       const cfg = {
         agents: {
           defaults: {
             model: {
-              primary: retired,
-              fallbacks: [retired, "openai/gpt-5.5"],
+              primary: authored,
+              fallbacks: [authored, "custom/model"],
             },
+            models: { [authored]: { alias: "Selected" }, "custom/model": { alias: "Control" } },
           },
         },
       } satisfies OpenClawConfig;
@@ -285,7 +290,11 @@ describe("applyModelDefaults", () => {
 
       expect(next.agents?.defaults?.model).toEqual({
         primary: replacement,
-        fallbacks: [replacement, "openai/gpt-5.5"],
+        fallbacks: [replacement, "custom/model"],
+      });
+      expect(next.agents?.defaults?.models).toEqual({
+        [replacement]: { alias: "Selected" },
+        "custom/model": { alias: "Control" },
       });
     },
   );
