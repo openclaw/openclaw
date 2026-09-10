@@ -18,6 +18,7 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -212,6 +213,7 @@ describe("worker transcript commit application", () => {
     unsubscribe?.();
     clearRuntimeConfigSnapshot();
     try {
+      await waitForSessionTranscriptIndexReconcilesInStateDir(root);
       await closeOpenClawAgentDatabasesAsync(root);
       closeOpenClawStateDatabaseByPath(stateDatabasePath);
       await fs.rm(root, { recursive: true, force: true });
