@@ -33,10 +33,6 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
   return {
     connected: true,
     loading: false,
-    paging: false,
-    pageNumber: 1,
-    canGoPrevious: false,
-    canGoNext: false,
     result: { items: [plugin("tool")] },
     error: null,
     remoteError: null,
@@ -69,8 +65,6 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
     onQueryChange: vi.fn(),
     onOpenEntry: vi.fn(),
     onInstall: vi.fn(),
-    onPreviousPage: vi.fn(),
-    onNextPage: vi.fn(),
     onRetry: vi.fn(),
     onRetryGrouped: vi.fn(),
     onRetryCategories: vi.fn(),
@@ -115,12 +109,18 @@ describe("renderPluginCatalogResults", () => {
   });
 
   it("renders search as an ungrouped grid", () => {
-    const container = mount(baseProps({ query: "notion", result: { items: [plugin("Notion")] } }));
+    const container = mount(
+      baseProps({
+        query: "notion",
+        result: { items: [plugin("Notion")] },
+      }),
+    );
 
     expect(container.querySelectorAll(".plugin-catalog-section")).toHaveLength(0);
     expect(
       container.querySelectorAll(".plugin-catalog-grid--results .plugin-catalog-card"),
     ).toHaveLength(1);
+    expect(container.querySelector(".plugin-catalog-pagination")).toBeNull();
   });
 
   it("keeps a partial ClawHub failure retryable", () => {
@@ -187,13 +187,13 @@ describe("renderPluginCatalogResults", () => {
       expected: "blob:package-icon",
     },
     {
-      name: "catalog icon before bundled artwork",
+      name: "trusted bundled artwork before catalog imagery",
       packageName: "@openclaw/whatsapp",
       pluginId: undefined,
       imageUrl: "https://example.com/icon.png",
       pluginIconUrls: {},
       iconUrls: { "https://example.com/icon.png": "blob:catalog-icon" },
-      expected: "blob:catalog-icon",
+      expected: "/plugin-art/whatsapp.webp",
     },
   ])(
     "renders $name",
@@ -245,13 +245,10 @@ describe("renderPluginCatalogResults", () => {
   });
 
   it("preserves every catalog result under Uncategorized when category metadata is unavailable", () => {
-    const onNextPage = vi.fn();
     const container = mount(
       baseProps({
         categories: [],
         categoriesError: "Category metadata unavailable",
-        canGoNext: true,
-        onNextPage,
         result: {
           items: Array.from({ length: 10 }, (_, index) => plugin(`catalog-result-${index}`)),
         },
@@ -267,8 +264,6 @@ describe("renderPluginCatalogResults", () => {
     expect(uncategorized?.querySelectorAll(".plugin-catalog-card")).toHaveLength(10);
     expect(uncategorized?.querySelector(".plugin-catalog-section__view-all")).toBeNull();
     expect(uncategorized?.classList.contains("plugin-catalog-section--expandable")).toBe(false);
-    container.querySelector<HTMLButtonElement>(".plugin-catalog-pagination button")?.click();
-    expect(onNextPage).toHaveBeenCalledOnce();
   });
 
   it("groups only entries without a matching catalog category under Uncategorized", () => {

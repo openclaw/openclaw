@@ -209,9 +209,10 @@ export function resolvePluginCatalogIconUrl(
       ? plugin.packageName
       : undefined
     : plugin.pluginId;
+  const bundledArt = artIdentity ? pluginArtPath(artIdentity) : null;
   return (
-    [packageIcon, catalogIcon, artIdentity ? pluginArtPath(artIdentity) : null].find(
-      (url): url is string => Boolean(url && !failedUrls?.has(url)),
+    [packageIcon, bundledArt, catalogIcon].find((url): url is string =>
+      Boolean(url && !failedUrls?.has(url)),
     ) ?? null
   );
 }
