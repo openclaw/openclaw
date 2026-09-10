@@ -434,6 +434,31 @@ function expectStartupPluginIds(params: {
   ).toEqual(params.expected);
 }
 
+function createBraveSearchStartupConfig(params: {
+  searchEnabled: boolean;
+  pluginEnabled: boolean;
+}): OpenClawConfig {
+  return {
+    channels: {},
+    tools: {
+      web: {
+        search: {
+          enabled: params.searchEnabled,
+          provider: "brave",
+        },
+      },
+    },
+    plugins: {
+      allow: ["brave"],
+      entries: {
+        brave: {
+          enabled: params.pluginEnabled,
+        },
+      },
+    },
+  };
+}
+
 function createStartupConfig(params: {
   enabledPluginIds?: string[];
   providerIds?: string[];
@@ -1056,71 +1081,17 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
     ],
     [
       "includes explicitly selected external web search providers at startup",
-      {
-        channels: {},
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              provider: "brave",
-            },
-          },
-        },
-        plugins: {
-          allow: ["brave"],
-          entries: {
-            brave: {
-              enabled: true,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      createBraveSearchStartupConfig({ searchEnabled: true, pluginEnabled: true }),
       ["brave"],
     ],
     [
       "honors disabled web search when selecting startup providers",
-      {
-        channels: {},
-        tools: {
-          web: {
-            search: {
-              enabled: false,
-              provider: "brave",
-            },
-          },
-        },
-        plugins: {
-          allow: ["brave"],
-          entries: {
-            brave: {
-              enabled: true,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      createBraveSearchStartupConfig({ searchEnabled: false, pluginEnabled: true }),
       [],
     ],
     [
       "honors explicit plugin disablement for configured web search providers",
-      {
-        channels: {},
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              provider: "brave",
-            },
-          },
-        },
-        plugins: {
-          allow: ["brave"],
-          entries: {
-            brave: {
-              enabled: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
+      createBraveSearchStartupConfig({ searchEnabled: true, pluginEnabled: false }),
       [],
     ],
     [
