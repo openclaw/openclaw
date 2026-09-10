@@ -53,6 +53,7 @@ export type SecretStoreWriteParams = {
   value: string;
   kind: SecretStoreKind;
   allowedHosts?: readonly string[];
+  inheritExistingKind?: boolean;
   updatedBy: string | null;
   database?: OpenClawStateDatabaseOptions;
 };
@@ -133,6 +134,20 @@ export function assertSecretStoreValue(value: string, kind: SecretStoreKind): vo
     throw new SecretStoreValidationError(
       "SECRET_STORE_VALUE_EMPTY",
       "Secret store value is empty. Secret entries require a value; check the command that produced it.",
+    );
+  }
+}
+
+function assertSecretStoreWriteShape(
+  value: string,
+  kind: SecretStoreKind,
+  allowedHosts: readonly string[] | undefined,
+): void {
+  assertSecretStoreValue(value, kind);
+  if (kind === "env" && allowedHosts !== undefined) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_INVALID_ALLOWED_HOST",
+      "Allowed hosts apply only to secret entries.",
     );
   }
 }
@@ -404,38 +419,41 @@ export function readSecretStoreValue(params: {
 function writeSecretStoreEntryInternal(
   params: SecretStoreWriteParams,
   capturePrevious: boolean,
-): SecretStoreWriteSnapshot | undefined {
+): { kind: SecretStoreKind; previous: SecretStoreWriteSnapshot | undefined } {
   assertSecretStoreMutationName(params.name);
-  assertSecretStoreValue(params.value, params.kind);
-  if (params.kind === "env" && params.allowedHosts !== undefined) {
-    throw new SecretStoreValidationError(
-      "SECRET_STORE_INVALID_ALLOWED_HOST",
-      "Allowed hosts apply only to secret entries.",
-    );
+  const inheritExistingKind = params.inheritExistingKind === true;
+  if (!inheritExistingKind) {
+    assertSecretStoreWriteShape(params.value, params.kind, params.allowedHosts);
   }
-  const allowedHosts =
-    params.kind === "secret" && params.allowedHosts !== undefined
-      ? normalizeSecretAllowedHosts(params.allowedHosts)
-      : undefined;
-  const allowedHostsJson = allowedHosts?.length ? JSON.stringify(allowedHosts) : null;
   const { scopeKind, scopeId } = normalizeScope(params.scope);
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
       ensureSecretStoreSchema(sqlite);
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-      const previous = capturePrevious
-        ? executeSqliteQueryTakeFirstSync(
-            sqlite,
-            db
-              .selectFrom("secret_store_entries")
-              .select(["value", "kind", "allowed_hosts", "updated_by"])
-              .where("scope_kind", "=", scopeKind)
-              .where("scope_id", "=", scopeId)
-              .where("name", "=", params.name)
-              .where("deleted_at_ms", "is", null),
-          )
-        : undefined;
+      const previous =
+        capturePrevious || inheritExistingKind
+          ? executeSqliteQueryTakeFirstSync(
+              sqlite,
+              db
+                .selectFrom("secret_store_entries")
+                .select(["value", "kind", "allowed_hosts", "updated_by"])
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+                .where("deleted_at_ms", "is", null),
+            )
+          : undefined;
+      const kind =
+        inheritExistingKind && previous ? (previous.kind as SecretStoreKind) : params.kind;
+      if (inheritExistingKind) {
+        assertSecretStoreWriteShape(params.value, kind, params.allowedHosts);
+      }
+      const allowedHosts =
+        kind === "secret" && params.allowedHosts !== undefined
+          ? normalizeSecretAllowedHosts(params.allowedHosts)
+          : undefined;
+      const allowedHostsJson = allowedHosts?.length ? JSON.stringify(allowedHosts) : null;
       executeSqliteQuerySync(
         sqlite,
         db
@@ -445,7 +463,7 @@ function writeSecretStoreEntryInternal(
             scope_id: scopeId,
             name: params.name,
             value: params.value,
-            kind: params.kind,
+            kind,
             created_at_ms: now,
             updated_at_ms: now,
             updated_by: params.updatedBy,
@@ -455,11 +473,11 @@ function writeSecretStoreEntryInternal(
           .onConflict((conflict) =>
             conflict.columns(["scope_kind", "scope_id", "name"]).doUpdateSet({
               value: params.value,
-              kind: params.kind,
+              kind,
               updated_at_ms: now,
               updated_by: params.updatedBy,
               deleted_at_ms: null,
-              ...(params.kind === "env"
+              ...(kind === "env"
                 ? { allowed_hosts: null }
                 : allowedHosts !== undefined
                   ? { allowed_hosts: allowedHostsJson }
@@ -467,23 +485,27 @@ function writeSecretStoreEntryInternal(
             }),
           ),
       );
-      return previous
-        ? {
-            value: previous.value,
-            // SAFETY: The canonical secret_store schema and write validation restrict kind to secret|env.
-            kind: previous.kind as SecretStoreKind,
-            allowedHosts: previous.allowed_hosts,
-            updatedBy: previous.updated_by,
-          }
-        : undefined;
+      return {
+        kind,
+        previous:
+          capturePrevious && previous
+            ? {
+                value: previous.value,
+                // SAFETY: The canonical secret_store schema and write validation restrict kind to secret|env.
+                kind: previous.kind as SecretStoreKind,
+                allowedHosts: previous.allowed_hosts,
+                updatedBy: previous.updated_by,
+              }
+            : undefined,
+      };
     },
     params.database,
     { operationLabel: "secrets.store.write" },
   );
 }
 
-export function writeSecretStoreEntry(params: SecretStoreWriteParams): void {
-  writeSecretStoreEntryInternal(params, false);
+export function writeSecretStoreEntry(params: SecretStoreWriteParams): SecretStoreKind {
+  return writeSecretStoreEntryInternal(params, false).kind;
 }
 
 function rollbackSecretStoreEntryWrite(params: {
@@ -544,7 +566,7 @@ export function writeSecretStoreEntryWithRollback(params: SecretStoreWriteParams
   rollback: () => boolean;
 } {
   const writer = `${params.updatedBy ?? "secret-store"}:${randomUUID()}`;
-  const previous = writeSecretStoreEntryInternal({ ...params, updatedBy: writer }, true);
+  const { previous } = writeSecretStoreEntryInternal({ ...params, updatedBy: writer }, true);
   let rollbackResult: boolean | undefined;
   return {
     rollback: () => {
