@@ -47,7 +47,9 @@ describe("task activity feed", () => {
       {
         role: "assistant",
         content: [
-          toolCall("exec-1", "exec", { command: "pnpm tsgo --project tsconfig.gateway.json" }),
+          toolCall("exec-1", "exec", {
+            command: "pnpm tsgo --project tsconfig.gateway.json\npnpm lint:ui:styles --fix",
+          }),
         ],
       },
       toolResult("exec-1"),
@@ -78,10 +80,15 @@ describe("task activity feed", () => {
     const group = groups[0]!;
     const summary = group.querySelector("summary")!;
     expect(summary.textContent).toContain("pnpm tsgo --project tsconfig.gateway.json");
+    expect(summary.textContent).not.toContain("--fix");
     expect(summary.textContent).toContain("Ran 2 commands, read a file");
     expect(group.open).toBe(false);
     summary.click();
     expect(group.open).toBe(true);
+    // Expanded rows keep the complete multi-line command, not just its first line.
+    expect(
+      group.querySelector(".chat-task-feed__calls .chat-task-feed__tool-line--full")?.textContent,
+    ).toContain("pnpm tsgo --project tsconfig.gateway.json\npnpm lint:ui:styles --fix");
     expect(group.textContent).toContain("pnpm lint:ui:styles");
     expect(group.textContent).toContain("ui/src/styles/chat/sidebar.css");
     expect(group.querySelectorAll(".chat-task-feed__tool-line").length).toBeGreaterThanOrEqual(3);

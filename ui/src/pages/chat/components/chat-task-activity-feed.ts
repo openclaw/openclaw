@@ -34,17 +34,17 @@ type Entry = { key: string; timestamp: number | null } & (
   | { kind: "user" | "assistant" | "block"; text: string }
 );
 
-function toolLine(call: ToolCard): string {
+// Collapsed rows show the first line; expanded rows keep the complete command
+// or script so a multi-line call can be inspected.
+function toolLine(call: ToolCard, mode: "summary" | "full"): string {
   const view = resolveToolCallView(call);
-  return (
+  const text =
     view.command ??
     view.code ??
     (view.kind === "search" ? view.target : resolveToolCallTargetPaths(call.name, call.args)[0]) ??
     view.target ??
-    [call.name, resolveCollapsedToolArgumentPreview(call.args)].filter(Boolean).join(" ")
-  )
-    .split(/\r?\n/)[0]!
-    .trim();
+    [call.name, resolveCollapsedToolArgumentPreview(call.args)].filter(Boolean).join(" ");
+  return mode === "full" ? text.trim() : text.split(/\r?\n/)[0]!.trim();
 }
 
 function entries(messages: unknown[]): Entry[] {
@@ -144,11 +144,11 @@ function toolIcon(call: ToolCard) {
   }
 }
 
-function renderToolLine(call: ToolCard) {
+function renderToolLine(call: ToolCard, mode: "summary" | "full") {
   return html`<div
-    class="chat-task-feed__tool-line ${isToolCardError(call) ? "chat-task-feed__error" : ""}"
+    class="chat-task-feed__tool-line ${mode === "full" ? "chat-task-feed__tool-line--full" : ""} ${isToolCardError(call) ? "chat-task-feed__error" : ""}"
   >
-    ${toolLine(call)}
+    ${toolLine(call, mode)}
   </div>`;
 }
 
@@ -166,9 +166,11 @@ export function renderTaskActivityFeed(messages: unknown[]): TemplateResult {
             entry.kind === "tools"
               ? html` <details class="chat-task-feed__tool-group">
                   <summary>
-                    ${renderToolLine(entry.calls[0]!)}${entry.calls.length > 1 ? html`<div class="chat-task-feed__summary">${summarizeToolGroup(entry.calls)}</div>` : nothing}
+                    ${renderToolLine(entry.calls[0]!, "summary")}${entry.calls.length > 1 ? html`<div class="chat-task-feed__summary">${summarizeToolGroup(entry.calls)}</div>` : nothing}
                   </summary>
-                  <div class="chat-task-feed__calls">${entry.calls.map(renderToolLine)}</div>
+                  <div class="chat-task-feed__calls">
+                    ${entry.calls.map((call) => renderToolLine(call, "full"))}
+                  </div>
                 </details>`
               : entry.kind === "assistant"
                 ? renderMessageMarkdown(

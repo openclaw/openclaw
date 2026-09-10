@@ -1139,6 +1139,13 @@ openclaw-chat-sidebar-region,
   font-family: var(--mono);
 }
 
+.chat-task-feed__tool-line--full {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .chat-task-feed__calls {
   margin-top: 8px;
   padding-inline-start: 8px;
