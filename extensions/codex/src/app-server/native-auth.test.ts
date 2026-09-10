@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { probeCodexNativeAuth } from "./native-auth.js";
 
 const run = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runUtf8CommandWithTimeout: run }));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runUtf8CommandWithTimeout: run,
+}));
 
 const config: OpenClawConfig = {
   plugins: { entries: { codex: { config: { appServer: { command: "native-codex-fixture" } } } } },
@@ -33,6 +36,7 @@ describe("Codex native login discovery", () => {
   ])("does not authorize OpenAI from exit %s and %s", async (code, stderr) => {
     run.mockResolvedValue({ termination: "exit", code, stdout: "", stderr });
     expect(await probeCodexNativeAuth({ config })).toBeUndefined();
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it.each(["config", "env"] as const)(

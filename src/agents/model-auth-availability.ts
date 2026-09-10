@@ -51,7 +51,10 @@ import {
   readInlineProviderApiKeyUsage,
   resolveProfileUnusableUntil,
 } from "./auth-profiles/usage-state.js";
-import { resolveCliRuntimeModelBackendBinding } from "./cli-backends.js";
+import {
+  resolveCliRuntimeCanonicalProvider,
+  resolveCliRuntimeModelBackendBinding,
+} from "./cli-backends.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
@@ -174,16 +177,21 @@ function evaluateCliRuntimeModelAuthAvailability(
           authProfileId: selectedProfileId,
           metadataSnapshot: params.metadataSnapshot,
         }) ?? normalizeProviderId(provider));
-  if (
-    ref.runtimeId &&
-    runtimeProvider !== normalizeProviderId(provider) &&
-    !resolveCliRuntimeModelBackendBinding({ provider, runtime: runtimeProvider })
-  ) {
-    return { availability: false, routeResolution: null, unavailableReason: "missing-auth" };
-  }
+  const binding = resolveCliRuntimeModelBackendBinding({ provider, runtime: runtimeProvider });
   const runtimeOwners = params.metadataSnapshot?.owners?.cliBackends.get(
     normalizeProviderId(runtimeProvider),
   );
+  // Agent harnesses can use provider auth without registering a CLI backend.
+  if (
+    !binding &&
+    !runtimeOwners?.length &&
+    !resolveCliRuntimeCanonicalProvider({ runtime: runtimeProvider })
+  ) {
+    return undefined;
+  }
+  if (ref.runtimeId && runtimeProvider !== normalizeProviderId(provider) && !binding) {
+    return { availability: false, routeResolution: null, unavailableReason: "missing-auth" };
+  }
   if (runtimeOwners?.length) {
     const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
     if (

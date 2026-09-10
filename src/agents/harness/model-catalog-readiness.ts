@@ -93,7 +93,8 @@ export function createAgentHarnessCatalogEvaluator(
     if (!harness?.readModelCatalogReadiness && entry.nativeRuntime !== runtime) {
       return host;
     }
-    let ready = false;
+    let ready: boolean;
+    let authMode: string | undefined;
     try {
       ready =
         isCurrent() &&
@@ -104,18 +105,24 @@ export function createAgentHarnessCatalogEvaluator(
           requestedRuntime: runtime,
           modelProvider: { preparedAuth: { source: "harness" } },
         }).supported &&
-        harness.readModelCatalogReadiness?.({
-          config: params.observationConfig ?? params.config,
-          agentId: params.agentId,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          provider,
-          modelId: entry.id,
-        }) !== undefined &&
         isCurrent() &&
         resolveRegistry() === registry;
+      const observation = ready
+        ? harness?.readModelCatalogReadiness?.({
+            config: params.observationConfig ?? params.config,
+            agentId: params.agentId,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            provider,
+            modelId: entry.id,
+          })
+        : undefined;
+      ready = ready && observation !== undefined && isCurrent() && resolveRegistry() === registry;
+      authMode = ready ? observation?.authMode : undefined;
     } catch {
       // A failed/disposed owner supplies no account observation; do not infer host readiness.
+      ready = false;
+      authMode = undefined;
     }
     return {
       availability: ready,
@@ -123,6 +130,7 @@ export function createAgentHarnessCatalogEvaluator(
       routeResolution: null,
       ...(host.requestedRuntimeId ? { requestedRuntimeId: host.requestedRuntimeId } : {}),
       runtimeAuth: { id: runtime, source: "native" },
+      ...(authMode ? { selectedAuthMode: authMode } : {}),
     };
   };
 }

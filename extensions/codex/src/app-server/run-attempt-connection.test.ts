@@ -35,6 +35,34 @@ import { withCodexThreadLifecycleBinding } from "./thread-lifecycle-adoption.js"
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
+  it("preserves the WebSocket server account when deferred auth omits homeScope", async () => {
+    const sessionFile = path.join(tempDir, "deferred-websocket.jsonl");
+    const params = createParams(sessionFile, path.join(tempDir, "deferred-websocket-workspace"));
+    const runtimePlan = createCodexRuntimePlanFixture();
+    params.runtimePlan = {
+      ...runtimePlan,
+      auth: {
+        ...runtimePlan.auth,
+        deferredRouteSupport: {
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+      },
+    };
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: {
+          appServer: { transport: "websocket", url: "ws://127.0.0.1:19400" },
+        },
+      },
+    });
+    expect(connection.appServer.start.transport).toBe("websocket");
+    expect(connection.appServer.start.homeScope).toBe("agent");
+  });
+
   it("retains the recovered generation fence after connection preparation", async () => {
     const workspaceDir = path.join(tempDir, "recovered-workspace");
     const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);

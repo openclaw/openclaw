@@ -35,6 +35,8 @@ export async function prepareChatMetadataModelProjection(params: {
   requesterProfileId?: string;
   preferredProfileId?: string;
   pinnedProfileId?: string;
+  profileProvider?: string;
+  runtimeOverride?: string;
   assertCurrent?: () => void;
 }): Promise<PreparedAgentProjection<{ models?: ModelChoice[] }>> {
   const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
@@ -61,6 +63,8 @@ export async function prepareChatMetadataModelProjection(params: {
     observationConfig: params.facts.owner.observationConfig,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
+    ...(params.profileProvider ? { profileProvider: params.profileProvider } : {}),
+    ...(params.runtimeOverride ? { runtimeOverride: params.runtimeOverride } : {}),
   });
   const [modelCatalog, readModels] = await Promise.all([
     projector.projectCatalog(),

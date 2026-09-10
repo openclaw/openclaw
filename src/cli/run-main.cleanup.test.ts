@@ -207,17 +207,6 @@ async function runProcessEntry() {
 }
 
 describe("CLI process harness cleanup", () => {
-  it("installs the rejection handler before the direct Gateway fast path", async () => {
-    dispatch.run = async () => {
-      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-    };
-
-    const { runCli } = await import("./run-main.js");
-    await runCli(["node", "openclaw", "gateway"]);
-
-    expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
-  });
-
   it.each(["process", "borrowed"])("keeps catalog discovery with its %s owner", async (mode) => {
     const registry = emptyRegistry.createEmptyPluginRegistry();
     const resource = resourceHarness("codex");
@@ -261,6 +250,17 @@ describe("CLI process harness cleanup", () => {
     } finally {
       await resource.closeAndJoin();
     }
+  });
+
+  it("installs the rejection handler before the direct Gateway fast path", async () => {
+    dispatch.run = async () => {
+      expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
+    };
+
+    const { runCli } = await import("./run-main.js");
+    await runCli(["node", "openclaw", "gateway"]);
+
+    expect(installUnhandledRejectionHandlerMock).toHaveBeenCalledOnce();
   });
 
   it.each(["current", "transient-resolve", "transient-reject"])(

@@ -49,6 +49,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
     pluginConfig: unknown;
     models?: ReadonlySet<string>;
     accountType?: "apiKey" | "chatgpt";
+    authMode?: string;
     isCurrent?: () => boolean;
   };
   const scopes = new WeakMap<AgentHarnessModelCatalogParams["config"], Map<string, Observation>>();
@@ -71,7 +72,10 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         observation.models?.has(params.modelId) &&
         observation.accountType &&
         observation.isCurrent?.()
-        ? { accountType: observation.accountType }
+        ? {
+            accountType: observation.accountType,
+            ...(observation.authMode ? { authMode: observation.authMode } : {}),
+          }
         : undefined;
     },
     async load(
@@ -153,6 +157,15 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           ? result.accountType
           : undefined;
       observation.isCurrent = result.isCurrent;
+      // A remote ChatGPT account does not distinguish OAuth from caller-supplied tokens.
+      // Carry the local mode only after its account type matches this discovery observation.
+      observation.authMode =
+        observation.accountType === "apiKey"
+          ? "api_key"
+          : observation.accountType === "chatgpt" &&
+              (native?.mode === "oauth" || native?.mode === "token")
+            ? native.mode
+            : undefined;
       return codexAppServerModelsToCatalogEntries(result.models, runtime);
     },
   };

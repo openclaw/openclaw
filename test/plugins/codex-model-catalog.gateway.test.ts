@@ -275,11 +275,15 @@ describe("models.list native account catalog", () => {
               for (const observed of [
                 {
                   value: { type: "chatgpt", email: "synthetic@example.test", planType: "plus" },
-                  mode: "chatgpt",
+                  readiness: { accountType: "chatgpt" },
                   available: true,
                 },
-                { value: null, mode: undefined, available: false },
-                { value: { type: "apiKey" }, mode: "apiKey", available: true },
+                { value: null, readiness: undefined, available: false },
+                {
+                  value: { type: "apiKey" },
+                  readiness: { accountType: "apiKey", authMode: "api_key" },
+                  available: true,
+                },
               ]) {
                 account = observed.value;
                 const refreshed = await listModels({
@@ -291,9 +295,7 @@ describe("models.list native account catalog", () => {
                   refresh: true,
                 });
                 expect(refreshed.models[0]?.available).toBe(observed.available);
-                expect(readiness()).toEqual(
-                  observed.mode ? { accountType: observed.mode } : undefined,
-                );
+                expect(readiness()).toEqual(observed.readiness);
               }
               const hostRoutes: OpenClawConfig["models"][] = [
                 {

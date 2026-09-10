@@ -7,6 +7,7 @@ import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runt
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createStatusModelAuthResolver } from "./status-model-auth.js";
 
 const cfg: OpenClawConfig = {
@@ -25,13 +26,37 @@ function statusAuth(
     current?: () => boolean;
     sessionEntry?: SessionEntry;
     config?: OpenClawConfig;
+    nativeDiscovery?: { accountType: string; authMode?: string };
   } = {},
 ) {
   const config = options.config ?? cfg;
-  const entry = { provider: "openai", id: "gpt-5.4", name: "GPT" };
+  const entry = {
+    provider: "openai",
+    id: "gpt-5.4",
+    name: "GPT",
+    ...(options.nativeDiscovery ? { nativeRuntime: "codex" } : {}),
+  };
+  const pluginRegistry = createEmptyPluginRegistry();
+  if (options.nativeDiscovery) {
+    pluginRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        readModelCatalogReadiness: () => options.nativeDiscovery,
+        runAttempt: async () => {
+          throw new Error("Status must not execute a model");
+        },
+      },
+    });
+  }
   const owner: PreparedModelRuntimeSnapshot = {
     config,
     observationConfig: config,
+    pluginRegistry,
     catalogOwner: { agentId: "main", workspaceDir: "/tmp/status-workspace" },
     agentId: "main",
     agentDir: "/tmp/status-agent",
@@ -77,6 +102,43 @@ describe("native status authentication", () => {
     expect(await statusAuth()(selection)).toBe("unknown");
     expect(
       await statusAuth({ source: "native", mode: "api_key" }, { current: () => false })(selection),
+    ).toBe("unknown");
+  });
+
+  it.each([
+    ["apiKey", "api_key", "api-key (codex)"],
+    ["chatgpt", "oauth", "oauth (codex)"],
+    ["chatgpt", "token", "token (codex)"],
+  ] as const)(
+    "renders %s discovery with its observed %s mode",
+    async (accountType, authMode, label) => {
+      expect(
+        await statusAuth(
+          { source: "native", mode: "oauth" },
+          { nativeDiscovery: { accountType, authMode } },
+        )(selection),
+      ).toBe(label);
+    },
+  );
+
+  it("does not borrow a local mode for a remote account with an unknown mode", async () => {
+    expect(
+      await statusAuth(
+        { source: "native", mode: "oauth" },
+        { nativeDiscovery: { accountType: "chatgpt" } },
+      )(selection),
+    ).toBe("native (codex)");
+  });
+
+  it("rejects a retired discovery observation together with its mode", async () => {
+    expect(
+      await statusAuth(
+        { source: "native", mode: "api_key" },
+        {
+          nativeDiscovery: { accountType: "apiKey", authMode: "api_key" },
+          current: () => false,
+        },
+      )(selection),
     ).toBe("unknown");
   });
 

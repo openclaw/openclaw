@@ -3477,7 +3477,10 @@ describe("shared Codex app-server client", () => {
       const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
       const harness = createCodexAppServerAgentHarness({
         bindingStore: createCodexTestBindingStore(),
-        pluginConfig: { discovery: { timeoutMs: 1_000 } },
+        pluginConfig: {
+          appServer: { homeScope: "agent" },
+          discovery: { timeoutMs: 1_000 },
+        },
       });
       const load = harness.loadModelCatalog!({
         config: {},

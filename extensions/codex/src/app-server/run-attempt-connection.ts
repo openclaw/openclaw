@@ -86,7 +86,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   // The route planner leaves auth with the native owner only after rejecting
   // host credential substitution. Keep explicit homes and prepared profiles intact.
   const pluginConfig =
-    params.runtimePlan?.auth.deferredRouteSupport && !configuredPlugin.appServer?.homeScope
+    params.runtimePlan?.auth.deferredRouteSupport &&
+    !configuredPlugin.appServer?.homeScope &&
+    (configuredPlugin.appServer?.transport === undefined ||
+      configuredPlugin.appServer.transport === "stdio")
       ? {
           ...configuredPlugin,
           appServer: { ...configuredPlugin.appServer, homeScope: "user" as const },

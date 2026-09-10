@@ -580,7 +580,12 @@ export async function applyCodexAuthItems(params: {
       ctx.signal?.throwIfAborted();
       if (
         item.details?.legacyNativeHome !== undefined &&
-        itemProfileTarget(credential, freshStore, ctx, source).profileId !== profileId
+        itemProfileTarget(
+          credential,
+          loadAuthProfileStoreWithoutExternalProfiles(targets.agentDir),
+          ctx,
+          source,
+        ).profileId !== profileId
       ) {
         conflicted = true;
         return false;
