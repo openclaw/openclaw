@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   inlineMarkerPrefix,
   markerPrefix,
@@ -48,7 +48,9 @@ describe("docs component literal attributes", () => {
     const token = document.tokens.find(
       (entry) => entry.type === "inline" && entry.content.startsWith(`${markerPrefix}:${kind}:`),
     );
-    expect(Buffer.from(token!.content.split(":")[2], "base64url").toString("utf8")).toBe(payload);
+    const encoded = token?.content.split(":")[2];
+    assert.isDefined(encoded);
+    expect(Buffer.from(encoded, "base64url").toString("utf8")).toBe(payload);
   });
 
   it("keeps placeholder-shaped author text and component examples literal", () => {
