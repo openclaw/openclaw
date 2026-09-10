@@ -12,13 +12,33 @@ export type RequesterToolCapRef = { current?: RequesterToolCap };
 
 const requesterToolCap = new AsyncLocalStorage<RequesterToolCap>();
 
+// Plugin metadata may be accessor-backed; unreadable names cannot carry authority.
+function readRequesterToolName(tool: { name: string }): string | undefined {
+  try {
+    return typeof tool.name === "string" ? tool.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function captureRequesterToolCap(
   tools: readonly { name: string }[],
   deny: readonly string[] = [],
 ): RequesterToolCap {
   const matches = createToolPolicyMatcher({ deny: [...deny] });
   return Object.freeze({
-    names: Object.freeze([...new Set(tools.map((tool) => tool.name))].filter(matches).toSorted()),
+    names: Object.freeze(
+      [
+        ...new Set(
+          tools.flatMap((tool) => {
+            const name = readRequesterToolName(tool);
+            return name === undefined ? [] : [name];
+          }),
+        ),
+      ]
+        .filter(matches)
+        .toSorted(),
+    ),
     deny: Object.freeze([...new Set(deny)].toSorted()),
   });
 }
@@ -35,7 +55,10 @@ export function filterToolsByRequesterCap<T extends { name: string }>(
     return tools;
   }
   const names = new Set(cap.names);
-  return tools.filter((tool) => names.has(tool.name));
+  return tools.filter((tool) => {
+    const name = readRequesterToolName(tool);
+    return name !== undefined && names.has(name);
+  });
 }
 
 export function isRequesterToolCapCompatible(

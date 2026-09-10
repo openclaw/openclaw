@@ -78,8 +78,8 @@ describe("trusted in-process Gateway session creation", () => {
         preparedRunAdmission: source,
         abortSignal: abort.signal,
       });
-      const entered = createDeferred<void>();
-      const resume = createDeferred<void>();
+      const entered = createDeferred();
+      const resume = createDeferred();
       const cap = captureRequesterToolCap([{ name: "read" }]);
       let assertFollowup: (() => void) | undefined;
       const followup = runWithRequesterToolCap(cap, () =>

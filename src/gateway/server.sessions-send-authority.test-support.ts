@@ -95,7 +95,7 @@ export async function runSessionsSendAuthorityScenario(params: {
     },
     cancellationSignal: sourceAbort.signal,
   });
-  const targetEffectSettled = createDeferred<void>();
+  const targetEffectSettled = createDeferred();
   let receiverWriteAvailable: boolean | undefined;
   let targetEffectError: unknown;
   let targetEffectResult: unknown;
