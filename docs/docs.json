@@ -3323,7 +3323,6 @@
                       "help/testing-live/media-providers"
                     ]
                   },
-                  "channels/qa-channel",
                   "concepts/mantis",
                   "concepts/mantis-slack-desktop-runbook"
                 ]
