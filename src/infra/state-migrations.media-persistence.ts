@@ -52,6 +52,15 @@ import {
   listTranscriptArchives,
   resolveAgentDatabaseMigrationTargets,
 } from "./state-migrations.media-persistence-targets.js";
+import {
+  assertEventIdentitiesUnchanged,
+  eventIdentity,
+  parseArchiveContent,
+  parseTranscriptEvent,
+  transformMediaArchiveContent,
+  transformTranscriptEvent,
+} from "./state-migrations.media-persistence-transform.js";
+import { migrateCanonicalTranscriptArchives } from "./state-migrations.transcript-directives-archives.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const PREVIOUS_MEDIA_SCHEMA_VERSION = AGENT_MEDIA_SCHEMA_VERSION - 1;
@@ -70,55 +79,6 @@ type ArchiveSourceSnapshot = {
   sha256: string;
   size: number;
 };
-
-function transformTranscriptEvent(event: TranscriptEvent): {
-  changed: boolean;
-  event: TranscriptEvent;
-} {
-  if (!isRecord(event) || event.type !== "message" || !isRecord(event.message)) {
-    return { changed: false, event };
-  }
-  const canonical = canonicalizePersistedUserMessageMedia(event.message);
-  return canonical.changed
-    ? { changed: true, event: { ...event, message: canonical.message } }
-    : { changed: false, event };
-}
-
-function parseTranscriptEvent(raw: string, owner: string): TranscriptEvent {
-  try {
-    return JSON.parse(raw) as TranscriptEvent;
-  } catch (error) {
-    throw new Error(`${owner} contains invalid transcript JSON: ${String(error)}`, {
-      cause: error,
-    });
-  }
-}
-
-function eventIdentity(event: TranscriptEvent): string {
-  if (!isRecord(event)) {
-    return JSON.stringify({ id: null, parentId: null, type: null });
-  }
-  return JSON.stringify({
-    id: typeof event.id === "string" ? event.id : null,
-    parentId: typeof event.parentId === "string" ? event.parentId : null,
-    type: typeof event.type === "string" ? event.type : null,
-  });
-}
-
-function assertEventIdentitiesUnchanged(
-  before: readonly TranscriptEvent[],
-  after: readonly TranscriptEvent[],
-  owner: string,
-): void {
-  if (before.length !== after.length) {
-    throw new Error(`${owner} event count changed during media migration`);
-  }
-  for (let index = 0; index < before.length; index += 1) {
-    if (eventIdentity(before[index]) !== eventIdentity(after[index])) {
-      throw new Error(`${owner} event identity changed at index ${index}`);
-    }
-  }
-}
 
 function forEachMediaEventBatch(params: {
   database: DatabaseSync;
@@ -362,12 +322,25 @@ function refreshAgentDatabasePlannerStatistics(database: DatabaseSync): void {
   database.exec("PRAGMA analysis_limit=1000; ANALYZE main;");
 }
 
-function migrateAgentDatabase(params: {
+async function migrateAgentDatabase(params: {
   agentId: string;
+  canonicalArchivePaths: Set<string>;
   beforeTransaction?: () => void;
   pathname: string;
 }) {
   const database = openNodeSqliteDatabase(params.pathname);
+  const migrateArchives = () =>
+    migrateCanonicalTranscriptArchives({
+      agentId: params.agentId,
+      database,
+      pathname: params.pathname,
+      start: { generation: "", sessionId: "" },
+      // Imports and restores can introduce legacy media after any successful pass.
+      // Reuse archive repair without persisting the directive migration's cursor.
+      writeCursor: () => {},
+      onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),
+      transformContent: transformMediaArchiveContent,
+    });
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     let metadata = assertOpenClawAgentDatabaseOwner(database, {
@@ -429,8 +402,9 @@ function migrateAgentDatabase(params: {
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
       if (detected.rewrittenSessions === 0 && detected.rewrittenTrajectoryRows === 0) {
+        const rewrittenArchives = await migrateArchives();
         refreshAgentDatabasePlannerStatistics(database);
-        return { ...detected, initialVersion, finalVersion: userVersion };
+        return { ...detected, rewrittenArchives, initialVersion, finalVersion: userVersion };
       }
     }
 
@@ -480,9 +454,11 @@ function migrateAgentDatabase(params: {
       },
     );
     ensureOpenClawAgentDatabaseSchema(database, { agentId: params.agentId, path: params.pathname });
+    const rewrittenArchives = await migrateArchives();
     refreshAgentDatabasePlannerStatistics(database);
     return {
       ...rewritten,
+      rewrittenArchives,
       initialVersion,
       finalVersion: readSqliteUserVersion(database),
     };
@@ -522,60 +498,17 @@ function archiveSourceMatches(filePath: string, expected: ArchiveSourceSnapshot)
   }
 }
 
-function parseArchiveContent(content: string, filePath: string): TranscriptEvent[] {
-  if (content === "") {
-    return [];
-  }
-  const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
-  return lines.map((line, index) => {
-    if (!line) {
-      throw new Error(`${filePath} contains a blank JSONL record at line ${index + 1}`);
-    }
-    return parseTranscriptEvent(line, `${filePath}:${index + 1}`);
-  });
-}
-
-function serializeArchiveEvents(
-  events: readonly TranscriptEvent[],
-  trailingNewline: boolean,
-): string {
-  if (events.length === 0) {
-    return "";
-  }
-  return `${events.map((event) => JSON.stringify(event)).join("\n")}${trailingNewline ? "\n" : ""}`;
-}
-
 function migrateTranscriptArchive(
   filePath: string,
   options: { beforeReplace?: () => void } = {},
 ): boolean {
   const source = readArchiveSourceSnapshot(filePath);
   const content = readSessionArchiveContentSync(filePath);
-  let nulTailStart = content.length;
-  while (nulTailStart > 0 && content.charCodeAt(nulTailStart - 1) === 0) {
-    nulTailStart -= 1;
-  }
-  const hasTerminalNulSuffix = nulTailStart < content.length;
-  if (hasTerminalNulSuffix && nulTailStart === 0) {
-    throw new Error(`${filePath} contains no JSONL records before its terminal NUL suffix`);
-  }
-  // Torn writes may leave only preallocated NUL bytes after complete JSONL records.
-  // Recovery stays doctor-owned and reaches the same verified atomic replacement as media repair.
-  const recoveredContent = hasTerminalNulSuffix ? content.slice(0, nulTailStart) : content;
-  const events = parseArchiveContent(recoveredContent, filePath);
-  let mediaChanged = false;
-  const transformed = events.map((event) => {
-    const result = transformTranscriptEvent(event);
-    mediaChanged ||= result.changed;
-    return result.event;
-  });
-  if (!hasTerminalNulSuffix && !mediaChanged) {
+  const transformed = transformMediaArchiveContent(content, filePath);
+  if (!transformed.changed) {
     return false;
   }
-  assertEventIdentitiesUnchanged(events, transformed, filePath);
-  const rewritten = mediaChanged
-    ? serializeArchiveEvents(transformed, recoveredContent.endsWith("\n"))
-    : recoveredContent;
+  const rewritten = transformed.content;
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
   const encoded = compressed
     ? encodeSessionArchiveContent(rewritten)
@@ -599,7 +532,11 @@ function migrateTranscriptArchive(
       if (staged !== rewritten) {
         throw new Error(`${filePath} failed codec readback before replacement`);
       }
-      assertEventIdentitiesUnchanged(events, parseArchiveContent(staged, tempPath), filePath);
+      assertEventIdentitiesUnchanged(
+        parseArchiveContent(rewritten, filePath),
+        parseArchiveContent(staged, tempPath),
+        filePath,
+      );
     },
   });
   if (readSessionArchiveContentSync(filePath) !== rewritten) {
@@ -634,6 +571,8 @@ export async function migrateLegacyMediaPersistence(
       recoverableWarningCount = discovery.recoverableWarningCount;
       const seenPaths = new Set<string>();
       const archiveDirectories = new Set<string>();
+      const canonicalArchivePaths = new Set<string>();
+      const refusedArchiveDirectories = new Set<string>();
       for (const entry of discovery.targets) {
         const pathname = entry.path;
         archiveDirectories.add(
@@ -647,8 +586,9 @@ export async function migrateLegacyMediaPersistence(
         }
         seenPaths.add(entry.realPath);
         try {
-          const result = migrateAgentDatabase({
+          const result = await migrateAgentDatabase({
             agentId: entry.agentId,
+            canonicalArchivePaths,
             beforeTransaction: params.hooks?.beforeDatabaseTransaction
               ? () => params.hooks?.beforeDatabaseTransaction?.(pathname)
               : undefined,
@@ -668,12 +608,25 @@ export async function migrateLegacyMediaPersistence(
               `Migrated media persistence in ${pathname}: ${result.rewrittenSessions} transcript session(s), ${result.rewrittenTrajectoryRows} trajectory row(s), schema v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
             );
           }
+          if (result.rewrittenArchives > 0) {
+            changes.push(
+              `Migrated canonical transcript archive media in ${pathname}: ${result.rewrittenArchives} archive(s).`,
+            );
+          }
         } catch (error) {
+          // An unverified database may own files in this directory. Never fall
+          // back to file-only repair after its canonical archive repair refuses.
+          refusedArchiveDirectories.add(
+            resolveSqliteTranscriptArchiveDirectory({ agentId: entry.agentId, path: pathname }),
+          );
           warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
         }
       }
 
       for (const directory of archiveDirectories) {
+        if (refusedArchiveDirectories.has(directory)) {
+          continue;
+        }
         let archives: string[];
         try {
           archives = listTranscriptArchives(directory);
@@ -684,6 +637,9 @@ export async function migrateLegacyMediaPersistence(
           continue;
         }
         for (const archive of archives) {
+          if (canonicalArchivePaths.has(path.resolve(archive))) {
+            continue;
+          }
           try {
             if (
               migrateTranscriptArchive(archive, {
