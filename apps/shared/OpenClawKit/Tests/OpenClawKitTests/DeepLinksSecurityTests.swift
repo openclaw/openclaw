@@ -199,7 +199,7 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
         ("wss://gateway.example:443", 443, "wss://gateway.example"),
         ("https://gateway.example:443", 443, "wss://gateway.example"),
         ("wss://gateway.example:8443", 8443, "wss://gateway.example:8443"),
-        ("ws://127.0.0.1:80", 80, "ws://127.0.0.1"),
+        ("ws://127.0.0.1:80", 80, "ws://127.0.0.1:80"),
         ("ws://127.0.0.1:18789", 18789, "ws://127.0.0.1:18789"),
         ("wss://[::1]:443", 443, "wss://[::1]"),
         ("wss://[::1]:8443", 8443, "wss://[::1]:8443"),
