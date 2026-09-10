@@ -7,6 +7,10 @@ import {
 } from "../../agents/admitted-run-context.js";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import {
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../../agents/cli-execution-auth.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import { settleCliSessionResult } from "../../agents/cli-session-store.js";
 import {
@@ -629,6 +633,26 @@ function createCronPromptExecutor(
           sessionEntry: params.cronSession.sessionEntry,
         });
         if (cliExecution) {
+          const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
+            provider: executionProvider,
+            config: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
+          });
+          const authProfileId = allowCliAuthProfileForwarding
+            ? resolveCliExecutionAuthProfileId({
+                cliExecutionProvider: executionProvider,
+                authProfileProvider: providerOverride,
+                config: params.cfgWithAgentDefaults,
+                agentDir: params.agentDir,
+                selected: params.liveSelection.authProfileId
+                  ? {
+                      authProfileId: params.liveSelection.authProfileId,
+                      authProfileIdSource:
+                        params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
+                    }
+                  : undefined,
+              })
+            : undefined;
           // Cron intentionally reuses its durable session id as the run id; turn
           // claims stay unique via per-claim ids and the worker gate handles this
           // via credential rotation (see worker-environments/service.ts fences).
@@ -674,6 +698,7 @@ function createCronPromptExecutor(
                 ),
                 provider: executionProvider,
                 model: modelOverride,
+                authProfileId,
                 thinkLevel: candidateThinkLevel,
                 timeoutMs: params.timeoutMs,
                 runId,
