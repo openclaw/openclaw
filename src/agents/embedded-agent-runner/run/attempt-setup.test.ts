@@ -18,6 +18,9 @@ const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
 const resolveSandboxContext = vi.hoisted(() =>
   vi.fn<typeof resolveRealSandboxContext>(async () => null),
 );
+const removeCreatedSandboxRuntime = vi.hoisted(() =>
+  vi.fn<(containerName: string) => Promise<void>>(async () => {}),
+);
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
@@ -25,6 +28,8 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => (
 }));
 
 vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
+
+vi.mock("../../sandbox/created-runtime.js", () => ({ removeCreatedSandboxRuntime }));
 
 import {
   installEmbeddedAttemptContextGuards,
@@ -65,6 +70,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
     resolveProviderRuntimePluginHandle.mockReset();
     resolveSandboxContext.mockClear();
+    removeCreatedSandboxRuntime.mockClear();
   });
 
   it("prepares the identity that owns the current agent session", async () => {
@@ -271,6 +277,45 @@ describe("prepareEmbeddedAttemptSetup", () => {
         workspaceDir,
       }),
     ).rejects.toThrow("sandbox workspace is not read-write; collection review skipped");
+  });
+
+  it("releases a runtime it created when workspace setup fails before dispatch", async () => {
+    const workspaceDir = tempDirs.make("openclaw-attempt-setup-created-runtime-release-");
+    resolveSandboxContext.mockResolvedValueOnce({
+      ...sandboxContext("ro"),
+      createdRuntime: true,
+    });
+
+    await expect(
+      resolveAttemptWorkspaceSandbox({
+        agentId: "main",
+        config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
+        sessionId: "session-created-runtime-release",
+        sessionKey: "agent:main:skill-collection-review",
+        requireWritableSandbox: true,
+        workspaceDir,
+      }),
+    ).rejects.toThrow("sandbox workspace is not read-write; collection review skipped");
+
+    expect(removeCreatedSandboxRuntime).toHaveBeenCalledWith("openclaw-sandbox");
+  });
+
+  it("keeps a reused runtime when workspace setup fails before dispatch", async () => {
+    const workspaceDir = tempDirs.make("openclaw-attempt-setup-reused-runtime-kept-");
+    resolveSandboxContext.mockResolvedValueOnce(sandboxContext("ro"));
+
+    await expect(
+      resolveAttemptWorkspaceSandbox({
+        agentId: "main",
+        config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
+        sessionId: "session-reused-runtime-kept",
+        sessionKey: "agent:main:skill-collection-review",
+        requireWritableSandbox: true,
+        workspaceDir,
+      }),
+    ).rejects.toThrow("sandbox workspace is not read-write; collection review skipped");
+
+    expect(removeCreatedSandboxRuntime).not.toHaveBeenCalled();
   });
 
   it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {
