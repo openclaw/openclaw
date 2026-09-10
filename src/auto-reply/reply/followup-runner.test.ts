@@ -564,20 +564,33 @@ describe("createFollowupRunner", () => {
     const typing = createTypingController();
     const turn = createTurn(order);
     const execution = createRejectedExecution(order);
+    const sourceDelivery = vi.fn(async () => {
+      order.push("completion");
+    });
+    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDelivery };
+    const decision = {
+      kind: "deliver" as const,
+      payloads: [{ text: "done\nUsage: 1.3k total" } satisfies ReplyPayload],
+    };
     state.admit.mockResolvedValue({ kind: "admitted", turn });
     state.execute.mockResolvedValue(execution);
     state.account.mockImplementation(async () => {
       order.push("accounted");
-      return undefined;
+      return { payloadArray: [{ text: "raw accounting reply" }] };
     });
     state.resolveDecision.mockImplementation(() => {
       order.push("decision");
-      return { kind: "deliver", payloads: [{ text: "done" } satisfies ReplyPayload] };
+      return decision;
     });
-    state.deliver.mockImplementation(async () => {
-      order.push("delivered");
-      return { kind: "completed", payloads: [] };
-    });
+    state.deliver.mockImplementation(
+      async (
+        params: Parameters<typeof import("./followup-delivery.js").deliverFollowupDecision>[0],
+      ) => {
+        expect(params.decision).toEqual(decision);
+        order.push("delivered");
+        return { kind: "completed", payloads: decision.payloads };
+      },
+    );
     state.completeLifecycle.mockImplementation(() => order.push("lifecycle-complete"));
 
     await createFollowupRunner({
@@ -596,10 +609,14 @@ describe("createFollowupRunner", () => {
       "accounted",
       "decision",
       "delivered",
+      "completion",
       "presentation-settled",
       "lifecycle-complete",
       "operation-complete",
     ]);
+    expect(sourceDelivery).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ payloads: decision.payloads }),
+    );
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
   });
 
