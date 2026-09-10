@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
-import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import {
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -82,10 +81,6 @@ export function resolveSessionSelectedModelRef(params: {
           : {}),
       }
     : undefined;
-  const override = normalizeStoredOverrideModel({
-    providerOverride: selectedEntry?.providerOverride,
-    modelOverride: selectedEntry?.modelOverride,
-  });
   if (!params.rowContext) {
     return {
       ...resolveSessionModelRef(params.cfg, selectedEntry, params.agentId, {
@@ -96,8 +91,9 @@ export function resolveSessionSelectedModelRef(params: {
   }
   const key = [
     normalizeAgentId(params.agentId),
-    override.providerOverride ?? "",
-    override.modelOverride ?? "",
+    selectedEntry?.providerOverride ?? "",
+    selectedEntry?.modelOverride ?? "",
+    storedOverride?.routeResolution ?? "",
   ].join("\0");
   const cached = params.rowContext.selectedModelByOverrideRef.get(key);
   if (cached) {

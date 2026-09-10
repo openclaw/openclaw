@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   type ModelManifestNormalizationContext,
@@ -136,6 +137,7 @@ export function resolvePersistedSelectedModelRef(params: {
   runtimeModel?: unknown;
   overrideProvider?: unknown;
   overrideModel?: unknown;
+  overrideRouteResolution?: ModelFallbackRouteResolution;
   allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
@@ -143,6 +145,7 @@ export function resolvePersistedSelectedModelRef(params: {
     defaultProvider: params.defaultProvider,
     overrideProvider: params.overrideProvider,
     overrideModel: params.overrideModel,
+    routeResolution: params.overrideRouteResolution,
     allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
   });
