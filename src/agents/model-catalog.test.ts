@@ -40,11 +40,19 @@ function providerManifestSnapshot(params: {
   discovery: "static" | "refreshable" | "runtime";
   modelIds: string[];
   aliases?: string[];
+  modelAliases?: Record<string, string>;
 }): PluginMetadataSnapshot {
   const plugin = createPluginManifestRecordFixture({
     id: params.provider,
     origin: "bundled",
     providers: [params.provider],
+    ...(params.modelAliases
+      ? {
+          modelIdNormalization: {
+            providers: { [params.provider]: { aliases: params.modelAliases } },
+          },
+        }
+      : {}),
     modelCatalog: {
       aliases: Object.fromEntries(
         (params.aliases ?? []).map((alias) => [alias, { provider: params.provider }]),
@@ -116,6 +124,39 @@ describe("prepared model catalog builder", () => {
       expect(snapshot.authoritative).toBe(status === "ready");
     },
   );
+
+  it("preserves executable registry identities that are also input aliases", async () => {
+    const snapshot = await build({
+      entries: [{ provider: "custom", id: "middle", name: "Middle", input: ["text", "image"] }],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "custom",
+        discovery: "runtime",
+        modelIds: [],
+        modelAliases: { latest: "middle", middle: "final" },
+      }),
+    });
+    expect(snapshot.entries).toMatchObject([{ id: "middle", input: ["text", "image"] }]);
+    expect(snapshot.entries).toHaveLength(1);
+  });
+
+  it("keeps runtime catalog entitlement attached to emitted identities", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      { provider: "custom", id: "latest", name: "Enriched middle", contextWindow: 64000 },
+      { provider: "custom", id: "denied", name: "Unobserved model", contextWindow: 128000 },
+    ]);
+    const snapshot = await build({
+      entries: [{ provider: "custom", id: "middle", name: "Middle", contextWindow: 32000 }],
+      metadataSnapshot: providerManifestSnapshot({
+        provider: "custom",
+        discovery: "runtime",
+        modelIds: ["middle", "final", "denied"],
+        modelAliases: { latest: "middle", middle: "final" },
+      }),
+      readOnly: false,
+    });
+    expect(snapshot.entries).toMatchObject([{ id: "middle", contextWindow: 64000 }]);
+    expect(snapshot.entries).toHaveLength(1);
+  });
 
   it("projects and sorts one lifecycle registry generation", async () => {
     const snapshot = await build({
