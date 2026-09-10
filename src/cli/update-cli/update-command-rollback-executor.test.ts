@@ -77,8 +77,8 @@ describe("package rollback executor ownership", () => {
     };
     const before = await snapshot();
     const history = getUpdateRun(run.runId, { env });
-    const observed = createDeferred<void>();
-    const resume = createDeferred<void>();
+    const observed = createDeferred();
+    const resume = createDeferred();
     const lstat = fs.lstat.bind(fs);
     const observation = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       const stat = await lstat(...args);
