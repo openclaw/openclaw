@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { loadPersistedSharedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import {
+  readPersistedAuthProfileStoreRaw,
   readPersistedSharedAuthProfileStoreRaw,
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStoreRaw,
@@ -153,6 +154,102 @@ it("keeps the recorded target when import verification rolls back", async () => 
       expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles).toEqual({
         "anthropic:work": { type: "api_key", provider: "anthropic", key: "retry-account" },
       });
+    },
+  );
+});
+
+it("preserves a recovered shared selection when a different local account occupies its target", async () => {
+  await withOpenClawTestState(
+    { label: "alias-archive-local-collision", layout: "home" },
+    async (fixture) => {
+      const agentDir = fixture.agentDir("worker");
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: { entries: { main: {}, worker: { agentDir } } },
+        auth: {
+          profiles: { "claude-cli:default": { provider: "claude-cli", mode: "api_key" } },
+          order: { "claude-cli": ["claude-cli:default"] },
+        },
+      };
+      await fixture.writeJson("agents/main/agent/auth.json", {
+        "claude-cli": { type: "api_key", provider: "claude-cli", key: "original-shared-account" },
+      });
+      const run = (config: OpenClawConfig) =>
+        runDoctorRepairSequence({
+          state: {
+            cfg: config,
+            candidate: structuredClone(config),
+            pendingChanges: false,
+            fixHints: [],
+          },
+          doctorFixCommand: "openclaw doctor --fix",
+          env: fixture.env,
+        });
+      await run(cfg);
+      const local = {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "different-local-account",
+          },
+        },
+      };
+      runAuthProfileWriteTransaction(
+        agentDir,
+        (database) => {
+          writePersistedAuthProfileStoreRaw(local, agentDir, database);
+        },
+        { env: fixture.env },
+      );
+      runAuthProfileWriteTransaction(
+        undefined,
+        (database) => {
+          writePersistedAuthProfileStoreRaw(
+            {
+              version: 1,
+              profiles: {
+                "anthropic:default": {
+                  type: "api_key",
+                  provider: "anthropic",
+                  key: "original-shared-account",
+                },
+                "codex:ready": { type: "api_key", provider: "codex", key: "independent-account" },
+              },
+            },
+            undefined,
+            database,
+          );
+        },
+        { env: fixture.env },
+      );
+      const next: OpenClawConfig = {
+        ...cfg,
+        auth: {
+          profiles: {
+            "claude-cli:default": { provider: "claude-cli", mode: "api_key" },
+            "codex:ready": { provider: "codex", mode: "api_key" },
+          },
+          order: { "claude-cli": ["claude-cli:default"], codex: ["codex:ready"] },
+        },
+      };
+      const result = await run(next);
+      expect(result.state.candidate.auth).toEqual({
+        profiles: {
+          "claude-cli:default": { provider: "claude-cli", mode: "api_key" },
+          "openai:ready": { provider: "openai", mode: "api_key" },
+        },
+        order: { "claude-cli": ["claude-cli:default"], openai: ["openai:ready"] },
+      });
+      expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(local);
+      expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toMatchObject({
+        profiles: {
+          "anthropic:default": { key: "original-shared-account" },
+          "openai:ready": { key: "independent-account" },
+        },
+      });
+      expect(result.warningNotes.join("\n")).toContain("identity is unresolved");
     },
   );
 });

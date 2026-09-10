@@ -84,6 +84,7 @@ import {
   runWithAuthAliasMigrationReceipt,
   recordAuthAliasMigration,
   recoverAuthAliasMigration,
+  type AuthAliasArchiveMapping,
   type AuthAliasStoreSnapshot,
 } from "./doctor/auth-alias-receipt.js";
 import { resolveLegacyRuntimeModelProviderAlias } from "./doctor/shared/legacy-runtime-model-providers.js";
@@ -2001,7 +2002,7 @@ export function maybeRepairLegacyAuthProfileStores(params: {
   const recovery = recoverAuthAliasMigration({
     stores: planned,
     env,
-    archivedProfileIdMap: recoverArchivedOpenAICodexAuthProfileIdMap({ candidates, env }),
+    archivedMappings: recoverArchivedAuthProfileMappings({ candidates, env }),
   });
   for (const from of params.profileIdMap.keys()) {
     if (recovery.blocked.has(from)) {
@@ -2075,11 +2076,11 @@ export function maybeRepairLegacyAuthProfileStores(params: {
   return { changes, warnings, profileIdMap: params.profileIdMap };
 }
 
-function recoverArchivedOpenAICodexAuthProfileIdMap(params: {
+function recoverArchivedAuthProfileMappings(params: {
   candidates: readonly AuthProfileRepairCandidate[];
   env: NodeJS.ProcessEnv;
-}): Map<string, string> {
-  const recovered = new Map<string, string>();
+}): Map<string, AuthAliasArchiveMapping> {
+  const recovered = new Map<string, AuthAliasArchiveMapping>();
   const ambiguous = new Set<string>();
   const agentDirs = [
     resolveSharedMainAuthAgentDir(params.env),
@@ -2174,11 +2175,21 @@ function recoverArchivedOpenAICodexAuthProfileIdMap(params: {
           }
           const canonicalProfileId = matches[0]!;
           const previous = recovered.get(legacyProfileId);
-          if (previous && previous !== canonicalProfileId) {
+          if (previous && previous.profileId !== canonicalProfileId) {
             recovered.delete(legacyProfileId);
             ambiguous.add(legacyProfileId);
           } else if (!ambiguous.has(legacyProfileId)) {
-            recovered.set(legacyProfileId, canonicalProfileId);
+            recovered.set(legacyProfileId, {
+              profileId: canonicalProfileId,
+              origins: [
+                ...(previous?.origins ?? []),
+                {
+                  sourcePath: path.resolve(sourcePath),
+                  sourceSha256,
+                  databasePath: resolveMigrationTargetDatabasePath(candidate.agentDir, params.env),
+                },
+              ],
+            });
           }
         }
       } catch {
@@ -2336,8 +2347,8 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
       collectReferences(raw);
     }
   }
-  const archivedProfileIdMap = recoverArchivedOpenAICodexAuthProfileIdMap({ candidates, env });
-  const recovery = recoverAuthAliasMigration({ stores: sqliteStores, env, archivedProfileIdMap });
+  const archivedMappings = recoverArchivedAuthProfileMappings({ candidates, env });
+  const recovery = recoverAuthAliasMigration({ stores: sqliteStores, env, archivedMappings });
   for (const profileId of recovery.blocked) {
     blocked.add(profileId);
   }
@@ -2356,9 +2367,20 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
       );
     }
   }
-  for (const [legacyProfileId, canonicalProfileId] of archivedProfileIdMap) {
-    if (!profileIdMap.has(legacyProfileId) && !blocked.has(legacyProfileId)) {
-      profileIdMap.set(legacyProfileId, canonicalProfileId);
+  for (const [legacyProfileId, archive] of archivedMappings) {
+    const destinationIsVerified = sqliteStores.every(
+      ({ databasePath, store }) =>
+        !isRecord(store) ||
+        !isRecord(store.profiles) ||
+        store.profiles[archive.profileId] === undefined ||
+        archive.origins.some((origin) => origin.databasePath === databasePath),
+    );
+    if (
+      destinationIsVerified &&
+      !profileIdMap.has(legacyProfileId) &&
+      !blocked.has(legacyProfileId)
+    ) {
+      profileIdMap.set(legacyProfileId, archive.profileId);
     }
   }
   return profileIdMap;

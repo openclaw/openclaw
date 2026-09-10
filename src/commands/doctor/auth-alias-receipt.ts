@@ -33,6 +33,10 @@ const receiptSchema = z.object({
 
 type AliasReceipt = z.infer<typeof receiptSchema>;
 export type AuthAliasStoreSnapshot = { databasePath: string; store: unknown };
+export type AuthAliasArchiveMapping = {
+  profileId: string;
+  origins: readonly { sourcePath: string; sourceSha256: string; databasePath: string }[];
+};
 
 function profiles(raw: unknown): Record<string, unknown> {
   return isRecord(raw) && isRecord(raw.profiles) ? raw.profiles : {};
@@ -156,7 +160,7 @@ export function runWithAuthAliasMigrationReceipt<T>(
 export function recoverAuthAliasMigration(params: {
   stores: readonly AuthAliasStoreSnapshot[];
   env: NodeJS.ProcessEnv;
-  archivedProfileIdMap?: ReadonlyMap<string, string>;
+  archivedMappings?: ReadonlyMap<string, AuthAliasArchiveMapping>;
 }): { recovered: Map<string, string>; blocked: Set<string> } {
   const recovered = new Map<string, string>();
   const blocked = new Set<string>();
@@ -173,9 +177,25 @@ export function recoverAuthAliasMigration(params: {
       sourcePaths.length > 0 && sourcePaths.every((source) => !fs.existsSync(source));
     if (archived) {
       // The import owner validates archived bytes, refreshed OAuth identity and ambiguity.
+      const archive = params.archivedMappings?.get(mapping.from);
+      const verifiedStores = new Set(
+        archive?.origins
+          .filter((origin) =>
+            mapping.sources?.some(
+              (source) =>
+                source.path === origin.sourcePath && source.sha256 === origin.sourceSha256,
+            ),
+          )
+          .map((origin) => origin.databasePath),
+      );
       if (
-        params.archivedProfileIdMap?.get(mapping.from) === mapping.to &&
-        ![...stores.values()].some((entries) => entries[mapping.from] !== undefined)
+        archive?.profileId === mapping.to &&
+        verifiedStores.size > 0 &&
+        [...stores].every(
+          ([databasePath, entries]) =>
+            entries[mapping.from] === undefined &&
+            (entries[mapping.to] === undefined || verifiedStores.has(databasePath)),
+        )
       ) {
         const targets = matches.get(mapping.from) ?? new Set<string>();
         targets.add(mapping.to);
