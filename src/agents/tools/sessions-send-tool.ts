@@ -285,21 +285,24 @@ function isRequesterParentOfNativeSubagentSession(params: {
   requesterSessionKey: string | null | undefined;
   targetSessionKey: string;
 }): boolean {
-  if (
-    !params.entry ||
-    params.acpMeta ||
-    params.entry.acp ||
-    !isSubagentSessionKey(params.targetSessionKey)
-  ) {
+  if (!params.entry || params.acpMeta || params.entry.acp) {
     return false;
   }
   const requester = normalizeOptionalString(params.requesterSessionKey);
   if (!requester) {
     return false;
   }
-  const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
-  const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
-  return requester === spawnedBy || requester === parentSessionKey;
+  // spawnedBy is written only by the spawn policy, so it identifies a native
+  // child regardless of key shape: visible children live under persistent
+  // dashboard keys, not subagent keys. parentSessionKey also records ordinary
+  // UI threading and forks, so it only counts for subagent-keyed targets.
+  if (requester === normalizeOptionalString(params.entry.spawnedBy)) {
+    return true;
+  }
+  return (
+    isSubagentSessionKey(params.targetSessionKey) &&
+    requester === normalizeOptionalString(params.entry.parentSessionKey)
+  );
 }
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
