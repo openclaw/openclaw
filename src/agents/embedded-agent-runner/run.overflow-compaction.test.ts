@@ -140,11 +140,9 @@ function makeRecoveryInput(
     sessionAgentId: "main",
     agentDir: "/tmp/agent",
     workspaceDir: "/tmp/workspace",
-    provider: "openai",
-    modelId: "gpt-5.5",
+    modelSelection: { provider: "openai", model: "gpt-5.5", authProfileIdSource: "auto" },
     harnessRuntime: "openclaw",
     thinkLevel: "off",
-    authProfileIdSource: "auto",
     resolveContextEnginePluginId: () => undefined,
     buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
       buildContextEngineRuntimeSettings({
@@ -236,8 +234,12 @@ describe("compactEmbeddedRunForRecovery", () => {
         attempt: makeAttempt({ promptCache }),
         runtimeAuthPlan,
         thinkLevel: "ultra",
-        authProfileId: "openai:work",
-        authProfileIdSource: "user",
+        modelSelection: {
+          provider: "openai",
+          model: "gpt-5.5",
+          authProfileId: "openai:work",
+          authProfileIdSource: "user",
+        },
       }),
       {
         tokenBudget: 200_000,
