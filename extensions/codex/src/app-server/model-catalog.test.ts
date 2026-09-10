@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
@@ -9,6 +10,18 @@ vi.mock("./models.js", () => ({
   listAllCodexAppServerModels: vi.fn(),
 }));
 vi.mock("./native-auth.js", () => ({ probeCodexNativeAuth: vi.fn() }));
+
+const profiles = vi.hoisted((): { store: AuthProfileStore } => ({
+  store: { version: 1, profiles: {} },
+}));
+vi.mock("./auth-profile.js", async () => {
+  const { resolveAuthProfileOrder } = await import("openclaw/plugin-sdk/provider-auth");
+  const { createCodexAuthProfileSelection } = await import("./auth-profile-selection.js");
+  return createCodexAuthProfileSelection({
+    ensureAuthProfileStore: () => profiles.store,
+    resolveAuthProfileOrder,
+  });
+});
 
 const rpc = vi.hoisted(() => ({ request: vi.fn(), epoch: 0, client: {} }));
 vi.mock("./request.js", () => ({
@@ -44,6 +57,7 @@ describe("Codex app-server model catalog", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
+    profiles.store = { version: 1, profiles: {} };
     vi.mocked(probeCodexNativeAuth).mockReset().mockResolvedValue({
       apiKey: "native-presence",
       source: "native login",
@@ -112,6 +126,10 @@ describe("Codex app-server model catalog", () => {
       limit: 100,
       includeHidden: true,
     });
+    expect(vi.mocked(withCodexAppServerJsonClient).mock.calls[0]?.[0].startOptions?.homeScope).toBe(
+      "user",
+    );
+    expect(probeCodexNativeAuth).toHaveBeenCalledOnce();
   });
 
   it("returns no rows without a live call when discovery is disabled", async () => {
@@ -119,6 +137,78 @@ describe("Codex app-server model catalog", () => {
       await loadCodexAppServerModelCatalog(catalogParams, { discovery: { enabled: false } }),
     ).toEqual([]);
     expect(listModelsMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "logged-out native account",
+      nativeMode: undefined,
+      homeScope: undefined,
+      expectedHome: "agent",
+      expectedProfile: "openai:work",
+      accountType: "apiKey",
+    },
+    {
+      name: "different native account",
+      nativeMode: "oauth",
+      homeScope: undefined,
+      expectedHome: "agent",
+      expectedProfile: "openai:work",
+      accountType: "apiKey",
+    },
+    {
+      name: "explicit native home",
+      nativeMode: "oauth",
+      homeScope: "user",
+      expectedHome: "user",
+      expectedProfile: undefined,
+      accountType: "chatgpt",
+    },
+  ] as const)("keeps the selected account with a $name", async (scenario) => {
+    profiles.store = {
+      version: 1,
+      profiles: {
+        "openai:personal": { type: "api_key", provider: "openai", key: "synthetic-personal-key" },
+        "openai:work": { type: "api_key", provider: "openai", key: "synthetic-work-key" },
+      },
+    };
+    const params = {
+      ...catalogParams,
+      config: { auth: { order: { openai: ["openai:work", "openai:personal"] } } },
+    };
+    const pluginConfig = { appServer: { homeScope: scenario.homeScope } };
+    vi.mocked(probeCodexNativeAuth).mockResolvedValue(
+      scenario.nativeMode
+        ? { apiKey: "native-presence", source: "native login", mode: scenario.nativeMode }
+        : undefined,
+    );
+    rpc.request.mockResolvedValue({
+      account: { type: scenario.accountType },
+      requiresOpenaiAuth: true,
+    });
+    listModelsMock.mockResolvedValue({
+      models: [
+        {
+          id: "synthetic-account-model",
+          model: "synthetic-account-model",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+
+    expect(await owner.load(params, pluginConfig)).toContainEqual(
+      expect.objectContaining({ id: "synthetic-account-model" }),
+    );
+    const clientOptions = vi.mocked(withCodexAppServerJsonClient).mock.calls[0]?.[0];
+    expect(clientOptions?.startOptions?.homeScope).toBe(scenario.expectedHome);
+    expect(clientOptions?.authProfileId).toBe(scenario.expectedProfile);
+    if (scenario.expectedProfile) {
+      expect(clientOptions?.authProfileStore).toBe(profiles.store);
+      expect(probeCodexNativeAuth).not.toHaveBeenCalled();
+    } else {
+      expect(probeCodexNativeAuth).toHaveBeenCalledOnce();
+    }
   });
 
   it.each([

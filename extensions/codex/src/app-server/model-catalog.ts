@@ -1,5 +1,9 @@
 import type { AgentHarnessModelCatalogParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileStore,
+} from "./auth-profile.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
@@ -101,10 +105,20 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         return [];
       }
       const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+      const ownsLocalProcess =
+        options.start.transport === "stdio" && !isCodexAppServerProxyLaunch(options.start.args);
+      const authProfileStore =
+        ownsLocalProcess && configured.appServer?.homeScope === undefined
+          ? resolveCodexAppServerAuthProfileStore({
+              agentDir: params.agentDir,
+              config: params.config,
+            })
+          : undefined;
+      const authProfileId = authProfileStore
+        ? resolveCodexAppServerAuthProfileId({ store: authProfileStore, config: params.config })
+        : undefined;
       const usesNativeHome =
-        configured.appServer?.homeScope !== "agent" &&
-        options.start.transport === "stdio" &&
-        !isCodexAppServerProxyLaunch(options.start.args);
+        ownsLocalProcess && configured.appServer?.homeScope !== "agent" && !authProfileId;
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
         return [];
@@ -119,7 +133,13 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         : options;
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
       const result = await withCodexAppServerJsonClient(
-        { startOptions: start, config: params.config, agentDir: params.agentDir, timeoutMs },
+        {
+          startOptions: start,
+          config: params.config,
+          agentDir: params.agentDir,
+          timeoutMs,
+          ...(authProfileStore ? { authProfileStore, authProfileId } : {}),
+        },
         async (request, client) => {
           const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
           const listed = await listAllCodexAppServerModels({
