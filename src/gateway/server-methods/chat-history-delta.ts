@@ -85,7 +85,8 @@ export function readChatHistoryDelta(params: {
     }
     if (
       isOpenClawDeliveryMirrorAssistantMessage(entryMessage) &&
-      asOptionalRecord(entryMessage.openclawDeliveryMirror)?.kind === "channel-final"
+      asOptionalRecord(asOptionalRecord(entryMessage)?.openclawDeliveryMirror)?.kind ===
+        "channel-final"
     ) {
       // Mirror suppression needs the preceding reply, which can be before this cursor.
       return { kind: "reset" };
