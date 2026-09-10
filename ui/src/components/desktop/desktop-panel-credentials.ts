@@ -1,7 +1,19 @@
-import type { DesktopObserveResult } from "@openclaw/gateway-protocol";
+import type { DesktopObserveResult, DesktopSource } from "@openclaw/gateway-protocol";
 import type { DesktopCredentials } from "./desktop-panel-connection.ts";
 
 const DESKTOP_CREDENTIALS_REQUIRED_CODE = "DESKTOP_CREDENTIALS_REQUIRED";
+
+export function forObserve(
+  source: DesktopSource,
+  auth: "vnc-password" | "ard-account" | undefined,
+  saved: DesktopCredentials | undefined,
+): DesktopCredentials | undefined {
+  return source.kind !== "environment" &&
+    saved?.password &&
+    (auth === "vnc-password" || (auth === "ard-account" && saved.username))
+    ? saved
+    : undefined;
+}
 
 export function rfbCredentials(
   observed: DesktopObserveResult,

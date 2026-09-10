@@ -28,7 +28,7 @@ import {
   type ObservedDesktopConnection,
   type PendingDesktopConnection,
 } from "./desktop-panel-connection.ts";
-import { desktopCredentialRequirement, rfbCredentials } from "./desktop-panel-credentials.ts";
+import * as desktopAuth from "./desktop-panel-credentials.ts";
 import { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
 import { type DesktopPanelState, renderDesktopPanelRecovery } from "./desktop-panel-state.ts";
@@ -393,23 +393,17 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     this.controlTakeoverRecoveryUsed = options.takeoverRecovery === true;
     try {
-      const observeCredentials =
-        source.kind !== "environment" &&
-        this.credentials?.password &&
-        (this.credentialAuth === "vnc-password" ||
-          (this.credentialAuth === "ard-account" && this.credentials.username))
-          ? this.credentials
-          : undefined;
+      const supplied = desktopAuth.forObserve(source, this.credentialAuth, this.credentials);
       const observed = await client.request<DesktopObserveResult>("desktop.observe", {
         source,
         control,
-        ...(observeCredentials ? { credentials: observeCredentials } : {}),
+        ...(supplied ? { credentials: supplied } : {}),
       });
       if (operationId !== this.operationId) {
         return;
       }
       this.controlling = observed.control;
-      const credentials = rfbCredentials(observed, this.credentials);
+      const credentials = desktopAuth.rfbCredentials(observed, this.credentials);
       if (
         observed.auth === "vnc-password" &&
         observed.preauthenticated !== true &&
@@ -426,7 +420,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       }
       await this.connectObserved({ environmentId, control, observed, operationId }, credentials);
     } catch (error) {
-      const requiredAuth = desktopCredentialRequirement(error);
+      const requiredAuth = desktopAuth.desktopCredentialRequirement(error);
       if (requiredAuth && operationId === this.operationId) {
         this.connection.disconnect();
         this.credentialAuth = requiredAuth;
