@@ -51,6 +51,7 @@ import { SessionManager } from "../sessions/index.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import {
   disposeDeferredMaintenanceContextEngine,
+  mergeContextEngineFactoryWork,
   runContextEngineMaintenanceWork,
 } from "./context-engine-maintenance-work.js";
 import { log } from "./logger.js";
@@ -84,6 +85,7 @@ type ContextEngineMaintenanceParams = {
   onDeferredMaintenanceFailure?: (error: unknown) => void;
   config?: OpenClawConfig;
   disposeDeferredContextEngineAfterMaintenance?: boolean;
+  closeFactoryWork?: () => Promise<void>;
 };
 
 type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
@@ -92,6 +94,7 @@ type DeferredTurnMaintenanceScheduleParams = ContextEngineMaintenanceParams & {
   runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   disposeContextEngineAfterMaintenance?: boolean;
   onScheduleFailure?: (error: unknown) => void;
+  factoryWorkClosers: Set<() => Promise<void>>;
 };
 
 type DeferredTurnMaintenanceRunState = {
@@ -100,6 +103,7 @@ type DeferredTurnMaintenanceRunState = {
   promise: Promise<void>;
   rerunRequested: boolean;
   activeContextEngine: ContextEngine;
+  activeFactoryWorkClosers: Set<() => Promise<void>>;
   disposeActiveContextEngineAfterMaintenance: boolean;
   latestParams: DeferredTurnMaintenanceScheduleParams;
 };
@@ -456,6 +460,12 @@ function scheduleDeferredTurnMaintenance(
   if (activeRun) {
     const supersededParams = activeRun.rerunRequested ? activeRun.latestParams : undefined;
     const latestParams = { ...params, sessionKey };
+    latestParams.factoryWorkClosers = mergeContextEngineFactoryWork(
+      latestParams,
+      activeRun.activeContextEngine,
+      activeRun.activeFactoryWorkClosers,
+      supersededParams,
+    );
     // Coalesced resolutions may wrap one shared factory instance. Carry disposal
     // ownership forward without closing an engine still used by active or newer work.
     if (
@@ -664,6 +674,7 @@ function scheduleDeferredTurnMaintenance(
     promise: trackedPromise,
     rerunRequested: false,
     activeContextEngine: params.contextEngine,
+    activeFactoryWorkClosers: params.factoryWorkClosers,
     disposeActiveContextEngineAfterMaintenance:
       params.disposeContextEngineAfterMaintenance === true,
     latestParams: { ...params, sessionKey },
@@ -711,6 +722,7 @@ export async function runContextEngineMaintenance(
         contextEngine,
         sessionKey,
         runInContext: AsyncLocalStorage.snapshot(),
+        factoryWorkClosers: new Set(params.closeFactoryWork ? [params.closeFactoryWork] : []),
         disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
         onScheduleFailure: params.onDeferredMaintenanceFailure,
       });
