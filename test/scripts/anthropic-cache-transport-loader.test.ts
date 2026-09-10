@@ -1,6 +1,10 @@
 import type { StreamFn } from "@openclaw/ai";
 import { describe, expect, it, vi } from "vitest";
-import { loadAnthropicTransportStream } from "../../scripts/e2e/lib/anthropic-cache/transport-loader.mts";
+import {
+  type AnthropicStreamFn,
+  loadAnthropicProviderInternals,
+  loadAnthropicTransportStream,
+} from "../../scripts/e2e/lib/anthropic-cache/transport-loader.mts";
 
 describe("loadAnthropicTransportStream", () => {
   it("loads the managed transport when the candidate exports it", async () => {
@@ -38,5 +42,34 @@ describe("loadAnthropicTransportStream", () => {
         throw error;
       }),
     ).rejects.toBe(error);
+  });
+});
+
+describe("loadAnthropicProviderInternals", () => {
+  it("uses the candidate prefix-binding capability when exported", async () => {
+    const stream = vi.fn<AnthropicStreamFn>();
+    const binds = vi.fn(() => true);
+
+    const loaded = await loadAnthropicProviderInternals(async () => ({
+      streamAnthropic: stream,
+      bindsClaudeThinkingPrefix: binds,
+    }));
+
+    expect(loaded.streamAnthropic).toBe(stream);
+    expect(loaded.bindsClaudeThinkingPrefix({ id: "claude-fable-5-1" })).toBe(true);
+  });
+
+  it("treats a missing prefix-binding export as an absent frozen capability", async () => {
+    const stream = vi.fn<AnthropicStreamFn>();
+    const loaded = await loadAnthropicProviderInternals(async () => ({ streamAnthropic: stream }));
+
+    expect(loaded.streamAnthropic).toBe(stream);
+    expect(loaded.bindsClaudeThinkingPrefix({ id: "claude-sonnet-4-6" })).toBe(false);
+  });
+
+  it("rejects candidates missing the provider stream", async () => {
+    await expect(
+      loadAnthropicProviderInternals(async () => ({ streamAnthropic: undefined as never })),
+    ).rejects.toThrow("candidate package does not export streamAnthropic");
   });
 });
