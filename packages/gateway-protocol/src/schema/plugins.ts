@@ -165,6 +165,8 @@ export const PluginCatalogEntrySchema = closedObject({
   order: Type.Optional(Type.Number()),
   /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
   hasIcon: Type.Optional(Type.Boolean()),
+  /** Channel identities declared by this installed plugin. */
+  channelIds: Type.Optional(Type.Array(NonEmptyString)),
   install: Type.Optional(PluginCatalogInstallActionSchema),
   error: Type.Optional(Type.String()),
   /** Ordered package or registry categories; the first category is primary. */

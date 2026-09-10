@@ -296,6 +296,82 @@ describe("ChannelsPage lifecycle", () => {
     source.channels.dispose();
   });
 
+  it("loads a channel icon through its distinct owning plugin id", async () => {
+    const gateway = createGateway();
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    source.channels.state.channelsSnapshot = {
+      ts: 0,
+      channelOrder: ["agent-system-github"],
+      channelLabels: { "agent-system-github": "GitHub Notifications" },
+      channelDetailLabels: { "agent-system-github": "GitHub notification channel" },
+      channels: { "agent-system-github": { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    };
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "plugins.list") {
+        return {
+          plugins: [
+            {
+              id: "agent-system",
+              name: "Agent System",
+              description: "Manage agent workspaces.",
+              origin: "global",
+              installed: true,
+              enabled: true,
+              state: "enabled",
+              hasIcon: true,
+              channelIds: ["agent-system-github"],
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        };
+      }
+      return await baseRequest?.(method, params);
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:agent-system-plugin-icon");
+    const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+    page.context = source.context;
+    document.body.append(page);
+
+    await vi.waitFor(() => {
+      expect(page.querySelector(".settings-row__title")?.textContent).toBe(
+        "GitHub Notifications",
+      );
+      expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
+        "GitHub notification channel",
+      );
+      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+        "blob:agent-system-plugin-icon",
+      );
+    });
+    expect(
+      fetchMock.mock.calls
+        .map(([input]) =>
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        )
+        .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
+    ).toEqual(["/__openclaw__/plugin-icon/agent-system"]);
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
   it("loads schema again when the runtime-config source changes", async () => {
     const gateway = createGateway();
     const first = createContext(gateway);
