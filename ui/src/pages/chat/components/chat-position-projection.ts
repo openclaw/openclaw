@@ -19,14 +19,6 @@ export type ChatPositionIndex = {
 
 type RenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 
-function hasPositionContent(message: unknown): boolean {
-  const { normalizedMessage, displayMarkdown } = prepareChatMessageRender(message);
-  return (
-    resolveMessageVisibleContent(message, normalizedMessage) === "non-text" ||
-    Boolean(displayMarkdown.trim())
-  );
-}
-
 export function projectChatPositions(
   items: readonly RenderItem[],
   expandedWork: ReadonlyMap<string, boolean>,
@@ -55,7 +47,7 @@ export function projectChatPositions(
       return;
     }
     for (const source of item.messages) {
-      if (!hasPositionContent(source.message)) {
+      if (!source.hasVisibleContent) {
         continue;
       }
       const messageId = persistedMessageEntryId(source.message) ?? source.key;
@@ -96,7 +88,11 @@ export function projectChatPositions(
           content: [{ type: "text", text: part.text }],
           timestamp: part.startedAt,
         };
-        if (!hasPositionContent(message)) {
+        const { normalizedMessage, displayMarkdown } = prepareChatMessageRender(message);
+        if (
+          resolveMessageVisibleContent(message, normalizedMessage) !== "non-text" &&
+          !displayMarkdown.trim()
+        ) {
           continue;
         }
         add(item.runId ? `run:${item.runId}` : item.key, "assistant", part.key, message, rowKey);

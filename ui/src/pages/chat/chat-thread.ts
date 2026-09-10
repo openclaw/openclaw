@@ -87,7 +87,8 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
         candidate !== undefined &&
         entry.key === candidate.key &&
         entry.message === candidate.message &&
-        entry.duplicateCount === candidate.duplicateCount
+        entry.duplicateCount === candidate.duplicateCount &&
+        entry.hasVisibleContent === candidate.hasVisibleContent
       );
     })
   );

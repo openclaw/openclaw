@@ -17,6 +17,7 @@ import {
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
@@ -102,12 +103,22 @@ export function custodianErrorMessage(error: unknown): string {
 function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   const key = `msg-${message.id}`;
   const rawMessage = { role: message.role, content: message.text };
+  const normalized = normalizeMessage(rawMessage);
+  const visibleContent = resolveMessageVisibleContent(rawMessage, normalized);
   return {
     kind: "group",
     key,
     role: message.role,
-    messages: [{ message: rawMessage, key }],
-    visibleContent: resolveMessageVisibleContent(rawMessage, normalizeMessage(rawMessage)),
+    messages: [
+      {
+        message: rawMessage,
+        key,
+        hasVisibleContent:
+          visibleContent === "non-text" ||
+          Boolean(resolveMessageDisplayMarkdown(rawMessage, normalized).trim()),
+      },
+    ],
+    visibleContent,
     timestamp: message.at,
     isStreaming: false,
   };

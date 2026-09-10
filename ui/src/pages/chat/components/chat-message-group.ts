@@ -297,7 +297,9 @@ export function renderActivityGroup(
 }
 
 export function resolveMessageGroupSenderLabel(
-  group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "messages">,
+  group: Pick<MessageGroup, "role" | "sender" | "senderLabel"> & {
+    messages: ReadonlyArray<{ message: unknown }>;
+  },
   opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);

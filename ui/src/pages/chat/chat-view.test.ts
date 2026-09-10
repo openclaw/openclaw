@@ -63,6 +63,10 @@ import {
   resetTranscriptSession,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import {
@@ -93,6 +97,14 @@ function visibleContentForMessages(messages: unknown[]): MessageGroup["visibleCo
   return groups.some((group) => group.kind === "group" && group.visibleContent === "text")
     ? "text"
     : "none";
+}
+
+function createMessageEntry(key: string, message: unknown): MessageGroup["messages"][number] {
+  const [group] = groupMessages([{ kind: "message", key, message }]);
+  if (group?.kind !== "group") {
+    throw new Error("expected a prepared message group");
+  }
+  return expectDefined(group.messages[0], "Prepared message entry");
 }
 
 const buildChatItemsMock = vi.fn(
@@ -157,7 +169,7 @@ const buildChatItemsMock = vi.fn(
               kind: "group",
               key: `group:${key}`,
               role: testMessage.testVirtualRole ?? (index % 2 === 0 ? "user" : "assistant"),
-              messages: [{ key: `message:${key}`, message }],
+              messages: [createMessageEntry(`message:${key}`, message)],
               visibleContent: visibleContentForMessages([message]),
               timestamp: index + 1,
               isStreaming: false,
@@ -170,10 +182,9 @@ const buildChatItemsMock = vi.fn(
           key: "group:assistant:test",
           role: "assistant",
           runId: (props.messages.at(-1) as { runId?: string } | undefined)?.runId,
-          messages: props.messages.map((message, index) => ({
-            key: `message:${index}`,
-            message,
-          })),
+          messages: props.messages.map((message, index) =>
+            createMessageEntry(`message:${index}`, message),
+          ),
           visibleContent: visibleContentForMessages(props.messages),
           timestamp: 1,
           isStreaming: false,
@@ -316,6 +327,7 @@ function renderWorkGroupSummaryMock(
 }
 
 beforeEach(() => {
+  installTranscriptDomMocks();
   vi.spyOn(chatThread, "buildCachedChatItems").mockImplementation(buildChatItemsMock);
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "getExpandedUserMessages").mockReturnValue(new Map<string, boolean>());
@@ -1849,7 +1861,7 @@ describe("chat transcript rendering", () => {
         key: "group:assistant:reply-callback-cache",
         role: "assistant",
         visibleContent: "text",
-        messages: [{ key: "message:reply-callback-cache", message }],
+        messages: [createMessageEntry("message:reply-callback-cache", message)],
         timestamp: 1,
         isStreaming: false,
       },
@@ -2048,17 +2060,14 @@ describe("chat transcript rendering", () => {
         role: "user" as const,
         visibleContent: "text" as const,
         messages: [
-          {
-            key: "user:attachment-run",
-            message: {
-              role: "user",
-              content: "Send the attachment",
-              __openclaw: {
-                id: "user:attachment-run",
-                idempotencyKey: "attachment-run:user",
-              },
+          createMessageEntry("user:attachment-run", {
+            role: "user",
+            content: "Send the attachment",
+            __openclaw: {
+              id: "user:attachment-run",
+              idempotencyKey: "attachment-run:user",
             },
-          },
+          }),
         ],
         timestamp: 1,
         isStreaming: false,
@@ -2069,14 +2078,11 @@ describe("chat transcript rendering", () => {
         role: "assistant" as const,
         visibleContent: "non-text" as const,
         messages: [
-          {
-            key: "assistant:attachment-run",
-            message: {
-              role: "assistant",
-              content: attachmentOnly.content,
-              runId: "attachment-run",
-            },
-          },
+          createMessageEntry("assistant:attachment-run", {
+            role: "assistant",
+            content: attachmentOnly.content,
+            runId: "attachment-run",
+          }),
         ],
         timestamp: 2,
         isStreaming: false,
@@ -2106,7 +2112,7 @@ describe("chat transcript rendering", () => {
         const reply = {
           ...completedFailure,
           key: `group:assistant:long-${index}`,
-          messages: [{ key: `assistant:long-${index}`, message }],
+          messages: [createMessageEntry(`assistant:long-${index}`, message)],
           isStreaming: flow === "active",
         };
         const items = flow === "ordinary" ? [reply] : [runBoundary, reply];
@@ -2125,7 +2131,7 @@ describe("chat transcript rendering", () => {
 
         vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
           ...items.slice(0, -1),
-          { ...reply, messages: [{ key: `assistant:long-${index}`, message: mixed }] },
+          { ...reply, messages: [createMessageEntry(`assistant:long-${index}`, mixed)] },
         ]);
         renderChatInto(container, { transcript, messages: [mixed] });
         expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
@@ -2660,8 +2666,7 @@ afterEach(() => {
   chatMediaRenderVersionMock.value = 0;
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+  resetTranscriptTestDom();
 });
 
 describe("per-pane chat presentation state", () => {
@@ -2838,7 +2843,7 @@ describe("chat transcript rendering cache", () => {
         key: "group:user:test",
         role: "user",
         visibleContent: "text",
-        messages: [{ key: "message:user:test", message: messages[0] }],
+        messages: [createMessageEntry("message:user:test", messages[0])],
         timestamp: 1,
         isStreaming: false,
       },
@@ -3187,10 +3192,11 @@ describe("chat loading skeleton", () => {
         role: "assistant",
         visibleContent: "text",
         messages: [
-          {
-            key: "message:assistant:test",
-            message: { role: "assistant", content: "Interim answer", timestamp: 1 },
-          },
+          createMessageEntry("message:assistant:test", {
+            role: "assistant",
+            content: "Interim answer",
+            timestamp: 1,
+          }),
         ],
         timestamp: 1,
         isStreaming: false,
@@ -3201,10 +3207,11 @@ describe("chat loading skeleton", () => {
         role: "tool",
         visibleContent: "text",
         messages: [
-          {
-            key: "message:tool:test",
-            message: { role: "tool", content: "Later tool result", timestamp: 2 },
-          },
+          createMessageEntry("message:tool:test", {
+            role: "tool",
+            content: "Later tool result",
+            timestamp: 2,
+          }),
         ],
         timestamp: 2,
         isStreaming: false,

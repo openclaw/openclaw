@@ -8,9 +8,9 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
+import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 

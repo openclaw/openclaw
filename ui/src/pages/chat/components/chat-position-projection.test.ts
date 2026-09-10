@@ -166,6 +166,33 @@ describe("chat position projection", () => {
     }
   });
 
+  it("refreshes navigation visibility when retained message content changes", () => {
+    const response = message("response", "assistant", "Visible answer", 2, "edited-run");
+    const props = threadProps("rail-edited", "agent:main:main", [
+      message("question", "user", "Inspect the answer", 1),
+      response,
+    ]);
+    const transcript = createTestTranscript();
+    try {
+      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+        const anchors = () =>
+          projectChatTranscript(props, session).positionIndex.markers.map(
+            (marker) => marker.anchorId,
+          );
+        expect(anchors()).toEqual(["question", "response"]);
+        response.content = "<thinking>Private planning</thinking>";
+        props.messages = [...props.messages];
+        expect(anchors()).toEqual(["question"]);
+        response.content = "The visible answer is ready";
+        props.messages = [...props.messages];
+        expect(anchors()).toEqual(["question", "response"]);
+        return html``;
+      });
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
   it("keeps consecutive user messages and another participant while aggregating a run across a steer", () => {
     const messages = [
       message("user-1", "user", "Review the first section", 1),

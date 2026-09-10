@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, render, type LitElement } from "lit";
+import { html, nothing, render, type LitElement } from "lit";
 import "./components/chat-detail-panel.ts";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -407,6 +407,7 @@ describe("chat pane embedded panels", () => {
   it.each(["history", "stream"] as const)(
     "reuses attachment metadata when Open shows %s content in Files",
     async (surface) => {
+      installTranscriptDomMocks();
       const { mount, state } = createReviewFixture();
       const transcript = document.body.appendChild(document.createElement("div"));
       const fetchMetadata = vi.fn().mockResolvedValue({
@@ -486,10 +487,11 @@ describe("chat pane embedded panels", () => {
           expect(mount.querySelector("openclaw-chat-video-player")).not.toBeNull();
         }
       } finally {
+        render(nothing, transcript);
         controller.hostDisconnected();
         mount.remove();
         releaseChatMediaResourceSubscriber(renderAttachment);
-        vi.unstubAllGlobals();
+        resetTranscriptTestDom();
       }
     },
   );

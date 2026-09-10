@@ -5,6 +5,7 @@ import {
   resolveAssistantMessagePhase,
 } from "../../../../src/shared/chat-message-content.js";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
@@ -90,6 +91,14 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     // Classify after content projection and keep the fact with its group; later
     // presentation passes reuse it, while a rebuild sees in-place message changes.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+    const source = {
+      message: item.message,
+      key: item.key,
+      duplicateCount: item.duplicateCount,
+      hasVisibleContent:
+        visibleContent === "non-text" ||
+        Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
+    };
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
@@ -133,7 +142,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         senderLabel,
         ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
-        messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
+        messages: [source],
         visibleContent,
         timestamp,
         isStreaming: false,
@@ -143,11 +152,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       if (visibleContent === "non-text" || currentGroup.visibleContent === "none") {
         currentGroup.visibleContent = visibleContent;
       }
-      currentGroup.messages.push({
-        message: item.message,
-        key: item.key,
-        duplicateCount: item.duplicateCount,
-      });
+      currentGroup.messages.push(source);
     }
   }
 
