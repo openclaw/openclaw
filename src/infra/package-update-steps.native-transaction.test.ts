@@ -465,11 +465,11 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           });
           const lstat = fs.lstat.bind(fs);
           const observation = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-            const stat = await lstat(...args);
+            const copyResult = await lstat(...args);
             if (rollbackFailure === "copy-cleanup" && published && String(args[0]) === backupRoot) {
               current = false;
             }
-            return stat;
+            return copyResult;
           });
           const unlink = vi.spyOn(fs, "unlink");
           const rmdir = vi.spyOn(fs, "rmdir");

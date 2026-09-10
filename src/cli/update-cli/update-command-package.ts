@@ -3,10 +3,6 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
-import type {
-  PackageRecoveryHooks,
-  PreparePackageRecovery,
-} from "../../infra/package-update-recovery.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
@@ -224,8 +220,6 @@ export type PackageInstallUpdateParams = {
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   onTransaction: (transaction: PackageUpdateTransaction) => void;
-  recovery?: PackageRecoveryHooks;
-  prepareRecovery?: PreparePackageRecovery;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
 };
 
@@ -248,7 +242,6 @@ export async function runPackageInstallUpdate(
       honorPackageRoot: params.honorPackageRoot === true,
     });
   }
-  const durablePackageLayout = installTarget.manager === "npm";
   const pkgRoot = installTarget.packageRoot;
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
@@ -279,12 +272,6 @@ export async function runPackageInstallUpdate(
     validateCandidate: params.validateCandidate,
     beforeActivate: params.beforeActivate,
     onTransaction: params.onTransaction,
-    recovery: params.recovery,
-    // Shared-project pnpm/Bun transactions keep their existing owner. Their
-    // retained-root layout is not the sealed package transaction used here.
-    get prepareRecovery() {
-      return durablePackageLayout ? params.prepareRecovery : undefined;
-    },
     installTarget,
     installSpec,
     packageName,
@@ -300,14 +287,7 @@ export async function runPackageInstallUpdate(
         ...stepParams,
         progress: params.progress,
       }),
-    // Durable startup captures the original state before activation. Its fresh
-    // candidate owns Doctor and after-image binding; the old process must not
-    // launch a mutation child between package publication and that handoff.
-    get postVerifyStep() {
-      return (durablePackageLayout && params.prepareRecovery) || params.recovery
-        ? undefined
-        : (root: string) => runPackageUpdateDoctor({ ...params, root });
-    },
+    postVerifyStep: (root: string) => runPackageUpdateDoctor({ ...params, root }),
   });
 
   const afterBuildId = packageUpdate.activePackageRoot

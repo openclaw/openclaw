@@ -96,80 +96,8 @@ export const PackageTransactionDescriptorSchema = z
     }
   });
 
-export type PackageTransactionDescriptor = z.infer<typeof PackageTransactionDescriptorSchema>;
-export type PackageRetentionDecision = z.infer<typeof retention>;
-export type PackageRecoveryObservation = {
-  previous: "live" | "retained" | "absent";
-  candidate: "live" | "staged" | "displaced" | "absent";
-  launchers: "previous" | "candidate" | "both" | "mixed" | "interrupted";
-  successorLive: boolean;
-};
-export type PackageRecoveryFacts = {
-  roots: Array<{
-    path: string;
-    identity: string | null;
-    match: "unavailable" | "absent" | "previous" | "candidate" | "successor" | "conflict";
-  }>;
-  launchers: Array<{
-    name: string;
-    match: "previous" | "candidate" | "both" | "absent" | "conflict";
-  }>;
-};
-export type PackageRecoveryVerified = {
-  // Verified package roles can include absence or an interrupted transition.
-  // Neither this tag nor its digest attests a running or restartable service.
-  status: "verified";
-  descriptor: PackageTransactionDescriptor;
-  observation: PackageRecoveryObservation;
-  observedIdentity: string;
-};
-export type PackageRecoveryResult =
-  | PackageRecoveryVerified
-  | {
-      status: "conflict" | "unavailable";
-      reason: string;
-      // Unavailability is NOT a no-effects assertion. A pending intent survives
-      // failed writes and failed observation commits until Recovery reconciles it.
-      descriptor: PackageTransactionDescriptor;
-      pendingEffect: PackageRecoveryEffect | null;
-      facts: PackageRecoveryFacts;
-    };
 export const PackageRecoveryEffectSchema = z.strictObject({
   effectId: z.uuid(),
   action: z.enum(["activate", "restore", "retire"]),
   descriptor: PackageTransactionDescriptorSchema,
 });
-export type PackageRecoveryEffect = z.infer<typeof PackageRecoveryEffectSchema>;
-export type PackageRecoveryEffectReceipt = {
-  // Recovery revalidates its current executor and durable revision here. This
-  // is not writer containment; it must never be serialized with the descriptor.
-  assertCurrent: () => void;
-  afterEffect: (
-    observed: PackageRecoveryVerified,
-    outcome: "completed" | "interrupted",
-  ) => Promise<void>;
-};
-/** The package owner supplies verified staging facts before any live mutation. */
-export type PreparePackageRecovery = (
-  source: Pick<PackageTransactionDescriptor, "liveRoot" | "stageRoot" | "previous" | "candidate">,
-) => Promise<PackageRecoveryHooks>;
-
-export type PackageRecoveryHooks = {
-  transactionId: string;
-  /** Persist package facts only. For selection, validate Recovery's ALREADY
-   * committed terminal/selected-pair decision; this callback must not select it.
-   */
-  persistDescriptor: (
-    observed: PackageRecoveryVerified,
-  ) => Promise<Pick<PackageRecoveryEffectReceipt, "assertCurrent">>;
-  /** New: await durable intent. Resume: reacquire the SAME outstanding intent,
-   * checking its exact descriptor and current revision; never append another.
-   * If observation committed but its acknowledgement failed, reconcile the
-   * matching observed effect instead of recording its observation twice.
-   * Both paths carry each returned Recovery revision forward in the live closure.
-   */
-  beforeEffect: (
-    effect: PackageRecoveryEffect,
-    context: { mode: "new" | "resume"; observed: PackageRecoveryVerified },
-  ) => Promise<PackageRecoveryEffectReceipt>;
-};

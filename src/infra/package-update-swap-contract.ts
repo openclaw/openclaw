@@ -1,8 +1,4 @@
 // Public contracts shared by package activation and its existing callers.
-import type {
-  PackageRecoveryTransaction,
-  PackageRecoveryResult,
-} from "./package-update-recovery.js";
 import type { NpmGlobalPrefixLayout, ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
@@ -10,7 +6,6 @@ import type { UpdateStepResult } from "./update-runner-types.js";
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */
 export type PackageUpdateTransaction = {
   backupRoot: string;
-  recovery?: PackageRecoveryTransaction;
   assertRollbackSafe?: () => Promise<void>;
   rollback: (
     assertCurrent: () => void,
@@ -52,5 +47,4 @@ export type StagedPackageSwapResult =
       step: UpdateStepResult;
       postVerifyStep: UpdateStepResult | null;
       packageRollbackVerified: boolean;
-      recovery?: PackageRecoveryResult;
     };
