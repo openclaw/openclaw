@@ -10,6 +10,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
 import {
   findActiveUpdateRun,
   getUpdateRunAsync,
@@ -127,8 +128,13 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunsGetParams, "update.runs.get", respond)) {
       return;
     }
-    reconcileAbandonedUpdateRuns({ runIds: [params.runId] });
-    respond(true, { run: (await getUpdateRunAsync(params.runId)) ?? null });
+    // Protected rows keep the asynchronous, artifact-preserving read path.
+    let run = await getUpdateRunAsync(params.runId);
+    if (run && inspectUpdateRunAbandonment(run)) {
+      const [reconciled] = reconcileAbandonedUpdateRuns({ runIds: [params.runId] });
+      run = reconciled ?? (await getUpdateRunAsync(params.runId));
+    }
+    respond(true, { run: run ?? null });
   },
   "update.runs.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUpdateRunsListParams, "update.runs.list", respond)) {
