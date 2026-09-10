@@ -1,18 +1,19 @@
 /**
  * Canonical macOS Browser bridge (DashboardBrowserMessageHandler mirrors these keys).
  * Handler: window.webkit.messageHandlers.openclawBrowser, Promise reply {ok:true,...}
- * or {ok:false,error}. Requests use type: open {tabId,url,activate?}, navigate
+ * or {ok:false,error}. Requests use type: open {tabId,url,sessionKey,activate?}, navigate
  * {tabId,url}, back/forward/reload/stop/close/snapshot {tabId}, inspect {tabId,x,y},
  * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope}.
  * IDs and scopes are opaque; web-created IDs are `mac-` plus a generated UUID.
- * Open replies include tabId. The host reuses a tab at the requested URL or its
+ * Open replies include tabId. The host reuses a session's tab at the requested URL or its
  * retained initial-request alias, so the returned ID may differ from the request.
  * The requesting panel selects that returned tab; it need not wait for a new tab.
  * Rects are dashboard viewport CSS pixels. Null tab/rect or invisible hides a scope.
- * Tabs are window-owned; release-scope never closes them. If scopes present the
+ * The window retains session-owned tabs; empty sessionKey is the non-chat dock.
+ * Popups inherit their opener's session. Release-scope never closes tabs. If scopes present the
  * same tab, the most recent presentation wins until it is hidden or released.
  * Push: __OPENCLAW_NATIVE_BROWSER__ plus openclaw:native-browser-state detail,
- * {revision,tabs:[{id,url,title,loading,canGoBack,canGoForward,openedBy,openerTabId?}]}.
+ * {revision,tabs:[{id,sessionKey,url,title,loading,canGoBack,canGoForward,openedBy,openerTabId?}]}.
  * Tabs are in creation order; openedBy is web|native. Snapshot adds dataUrl (PNG),
  * cssWidth,cssHeight; inspect adds node (BrowserInspectedNode|null).
  */
@@ -24,6 +25,7 @@ export { hasNativeBrowserBridge } from "./native-browser-host.ts";
 
 export type NativeBrowserTab = {
   id: string;
+  sessionKey: string;
   url: string;
   title: string;
   loading: boolean;
@@ -35,7 +37,7 @@ export type NativeBrowserTab = {
 export type NativeBrowserState = { revision: number; tabs: NativeBrowserTab[] };
 type NativeBrowserRect = { x: number; y: number; width: number; height: number };
 export type NativeBrowserMessage =
-  | { type: "open"; tabId: string; url: string; activate?: boolean }
+  | { type: "open"; tabId: string; url: string; sessionKey: string; activate?: boolean }
   | { type: "navigate"; tabId: string; url: string }
   | { type: "back" | "forward" | "reload" | "stop" | "close" | "snapshot"; tabId: string }
   | { type: "inspect"; tabId: string; x: number; y: number }
@@ -76,6 +78,9 @@ function handler() {
 }
 function nonempty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
+}
+function sessionKey(value: unknown): value is string {
+  return value === "" || nonempty(value);
 }
 function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -127,6 +132,7 @@ function validMessage(value: unknown): value is NativeBrowserMessage {
     case "open":
       return (
         browserUrl(value.url) &&
+        sessionKey(value.sessionKey) &&
         (value.activate === undefined || typeof value.activate === "boolean")
       );
     case "navigate":
@@ -159,6 +165,7 @@ function isState(value: unknown): value is NativeBrowserState {
     if (
       !isRecord(tab) ||
       !nonempty(tab.id) ||
+      !sessionKey(tab.sessionKey) ||
       ids.has(tab.id) ||
       !browserUrl(tab.url) ||
       typeof tab.title !== "string" ||

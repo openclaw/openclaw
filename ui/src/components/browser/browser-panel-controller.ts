@@ -160,6 +160,8 @@ export class BrowserPanelController implements ReactiveController {
 
   resetBrowserState(): void {
     this.invalidateViewOperations();
+    this.native.cancelPendingActivation();
+    this.native.cancelCapture();
     this.setState("running", null);
     const nativeTab = this.native.activeTab ?? this.native.tabs[0];
     this.setState("tabs", this.native.tabs);

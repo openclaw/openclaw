@@ -39,7 +39,7 @@ type BrowserPanelNativeState = {
 interface BrowserPanelNativeHost extends BrowserPanelNativeState {
   readonly host: Pick<
     BrowserPanelControllerHost,
-    "isConnected" | "browserPanelIsOpen" | "renderRoot" | "updateComplete"
+    "isConnected" | "browserPanelIsOpen" | "renderRoot" | "updateComplete" | "sessionKey"
   >;
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
   readonly pendingInput: Pick<BrowserPanelPendingInput, "queueInspection">;
@@ -57,10 +57,10 @@ interface BrowserPanelNativeHost extends BrowserPanelNativeState {
 const presenters = new Set<BrowserPanelNativeController>();
 const popupScopes = new Map<string, string>();
 
-/** Window-owned native state is shared by every session's panel instance. */
+/** Project the native owner's retained tabs into this session's panel. */
 export class BrowserPanelNativeController {
   readonly presentation: BrowserPanelNativePresentation;
-  private nativeTabs: NativeBrowserTab[] = [];
+  private allNativeTabs: NativeBrowserTab[] = [];
   private unsubscribeState?: () => void;
   private revision = -1;
   private pendingActivation: string | null = null;
@@ -71,6 +71,10 @@ export class BrowserPanelNativeController {
 
   constructor(private readonly controller: BrowserPanelNativeHost) {
     this.presentation = new BrowserPanelNativePresentation(controller);
+  }
+
+  private get nativeTabs(): NativeBrowserTab[] {
+    return this.allNativeTabs.filter((tab) => tab.sessionKey === this.controller.host.sessionKey);
   }
 
   get activeTab(): NativeBrowserTab | undefined {
@@ -118,7 +122,7 @@ export class BrowserPanelNativeController {
     const previous = new Set(this.nativeTabs.map((tab) => tab.id));
     const activeBefore = this.activeTab;
     this.revision = state.revision;
-    this.nativeTabs = state.tabs;
+    this.allNativeTabs = state.tabs;
     this.controller.setState("tabs", this.mergeRemoteTabs(this.controller.tabs));
     const view = this.controller.view;
     if (
@@ -133,7 +137,7 @@ export class BrowserPanelNativeController {
         popupScopes.delete(id);
       }
     }
-    for (const tab of state.tabs) {
+    for (const tab of this.nativeTabs) {
       if (tab.id === this.pendingActivation) {
         this.pendingActivation = null;
         void this.controller.selectTab(tab.id).then(() => {
@@ -143,7 +147,9 @@ export class BrowserPanelNativeController {
         });
       } else if (activatePopups && tab.openedBy === "native" && !previous.has(tab.id)) {
         if (!popupScopes.has(tab.id)) {
-          const eligible = [...presenters];
+          const eligible = [...presenters].filter(
+            (presenter) => presenter.controller.host.sessionKey === tab.sessionKey,
+          );
           const owner =
             eligible
               .filter((presenter) => presenter.presentation.presentedTabId === tab.openerTabId)
@@ -220,7 +226,13 @@ export class BrowserPanelNativeController {
     const tabId = `mac-${generateUUID()}`;
     this.pendingActivation = tabId;
     this.pendingAddressFocus = focusAddress ? tabId : null;
-    const reply = await postNativeBrowserMessage({ type: "open", tabId, url, activate: true });
+    const reply = await postNativeBrowserMessage({
+      type: "open",
+      tabId,
+      url,
+      sessionKey: this.controller.host.sessionKey,
+      activate: true,
+    });
     if (this.pendingActivation !== tabId) {
       return null;
     }

@@ -15,7 +15,7 @@ enum DashboardBrowserAction: String, Equatable, Sendable {
 }
 
 enum DashboardBrowserRequest: Equatable, Sendable {
-    case open(tabId: String, url: URL, activate: Bool)
+    case open(tabId: String, url: URL, sessionKey: String, activate: Bool)
     case navigate(tabId: String, url: URL)
     case action(DashboardBrowserAction, tabId: String)
     case present(scope: String, tabId: String?, rect: DashboardBrowserRect?, visible: Bool)
@@ -67,7 +67,10 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
         case "open":
             let activate = try Self.boolean(payload["activate"] ?? true)
             return try .open(
-                tabId: Self.identifier(payload["tabId"]), url: Self.url(payload["url"]), activate: activate)
+                tabId: Self.identifier(payload["tabId"]),
+                url: Self.url(payload["url"]),
+                sessionKey: Self.identifier(payload["sessionKey"], allowEmpty: true),
+                activate: activate)
         case "navigate":
             return try .navigate(tabId: Self.identifier(payload["tabId"]), url: Self.url(payload["url"]))
         case "present":
@@ -119,8 +122,8 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
         return url
     }
 
-    private nonisolated static func identifier(_ value: Any?) throws -> String {
-        guard let value = value as? String, !value.isEmpty,
+    private nonisolated static func identifier(_ value: Any?, allowEmpty: Bool = false) throws -> String {
+        guard let value = value as? String, allowEmpty || !value.isEmpty,
               value == value.trimmingCharacters(in: .whitespacesAndNewlines)
         else { throw DashboardBrowserError.invalidRequest }
         return value

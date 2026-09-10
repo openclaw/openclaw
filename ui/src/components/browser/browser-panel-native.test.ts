@@ -21,8 +21,13 @@ import { BrowserPanelController } from "./browser-panel-controller.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
 import "./browser-panel.ts";
 
-const nativeTab = (id: string, url = "https://example.test/page"): NativeBrowserTab => ({
+const nativeTab = (
+  id: string,
+  url = "https://example.test/page",
+  sessionKey = "",
+): NativeBrowserTab => ({
   id,
+  sessionKey,
   url,
   title: "Example page",
   loading: false,
@@ -41,7 +46,7 @@ function fakeNativeBrowser(tabs: NativeBrowserTab[] = []) {
   const postMessage = vi.fn(async (message: NativeBrowserMessage) => {
     switch (message.type) {
       case "open":
-        publish([...state.tabs, nativeTab(message.tabId, message.url)]);
+        publish([...state.tabs, nativeTab(message.tabId, message.url, message.sessionKey)]);
         return { ok: true, tabId: message.tabId };
       case "close":
         publish(state.tabs.filter((tab) => tab.id !== message.tabId));
@@ -80,7 +85,7 @@ let hit: Element | null;
 let frames: Map<number, FrameRequestCallback>;
 let nextFrame: number;
 
-function controllerFixture(screencast = false) {
+function controllerFixture(screencast = false, sessionKey = "") {
   let remoteOpen = true;
   const { client, request } = createBrowserClient(
     async (envelope) => {
@@ -120,6 +125,7 @@ function controllerFixture(screencast = false) {
     { screencast },
   );
   const host = new TestBrowserPanelHost(client);
+  host.sessionKey = sessionKey;
   document.body.append(host.renderRoot);
   hit = host.renderRoot.querySelector(".bp-stage");
   const controller = new BrowserPanelController(host);
@@ -163,7 +169,116 @@ afterEach(() => {
   Reflect.deleteProperty(document, "elementFromPoint");
 });
 
+async function mountSessionPanel(sessionKey: string) {
+  const panel = document.createElement("openclaw-browser-panel");
+  panel.sessionKey = sessionKey;
+  panel.available = true;
+  panel.remoteAvailable = false;
+  panel.embedded = true;
+  panel.presented = true;
+  document.body.append(panel);
+  await panel.updateComplete;
+  return panel;
+}
+
 describe("native Browser panel ownership", () => {
+  it("keeps tabs local when opening Browser in another chat session", async () => {
+    fakeNativeBrowser();
+    const first = await mountSessionPanel("agent:main:first");
+    first.handleToggleRequest(
+      new CustomEvent("openclaw:browser-panel-toggle", {
+        detail: { open: true, url: "https://example.test/first", native: true },
+      }),
+    );
+    await flushBrowserResponses();
+    await first.updateComplete;
+    expect(first.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    first.presented = false;
+    await first.updateComplete;
+
+    const second = await mountSessionPanel("agent:main:second");
+    expect(second.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
+    expect(second.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
+
+    second.handleToggleRequest(
+      new CustomEvent("openclaw:browser-panel-toggle", {
+        detail: { open: true, url: "https://example.test/second", native: true },
+      }),
+    );
+    await flushBrowserResponses();
+    await second.updateComplete;
+    expect(second.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    first.presented = true;
+    await first.updateComplete;
+    expect(first.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(first.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
+      "https://example.test/first",
+    );
+    first.remove();
+    const restored = await mountSessionPanel("agent:main:first");
+    expect(restored.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(restored.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(
+      "https://example.test/first",
+    );
+  });
+
+  it("does not publish a pending open into a panel rebound to another session", async () => {
+    const native = fakeNativeBrowser();
+    const panel = await mountSessionPanel("agent:main:first");
+    const reply = createDeferred<{ ok: true; tabId: string }>();
+    native.postMessage.mockImplementationOnce(() => reply.promise);
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:browser-panel-toggle", {
+        detail: { open: true, url: "https://example.test/slow", native: true },
+      }),
+    );
+    const opening = native.messages().find((message) => message.type === "open");
+    if (opening?.type !== "open") {
+      throw new Error("Expected an open request");
+    }
+    expect(opening.sessionKey).toBe("agent:main:first");
+    panel.sessionKey = "agent:main:second";
+    await panel.updateComplete;
+    native.publish([nativeTab(opening.tabId, opening.url, opening.sessionKey)]);
+    reply.resolve({ ok: true, tabId: opening.tabId });
+    await flushBrowserResponses();
+    await panel.updateComplete;
+    expect(panel.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(0);
+    expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe("");
+    panel.sessionKey = "agent:main:first";
+    await panel.updateComplete;
+    await panel.updateComplete;
+    expect(panel.shadowRoot?.querySelectorAll('[role="tab"]')).toHaveLength(1);
+    expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".bp-url")?.value).toBe(opening.url);
+  });
+
+  it("keeps popup tabs and their fallback activation in the opener's session", async () => {
+    const firstTab = nativeTab("mac-first", "https://example.test/first", "agent:main:first");
+    const secondTab = nativeTab("mac-second", "https://example.test/second", "agent:main:second");
+    const native = fakeNativeBrowser([firstTab, secondTab]);
+    const first = controllerFixture(false, firstTab.sessionKey);
+    flushFrames();
+    const second = controllerFixture(false, secondTab.sessionKey);
+    flushFrames();
+    // The popup arrives after the first presenter hides; the fallback must not
+    // choose the more recently presented, unrelated session.
+    first.host.open = false;
+    first.controller.suspendView();
+    native.publish([
+      firstTab,
+      secondTab,
+      {
+        ...nativeTab("mac-popup", "https://example.test/popup", firstTab.sessionKey),
+        openedBy: "native",
+        openerTabId: firstTab.id,
+      },
+    ]);
+    expect(first.controller.tabs.map((tab) => tab.id)).toEqual(["mac-first", "mac-popup"]);
+    expect(first.controller.activeTargetId).toBe("mac-popup");
+    expect(second.controller.tabs.map((tab) => tab.id)).toEqual(["mac-second"]);
+    expect(second.controller.activeTargetId).toBe("mac-second");
+  });
+
   it("keeps native tabs off the screencast and streams only the selected remote tab", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const sockets: TestScreencastSocket[] = [];
