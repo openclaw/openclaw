@@ -2,6 +2,7 @@
 // Computes inline script hashes and builds the Gateway-served CSP header.
 import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeControlUiRemoteImageOrigins } from "./control-ui-remote-images.js";
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
 
@@ -45,6 +46,8 @@ export function buildControlUiCspHeader(opts?: {
    * being enabled so the baseline Control UI CSP stays tight otherwise.
    */
   allowWasm?: boolean;
+  /** Exact browser-direct Markdown image origins, normalized before inclusion. */
+  remoteImageOrigins?: readonly string[];
 }): string {
   const hashes = opts?.inlineScriptHashes;
   const scriptTokens = ["'self'"];
@@ -90,7 +93,7 @@ export function buildControlUiCspHeader(opts?: {
     "frame-src 'self' http: https:",
     `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: blob: https://gravatar.com https://avatars.githubusercontent.com",
+    `img-src 'self' data: blob: https://gravatar.com https://avatars.githubusercontent.com ${normalizeControlUiRemoteImageOrigins(opts?.remoteImageOrigins).join(" ")}`.trim(),
     "media-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com",
     "worker-src 'self'",

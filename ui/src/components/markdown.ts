@@ -592,7 +592,7 @@ export function toSanitizedMarkdownHtml(
   if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.remoteImageOrigins.join("\0")}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
   const cached = getCachedMarkdown(cacheKey);
   if (cached !== null) {
     return cached;

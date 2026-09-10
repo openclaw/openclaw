@@ -280,13 +280,15 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.terminalAvailable === previousTerminalAvailable &&
       state.embedSandboxMode === config.embedSandboxMode &&
       state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
-      state.automaticallyFetchFavicons === config.automaticallyFetchFavicons
+      state.automaticallyFetchFavicons === config.automaticallyFetchFavicons &&
+      state.remoteImageOrigins === config.remoteImageOrigins
     ) {
       return;
     }
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
     state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;
+    state.remoteImageOrigins = config.remoteImageOrigins;
     state.requestUpdate?.();
   }
 

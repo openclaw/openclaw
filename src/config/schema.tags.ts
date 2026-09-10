@@ -33,6 +33,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.controlUi.embedSandbox": ["security", "access", "advanced"],
   "gateway.controlUi.allowExternalEmbedUrls": ["security", "access", "network", "advanced"],
   "gateway.controlUi.automaticallyFetchFavicons": ["security", "network", "advanced"],
+  "gateway.controlUi.remoteImageOrigins": ["security", "network", "media", "advanced"],
   "gateway.controlUi.communityInvite": ["advanced"],
   "gateway.controlUi.github.token": ["security", "auth", "network", "advanced"],
   "gateway.controlUi.sessionObserver": ["advanced"],

@@ -164,6 +164,8 @@ export type GatewayControlUiConfig = {
   allowExternalEmbedUrls?: boolean;
   /** Fetch public-site favicons through the Gateway for Control UI links (default true). */
   automaticallyFetchFavicons?: boolean;
+  /** Exact HTTP or HTTPS origins permitted for browser-direct Markdown images in chat. */
+  remoteImageOrigins?: string[];
   /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];

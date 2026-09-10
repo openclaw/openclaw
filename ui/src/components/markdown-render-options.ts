@@ -14,6 +14,8 @@ export type MarkdownRenderOptions = {
   progressBars?: boolean;
   mode?: MarkdownRenderMode;
   remoteImages?: boolean;
+  /** Gateway-normalized exact origins allowed for browser-direct message images. */
+  remoteImageOrigins?: readonly string[];
   sessionLinks?: boolean;
   tableInteractions?: MarkdownTableInteractions;
 };
@@ -36,6 +38,7 @@ export function normalizeMarkdownRenderOptions(
     progressBars: options.progressBars ?? false,
     mode: options.mode ?? "message",
     remoteImages: options.remoteImages ?? options.mode === "document",
+    remoteImageOrigins: options.remoteImageOrigins ?? [],
     sessionLinks: options.sessionLinks ?? false,
     tableInteractions: options.tableInteractions ?? "none",
   };

@@ -222,6 +222,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
   "gateway.controlUi.automaticallyFetchFavicons":
     "Fetch link favicons through the Gateway (default on). The Gateway requests only HTTPS /favicon.ico from public destinations, applies strict SSRF checks to every DNS result and redirect, and validates bounded image bytes. Set false to prevent all favicon route requests and destination fetches.",
+  "gateway.controlUi.remoteImageOrigins":
+    "Exact bare HTTP or HTTPS origins that browsers may load inline from chat Markdown. Origins are normalized and must match scheme, hostname, and port exactly. This is browser-direct loading, so it does not provide Gateway-side SSRF or redirect enforcement.",
   "gateway.controlUi.allowedOrigins":
     'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":

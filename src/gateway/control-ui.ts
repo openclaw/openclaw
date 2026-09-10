@@ -79,6 +79,7 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
+import { normalizeControlUiRemoteImageOrigins } from "./control-ui-remote-images.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
   classifyControlUiRequest,
@@ -839,6 +840,7 @@ async function serveResolvedIndexHtml(
   allowWasm?: boolean,
   environment?: ControlUiEnvironment,
   buildId?: string,
+  remoteImageOrigins?: readonly string[],
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath, buildId);
@@ -872,6 +874,7 @@ async function serveResolvedIndexHtml(
       inlineScriptHashes: hashes,
       allowWasm,
       portalHost: req.headers.host,
+      remoteImageOrigins,
     }),
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -999,6 +1002,9 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
+  const remoteImageOrigins = normalizeControlUiRemoteImageOrigins(
+    opts?.config?.gateway?.controlUi?.remoteImageOrigins,
+  );
   // The embedded terminal ships ghostty-web (WASM); the index CSP carries the
   // WASM relaxation whenever the terminal is enabled (the default) and stays
   // strict once operators opt out with gateway.terminal.enabled: false.
@@ -1094,6 +1100,7 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
+      remoteImageOrigins,
       seamColor: config?.ui?.seamColor,
       environment: config?.gateway?.controlUi?.environment,
       communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
@@ -1324,6 +1331,7 @@ export async function handleControlUiHttpRequest(
       terminalEnabled,
       opts?.config?.gateway?.controlUi?.environment,
       publicAssetBuildId,
+      remoteImageOrigins,
     );
     return true;
   }

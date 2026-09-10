@@ -387,6 +387,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.embedSandbox": "Control UI Embed Sandbox Mode",
   "gateway.controlUi.allowExternalEmbedUrls": "Allow External Control UI Embed URLs",
   "gateway.controlUi.automaticallyFetchFavicons": "Automatically Fetch Link Favicons",
+  "gateway.controlUi.remoteImageOrigins": "Remote Markdown Image Origins",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "Dangerously Allow Host-Header Origin Fallback",

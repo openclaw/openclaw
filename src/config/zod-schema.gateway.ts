@@ -2,6 +2,7 @@ import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/a
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-contract.js";
+import { normalizeControlUiRemoteImageOrigin } from "../gateway/control-ui-remote-images.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -98,6 +99,22 @@ export const GatewayConfigSchema = z
           .optional(),
         allowExternalEmbedUrls: z.boolean().optional(),
         automaticallyFetchFavicons: z.boolean().optional(),
+        remoteImageOrigins: z
+          .array(
+            z
+              .string()
+              .trim()
+              .refine(
+                (value) => normalizeControlUiRemoteImageOrigin(value) !== undefined,
+                "Each gateway.controlUi.remoteImageOrigins entry must be a bare HTTP or HTTPS origin without credentials, path, query, or fragment",
+              ),
+          )
+          .transform((origins) =>
+            Array.from(
+              new Set(origins.map((origin) => normalizeControlUiRemoteImageOrigin(origin)!)),
+            ).toSorted(),
+          )
+          .optional(),
         allowedOrigins: z.array(z.string()).optional(),
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
       })

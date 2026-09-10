@@ -679,6 +679,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       connectionEpoch: state.connectionEpoch,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
+      remoteImageOrigins: state.remoteImageOrigins,
       fetchLinkFavicon,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
