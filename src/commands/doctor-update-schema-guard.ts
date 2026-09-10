@@ -1,3 +1,4 @@
+import path from "node:path";
 import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
@@ -16,6 +17,24 @@ import { readStateSchemaPublicationBlocker } from "../state/openclaw-state-schem
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import { VERSION } from "../version.js";
 
+/**
+ * Marks a snapshot cleanup failure so the guard can distinguish it from an
+ * unreadable driving updater. A missing or unreadable run cannot prove the
+ * driver writes the ledger and is tolerated; a cleanup failure is a real
+ * storage problem that must surface to the operator, not be swallowed.
+ */
+class DoctorSchemaSnapshotCleanupError extends Error {
+  constructor(stagingDir: string, cause: unknown) {
+    const readFailure =
+      cause === undefined ? "" : `${cause instanceof Error ? cause.message : String(cause)}; `;
+    super(
+      `${readFailure}State database snapshot cleanup failed: ${stagingDir}. Check directory permissions and available storage before retrying.`,
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = "DoctorSchemaSnapshotCleanupError";
+  }
+}
+
 async function readDrivingUpdater(): Promise<
   { version: string; canDeferStateSchema: boolean } | undefined
 > {
@@ -24,23 +43,41 @@ async function readDrivingUpdater(): Promise<
   const snapshot = await prepareSqliteReadOnlyLocation(resolveOpenClawStateSqlitePath(), {
     preserveSourceArtifacts: true,
   });
+  let outcome:
+    | { value: { version: string; canDeferStateSchema: boolean } | undefined }
+    | {
+        cause: unknown;
+      };
   try {
     const database = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
     try {
       const blocker = readStateSchemaPublicationBlocker(database);
-      return blocker
+      outcome = blocker
         ? {
-            version: blocker.updaterVersion,
-            canDeferStateSchema: tableExists(database, "config_machine_state"),
+            value: {
+              version: blocker.updaterVersion,
+              canDeferStateSchema: tableExists(database, "config_machine_state"),
+            },
           }
-        : undefined;
+        : { value: undefined };
     } finally {
       clearNodeSqliteKyselyCacheForDatabase(database);
       database.close();
     }
-  } finally {
-    snapshot.cleanup();
+  } catch (cause) {
+    outcome = { cause };
   }
+  // The exit retry is best-effort, not proof that this private copy was removed.
+  if (!snapshot.cleanup()) {
+    throw new DoctorSchemaSnapshotCleanupError(
+      path.dirname(snapshot.location),
+      "cause" in outcome ? outcome.cause : undefined,
+    );
+  }
+  if ("cause" in outcome) {
+    throw outcome.cause;
+  }
+  return outcome.value;
 }
 
 /** Refuse before CLI capture or Doctor maintenance can open writable state. */
@@ -67,8 +104,13 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   let updater: Awaited<ReturnType<typeof readDrivingUpdater>>;
   try {
     updater = await readDrivingUpdater();
-  } catch {
-    // A missing or unreadable run cannot prove that the driver writes the ledger.
+  } catch (error) {
+    // A missing or unreadable run cannot prove that the driver writes the ledger,
+    // so read failures are tolerated. A snapshot cleanup failure is a real storage
+    // problem and must surface rather than silently let the upgrade proceed.
+    if (error instanceof DoctorSchemaSnapshotCleanupError) {
+      throw error;
+    }
   }
   if (!updater) {
     return;
