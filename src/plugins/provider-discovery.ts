@@ -239,3 +239,13 @@ export async function prepareProviderStaticCatalog(params: {
     entries: Object.freeze(entries),
   });
 }
+
+export function resolvePreparedProviderStaticConfigs(
+  prepared: PreparedProviderStaticCatalog | undefined,
+): Record<string, ModelProviderConfig> {
+  const providers: Record<string, ModelProviderConfig> = {};
+  for (const entry of prepared?.entries ?? []) {
+    Object.assign(providers, normalizePluginDiscoveryResult(entry));
+  }
+  return providers;
+}

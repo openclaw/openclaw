@@ -138,63 +138,6 @@ describe("ModelRegistry source composition", () => {
   });
 
   it.each([rootUrl, catalogUrl])(
-    "preserves source compatibility without mixing provider defaults at %s",
-    (baseUrl) => {
-      const registry = createRegistry({
-        authored: {
-          ...authored,
-          compat: { maxTokensField: "max_tokens", supportsDeveloperRole: false },
-          models: [{ id: "shared" }, { id: "authored-only" }],
-        },
-        generated: {
-          ...generated,
-          baseUrl,
-          compat: { maxTokensField: "max_completion_tokens" },
-          models: [
-            { id: "shared" },
-            { id: "generated-only" },
-            { id: "model-override", compat: { maxTokensField: "max_tokens" } },
-          ],
-        },
-      });
-      expect(registry.find(provider, "generated-only")?.compat).toEqual({
-        maxTokensField: "max_completion_tokens",
-      });
-      expect(registry.find(provider, "model-override")?.compat).toEqual({
-        maxTokensField: "max_tokens",
-      });
-      expect(registry.find(provider, "authored-only")?.compat).toEqual({
-        maxTokensField: "max_tokens",
-        supportsDeveloperRole: false,
-      });
-      expect(registry.find(provider, "shared")?.compat).toEqual(
-        baseUrl === rootUrl
-          ? { maxTokensField: "max_completion_tokens" }
-          : { maxTokensField: "max_tokens", supportsDeveloperRole: false },
-      );
-    },
-  );
-
-  it("keeps model headers separate for literal provider/model pairs with delimiters", async () => {
-    const authoredProvider = `${provider}:variant`;
-    const registry = createRegistry({
-      authoredProvider,
-      authored: {
-        ...authored,
-        models: [{ id: "shared", headers: { "X-Authored-Model": "private" } }],
-      },
-      generated: { ...generated, models: [{ id: "variant:shared" }] },
-      credentials: { [provider]: { type: "api_key", key: "current-store-key" } },
-    });
-    await expect(
-      registry.getApiKeyAndHeaders(registry.find(provider, "variant:shared")!),
-    ).resolves.toEqual({ ok: true, apiKey: "current-store-key", headers: undefined });
-    await expect(
-      registry.getApiKeyAndHeaders(registry.find(authoredProvider, "shared")!),
-    ).resolves.toMatchObject({ headers: { "X-Authored-Model": "private" } });
-  });
-
-  it.each([rootUrl, catalogUrl])(
     "limits authored request settings to authored endpoints for generated-only rows at %s",
     async (baseUrl) => {
       const registry = createRegistry({

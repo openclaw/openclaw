@@ -101,6 +101,28 @@ describe("prepared model catalog builder", () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
   });
 
+  it.each(["static", "refreshable", "runtime"] as const)(
+    "keeps replace publication closed to %s manifest and augmented inventory",
+    async (discovery) => {
+      mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
+        { provider: "manifest-provider", id: "augmented-only", name: "Augmented" },
+      ]);
+      const snapshot = await build({
+        config: { models: { mode: "replace", providers: {} } },
+        metadataSnapshot: providerManifestSnapshot({
+          provider: "manifest-provider",
+          discovery,
+          modelIds: ["manifest-only"],
+        }),
+        readOnly: false,
+        includeProviderPluginAugmentation: true,
+      });
+      expect(snapshot.entries).toEqual([]);
+      expect(snapshot.routeVariants).toEqual([]);
+      expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["ready", "unavailable", "auth-rejected"] as const)(
     "preserves %s provider membership without replenishing it from metadata",
     async (status) => {
@@ -603,6 +625,7 @@ describe("prepared model catalog builder", () => {
     "keeps %s manifest models available without runtime account discovery",
     async (discovery) => {
       const snapshot = await build({
+        includeProviderPluginAugmentation: false,
         metadataSnapshot: providerManifestSnapshot({
           provider: "manifest-provider",
           discovery,
