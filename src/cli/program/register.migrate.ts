@@ -10,6 +10,7 @@ import {
 } from "../../commands/migrate.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 
 function collectMigrationSkill(value: string, previous: string[] | undefined): string[] {
@@ -24,9 +25,8 @@ function collectMigrationItem(value: string, previous: string[] | undefined): st
   return [...(previous ?? []), value];
 }
 
-function readMigrationItems(value: unknown, command?: Command): string[] | undefined {
-  const selected = Array.isArray(value) ? value : command?.parent?.opts().item;
-  return normalizeOptionalTrimmedStringList(selected);
+function readMigrationOption<T>(command: Command, name: string, value: T): T {
+  return inheritOptionFromParent<T>(command, name) ?? value;
 }
 
 function addMigrationSkillOption(command: Command): Command {
@@ -87,12 +87,39 @@ function readVerifyPluginApps(value: unknown): boolean {
   return value === true;
 }
 
-function readMigrationTargetAgentId(value: unknown, command: Command): string | undefined {
-  if (typeof value === "string") {
-    return value;
+function readSharedMigrationOptions(opts: Record<string, unknown>, command: Command) {
+  const agent = readMigrationOption(command, "agent", opts.agent);
+  return {
+    source: readMigrationOption(command, "from", opts.from as string | undefined),
+    targetAgentId: typeof agent === "string" ? agent : undefined,
+    includeSecrets:
+      readMigrationOption(command, "includeSecrets", opts.includeSecrets) === true
+        ? true
+        : undefined,
+    authCredentials: readMigrationOption(
+      command,
+      "authCredentials",
+      opts.authCredentials as boolean | undefined,
+    ),
+    overwrite: Boolean(readMigrationOption(command, "overwrite", opts.overwrite)),
+    skills: normalizeOptionalTrimmedStringList(readMigrationOption(command, "skill", opts.skill)),
+    plugins: normalizeOptionalTrimmedStringList(
+      readMigrationOption(command, "plugin", opts.plugin),
+    ),
+    itemIds: normalizeOptionalTrimmedStringList(readMigrationOption(command, "item", opts.item)),
+    verifyPluginApps: readVerifyPluginApps(
+      readMigrationOption(command, "verifyPluginApps", opts.verifyPluginApps),
+    ),
+    json: Boolean(readMigrationOption(command, "json", opts.json)),
+  };
+}
+
+function rejectUnsupportedApplyDryRun(command: Command): void {
+  if (inheritOptionFromParent<boolean>(command, "dryRun") === true) {
+    throw new Error(
+      "--dry-run is not supported for `openclaw migrate apply`. Run `openclaw migrate plan <provider>` or `openclaw migrate <provider> --dry-run` instead.",
+    );
   }
-  const parentValue = command.parent?.opts().agent;
-  return typeof parentValue === "string" ? parentValue : undefined;
 }
 
 /** Register migration commands and shared provider/item selection flags. */
@@ -157,7 +184,7 @@ export function registerMigrateCommand(program: Command) {
           overwrite: Boolean(opts.overwrite),
           skills: normalizeOptionalTrimmedStringList(opts.skill),
           plugins: normalizeOptionalTrimmedStringList(opts.plugin),
-          itemIds: readMigrationItems(opts.item),
+          itemIds: normalizeOptionalTrimmedStringList(opts.item),
           verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
           dryRun: Boolean(opts.dryRun),
           yes: Boolean(opts.yes),
@@ -173,9 +200,11 @@ export function registerMigrateCommand(program: Command) {
     .command("list")
     .description("List migration providers")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        await migrateListCommand(defaultRuntime, { json: Boolean(opts.json) });
+        await migrateListCommand(defaultRuntime, {
+          json: Boolean(readMigrationOption(command, "json", opts.json)),
+        });
       });
     });
 
@@ -187,16 +216,7 @@ export function registerMigrateCommand(program: Command) {
     await runCommandWithRuntime(defaultRuntime, async () => {
       await migratePlanCommand(defaultRuntime, {
         provider: provider as string,
-        source: opts.from as string | undefined,
-        targetAgentId: readMigrationTargetAgentId(opts.agent, command),
-        includeSecrets: opts.includeSecrets === true ? true : undefined,
-        authCredentials: opts.authCredentials as boolean | undefined,
-        overwrite: Boolean(opts.overwrite),
-        skills: normalizeOptionalTrimmedStringList(opts.skill),
-        plugins: normalizeOptionalTrimmedStringList(opts.plugin),
-        itemIds: readMigrationItems(opts.item, command),
-        verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
-        json: Boolean(opts.json),
+        ...readSharedMigrationOptions(opts, command),
       });
     });
   });
@@ -210,22 +230,18 @@ export function registerMigrateCommand(program: Command) {
     .option("--force", "Allow dangerous options such as --no-backup", false)
     .action(async (provider, opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        rejectUnsupportedApplyDryRun(command);
         await migrateApplyCommand(defaultRuntime, {
           provider: provider as string,
-          source: opts.from as string | undefined,
-          targetAgentId: readMigrationTargetAgentId(opts.agent, command),
-          includeSecrets: opts.includeSecrets === true ? true : undefined,
-          authCredentials: opts.authCredentials as boolean | undefined,
-          overwrite: Boolean(opts.overwrite),
-          skills: normalizeOptionalTrimmedStringList(opts.skill),
-          plugins: normalizeOptionalTrimmedStringList(opts.plugin),
-          itemIds: readMigrationItems(opts.item, command),
-          verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
-          yes: Boolean(opts.yes),
-          backupOutput: opts.backupOutput as string | undefined,
-          noBackup: opts.backup === false,
-          force: Boolean(opts.force),
-          json: Boolean(opts.json),
+          ...readSharedMigrationOptions(opts, command),
+          yes: Boolean(readMigrationOption(command, "yes", opts.yes)),
+          backupOutput: readMigrationOption(
+            command,
+            "backupOutput",
+            opts.backupOutput as string | undefined,
+          ),
+          noBackup: readMigrationOption(command, "backup", opts.backup) === false,
+          force: Boolean(readMigrationOption(command, "force", opts.force)),
         });
       });
     });
