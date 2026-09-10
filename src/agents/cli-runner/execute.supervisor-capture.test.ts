@@ -1296,21 +1296,44 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
   });
 
-  it("still streams every JSONL stdout chunk with supervisor capture disabled", async () => {
+  it("streams native thinking snapshots and text with supervisor capture disabled", async () => {
     // Streaming events are emitted from live chunks, not from the final captured
     // stdout string, so users still see deltas when captureOutput is false.
-    const agentEvents: Array<{ text?: string; delta?: string }> = [];
+    const agentEvents: Array<{
+      stream: string;
+      text?: string;
+      delta?: string;
+      isReasoningSnapshot?: boolean;
+    }> = [];
     const stop = onAgentEvent((event) => {
-      if (event.stream !== "assistant") {
+      if (event.stream !== "assistant" && event.stream !== "thinking") {
         return;
       }
       agentEvents.push({
+        stream: event.stream,
         text: typeof event.data.text === "string" ? event.data.text : undefined,
         delta: typeof event.data.delta === "string" ? event.data.delta : undefined,
+        ...(event.data.isReasoningSnapshot === true ? { isReasoningSnapshot: true } : {}),
       });
     });
     const chunks = [
       `${JSON.stringify({ type: "init", session_id: "session-jsonl" })}\n`,
+      ...[
+        { index: 0, thinking: "Checking " },
+        { index: 1, thinking: "facts." },
+        { index: 0, thinking: "the " },
+        { index: 1, thinking: " Done." },
+      ].map(
+        ({ index, thinking }) =>
+          `${JSON.stringify({
+            type: "stream_event",
+            event: {
+              type: "content_block_delta",
+              index,
+              delta: { type: "thinking_delta", thinking },
+            },
+          })}\n`,
+      ),
       `${JSON.stringify({
         type: "stream_event",
         event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hello" } },
@@ -1354,8 +1377,22 @@ describe("executePreparedCliRun supervisor output capture", () => {
       expect(result.text).toBe("Hello world");
       expect(result.toolSummary).toEqual({ calls: 0, tools: [], failures: 0 });
       expect(agentEvents).toEqual([
-        { text: "Hello", delta: "Hello" },
-        { text: "Hello world", delta: " world" },
+        { stream: "thinking", text: "Checking ", delta: "Checking ", isReasoningSnapshot: true },
+        { stream: "thinking", text: "Checking facts.", delta: "facts.", isReasoningSnapshot: true },
+        {
+          stream: "thinking",
+          text: "Checking the facts.",
+          delta: "the ",
+          isReasoningSnapshot: true,
+        },
+        {
+          stream: "thinking",
+          text: "Checking the facts. Done.",
+          delta: " Done.",
+          isReasoningSnapshot: true,
+        },
+        { stream: "assistant", text: "Hello", delta: "Hello" },
+        { stream: "assistant", text: "Hello world", delta: " world" },
       ]);
       expect(context.params.onExecutionPhase).toHaveBeenCalledTimes(2);
       expect(context.params.onExecutionPhase).toHaveBeenNthCalledWith(2, {
