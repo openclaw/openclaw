@@ -594,6 +594,7 @@ describe("plugin-sdk package contract guardrails", () => {
     const memoryCoreRuntime = await import("../../plugin-sdk/memory-core-host-runtime-core.js");
 
     expect(memoryCoreRuntime).not.toHaveProperty("recordMemoryArtifactWriteProvenance");
+    expect(memoryCoreRuntime).not.toHaveProperty("rebaseMemoryArtifactWriteProvenance");
   });
 
   it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {

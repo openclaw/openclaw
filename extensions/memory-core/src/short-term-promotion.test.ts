@@ -1,4 +1,5 @@
 // Memory Core tests cover short term promotion plugin behavior.
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -1861,6 +1862,125 @@ describe("short-term promotion", () => {
     const applied = await applyAllCandidates(workspaceDir, ranked);
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("origin filter (untrusted)");
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
+  it("rechecks provenance after relocating a candidate into an untrusted segment", async (workspaceDir) => {
+    const relativePath = "memory/2026-04-01.md";
+    const trustedPrefix = "Trusted replacement\n";
+    const untrustedClaim = "Relocated customer promise\n";
+    const content = `${trustedPrefix}${untrustedClaim}`;
+    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+      "Trusted replacement",
+      "Relocated customer promise",
+    ]);
+    await recordMemoryRecalls(workspaceDir, "customer promise", [
+      memoryRecallResult(relativePath, 1, 1, 0.92, "Relocated customer promise", {
+        provenance: {
+          originClass: "agent",
+          sessionKind: "unknown",
+          observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+        },
+      }),
+    ]);
+    const ranked = await rankAllCandidates(workspaceDir);
+    vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
+      {
+        relativePath,
+        provenance: {
+          fileHash: createHash("sha256").update(content).digest("hex"),
+          originClass: "untrusted",
+          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+          segments: [
+            {
+              startOffset: 0,
+              endOffset: trustedPrefix.length,
+              contentHash: createHash("sha256").update(trustedPrefix).digest("hex"),
+              originClass: "agent",
+              observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+            },
+            {
+              startOffset: trustedPrefix.length,
+              endOffset: content.length,
+              contentHash: createHash("sha256").update(untrustedClaim).digest("hex"),
+              originClass: "untrusted",
+              observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+            },
+          ],
+        },
+      },
+    ]);
+
+    const applied = await applyAllCandidates(workspaceDir, ranked);
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe(
+      "origin filter (untrusted after rehydration)",
+    );
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
+  it("rechecks incorporated heading provenance after relocation", async (workspaceDir) => {
+    const relativePath = "memory/2026-04-01.md";
+    const untrustedHeading = "## Imported decision\n";
+    const trustedBodyAndTail = "- Keep the verified customer promise\n\nTrusted replacement\n";
+    const content = `${untrustedHeading}${trustedBodyAndTail}`;
+    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+      "## Imported decision",
+      "- Keep the verified customer promise",
+      "",
+      "Trusted replacement",
+    ]);
+    await recordMemoryRecalls(workspaceDir, "customer promise", [
+      memoryRecallResult(
+        relativePath,
+        4,
+        4,
+        0.92,
+        "Imported decision: Keep the verified customer promise",
+        {
+          provenance: {
+            originClass: "agent",
+            sessionKind: "unknown",
+            observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+          },
+        },
+      ),
+    ]);
+    const ranked = await rankAllCandidates(workspaceDir);
+    vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
+      {
+        relativePath,
+        provenance: {
+          fileHash: createHash("sha256").update(content).digest("hex"),
+          originClass: "untrusted",
+          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+          segments: [
+            {
+              startOffset: 0,
+              endOffset: untrustedHeading.length,
+              contentHash: createHash("sha256").update(untrustedHeading).digest("hex"),
+              originClass: "untrusted",
+              observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+            },
+            {
+              startOffset: untrustedHeading.length,
+              endOffset: content.length,
+              contentHash: createHash("sha256").update(trustedBodyAndTail).digest("hex"),
+              originClass: "agent",
+              observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+            },
+          ],
+        },
+      },
+    ]);
+
+    const applied = await applyAllCandidates(workspaceDir, ranked);
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe(
+      "origin filter (untrusted after rehydration)",
+    );
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 

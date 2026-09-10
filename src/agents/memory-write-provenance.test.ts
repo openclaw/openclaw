@@ -96,4 +96,41 @@ describe("memory write provenance", () => {
       expect(commit).toHaveBeenCalledOnce();
     });
   });
+
+  it("keeps a grandfathered note trusted through its first agent append", async () => {
+    await withStateDirEnv("openclaw-memory-provenance-", async ({ tempRoot }) => {
+      const memoryDir = `${tempRoot}/memory`;
+      const target = `${memoryDir}/2026-08-20.md`;
+      await fs.mkdir(memoryDir);
+      await fs.writeFile(target, "operator note\n");
+      const observer = createMemoryWriteProvenanceObserver({
+        mutationRoot: tempRoot,
+        workspaceDir: tempRoot,
+        resolveOriginClass: () => "agent",
+        now: () => 2,
+      });
+      const operations = withMemoryWriteProvenance(
+        {
+          readFile: (file: string) => fs.readFile(file),
+          writeFile: (file: string, content: string) => fs.writeFile(file, content),
+        },
+        observer,
+      );
+
+      await operations.writeFile(target, "operator note\nverified append\n");
+
+      await expect(
+        readMemoryArtifactProvenance({
+          workspaceDir: tempRoot,
+          relativePath: "memory/2026-08-20.md",
+        }),
+      ).resolves.toMatchObject({
+        originClass: "agent",
+        segments: [
+          expect.objectContaining({ originClass: "agent" }),
+          expect.objectContaining({ originClass: "agent" }),
+        ],
+      });
+    });
+  });
 });

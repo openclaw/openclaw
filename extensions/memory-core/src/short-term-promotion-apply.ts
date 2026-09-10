@@ -10,7 +10,6 @@ import {
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveDailyRangeProvenance, type DailyProvenanceRecord } from "./daily-provenance.js";
 import {
   appendConsolidationSkippedSummary,
   appendConsolidationSummary,
@@ -39,8 +38,16 @@ import {
   buildPromotionRecallAnnotations,
   groupPromotionCandidatesByProjectKey,
 } from "./short-term-promotion-metadata.js";
-import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
-import { rehydratePromotionCandidate } from "./short-term-promotion-rehydrate.js";
+import {
+  isRelocatedRangeUntrusted,
+  withAuthoritativeProvenance,
+  withDailyRangeQuarantine,
+} from "./short-term-promotion-provenance.js";
+import {
+  promotionSourceFingerprint,
+  readPromotionSourceText,
+  rehydratePromotionCandidate,
+} from "./short-term-promotion-rehydrate.js";
 import { readStore, writeStore } from "./short-term-promotion-store.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -156,88 +163,8 @@ function consolidationCandidateFingerprint(candidate: PromotionCandidate): strin
   });
 }
 
-function withAuthoritativeProvenance(
-  candidate: PromotionCandidate,
-  provenance: PromotionCandidate["provenance"],
-): PromotionCandidate {
-  if (isPromotionOriginBlocked(candidate)) {
-    return candidate;
-  }
-  const next = { ...candidate };
-  if (provenance) {
-    next.provenance = provenance;
-  } else {
-    delete next.provenance;
-  }
-  return next;
-}
-
-function withDailyRangeQuarantine(
-  candidate: PromotionCandidate,
-  record: DailyProvenanceRecord | undefined,
-  content: string | undefined,
-): PromotionCandidate {
-  if (record?.originClass !== "untrusted") {
-    return candidate;
-  }
-  const provenance = content
-    ? resolveDailyRangeProvenance({
-        content,
-        record,
-        startLine: candidate.startLine,
-        endLine: candidate.endLine,
-        defaultObservedAt: record.observedAt,
-      })
-    : {
-        originClass: "untrusted" as const,
-        sessionKind: "unknown" as const,
-        observedAt: record.observedAt,
-      };
-  if (provenance.originClass !== "untrusted") {
-    return candidate;
-  }
-  return {
-    ...candidate,
-    provenance,
-  };
-}
-
-async function readPromotionSourceText(
-  workspaceDir: string,
-  candidatePath: string,
-): Promise<string | undefined> {
-  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, candidatePath)) {
-    try {
-      return await fs.readFile(sourcePath, "utf-8");
-    } catch (error) {
-      // SAFETY: Node filesystem failures expose errno codes through NodeJS.ErrnoException.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
-  return undefined;
-}
-
 function recallStoreEntryFingerprint(entry: ShortTermRecallEntry | undefined): string {
   return JSON.stringify(entry ?? null);
-}
-
-async function promotionSourceFingerprint(
-  workspaceDir: string,
-  candidate: PromotionCandidate,
-): Promise<string> {
-  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, candidate.path)) {
-    try {
-      const content = await fs.readFile(sourcePath);
-      return createHash("sha256").update(content).digest("hex");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
-  return "missing";
 }
 
 async function resolveMemoryPromotionLockTarget(workspaceDir: string): Promise<string> {
@@ -356,7 +283,18 @@ export async function applyShortTermPromotions(
   const plannedSourceFingerprints = new Map<string, string>();
   for (const candidate of selected) {
     const sourceFingerprintBefore = await promotionSourceFingerprint(workspaceDir, candidate);
-    const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
+    const rehydratedResult = await rehydratePromotionCandidate(workspaceDir, candidate);
+    const rehydrated = rehydratedResult?.candidate;
+    const normalizedPath = candidate.path.replaceAll("\\", "/");
+    const record = dailyProvenanceByPath.get(normalizedPath);
+    const relocatedSourceText = rehydrated
+      ? await readPromotionSourceText(workspaceDir, normalizedPath)
+      : undefined;
+    const relocatedRangeIsUntrusted = isRelocatedRangeUntrusted({
+      record,
+      content: relocatedSourceText,
+      ranges: rehydratedResult?.sourceRanges,
+    });
     const sourceFingerprintAfter = await promotionSourceFingerprint(workspaceDir, candidate);
     // Integrity is guarded by source-fingerprint stability during rehydration,
     // successful rehydration (the snippet still exists in the live file), the
@@ -366,7 +304,8 @@ export async function applyShortTermPromotions(
     if (
       sourceFingerprintBefore === sourceFingerprintAfter &&
       rehydrated &&
-      !isContaminatedDreamingSnippet(rehydrated.snippet)
+      !isContaminatedDreamingSnippet(rehydrated.snippet) &&
+      !relocatedRangeIsUntrusted
     ) {
       rehydratedSelected.push(rehydrated);
       plannedSourceFingerprints.set(candidate.key, sourceFingerprintAfter);
@@ -377,7 +316,9 @@ export async function applyShortTermPromotions(
           ? "source rehydration failed"
           : sourceFingerprintBefore !== sourceFingerprintAfter
             ? "source changed during apply"
-            : "contamination filter after rehydration",
+            : relocatedRangeIsUntrusted
+              ? "origin filter (untrusted after rehydration)"
+              : "contamination filter after rehydration",
       );
     }
   }

@@ -779,6 +779,7 @@ describe("plugin-sdk subpath exports", () => {
       omits: [
         'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
         "recordMemoryArtifactWriteProvenance",
+        "rebaseMemoryArtifactWriteProvenance",
       ],
     });
     expectSourceContract("memory-core-host-runtime-cli", {

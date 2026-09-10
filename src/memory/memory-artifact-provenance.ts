@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../infra/errors.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 
 const MEMORY_ARTIFACT_PROVENANCE_OWNER_ID = "core:memory-artifact-provenance";
@@ -164,7 +166,10 @@ function buildWriteProvenance(params: {
               content: params.contentBefore,
               startOffset: 0,
               endOffset: params.contentBefore.length,
-              originClass: params.previous?.originClass ?? "untrusted",
+              // Existing workspace notes predate the provenance ledger and were
+              // historically treated as operator-authored. Preserve that trust
+              // when the first tracked write appends new content.
+              originClass: params.previous?.originClass ?? "agent",
               observedAt: params.previous?.observedAt ?? params.observedAt,
             }),
           ])),
@@ -244,7 +249,9 @@ function buildRebasedProvenance(params: {
             content: params.contentBefore,
             startOffset: 0,
             endOffset: params.contentBefore.length,
-            originClass: params.previous?.originClass ?? "untrusted",
+            // A missing record means this is a grandfathered workspace note,
+            // not an untrusted import. Only the managed replacement is new.
+            originClass: params.previous?.originClass ?? "agent",
             observedAt: params.previous?.observedAt ?? params.observedAt,
           }),
         ]);
@@ -447,7 +454,7 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   };
 }
 
-export async function rebaseMemoryArtifactWriteProvenance(params: {
+async function reserveRebasedMemoryArtifactWriteProvenance(params: {
   workspaceDir: string;
   relativePath: string;
   contentBefore: string;
@@ -488,6 +495,63 @@ export async function rebaseMemoryArtifactWriteProvenance(params: {
     }
     rollbackStore.deleteIf(address.storeKey, (current) => current.reservationId === reservationId);
   };
+}
+
+export async function replaceMemoryArtifactFileWithProvenance(params: {
+  workspaceDir: string;
+  relativePath: string;
+  expectedContentBefore: string;
+  contentAfter: string;
+  observedAt: number;
+}): Promise<void> {
+  const address = resolveAddress(params);
+  if (!address) {
+    throw new Error(`Unsupported memory artifact path: ${params.relativePath}`);
+  }
+  const filePath = path.join(path.resolve(params.workspaceDir), ...address.relativePath.split("/"));
+  const contentBefore = await fs.readFile(filePath, "utf8").catch((error: unknown) => {
+    if (isMissingPathError(error)) {
+      return "";
+    }
+    throw error;
+  });
+  if (contentBefore !== params.expectedContentBefore) {
+    throw new Error(`Memory artifact changed before managed write: ${address.relativePath}`);
+  }
+
+  const rollback = await reserveRebasedMemoryArtifactWriteProvenance({
+    workspaceDir: params.workspaceDir,
+    relativePath: address.relativePath,
+    contentBefore,
+    contentAfter: params.contentAfter,
+    observedAt: params.observedAt,
+  });
+  try {
+    const directoryPath = path.dirname(filePath);
+    await fs.mkdir(directoryPath, { recursive: true });
+    const dirMode = (await fs.stat(directoryPath)).mode & 0o7777;
+    await replaceFileAtomic({
+      filePath,
+      content: params.contentAfter,
+      dirMode,
+      mode: 0o600,
+      preserveExistingMode: true,
+      tempPrefix: `${path.basename(filePath)}.memory-artifact`,
+      syncTempFile: true,
+      syncParentDir: true,
+      throwOnCleanupError: true,
+    });
+  } catch (error) {
+    try {
+      await rollback?.();
+    } catch (rollbackError) {
+      throw new Error(
+        `Memory artifact write failed and provenance rollback also failed: ${String(error)}`,
+        { cause: rollbackError },
+      );
+    }
+    throw error;
+  }
 }
 
 export async function clearMemoryArtifactProvenance(params: {
