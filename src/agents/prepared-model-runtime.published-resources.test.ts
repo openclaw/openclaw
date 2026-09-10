@@ -24,6 +24,7 @@ import {
 } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+import { isAuthStorageCredentialFree } from "./sessions/auth-storage-profiles.js";
 
 const selectedSource = vi.hoisted(() => {
   const state: {
@@ -219,6 +220,16 @@ module.exports = {
           let sideQuestion: ReturnType<typeof runBtwSideQuestion> | undefined;
           try {
             first = await acquireReadOnlyPreparedModelRuntime(input, undefined, "static");
+            const stores = first.snapshot.createStores();
+            expect(isAuthStorageCredentialFree(stores.authStorage)).toBe(true);
+            stores.modelRegistry.registerProvider(pluginId, {
+              api: "openai-completions",
+              apiKey: "synthetic-late-provider-fixture",
+              baseUrl: "https://fixture.invalid/v1",
+            });
+            await expect(
+              stores.modelRegistry.getApiKeyForProvider(pluginId),
+            ).resolves.toBeUndefined();
             expect(connections).toHaveLength(1);
             const original = expectDefined(connections[0], "original provider registration");
             if (mode === "published borrow") {

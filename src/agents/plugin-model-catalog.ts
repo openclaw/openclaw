@@ -13,17 +13,24 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import {
-  resolveAuthProfileDatabaseOwnerId,
-  resolveAuthProfileDatabasePath,
-} from "./auth-profiles/sqlite.js";
 import {
   isGeneratedPluginModelCatalog,
   repairPluginModelCatalogTransportMetadata,
 } from "./plugin-model-catalog-repair.js";
+import {
+  PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
+  PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
+  pluginModelCatalogDatabaseOptions,
+  readPersistedPluginModelCatalogEntries,
+  type PersistedPluginModelCatalog,
+  type PluginModelCatalogDatabase,
+} from "./plugin-model-catalog-storage.js";
+
+export {
+  rewriteVerifiedPluginCatalogCredentials,
+  type PersistedPluginModelCatalog,
+} from "./plugin-model-catalog-storage.js";
 
 export { isGeneratedPluginModelCatalog };
 export { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog-repair.js";
@@ -31,8 +38,6 @@ export { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog-repair
 // The in-memory planning key retains the established owner encoding; generated
 // payloads themselves are persisted only in the agent SQLite cache.
 const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
-const PLUGIN_MODEL_CATALOG_CACHE_SCOPE = "plugin-model-catalog-v1";
-const PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE = "plugin-model-catalog-migration-v1";
 
 const log = createSubsystemLogger("agents/plugin-model-catalog");
 
@@ -44,44 +49,10 @@ export function isPluginModelCatalogMigrationFile(filename: string): boolean {
   );
 }
 
-type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
-
-export type PersistedPluginModelCatalog = {
-  pluginId: string;
-  contents: string;
-};
-
 type PersistedPluginModelCatalogLoadResult = {
   catalogs: PersistedPluginModelCatalog[];
   warnings: string[];
 };
-
-function pluginModelCatalogDatabaseOptions(agentDir: string) {
-  return {
-    agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
-    path: resolveAuthProfileDatabasePath(agentDir),
-  };
-}
-
-function readPersistedPluginModelCatalogEntries(
-  agentDir: string,
-  scope: string,
-): PersistedPluginModelCatalog[] {
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(database.db);
-    return executeSqliteQuerySync(
-      database.db,
-      kysely
-        .selectFrom("cache_entries")
-        .select(["key", "value_json"])
-        .where("scope", "=", scope)
-        .orderBy("key"),
-    ).rows.flatMap((row) =>
-      row.value_json === null ? [] : [{ pluginId: row.key, contents: row.value_json }],
-    );
-  }, pluginModelCatalogDatabaseOptions(agentDir));
-  return result.found ? result.value : [];
-}
 
 function readPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
   return readPersistedPluginModelCatalogEntries(agentDir, PLUGIN_MODEL_CATALOG_CACHE_SCOPE);

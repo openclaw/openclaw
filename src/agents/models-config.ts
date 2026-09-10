@@ -31,6 +31,11 @@ import {
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
+  parseModelCatalogJson,
+  rewriteModelCatalogCredentialReferences,
+  type ModelCatalogCredentialReference,
+} from "./model-catalog-json.js";
+import {
   MODELS_JSON_STATE,
   type ModelsJsonReadyResult,
   type ModelsJsonReadyState,
@@ -147,7 +152,7 @@ async function readExistingModelsFile(pathname: string): Promise<{
     }
     return {
       raw,
-      parsed: JSON.parse(raw) as unknown,
+      parsed: parseModelCatalogJson(raw),
     };
   } catch {
     return {
@@ -282,6 +287,29 @@ function prepareModelsConfigContext(
 
 async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
   return await MODELS_JSON_STATE.writeQueue.enqueue(targetPath, run);
+}
+
+/** Doctor publishes verified references through the same root-catalog writer queue. */
+export async function rewriteVerifiedRootCatalogCredentials(
+  agentDir: string,
+  references: readonly ModelCatalogCredentialReference[],
+): Promise<void> {
+  if (references.length === 0) {
+    return;
+  }
+  await withModelsJsonWriteLock(path.join(agentDir, "models.json"), async () => {
+    const store = privateFileStore(agentDir);
+    const contents = await store.readTextIfExists("models.json");
+    if (contents === null) {
+      return;
+    }
+    // Read after queued writers settle. Only matching credential values change;
+    // newer keys and unrelated authored fields remain owned by their writer.
+    const rewritten = rewriteModelCatalogCredentialReferences(contents, references);
+    if (rewritten !== contents) {
+      await store.writeText("models.json", rewritten);
+    }
+  });
 }
 
 /** Ensures models.json and the agent SQLite catalog cache are current. */

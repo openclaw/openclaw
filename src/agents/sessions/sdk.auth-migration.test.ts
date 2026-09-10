@@ -1,4 +1,5 @@
 import { mkdir, rename } from "node:fs/promises";
+import { join } from "node:path";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -14,6 +15,8 @@ import {
 } from "../auth-profiles/sqlite.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
+import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -35,6 +38,56 @@ afterEach(() => {
 });
 
 describe("SDK migration guard endpoint context", () => {
+  it("refuses an unavailable exact profile before provider dispatch", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "exact-profile-dispatch-" },
+      async (state) => {
+        const agentDir = state.agentDir("main");
+        await state.writeJson("agents/main/agent/models.json", {
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://models.example/v1",
+              apiKey: "auth-profile:removed",
+              models: [{ id: "synthetic-model" }],
+            },
+          },
+        });
+        const authStorage = AuthStorage.inMemory();
+        const registry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+        const model = registry.find("custom", "synthetic-model");
+        if (!model) {
+          throw new Error("Expected configured model");
+        }
+        const providerIo = vi
+          .spyOn(getModelRegistryRuntime(registry).llmRuntime, "streamSimple")
+          .mockImplementation(() => createAssistantMessageEventStream());
+        const { session } = await createAgentSession({
+          agentDir,
+          authStorage,
+          modelRegistry: registry,
+          model,
+          resourceLoader: createResourceLoader(),
+          settingsManager: SettingsManager.inMemory(),
+          sessionManager: SessionManager.inMemory(),
+          noTools: "all",
+        });
+        try {
+          const stream = session.agent.streamFn;
+          if (!stream) {
+            throw new Error("SDK stream was not installed");
+          }
+          await expect(Promise.resolve(stream(model, { messages: [] }, {}))).rejects.toThrow(
+            "No API key found for exact auth profile",
+          );
+          expect(providerIo).not.toHaveBeenCalled();
+        } finally {
+          session.dispose();
+        }
+      },
+    );
+  });
+
   it.each<{
     route: string;
     baseUrl: string;

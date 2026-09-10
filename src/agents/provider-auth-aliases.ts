@@ -23,6 +23,8 @@ import type {
 /** Inputs that control plugin metadata and trust scope for auth alias lookup. */
 export type ProviderAuthAliasLookupParams = {
   config?: OpenClawConfig;
+  /** Actual authored request route when it is not part of the global config. */
+  baseUrl?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
@@ -85,7 +87,9 @@ function matchesProviderAuthEndpoint(
   if (params?.storedCredential) {
     return false;
   }
-  const baseUrl = resolveProviderAuthEndpoint(provider, params?.config);
+  const baseUrl =
+    params?.baseUrl?.trim().replace(/\/+$/, "") ??
+    resolveProviderAuthEndpoint(provider, params?.config);
   return baseUrl !== undefined && candidate.baseUrls.includes(baseUrl);
 }
 
@@ -95,7 +99,7 @@ export function hasUnresolvedProviderAuthEndpoint(
   params?: ProviderAuthAliasLookupParams,
 ): boolean {
   const normalized = normalizeProviderId(provider);
-  if (resolveProviderAuthEndpoint(normalized, params?.config)) {
+  if (params?.baseUrl?.trim() || resolveProviderAuthEndpoint(normalized, params?.config)) {
     return false;
   }
   return (

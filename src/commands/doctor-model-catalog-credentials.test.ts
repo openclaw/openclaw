@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
@@ -80,6 +80,53 @@ afterEach(() => {
 });
 
 describe("doctor model catalog credential migration", () => {
+  it.each([true, false])(
+    "preserves legacy exact profiles with an authored auth alias (config=%s)",
+    async (includeConfig) => {
+      const state = createState();
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            arcee: {
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [],
+            },
+          },
+        },
+      };
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            named: { type: "api_key", provider: "openrouter", key: "alias-canonical-fixture" },
+          },
+        },
+        state.agentDir,
+      );
+      const rootPath = path.join(state.agentDir, "models.json");
+      const contents = JSON.stringify({
+        providers: {
+          arcee: {
+            ...provider("named"),
+            baseUrl: "https://openrouter.ai/api/v1",
+          },
+        },
+      });
+      fs.writeFileSync(rootPath, contents);
+      expect(
+        await maybeMigrateModelCatalogCredentials(migrationParams(state, includeConfig ? cfg : {})),
+      ).toMatchObject({
+        detected: 0,
+        migrated: 0,
+        warnings: [],
+      });
+      expect(fs.readFileSync(rootPath, "utf8")).toBe(contents);
+      expect(loadPersistedAuthProfileStore(state.agentDir)?.profiles.named).toMatchObject({
+        key: "alias-canonical-fixture",
+      });
+    },
+  );
+
   it("copies config, root, and plugin catalog keys before runtime retires plaintext", async () => {
     const state = createState();
     const { agentDir } = state;
@@ -122,12 +169,105 @@ describe("doctor model catalog credential migration", () => {
       "root:default": { type: "api_key", provider: "root", key: "root-secret" },
       "plugin:default": { type: "api_key", provider: "plugin", key: "plugin-secret" },
     });
-    expect(fs.readFileSync(path.join(agentDir, "models.json"), "utf8")).toBe(rootContents);
+    const publishedRoot = fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
+    expect(publishedRoot).toBe(
+      rootContents.replace('"root-secret"', '"auth-profile:root:default"'),
+    );
+    expect(publishedRoot).not.toContain("root-secret");
     const pluginCatalog = loadPersistedPluginModelCatalogsReadOnly(agentDir)[0];
-    expect(pluginCatalog?.contents).toBe(pluginContents);
+    expect(JSON.parse(pluginCatalog?.contents ?? "{}").providers.plugin.apiKey).toBe(
+      "auth-profile:plugin:default",
+    );
+    expect(pluginCatalog?.contents).not.toContain("plugin-secret");
 
     const second = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
     expect(second).toMatchObject({ detected: 0, migrated: 0, warnings: [] });
+  });
+
+  it.each(["root", "plugin"])(
+    "publishes verified %s references despite another provider's profile-ID collision",
+    async (source) => {
+      const state = createState();
+      const apiKey = "other:catalog";
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [apiKey]: { type: "api_key", provider: "other", key: "unrelated-synthetic-key" },
+          },
+        },
+        state.agentDir,
+      );
+      const rootPath = path.join(state.agentDir, "models.json");
+      const contents = JSON.stringify({
+        ...(source === "plugin" ? { generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY } : {}),
+        operatorNote: "keep authored metadata",
+        providers: { custom: provider(apiKey) },
+      });
+      if (source === "root") {
+        fs.writeFileSync(rootPath, contents);
+      } else {
+        fs.writeFileSync(rootPath, JSON.stringify({ providers: {} }));
+        replacePersistedPluginModelCatalogs({
+          agentDir: state.agentDir,
+          pluginCatalogWrites: {
+            [encodePluginModelCatalogRelativePath("catalog-owner")]: contents,
+          },
+        });
+      }
+      expect(await maybeMigrateModelCatalogCredentials(migrationParams(state, {}))).toMatchObject({
+        migrated: 1,
+        warnings: [],
+      });
+      const published =
+        source === "root"
+          ? fs.readFileSync(rootPath, "utf8")
+          : (loadPersistedPluginModelCatalogsReadOnly(state.agentDir)[0]?.contents ?? "{}");
+      expect(JSON.parse(published)).toMatchObject({
+        operatorNote: "keep authored metadata",
+        providers: { custom: { apiKey: "auth-profile:custom:default" } },
+      });
+      const { ModelRegistry } = await import("../agents/sessions/model-registry.js");
+      const { AuthStorage } = await import("../agents/sessions/auth-storage.js");
+      const { createPluginMetadataSnapshotFixture } =
+        await import("../plugins/plugin-metadata.test-support.js");
+      const registry = ModelRegistry.create(AuthStorage.forAgent(state.agentDir, {}), rootPath, {
+        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "catalog-owner", providers: ["custom"] }],
+        }),
+      });
+      const model = registry.find("custom", "example-model");
+      assert(model, "The migrated catalog must retain its model");
+      expect(await registry.getApiKeyAndHeaders(model)).toMatchObject({ apiKey });
+      expect(loadPersistedAuthProfileStore(state.agentDir)?.profiles[apiKey]).toMatchObject({
+        provider: "other",
+        key: "unrelated-synthetic-key",
+      });
+    },
+  );
+
+  it("preserves catalog edits made while migration confirmation is pending", async () => {
+    const state = createState();
+    const rootPath = path.join(state.agentDir, "models.json");
+    fs.writeFileSync(
+      rootPath,
+      JSON.stringify({ providers: { custom: provider("old-fixture-key") } }),
+    );
+    const current = JSON.stringify({
+      operatorNote: "new writer",
+      providers: { custom: provider("replacement-fixture-key") },
+    });
+    const params = migrationParams(state, {});
+    params.prompter = createDoctorPrompter({ runtime: params.runtime, options: {} });
+    vi.spyOn(params.prompter, "confirmAutoFix").mockImplementation(async () => {
+      fs.writeFileSync(rootPath, current);
+      return true;
+    });
+    expect(await maybeMigrateModelCatalogCredentials(params)).toMatchObject({
+      migrated: 1,
+      warnings: [],
+    });
+    expect(fs.readFileSync(rootPath, "utf8")).toBe(current);
   });
 
   it("preserves custom provider env references and removes profiles containing their markers", async () => {

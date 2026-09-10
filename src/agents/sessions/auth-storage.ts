@@ -6,7 +6,6 @@
  * projects provider-default profiles into it.
  */
 
-import fs from "node:fs";
 import { dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
@@ -18,7 +17,7 @@ import type {
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
+import { OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
@@ -29,15 +28,10 @@ import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "../auth-profiles/oauth-refresh-marker.js";
-import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import {
-  inspectPersistedAuthProfileStateRaw,
-  inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
-  type AuthProfileDatabase,
 } from "../auth-profiles/sqlite.js";
-import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
   createAuthProfileStoreReadScope,
   saveAuthProfileStoreWithPreparedOwner,
@@ -48,7 +42,10 @@ import type {
   RuntimeAuthProfileStore,
 } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
-import { AuthStoragePersistenceError } from "./auth-storage-error.js";
+import {
+  assertDeprecatedAuthStoragePathAbsent,
+  AuthStoragePersistenceError,
+} from "./auth-storage-error.js";
 import {
   isAuthStorageOAuthRefreshFence,
   refreshAuthStorageOAuthCredential,
@@ -59,11 +56,17 @@ import {
   resolveAuthStoragePluginOAuthCredential,
 } from "./auth-storage-oauth-registry.js";
 import {
+  attachLiveAuthStorageProfiles,
+  isAuthStorageCredentialFree,
+  registerAuthStorageRuntimeOverride,
+} from "./auth-storage-profiles.js";
+import {
   applyAuthStorageData,
   assertAuthStorageSecretRefsMaterialized,
   materializeAuthStorageStore,
   projectAuthoritativeAuthStorageData,
 } from "./auth-storage-projection.js";
+import { loadSqliteAuthStorageStore } from "./auth-storage-sqlite-read.js";
 import type {
   AuthCredential,
   AuthStorageBackend,
@@ -96,26 +99,6 @@ function emitAuthStorageDeprecationWarning(params: {
   process.emitWarning(params.message, { code: params.code, type: "DeprecationWarning" });
 }
 
-class AuthStorageLegacyPathMigrationRequiredError extends Error {
-  readonly code = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
-  readonly action = "migrate to AuthStorage.forAgent(agentDir)" as const;
-
-  constructor() {
-    super(
-      "Deprecated AuthStorage path contains unmigrated credentials; run openclaw doctor --fix for standard agent auth.json or migrate plugin storage to AuthStorage.forAgent(agentDir).",
-    );
-    this.name = "AuthStorageLegacyPathMigrationRequiredError";
-  }
-}
-
-function assertDeprecatedAuthStoragePathAbsent(authPath: string | undefined): void {
-  // Deprecated adapters use this path only to derive the SQLite owner and
-  // never create or write it. An existing file is therefore unmigrated input.
-  if (authPath && fs.existsSync(authPath)) {
-    throw new AuthStorageLegacyPathMigrationRequiredError();
-  }
-}
-
 export type AuthStatus = {
   configured: boolean;
   source?:
@@ -137,33 +120,6 @@ function collectStateOnlyAuthProfileIds(store: AuthProfileStore): string[] {
   return [...referenced].filter((profileId) => !store.profiles[profileId]);
 }
 
-function loadSqliteAuthStorageStore(
-  agentDir: string,
-  database?: AuthProfileDatabase,
-): AuthProfileStore {
-  const inspection = inspectPersistedAuthProfileStoreRaw(agentDir, database);
-  if (inspection.status === "missing") {
-    const stateInspection = inspectPersistedAuthProfileStateRaw(agentDir, database);
-    if (stateInspection.status === "unreadable") {
-      throw new AuthProfileStoreUnreadableError(
-        database?.path ?? resolveAuthProfileDatabasePath(agentDir),
-      );
-    }
-    return {
-      version: AUTH_STORE_VERSION,
-      profiles: {},
-      ...loadPersistedAuthProfileState(agentDir, database),
-    };
-  }
-  const store = loadPersistedAuthProfileStore(agentDir, database ? { database } : undefined);
-  if (inspection.status === "unreadable" || !store) {
-    throw new AuthProfileStoreUnreadableError(
-      database?.path ?? resolveAuthProfileDatabasePath(agentDir),
-    );
-  }
-  return store;
-}
-
 class SqliteAuthStorageBackend implements AuthStorageBackend {
   private credentialSources = new Map<string, AuthProfileCredentialSource>();
 
@@ -171,6 +127,26 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     private readonly scope: ReturnType<typeof createAuthProfileStoreReadScope>,
     private readonly preparedStore: AuthProfileStore,
   ) {}
+
+  hasProfileId(profileId: string): boolean {
+    return Object.hasOwn(this.scope.read().profiles, profileId);
+  }
+
+  readProfile(profileId: string, baseUrl?: string) {
+    const store: RuntimeAuthProfileStore = this.scope.read();
+    const profile = materializeAuthStorageStore(store, this.resolveMaterializedRuntimeStores())
+      .profiles[profileId];
+    const source = store.runtimeCredentialSources?.[profileId];
+    if (source) {
+      this.scope.assertCredentialReady(source, baseUrl);
+    } else if (store.runtimePersistedProfileIds?.includes(profileId)) {
+      throw new AuthStoragePersistenceError(
+        "Canonical auth credential is missing its source owner.",
+        undefined,
+      );
+    }
+    return { profile, source };
+  }
 
   private get agentDir(): string {
     return this.scope.agentDir;
@@ -408,11 +384,48 @@ export class AuthStorage {
   private storage: AuthStorageBackend;
   private constructor(storage: AuthStorageBackend) {
     this.storage = storage;
+    registerAuthStorageRuntimeOverride(this, (provider) => this.runtimeOverrides.get(provider));
     this.reload();
   }
 
   static forAgent(agentDir: string = getAgentDir(), config?: OpenClawConfig): AuthStorage {
-    return new AuthStorage(createSqliteAuthStorageBackend(agentDir, config));
+    const backend = createSqliteAuthStorageBackend(agentDir, config);
+    const storage = new AuthStorage(backend);
+    return attachLiveAuthStorageProfiles(
+      storage,
+      (provider, profileId, baseUrl) => {
+        const assertReady = () => {
+          backend.assertProviderReady(provider, baseUrl);
+          const error = storage.getCanonicalLoadError();
+          if (error) {
+            throw error;
+          }
+        };
+        assertReady();
+        const selected = structuredClone(backend.readProfile(profileId, baseUrl));
+        assertReady();
+        if (!selected.profile) {
+          return undefined;
+        }
+        return {
+          profile: selected.profile,
+          assertCurrent: () => {
+            assertReady();
+            if (selected.source) {
+              backend.assertCredentialReady(selected.source, baseUrl);
+            }
+            // Do not authorize an earlier request with a replacement key or owner.
+            if (!isDeepStrictEqual(selected, backend.readProfile(profileId, baseUrl))) {
+              throw new AuthStoragePersistenceError(
+                "Canonical auth profile changed during request preparation.",
+                undefined,
+              );
+            }
+          },
+        };
+      },
+      (profileId) => backend.hasProfileId(profileId),
+    );
   }
 
   /**
@@ -604,8 +617,8 @@ export class AuthStorage {
    * Unlike getApiKey(), this doesn't refresh OAuth tokens.
    */
   hasAuth(provider: string): boolean {
-    if (this.runtimeOverrides.has(provider)) {
-      return true;
+    if (this.runtimeOverrides.has(provider) || isAuthStorageCredentialFree(this)) {
+      return this.runtimeOverrides.has(provider);
     }
     if (this.get(provider)) {
       return true;
@@ -623,6 +636,11 @@ export class AuthStorage {
    * Return auth status without exposing credential values or refreshing tokens.
    */
   getAuthStatus(provider: string): AuthStatus {
+    if (isAuthStorageCredentialFree(this)) {
+      return this.runtimeOverrides.has(provider)
+        ? { configured: false, source: "runtime", label: "--api-key" }
+        : { configured: false };
+    }
     if (this.get(provider)) {
       return { configured: true, source: "stored" };
     }
@@ -718,7 +736,7 @@ export class AuthStorage {
   ): Promise<string | undefined> {
     // Runtime override takes highest priority
     const runtimeKey = this.runtimeOverrides.get(providerId);
-    if (runtimeKey) {
+    if (runtimeKey || isAuthStorageCredentialFree(this)) {
       return runtimeKey;
     }
 

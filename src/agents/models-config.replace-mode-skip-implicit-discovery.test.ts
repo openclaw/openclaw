@@ -77,7 +77,10 @@ describe("models-config plan: replace mode skips implicit discovery", () => {
     }
     const generated = JSON.parse(plan.contents) as { providers: Record<string, ProviderConfig> };
     expect(Object.keys(generated.providers).toSorted()).toEqual(providerIds);
-    expect(generated.providers.explicit).toEqual(explicitProvider);
+    const { apiKey: _configuredKey, ...explicitMetadata } = explicitProvider;
+    expect(generated.providers.explicit).toEqual(explicitMetadata);
+    expect(generated.providers.explicit).not.toHaveProperty("apiKey");
+    expect(cfg.models?.providers?.explicit?.apiKey).toBe("EXPLICIT_API_KEY");
   });
 
   it("forwards resolved runtime config separately from source config", async () => {

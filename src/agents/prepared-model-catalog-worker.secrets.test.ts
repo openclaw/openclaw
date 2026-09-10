@@ -366,11 +366,16 @@ module.exports = {
         if (!catalog) {
           throw new Error("Expected the provider-owned writable catalog");
         }
-        expect(JSON.parse(catalog.contents)).toMatchObject({
-          providers: { [provider]: { apiKey: loader ? value : NON_ENV_SECRETREF_MARKER } },
-        });
+        const publishedProvider = JSON.parse(catalog.contents).providers[provider];
+        if (loader) {
+          // Discovery and native/worker auth above still use the configured
+          // credential, but the generated projection is no longer its owner.
+          expect(publishedProvider).not.toHaveProperty("apiKey");
+        } else {
+          expect(publishedProvider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+        }
         expect(JSON.stringify(plans)).not.toContain("discoveryApiKey");
-        if (!loader && value !== NON_ENV_SECRETREF_MARKER) {
+        if (value !== NON_ENV_SECRETREF_MARKER) {
           expect(JSON.stringify(plans).includes(value)).toBe(false);
         }
         if (alternativeFingerprint !== undefined) {

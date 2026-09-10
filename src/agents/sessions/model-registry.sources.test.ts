@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
 import { ModelRegistry } from "./model-registry.js";
@@ -10,7 +10,7 @@ const catalogUrl = "https://catalog.example.test/v1";
 const authored = {
   api: "openai-completions",
   baseUrl: rootUrl,
-  apiKey: "authored-fixture-key",
+  apiKey: "REGISTRY_AUTHORED_API_KEY",
   headers: { "X-Authored-Provider": "root" },
   models: [
     { id: "shared", name: "Authored", maxTokens: 2048, headers: { "X-Authored-Model": "root" } },
@@ -80,6 +80,22 @@ function createRegistry(
 }
 
 describe("ModelRegistry source composition", () => {
+  beforeEach(() => vi.stubEnv("REGISTRY_AUTHORED_API_KEY", "authored-fixture-key"));
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("requires migration before a retained literal root credential can authenticate", async () => {
+    const registry = createRegistry({
+      authored: { ...authored, apiKey: "retained-literal-fixture-key" },
+      credentials: { [provider]: { type: "api_key", key: "unrelated-canonical-key" } },
+    });
+    const model = registry.find(provider, "shared")!;
+    expect(registry.hasConfiguredAuth(model)).toBe(false);
+    await expect(registry.getApiKeyAndHeaders(model)).resolves.toEqual({
+      ok: false,
+      error: "No API key found for exact auth profile.",
+    });
+  });
+
   it.each([rootUrl, catalogUrl])(
     "preserves source compatibility without mixing provider defaults at %s",
     (baseUrl) => {

@@ -270,6 +270,9 @@ importers:
       json5:
         specifier: 2.2.3
         version: 2.2.3
+      jsonc-parser:
+        specifier: 3.3.1
+        version: 3.3.1
       jszip:
         specifier: 3.10.1
         version: 3.10.1

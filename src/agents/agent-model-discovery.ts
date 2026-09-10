@@ -14,6 +14,10 @@ import type {
   PluginModelCatalogMetadataSnapshot,
   PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
+import {
+  attachAuthStorageProfiles,
+  markAuthStorageCredentialFree,
+} from "./sessions/auth-storage-profiles.js";
 import { AuthStorage, type AuthStorage as AgentAuthStorage } from "./sessions/auth-storage.js";
 import {
   ModelRegistry,
@@ -142,7 +146,13 @@ export function discoverAuthStorageFacts(
     options?.skipCredentials === true
       ? { store: { version: 1, profiles: {} }, credentials: {} }
       : resolveAgentDiscoveryAuthFacts(agentDir, options);
-  return { ...facts, authStorage: AuthStorage.inMemory(facts.credentials) };
+  const authStorage = AuthStorage.inMemory(facts.credentials);
+  if (options?.skipCredentials === true) {
+    markAuthStorageCredentialFree(authStorage);
+  } else {
+    attachAuthStorageProfiles(authStorage, facts.store);
+  }
+  return { ...facts, authStorage };
 }
 
 /** Creates the model registry used by agent model discovery. */

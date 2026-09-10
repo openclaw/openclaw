@@ -39,6 +39,7 @@ import {
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
+import { attachAuthStorageProfiles } from "./sessions/auth-storage-profiles.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 function refreshAuthStore(params: {
@@ -238,7 +239,7 @@ export async function runPreparedModelCatalogWorkerRequest(
     const exactAgentFacts = {
       ...prepared.agentFacts,
       authStore,
-      templateAuthStorage: AuthStorage.inMemory(credentials),
+      templateAuthStorage: attachAuthStorageProfiles(AuthStorage.inMemory(credentials), authStore),
       credentials,
       providerIds: [...new Set([...value.providerIds, ...Object.keys(credentials)])].toSorted(
         (left, right) => left.localeCompare(right),

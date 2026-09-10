@@ -13,7 +13,10 @@ import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import * as modelsConfigProviders from "./models-config.providers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
-import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
+import {
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  encodePluginModelCatalogRelativePath,
+} from "./plugin-model-catalog.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
@@ -650,4 +653,192 @@ describe("models-config", () => {
       );
     });
   });
+});
+
+describe("generated catalog credential serialization", () => {
+  const apiKey = "synthetic-catalog-credential";
+  const provider = createImplicitOpenAiProvider({ apiKey });
+  const store = {
+    version: 1,
+    profiles: { "openai:catalog": { type: "api_key" as const, provider: "openai", key: apiKey } },
+  };
+  const metadata = createPluginMetadataSnapshotFixture({
+    plugins: [{ id: "catalog-owner", providers: ["openai"] }],
+  });
+
+  it("keeps config-owned credentials out of newly generated catalogs without importing profiles", async () => {
+    const cfg: OpenClawConfig = { models: { mode: "replace", providers: { openai: provider } } };
+    const plan = await planModelsJsonForTest({
+      cfg,
+      agentDir: "/tmp/openclaw-catalog-serialization",
+      env: {},
+      authStore: { version: 1, profiles: {} },
+      existingRaw: "",
+      existingParsed: null,
+    });
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected generated catalog");
+    }
+    expect(JSON.parse(plan.contents).providers.openai.models[0].id).toBe("gpt-5.5");
+    expect(JSON.parse(plan.contents).providers.openai).not.toHaveProperty("apiKey");
+    expect(plan.contents).not.toContain(apiKey);
+    expect(cfg.models?.providers?.openai?.apiKey).toBe(apiKey);
+  });
+
+  it("does not restore a generated root credential during the final preservation merge", async () => {
+    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockImplementation(async () => ({
+      openai: provider,
+    }));
+
+    const plan = await planModelsJsonForTest({
+      cfg: {},
+      agentDir: "/tmp/openclaw-catalog-serialization",
+      env: {},
+      authStore: store,
+      existingRaw: "",
+      existingParsed: { providers: { openai: provider } },
+    });
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected generated catalog");
+    }
+    expect(JSON.parse(plan.contents).providers.openai.apiKey).toBe("auth-profile:openai:catalog");
+    expect(plan.contents).not.toContain(apiKey);
+  });
+
+  it("retains fresh inventory without granting a different provider's transient discovery credential", async () => {
+    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockImplementation(async () => ({
+      openai: provider,
+    }));
+
+    const plan = await planModelsJsonForTest({
+      cfg: {},
+      agentDir: "/tmp/openclaw-catalog-serialization",
+      env: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          "other:catalog": {
+            type: "api_key",
+            provider: "other",
+            key: apiKey,
+          },
+        },
+      },
+      existingRaw: "",
+      existingParsed: null,
+    });
+    if (plan.action !== "write") {
+      throw new Error("Expected generated catalog");
+    }
+    expect(JSON.parse(plan.contents).providers.openai.models[0].id).toBe("gpt-5.5");
+    expect(JSON.parse(plan.contents).providers.openai).not.toHaveProperty("apiKey");
+    expect(plan.contents).not.toContain(apiKey);
+    expect(plan.contents).not.toContain("other:catalog");
+  });
+
+  it("keeps exact profile identity when another profile's credential has identical bytes", async () => {
+    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockImplementation(async () => ({
+      openai: { ...provider, apiKey: profileId },
+    }));
+
+    const profileId = "openai:named";
+    const plan = await planModelsJsonForTest({
+      cfg: {},
+      agentDir: "/tmp/openclaw-catalog-serialization",
+      env: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:collision": { type: "api_key", provider: "openai", key: profileId },
+          [profileId]: { type: "api_key", provider: "openai", key: "synthetic-named-key" },
+        },
+      },
+      existingRaw: "",
+      existingParsed: null,
+    });
+    if (plan.action !== "write") {
+      throw new Error("Expected generated catalog");
+    }
+    expect(JSON.parse(plan.contents).providers.openai.apiKey).toBe(`auth-profile:${profileId}`);
+    expect(plan.contents).not.toContain("openai:collision");
+  });
+
+  it.each(["openai:removed", "other:catalog", "removedaccount", "otheraccount"])(
+    "does not discard an unavailable exact reference %s",
+    async (profileReference) => {
+      vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockImplementation(async () => ({
+        openai: { ...provider, apiKey: profileReference },
+      }));
+
+      await expect(
+        planModelsJsonForTest({
+          cfg: {},
+          agentDir: "/tmp/openclaw-catalog-serialization",
+          env: {},
+          authStore: {
+            version: 1,
+            profiles: {
+              "other:catalog": {
+                type: "api_key",
+                provider: "other",
+                key: "synthetic-other-credential",
+              },
+              otheraccount: {
+                type: "api_key",
+                provider: "other",
+                key: "synthetic-another-credential",
+              },
+            },
+          },
+          existingRaw: "",
+          existingParsed: null,
+        }),
+      ).rejects.toThrow("doctor --fix");
+    },
+  );
+
+  it.each([true, false])(
+    "checks retained generated credentials with empty discovery (verified=%s)",
+    async (verified) => {
+      vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockImplementation(
+        async () => ({}),
+      );
+
+      const authoredRoot = { operatorNote: "retain operator metadata", providers: {} };
+      const operation = planModelsJsonForTest({
+        cfg: {},
+        agentDir: "/tmp/openclaw-catalog-serialization",
+        env: {},
+        authStore: verified ? store : { version: 1, profiles: {} },
+        existingRaw: JSON.stringify(authoredRoot),
+        existingParsed: authoredRoot,
+        pluginMetadataSnapshot: metadata,
+        pluginCatalogs: [
+          {
+            pluginId: "catalog-owner",
+            contents: JSON.stringify({
+              generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+              providers: { openai: provider },
+            }),
+          },
+        ],
+      });
+      if (!verified) {
+        await expect(operation).rejects.toThrow("doctor --fix");
+        return;
+      }
+      const plan = await operation;
+      expect(plan.action).toBe("write");
+      expect(plan.action === "write" && JSON.parse(plan.contents)).toMatchObject(authoredRoot);
+      const contents =
+        plan.pluginCatalogWrites?.[encodePluginModelCatalogRelativePath("catalog-owner")];
+      expect(contents).toBeDefined();
+      expect(JSON.parse(contents ?? "{}").providers.openai.apiKey).toBe(
+        "auth-profile:openai:catalog",
+      );
+      expect(contents).not.toContain(apiKey);
+    },
+  );
 });
