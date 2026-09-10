@@ -4070,6 +4070,11 @@ td.data-table-key-col {
   flex: 0 1 96px;
 }
 
+.agent-identity-editor__fields input {
+  min-width: 0;
+  width: 100%;
+}
+
 .agent-identity-editor__hint {
   font-size: 12px;
 }
