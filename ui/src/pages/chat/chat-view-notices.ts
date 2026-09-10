@@ -172,12 +172,13 @@ function renderProviderPolicyNotice(notice: ProviderPolicyNotice | null | undefi
   }
   const blocked = notice.state === "blocked" || notice.state === "unavailable";
   const model = notice.fallbackModel ?? notice.model;
+  // Only buffering and blocked have model-free copy; the rest name a model and
+  // fall back to the generic line when the event carried none.
+  const namesModel = notice.state !== "buffering" && notice.state !== "blocked";
   const body =
-    notice.state === "fallback" || notice.state === "escalated" || notice.state === "unavailable"
-      ? model
-        ? t(`chat.providerPolicy.${notice.state}Body`, { model })
-        : t("chat.providerPolicy.fallbackUnknownBody")
-      : t(`chat.providerPolicy.${notice.state}Body`);
+    namesModel && !model
+      ? t("chat.providerPolicy.fallbackUnknownBody")
+      : t(`chat.providerPolicy.${notice.state}Body`, { model: model ?? "" });
   return html`
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--${blocked ? "danger" : "warn"} chat-provider-policy-notice"

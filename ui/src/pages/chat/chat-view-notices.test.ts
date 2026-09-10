@@ -13,15 +13,11 @@ it.each([
   ["buffering", "status", "OpenAI is reviewing this response for cyber safety."],
   ["blocked", "alert", "OpenAI blocked this response under its cyber policy."],
   ["fallback", "status", "OpenAI routed this response to <img src=x onerror=alert(1)>."],
-  [
-    "escalated",
-    "status",
-    "OpenAI declined this request, so it was retried on <img src=x onerror=alert(1)>.",
-  ],
+  ["escalated", "status", "OpenAI declined this request; retried on <img src=x onerror=alert(1)>."],
   [
     "unavailable",
     "alert",
-    "OpenAI declined this request and <img src=x onerror=alert(1)> is not authorized here.",
+    "OpenAI declined this request; <img src=x onerror=alert(1)> is not authorized.",
   ],
 ] as const)(
   "renders the %s provider notice above the composer as plain text",

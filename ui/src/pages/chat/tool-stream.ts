@@ -22,6 +22,16 @@ import { handlePreambleProgress } from "./tool-stream-preamble.ts";
 import { cancelToolStreamSync, syncToolStreamMessages } from "./tool-stream-state.ts";
 import { handleStreamStatus, resolveAcceptedSession } from "./tool-stream-status.ts";
 
+// How far a cyber notice has settled. A lower value never replaces a higher one
+// for the same run, which keeps reroutes and blocks safe from a late review
+// update and makes an automatic Daybreak escalation terminal.
+const PROVIDER_POLICY_PRECEDENCE = {
+  buffering: 0,
+  fallback: 1,
+  blocked: 2,
+  escalated: 3,
+  unavailable: 3,
+} as const;
 const TOOL_STREAM_LIMIT = 50;
 const RUN_USAGE_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -323,21 +333,6 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
       return true;
     }
     (host.activityEventSeqById ??= new Map()).set(identity, payload.seq);
-    const currentNotice = host.providerPolicyNotice;
-    // A block is terminal for the provider's own outcome, but an automatic
-    // Daybreak escalation happens after it and is the newer, truer result. The
-    // escalation outcome is then terminal for the turn in its own right.
-    const escalationOutcome = state === "escalated" || state === "unavailable";
-    const settledByEscalation =
-      currentNotice?.state === "escalated" || currentNotice?.state === "unavailable";
-    if (
-      currentNotice?.runId === payload.runId &&
-      (settledByEscalation ||
-        (currentNotice.state === "blocked" && !escalationOutcome) ||
-        (currentNotice.state === "fallback" && state === "buffering"))
-    ) {
-      return true;
-    }
     if (state === "cleared") {
       if (
         host.providerPolicyNotice?.runId === payload.runId &&
@@ -345,6 +340,16 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
       ) {
         host.providerPolicyNotice = null;
       }
+      return true;
+    }
+    const currentNotice = host.providerPolicyNotice;
+    // Outcomes only ever settle further: a transient review cannot replace a
+    // reroute or a block, and an automatic Daybreak escalation is the last word
+    // because it happens after the block it followed.
+    if (
+      currentNotice?.runId === payload.runId &&
+      PROVIDER_POLICY_PRECEDENCE[state] < PROVIDER_POLICY_PRECEDENCE[currentNotice.state]
+    ) {
       return true;
     }
     const model = toTrimmedString(data.model);
