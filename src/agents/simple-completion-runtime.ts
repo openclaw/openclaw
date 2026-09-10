@@ -164,6 +164,7 @@ export type PrepareSimpleCompletionModelParams = {
   agentId?: string;
   provider: string;
   modelId: string;
+  modelIdSource?: "input" | "selected";
   agentDir?: string;
   profileId?: string;
   preferredProfile?: string;
@@ -214,6 +215,7 @@ async function prepareSimpleCompletionModelCore(
     params.agentDir,
     params.cfg,
     {
+      modelIdSource: params.modelIdSource,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.allowBundledStaticCatalogFallback !== undefined
         ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
@@ -608,6 +610,7 @@ export async function acquireSimpleCompletionModelForAgent(
           agentId: params.agentId,
           provider: selection.provider,
           modelId: selection.modelId,
+          modelIdSource: "selected",
           agentDir: selection.agentDir,
           profileId: selection.profileId,
           preferredProfile: params.preferredProfile,
