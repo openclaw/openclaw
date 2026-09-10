@@ -2,6 +2,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 // Tests auth profile directive handling and provider override selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { createBedrockAwsSdkConfig } from "../../agents/auth-profiles/config-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 let mockStore: AuthProfileStore;
@@ -166,26 +167,7 @@ describe("resolveAuthLabel ref-aware labels", () => {
     mockOrder = ["amazon-bedrock:default"];
     const result = await resolveAuthLabel(
       "amazon-bedrock",
-      {
-        models: {
-          providers: {
-            "amazon-bedrock": {
-              auth: "aws-sdk",
-              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-              api: "bedrock-converse-stream",
-              models: [],
-            },
-          },
-        },
-        auth: {
-          profiles: {
-            "amazon-bedrock:default": {
-              provider: "amazon-bedrock",
-              mode: "aws-sdk",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      createBedrockAwsSdkConfig(),
       "/tmp/models.json",
       undefined,
       "compact",
@@ -199,26 +181,7 @@ describe("resolveAuthLabel ref-aware labels", () => {
     mockOrder = ["amazon-bedrock:default"];
     const result = await resolveAuthLabel(
       "amazon-bedrock",
-      {
-        models: {
-          providers: {
-            "amazon-bedrock": {
-              auth: "aws-sdk",
-              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-              api: "bedrock-converse-stream",
-              models: [],
-            },
-          },
-        },
-        auth: {
-          profiles: {
-            "amazon-bedrock:default": {
-              provider: "amazon-bedrock",
-              mode: "aws-sdk",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      createBedrockAwsSdkConfig(),
       "/tmp/models.json",
       undefined,
       "verbose",
