@@ -4,6 +4,7 @@ import {
   normalizeMemoryObservedAt,
   resolveDailyLineProvenance,
   resolveDailyRangeProvenance,
+  resolveDailyRangesProvenance,
   type DailyProvenanceRecord,
 } from "./daily-provenance.js";
 
@@ -158,5 +159,25 @@ describe("daily memory provenance", () => {
       { originClass: "untrusted" },
       { originClass: "untrusted" },
     ]);
+  });
+
+  it("checks only the disjoint lines incorporated into a daily candidate", () => {
+    const { content, record } = recordFromSegments([
+      { text: "trusted heading\n", originClass: "agent", observedAt: 1 },
+      { text: "managed block\n", originClass: "untrusted", observedAt: 3 },
+      { text: "trusted claim\n", originClass: "agent", observedAt: 2 },
+    ]);
+
+    expect(
+      resolveDailyRangesProvenance({
+        content,
+        record,
+        ranges: [
+          { startLine: 1, endLine: 1 },
+          { startLine: 3, endLine: 3 },
+        ],
+        defaultObservedAt: 4,
+      }),
+    ).toMatchObject({ originClass: "agent", observedAt: 4 });
   });
 });

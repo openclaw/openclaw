@@ -1240,6 +1240,75 @@ describe("memory-core dreaming phases", () => {
     ).toBe("agent");
   });
 
+  it("keeps a trusted handwritten claim eligible across an omitted managed block", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const relativePath = `memory/${DREAMING_TEST_DAY}.md`;
+    const filePath = path.join(workspaceDir, relativePath);
+    const trustedHeading = "## Project\n\n";
+    const untrustedManagedBlock = [
+      "## Light Sleep",
+      "<!-- openclaw:dreaming:light:start -->",
+      "- Candidate: Managed summary.",
+      "<!-- openclaw:dreaming:light:end -->",
+      "",
+    ].join("\n");
+    const trustedClaim = "- Keep the handwritten customer promise in durable memory.\n";
+    const content = `${trustedHeading}${untrustedManagedBlock}${trustedClaim}`;
+    await fs.writeFile(filePath, content, "utf-8");
+    const trustedObservedAt = Date.parse("2026-04-05T09:00:00.000Z");
+    const managedObservedAt = Date.parse("2026-04-05T09:30:00.000Z");
+    memoryArtifactProvenanceMock.mockResolvedValue([
+      {
+        relativePath,
+        provenance: {
+          fileHash: createHash("sha256").update(content).digest("hex"),
+          originClass: "untrusted",
+          observedAt: managedObservedAt,
+          segments: [
+            {
+              startOffset: 0,
+              endOffset: trustedHeading.length,
+              contentHash: createHash("sha256").update(trustedHeading).digest("hex"),
+              originClass: "agent",
+              observedAt: trustedObservedAt,
+            },
+            {
+              startOffset: trustedHeading.length,
+              endOffset: trustedHeading.length + untrustedManagedBlock.length,
+              contentHash: createHash("sha256").update(untrustedManagedBlock).digest("hex"),
+              originClass: "untrusted",
+              observedAt: managedObservedAt,
+            },
+            {
+              startOffset: trustedHeading.length + untrustedManagedBlock.length,
+              endOffset: content.length,
+              contentHash: createHash("sha256").update(trustedClaim).digest("hex"),
+              originClass: "agent",
+              observedAt: trustedObservedAt,
+            },
+          ],
+        },
+      },
+    ]);
+
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(
+      candidates.find((candidate) => candidate.snippet.includes("handwritten customer promise"))
+        ?.provenance?.originClass,
+    ).toBe("agent");
+  });
+
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
     const workspaceDir = await createDreamingWorkspace();
     setDreamingTestEnv(path.join(workspaceDir, ".state"));

@@ -110,9 +110,14 @@ coverage, retained-data boundaries, and operator workflow in
 Workspace memory files are inside the operator trust boundary: any process
 that can edit them already controls the agent workspace, so handwritten notes
 remain promotion-eligible without extra authentication. Session provenance is
-classified from the sender, while a memory flush records the least-trusted
-class for the whole file; trusted lines in a downgraded file intentionally lose
-promotion eligibility so untrusted content cannot ride a trusted file hash.
+classified from the sender, while a memory flush initially records the
+least-trusted class for the whole file. Later host-owned appends and managed
+replacements maintain a complete content-hashed segment ledger. Daily-memory
+ingestion validates the exact heading, ancestor, and body ranges incorporated
+into each candidate: any untrusted incorporated range blocks promotion, while
+unrelated managed blocks do not quarantine adjacent handwritten notes. An
+out-of-band edit that invalidates the file hash or segment ledger falls back to
+the recorded file-level class rather than trusting partial content.
 
 Content origin also propagates within a turn. When a tool result declares
 network-sourced content (web fetches, browser reads, search results), the rest

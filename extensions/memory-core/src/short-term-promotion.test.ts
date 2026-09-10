@@ -1984,6 +1984,63 @@ describe("short-term promotion", () => {
     await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
+  it("rechecks heading provenance for a shortened list-marker fallback", async (workspaceDir) => {
+    const relativePath = "memory/2026-04-01.md";
+    const untrustedHeading = "## Imported decision\n";
+    const trustedBodyAndTail = "- Keep the promise\n\nTrusted replacement\n";
+    const content = `${untrustedHeading}${trustedBodyAndTail}`;
+    await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+      "## Imported decision",
+      "- Keep the promise",
+      "",
+      "Trusted replacement",
+    ]);
+    await recordMemoryRecalls(workspaceDir, "customer promise", [
+      memoryRecallResult(relativePath, 4, 4, 0.92, "Old: Keep the promise tomorrow", {
+        provenance: {
+          originClass: "agent",
+          sessionKind: "unknown",
+          observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+        },
+      }),
+    ]);
+    const ranked = await rankAllCandidates(workspaceDir);
+    vi.mocked(listMemoryArtifactProvenance).mockResolvedValueOnce([
+      {
+        relativePath,
+        provenance: {
+          fileHash: createHash("sha256").update(content).digest("hex"),
+          originClass: "untrusted",
+          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+          segments: [
+            {
+              startOffset: 0,
+              endOffset: untrustedHeading.length,
+              contentHash: createHash("sha256").update(untrustedHeading).digest("hex"),
+              originClass: "untrusted",
+              observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
+            },
+            {
+              startOffset: untrustedHeading.length,
+              endOffset: content.length,
+              contentHash: createHash("sha256").update(trustedBodyAndTail).digest("hex"),
+              originClass: "agent",
+              observedAt: Date.parse("2026-04-01T12:00:00.000Z"),
+            },
+          ],
+        },
+      },
+    ]);
+
+    const applied = await applyAllCandidates(workspaceDir, ranked);
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe(
+      "origin filter (untrusted after rehydration)",
+    );
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
   it("does not double-prefix promoted snippets that are already markdown bullets", async (workspaceDir) => {
     await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
       "alpha",

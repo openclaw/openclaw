@@ -127,9 +127,24 @@ export function resolveDailyRangeProvenance(params: {
   endLine: number;
   defaultObservedAt: number;
 }): MemoryEntryProvenance {
-  const lines = resolveDailyLineProvenance(params).slice(
-    Math.max(0, params.startLine - 1),
-    Math.max(params.startLine, params.endLine),
+  return resolveDailyRangesProvenance({
+    ...params,
+    ranges: [{ startLine: params.startLine, endLine: params.endLine }],
+  });
+}
+
+export function resolveDailyRangesProvenance(params: {
+  content: string;
+  record?: DailyProvenanceRecord;
+  ranges: ReadonlyArray<{ startLine: number; endLine: number }>;
+  defaultObservedAt: number;
+}): MemoryEntryProvenance {
+  const lineProvenance = resolveDailyLineProvenance(params);
+  const lines = params.ranges.flatMap((range) =>
+    lineProvenance.slice(
+      Math.max(0, range.startLine - 1),
+      Math.max(range.startLine, range.endLine),
+    ),
   );
   return {
     originClass: lines.some((line) => line.originClass === "untrusted") ? "untrusted" : "agent",

@@ -17,7 +17,7 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeConceptToken } from "./concept-vocabulary.js";
-import { resolveDailyRangeProvenance, type DailyProvenanceRecord } from "./daily-provenance.js";
+import { resolveDailyRangesProvenance, type DailyProvenanceRecord } from "./daily-provenance.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readRecentDreamDiaryEntries } from "./dreaming-dreams-file.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
@@ -191,10 +191,27 @@ function normalizeDailySnippet(line: string): string | null {
 type DailySnippetChunk = {
   startLine: number;
   endLine: number;
-  provenanceStartLine: number;
+  provenanceRanges: Array<{ startLine: number; endLine: number }>;
   snippet: string;
   identitySnippet?: string;
 };
+
+function mergeDailyLineRanges(
+  ranges: ReadonlyArray<{ startLine: number; endLine: number }>,
+): Array<{ startLine: number; endLine: number }> {
+  const merged: Array<{ startLine: number; endLine: number }> = [];
+  for (const range of ranges
+    .filter((candidate) => candidate.startLine > 0 && candidate.endLine >= candidate.startLine)
+    .toSorted((left, right) => left.startLine - right.startLine || left.endLine - right.endLine)) {
+    const previous = merged.at(-1);
+    if (previous && range.startLine <= previous.endLine + 1) {
+      previous.endLine = Math.max(previous.endLine, range.endLine);
+      continue;
+    }
+    merged.push({ ...range });
+  }
+  return merged;
+}
 
 function buildDailyChunkSnippet(heading: string | null, chunkLines: string[]): string {
   const body = chunkLines.join(" ").trim();
@@ -218,7 +235,12 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
   let chunkLines: string[] = [];
   let chunkStartLine = 0;
   let chunkEndLine = 0;
-  let listAncestors: Array<{ indent: number; text: string; startLine: number }> = [];
+  let listAncestors: Array<{
+    indent: number;
+    text: string;
+    startLine: number;
+    endLine: number;
+  }> = [];
 
   const flushChunk = () => {
     if (chunkLines.length === 0) {
@@ -232,7 +254,12 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
       chunks.push({
         startLine: chunkStartLine,
         endLine: chunkEndLine,
-        provenanceStartLine: activeHeadingLine || chunkStartLine,
+        provenanceRanges: mergeDailyLineRanges([
+          ...(activeHeadingLine
+            ? [{ startLine: activeHeadingLine, endLine: activeHeadingLine }]
+            : []),
+          { startLine: chunkStartLine, endLine: chunkEndLine },
+        ]),
         snippet,
       });
     }
@@ -325,17 +352,28 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
         chunks.push({
           startLine: index + 1,
           endLine: endIndex + 1,
-          provenanceStartLine: Math.min(
-            activeHeadingLine || index + 1,
-            listAncestors.at(0)?.startLine ?? index + 1,
-          ),
+          provenanceRanges: mergeDailyLineRanges([
+            ...(activeHeadingLine
+              ? [{ startLine: activeHeadingLine, endLine: activeHeadingLine }]
+              : []),
+            ...listAncestors.map((ancestor) => ({
+              startLine: ancestor.startLine,
+              endLine: ancestor.endLine,
+            })),
+            { startLine: index + 1, endLine: endIndex + 1 },
+          ]),
           snippet: contextualSnippet,
           // The rendered semantic context is part of claim identity, keeping
           // identical bullet text for different subjects or events separate.
           identitySnippet: contextualSnippet,
         });
       }
-      listAncestors.push({ indent, text: claimBody, startLine: index + 1 });
+      listAncestors.push({
+        indent,
+        text: claimBody,
+        startLine: index + 1,
+        endLine: endIndex + 1,
+      });
       index = nestedChildIndex === undefined ? endIndex : nestedChildIndex - 1;
       if (chunks.length >= limit) {
         break;
@@ -447,11 +485,10 @@ function buildDailyIngestionResults(params: {
     stripManagedDailyDreamingLines(params.raw.split(/\r?\n/)),
     params.limit,
   ).map((chunk) => {
-    const provenance = resolveDailyRangeProvenance({
+    const provenance = resolveDailyRangesProvenance({
       content: params.raw,
       ...(params.recorded ? { record: params.recorded } : {}),
-      startLine: chunk.provenanceStartLine,
-      endLine: chunk.endLine,
+      ranges: chunk.provenanceRanges,
       defaultObservedAt: params.defaultObservedAt,
     });
     return Object.assign(

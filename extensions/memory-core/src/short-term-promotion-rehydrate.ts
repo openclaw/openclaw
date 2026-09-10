@@ -290,6 +290,10 @@ function relocateCandidateRange(
               ? listMarkerFreeMatchSnippet
               : listMarkerFreeSnippet
             : snippet;
+      const incorporatesHeading =
+        headingContext !== null &&
+        matchedSnippet === listMarkerFreeMatchSnippet &&
+        listMarkerFreeMatchSnippet !== listMarkerFreeSnippet;
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
@@ -308,7 +312,7 @@ function relocateCandidateRange(
           distance,
           sourceRanges: [
             { startLine, endLine },
-            ...((useTargetHeadingBodyContext || useListMarkerFreeContext) && headingContext
+            ...(incorporatesHeading
               ? [{ startLine: headingContext.line, endLine: headingContext.line }]
               : []),
           ],
