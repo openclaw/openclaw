@@ -382,6 +382,8 @@ async function killSubagentRunTree(
         }
         result.descendants = true;
       }
+      // Active nodes already refresh descendants during killSubagentRun (prepare/run);
+      // ended nodes cannot spawn. The outer convergence loop captures late registrations.
       if (result.descendants && tree.canTraverse()) {
         await Promise.all(tree.children.map(visit));
       }

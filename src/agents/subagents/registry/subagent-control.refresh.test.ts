@@ -12,10 +12,12 @@ import { findTaskByRunId } from "../../../tasks/task-registry.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { killSessionSubagentRuns } from "./subagent-control-kill.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import * as registryRead from "./subagent-registry-read.js";
 import { registerSubagentRun, startQueuedSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 
@@ -342,3 +344,108 @@ it.each([
     }
   },
 );
+
+it("does not repeat full-scope refreshes per node when traversing retained subagent trees", async () => {
+  const owner = "agent:main:main";
+  const nodeCount = 6;
+  for (let i = 0; i < nodeCount; i += 1) {
+    const runId = `retained-${i}`;
+    const sessionKey = `agent:main:subagent:retained-${i}`;
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey,
+      defaultSessionId: `${runId}-session`,
+    });
+    registerSubagentRun({
+      runId,
+      childSessionKey: sessionKey,
+      requesterSessionKey: owner,
+      controllerSessionKey: owner,
+      requesterAgentId: "main",
+      requesterDisplayKey: owner,
+      task: runId,
+      cleanup: "keep",
+      collect: true,
+      queued: false,
+      expectsCompletionMessage: false,
+    });
+    const run = subagentRuns.get(runId)!;
+    run.execution.endedAt = Date.now() - 1000;
+    run.execution.status = "terminal";
+  }
+
+  const listSpy = vi.spyOn(registryRead, "listSubagentRunsForController");
+  try {
+    const result = await killSessionSubagentRuns({
+      cfg: getRuntimeConfig(),
+      sessionKey: owner,
+      agentId: "main",
+    });
+    expect(result.status).toBe("ok");
+    expect(result.killed).toBe(0);
+    // With N retained runs, full tree refresh is performed only for initial scope
+    // population and convergence checks (O(N) total checks), not per-node (O(N^2)).
+    // Each refresh pass visits N trees. 2 passes in killSubagentRunTree + 1 in withSubagentKillScope = 3 passes * N = 18.
+    // Pre-fix repeated refresh in visit() added N passes (N * N = 36 additional calls, total 54+).
+    const perPassCallCount = nodeCount;
+    const maxExpectedCalls = perPassCallCount * 4 + 1; // 1 initial lookup + at most 4 refresh passes
+    expect(listSpy.mock.calls.length).toBeLessThanOrEqual(maxExpectedCalls);
+  } finally {
+    listSpy.mockRestore();
+  }
+});
+
+it("discovers and kills active descendants through retained ancestors without redundant refreshes", async () => {
+  const owner = "agent:main:main";
+  const rootKey = "agent:main:subagent:hier-root";
+  const childKey = "agent:main:subagent:hier-child";
+  const grandChildKey = "agent:main:subagent:hier-grandchild";
+
+  for (const [runId, sessionKey, requesterSessionKey, status] of [
+    ["hier-root", rootKey, owner, "terminal"],
+    ["hier-child", childKey, rootKey, "terminal"],
+    ["hier-grandchild", grandChildKey, childKey, "queued"],
+  ] as const) {
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey,
+      defaultSessionId: `${runId}-session`,
+    });
+    registerSubagentRun({
+      runId,
+      childSessionKey: sessionKey,
+      requesterSessionKey,
+      controllerSessionKey: requesterSessionKey,
+      requesterAgentId: "main",
+      requesterDisplayKey: requesterSessionKey,
+      task: runId,
+      cleanup: "keep",
+      collect: true,
+      queued: status === "queued",
+      expectsCompletionMessage: false,
+    });
+    const run = subagentRuns.get(runId)!;
+    if (status === "terminal") {
+      run.execution.endedAt = Date.now() - 1000;
+      run.execution.status = "terminal";
+    }
+  }
+
+  const listSpy = vi.spyOn(registryRead, "listSubagentRunsForController");
+  try {
+    const result = await killSessionSubagentRuns({
+      cfg: getRuntimeConfig(),
+      sessionKey: owner,
+      agentId: "main",
+    });
+    expect(result.status).toBe("ok");
+    expect(result.killed).toBe(1);
+    expect(subagentRuns.get("hier-grandchild")?.execution.status).toBe("terminal");
+    expect(subagentRuns.get("hier-grandchild")?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+    expect(listSpy.mock.calls.length).toBeLessThanOrEqual(20);
+  } finally {
+    listSpy.mockRestore();
+  }
+});
