@@ -3026,8 +3026,8 @@ describe("config io write", () => {
       await withSuiteHome(async (home) => {
         const entry = { alias: "friendly", params: { temperature: 0.2 } };
         const canonicalEntry = canonicalPresent ? { params: { temperature: 0.7 } } : entry;
-        const legacy = "openrouter/openrouter/hunter-alpha";
-        const canonical = "openrouter/hunter-alpha";
+        const legacy = "google/gemini-3-pro-preview";
+        const canonical = "google/gemini-3.1-pro-preview";
         const agents = {
           entries: { main: {} },
           defaults: {
