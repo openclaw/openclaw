@@ -54,6 +54,9 @@ import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
 import {
   buildPluginCatalogMock,
+  buildPluginDiscoveryCategoriesMock,
+  buildPluginDiscoveryMock,
+  buildPluginInspectMock,
   pluginLifecycleMockInitScript,
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
@@ -73,6 +76,7 @@ type CliOptions = {
     | "code-fences"
     | "dashboards"
     | "goal"
+    | "plugins-dense"
     | "swarm"
     | "update-available"
     | "update-blocked"
@@ -392,6 +396,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "code-fences" &&
     value !== "dashboards" &&
     value !== "goal" &&
+    value !== "plugins-dense" &&
     value !== "swarm" &&
     value !== "update-available" &&
     value !== "update-blocked" &&
@@ -2813,6 +2818,19 @@ async function createChatPickerScenario(
             lastActiveAt: baseTime - 26 * 3_600_000,
           },
         ],
+      },
+      "plugins.list": buildPluginCatalogMock({
+        installedCopies: fixture === "plugins-dense" ? 10 : 1,
+      }),
+      "plugins.catalog.browse": buildPluginDiscoveryMock(),
+      "plugins.catalog.categories": buildPluginDiscoveryCategoriesMock(),
+      "plugins.inspect": buildPluginInspectMock({
+        installedCopies: fixture === "plugins-dense" ? 10 : 1,
+      }),
+      "skills.status": {
+        workspaceDir: "/Users/demo/Projects/openclaw",
+        managedSkillsDir: "/Users/demo/.openclaw/skills",
+        skills: [],
       },
       "channels.status": buildChannelsStatusMock(baseTime),
       "channels.pairing.list": buildChannelsPairingMock(baseTime),

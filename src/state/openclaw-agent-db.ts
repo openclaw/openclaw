@@ -363,7 +363,9 @@ function* openOpenClawAgentDatabaseSteps(
         return maintenance;
       } catch (err) {
         maintenance?.close();
-        db.close();
+        if (db.isOpen) {
+          db.close();
+        }
         const current = cache.databases.get(pathname);
         if (!current || current.db === db) {
           invalidateOpenClawAgentDatabaseValidation(pathname);

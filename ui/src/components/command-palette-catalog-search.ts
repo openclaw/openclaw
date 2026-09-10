@@ -115,7 +115,7 @@ function getCommandPaletteBaseItems(
     {
       id: "nav-plugins",
       label: t("palette.items.plugins"),
-      icon: "puzzle",
+      icon: "plug",
       category: "navigation",
       action: "nav:plugins",
     },
@@ -356,7 +356,7 @@ export async function loadCommandPaletteCatalogItems(params: {
     ...(plugins?.plugins ?? []).map((plugin) => ({
       id: `plugin-${plugin.id}`,
       label: plugin.name,
-      icon: "puzzle" as const,
+      icon: "plug" as const,
       category: "plugins" as const,
       routeId: "plugins" as const,
       description: plugin.description,

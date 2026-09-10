@@ -1,5 +1,6 @@
 // Role allowlist update tests cover operator-driven gateway updates, node lists,
 // device/node pairing state, restart sentinels, and runtime plugin visibility.
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +14,13 @@ import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  isOpenClawStateDatabaseOpen,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -23,6 +30,57 @@ import {
 import type { GatewayClient } from "./client.js";
 import type { HealthSummary } from "./health/types.js";
 import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
+
+const readonlyPreparation = vi.hoisted(() => ({
+  prepared: [] as Array<{ pathname: string; location?: string; progressed: boolean }>,
+  turns: [] as Promise<void>[],
+}));
+
+vi.mock("../infra/sqlite-readonly-location.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/sqlite-readonly-location.js")>();
+  const observe = (pathname: string) => {
+    let progressed = false;
+    readonlyPreparation.turns.push(
+      new Promise<void>((resolve) => {
+        setImmediate(() => {
+          progressed = true;
+          resolve();
+        });
+      }),
+    );
+    return (prepared?: { location: string }) =>
+      readonlyPreparation.prepared.push({
+        pathname,
+        location: prepared?.location,
+        progressed,
+      });
+  };
+  return {
+    ...actual,
+    prepareSqliteReadOnlyLocationSync(pathname: string) {
+      const finish = observe(pathname);
+      let prepared: ReturnType<typeof actual.prepareSqliteReadOnlyLocationSync> | undefined;
+      try {
+        prepared = actual.prepareSqliteReadOnlyLocationSync(pathname);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    },
+    async prepareSqliteReadOnlyLocation(
+      ...args: Parameters<typeof actual.prepareSqliteReadOnlyLocation>
+    ) {
+      const finish = observe(args[0]);
+      let prepared: Awaited<ReturnType<typeof actual.prepareSqliteReadOnlyLocation>> | undefined;
+      try {
+        prepared = await actual.prepareSqliteReadOnlyLocation(...args);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    },
+  };
+});
 
 const reloadFixture = vi.hoisted<{
   reconcileRuntimePolicy?: ManagedGatewayConfigReloaderParams["reconcileRuntimePolicy"];
@@ -411,6 +469,55 @@ describe("gateway role enforcement", () => {
       expect(healthPayload.ok).toBe(true);
     } finally {
       nodeClient?.stop();
+    }
+  });
+});
+
+describe("gateway update history", () => {
+  test("keeps authenticated update history reads responsive after closing shared state", async () => {
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: "secret",
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      clientVersion: "1.0.0",
+      scopes: ["operator.admin"],
+    });
+    try {
+      const run = createUpdateRun({ trigger: "api" });
+      const databasePath = openOpenClawStateDatabase().path;
+      for (const method of ["update.runs.get", "update.runs.list"] as const) {
+        for (const cache of ["warm", "closed"] as const) {
+          openOpenClawStateDatabase();
+          if (cache === "closed") {
+            expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+          }
+          expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(cache === "warm");
+          const before = readonlyPreparation.prepared.length;
+          const result = await client.request(
+            method,
+            method === "update.runs.get" ? { runId: run.runId } : { limit: 1 },
+          );
+          await Promise.all(readonlyPreparation.turns);
+          expect(result).toEqual(method === "update.runs.get" ? { run } : { runs: [run] });
+          const prepared = readonlyPreparation.prepared
+            .slice(before)
+            .filter((entry) => entry.pathname === databasePath);
+          if (cache === "warm") {
+            expect(prepared).toEqual([]);
+          } else {
+            expect(prepared).toHaveLength(1);
+            expect(
+              prepared[0]?.progressed,
+              "the Gateway isolate must progress while its snapshot child runs",
+            ).toBe(true);
+            expect(prepared[0]?.location).toBeDefined();
+            expect(existsSync(prepared[0]!.location!)).toBe(false);
+          }
+        }
+      }
+    } finally {
+      await client.stopAndWait();
     }
   });
 });

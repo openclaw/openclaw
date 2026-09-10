@@ -34,6 +34,7 @@ export type JsonSchema = {
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
   allOf?: JsonSchema[];
+  not?: JsonSchema | boolean;
   nullable?: boolean;
 };
 

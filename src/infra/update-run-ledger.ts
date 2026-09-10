@@ -34,7 +34,7 @@ import {
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
-import { listUpdateRuns } from "./update-run-reader.js";
+import { listUpdateRuns, readUpdateRunRecord as readRun } from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
   type FinishUpdateRunResult,
@@ -46,7 +46,12 @@ import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
-export { getLatestUpdateFetchFailure, listUpdateRuns } from "./update-run-reader.js";
+export {
+  getLatestUpdateFetchFailure,
+  getUpdateRunAsync,
+  listUpdateRuns,
+  listUpdateRunsAsync,
+} from "./update-run-reader.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
@@ -65,15 +70,6 @@ const readyDatabases = new WeakSet<DatabaseSync>();
 /** Canonical additive history table. */
 export function ensureUpdateRunLedgerSchema(db: DatabaseSync): void {
   db.exec(schema); // sqlite-allow-raw -- Canonical lazy additive DDL bootstrap only.
-}
-
-function readRun(db: DatabaseSync, runId: string): UpdateRunRecord | undefined {
-  const query = getNodeSqliteKysely<LedgerDatabase>(db)
-    .selectFrom("update_runs")
-    .selectAll()
-    .where("run_id", "=", runId);
-  const row = executeSqliteQueryTakeFirstSync(db, query);
-  return row ? decodeRun(row) : undefined;
 }
 
 function writeRun<T>(operation: (db: DatabaseSync) => T, options: OpenClawStateDatabaseOptions): T {

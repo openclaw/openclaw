@@ -8,11 +8,31 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
 import { decodeRun } from "./update-run-codec.js";
 import type { UpdateFetchFailure, UpdateRunRecord } from "./update-run-record.js";
+
+export function readUpdateRunRecord(db: DatabaseSync, runId: string): UpdateRunRecord | undefined {
+  const query = getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
+    .selectFrom("update_runs")
+    .selectAll()
+    .where("run_id", "=", runId);
+  const row = executeSqliteQueryTakeFirstSync(db, query);
+  return row ? decodeRun(row) : undefined;
+}
+
+export async function getUpdateRunAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<UpdateRunRecord | undefined> {
+  return await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+    ({ db }) => (tableExists(db, "update_runs") ? readUpdateRunRecord(db, runId) : undefined),
+    options,
+  );
+}
 
 type ListInput = { limit?: number; active?: boolean };
 

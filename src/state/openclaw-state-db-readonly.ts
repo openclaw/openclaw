@@ -91,19 +91,28 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,
   pathname: string,
-  location = pathname,
 ): T {
   const env = options.env ?? process.env;
   openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-  // Admission snapshots preserve the source sidecars. Explicit async readers
-  // already supplied a snapshot from their live mutation owner.
-  const prepared =
-    location === pathname && isArtifactPreservingStateRead()
-      ? prepareSqliteReadOnlyLocationSync(pathname)
-      : undefined;
-  const readLocation = prepared?.location ?? location;
+  // Even read-only SQLite opens can create a missing WAL. The existing worker
+  // snapshots committed WAL pages without touching source sidecars or caller-held locks.
+  const prepared = isArtifactPreservingStateRead()
+    ? prepareSqliteReadOnlyLocationSync(pathname)
+    : undefined;
+  try {
+    return withOpenClawStateReadOnlyLocation(operation, pathname, prepared?.location ?? pathname);
+  } finally {
+    prepared?.cleanup();
+  }
+}
+
+function withOpenClawStateReadOnlyLocation<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  pathname: string,
+  location: string,
+): T {
   const read = () => {
-    const db = openNodeSqliteDatabase(readLocation, { readOnly: true });
+    const db = openNodeSqliteDatabase(location, { readOnly: true });
     try {
       db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       assertSupportedStateSchemaVersion(db, pathname);
@@ -113,20 +122,11 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
       db.close();
     }
   };
-  try {
-    // Only live-source descriptors join handle custody; snapshots remain private.
-    return readLocation === pathname ? withSqliteSourceHandle(pathname, read) : read();
-  } finally {
-    prepared?.cleanup();
-  }
+  // Only live-source descriptors join handle custody; snapshots remain private.
+  return location === pathname ? withSqliteSourceHandle(pathname, read) : read();
 }
 
-/**
- * Read shared state without joining the writable lifecycle.
- *
- * CLI metadata reads can overlap a live Gateway. Keep them off schema repair,
- * journal-mode setup, checkpoints, and permission mutation owned by writers.
- */
+/** Read shared state without joining writers; admission inherits artifact preservation. */
 export function withOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
@@ -169,33 +169,31 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   );
 }
 
-/** Async inspection can join the live mutation owner's private snapshot provider.
- * The owner remains responsible for native handles; no child borrows its fence.
- */
-export async function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync<T>(
+/** Preserve source artifacts while allowing the caller to progress during snapshot preparation. */
+export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T | undefined> {
-  const pathname = resolveReadOnlyPath(options);
-  const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
-  if (reused.reused) {
-    return reused.value;
-  }
-  const existingPath = existingPathOrUndefined(pathname);
-  if (existingPath === undefined) {
-    return undefined;
-  }
-  const prepared = await prepareSqliteReadOnlyLocation(existingPath, {
-    preserveSourceArtifacts: true,
+  return withArtifactPreservingStateReads(async () => {
+    const pathname = resolveReadOnlyPath(options);
+    const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+    if (reused.reused) {
+      return reused.value;
+    }
+    if (existingPathOrUndefined(pathname) === undefined) {
+      return undefined;
+    }
+    const env = options.env ?? process.env;
+    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+    const prepared = await prepareSqliteReadOnlyLocation(pathname, {
+      preserveSourceArtifacts: true,
+    });
+    try {
+      // Verification can quarantine the live path while the snapshot child is running.
+      openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+      return withOpenClawStateReadOnlyLocation(operation, pathname, prepared.location);
+    } finally {
+      prepared.cleanup();
+    }
   });
-  try {
-    return withFreshOpenClawStateDatabaseReadOnly(
-      operation,
-      options,
-      existingPath,
-      prepared.location,
-    );
-  } finally {
-    prepared.cleanup();
-  }
 }

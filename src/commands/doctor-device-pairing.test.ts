@@ -358,6 +358,41 @@ describe("noteDevicePairingHealth", () => {
     });
   });
 
+  it.each([
+    { role: "node", tokenScopes: ["operator.read"], recoveryOption: " --no-scopes" },
+    { role: "operator", tokenScopes: ["operator.admin"], recoveryOption: "" },
+  ])(
+    "recommends explicit scope recovery only for legacy node tokens: $role",
+    async ({ role, tokenScopes, recoveryOption }) => {
+      callGatewayMock.mockResolvedValue({
+        pending: [],
+        paired: [
+          {
+            deviceId: "paired-device",
+            publicKey: "paired-public-key",
+            roles: [role],
+            scopes: ["operator.read"],
+            tokens: [{ role, scopes: tokenScopes, createdAtMs: 1 }],
+            createdAtMs: 1,
+            approvedAtMs: 1,
+          },
+        ],
+      });
+
+      const findings = await collectDevicePairingHealthFindings({
+        cfg: { gateway: { mode: "remote" } },
+        healthOk: true,
+      });
+
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          requirement: "token-outside-approved-scope",
+          fixHint: `Rotate it with openclaw devices rotate --device paired-device --role ${role}${recoveryOption}.`,
+        }),
+      );
+    },
+  );
+
   it("does not suggest rotating local auth for a role that is no longer approved", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
       storeDeviceAuthToken({

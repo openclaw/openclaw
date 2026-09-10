@@ -1,5 +1,6 @@
 {
   "id": "novita",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

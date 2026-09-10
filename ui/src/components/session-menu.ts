@@ -246,7 +246,7 @@ class SessionMenu extends OpenClawLightDomElement {
                             title=${this.actionTitle("plugin")}
                           >
                             <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                              >${icons.puzzle}</span
+                              >${icons.plug}</span
                             >
                             <span class="session-menu__text">${action.label}</span>
                           </wa-dropdown-item>

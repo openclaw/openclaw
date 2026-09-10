@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -12,11 +13,12 @@ import {
   createPluginRecord,
   createPluginRuntimeMock,
   getActivePluginRegistry,
+  loadPluginManifestRegistryCore,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
-import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
+import { withEnvAsync, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintTokenAuthProfileCacheKey } from "./auth-cache-key.js";
 import {
@@ -60,87 +62,118 @@ async function withAuthRefreshHarness(
   }) => Promise<void>,
 ): Promise<void> {
   await withStateDirEnv("openclaw-codex-auth-refresh-authority-", async ({ stateDir }) => {
-    const previousRegistry = getActivePluginRegistry();
-    const pluginRoot = path.join(process.cwd(), "extensions", "openai");
-    const registration = createPluginRegistry({
-      runtime: createPluginRuntimeMock(),
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      activateGlobalSideEffects: false,
-    });
-    const record = createPluginRecord({
-      id: "openai",
-      source: path.join(pluginRoot, "index.ts"),
-      rootDir: pluginRoot,
-      origin: "bundled",
-      format: "bundle",
-      enabled: true,
-      providerIds: ["openai"],
-      configSchema: true,
-    });
-    const otherProviderRecord = createPluginRecord({
-      id: "anthropic",
-      source: path.join(pluginRoot, "anthropic.ts"),
-      rootDir: pluginRoot,
-      origin: "bundled",
-      format: "bundle",
-      enabled: true,
-      providerIds: ["anthropic"],
-      configSchema: true,
-    });
-    registration.registry.plugins.push(record, otherProviderRecord);
-    const api = registration.createApi(record, { config: {} });
-    const otherProviderRefresh = vi.fn(async (credential: OAuthCredential) => credential);
-    api.registerProvider({
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
-      refreshOAuth,
-    });
-    registration.createApi(otherProviderRecord, { config: {} }).registerProvider({
-      id: "anthropic",
-      label: "Anthropic",
-      auth: [],
-      refreshOAuth: otherProviderRefresh,
-    });
-    setActivePluginRegistry(registration.registry, undefined, "default", process.cwd());
-
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    upsertAuthProfile({
-      agentDir,
-      profileId: PROFILE_ID,
-      credential: {
-        type: "oauth",
-        provider: "openai",
-        access: INITIAL_ACCESS,
-        refresh: "initial-refresh",
-        expires: Date.now() + 60_000,
-        accountId: ACCOUNT_ID,
-      },
-    });
-    const retainedStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
-    const harness = createClientHarness();
-    ensureCodexAppServerClientRuntime(harness.client, {
-      agentDir,
-      authProfileId: PROFILE_ID,
-      authProfileStore: retainedStore,
-    });
-    recordCodexAppServerAuthHandoff(harness.client, {
-      accessFingerprint: fingerprintTokenAuthProfileCacheKey(INITIAL_ACCESS),
-      chatgptAccountId: ACCOUNT_ID,
-    });
-
-    try {
-      await run({ agentDir, harness, otherProviderRefresh, retainedStore });
-    } finally {
-      harness.client.close();
-      clearRuntimeAuthProfileStoreSnapshots();
-      closeOpenClawStateDatabaseForTest();
-      if (previousRegistry) {
-        setActivePluginRegistry(previousRegistry);
-      } else {
-        resetPluginRuntimeStateForTest();
-      }
+    const bundledRoot = path.join(stateDir, "bundled");
+    for (const id of ["openai", "anthropic"]) {
+      const rootDir = path.join(bundledRoot, id);
+      fs.mkdirSync(rootDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(rootDir, "package.json"),
+        JSON.stringify({
+          name: `auth-refresh-fixture-${id}`,
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(rootDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id,
+          providers: [id],
+          enabledByDefault: true,
+          configSchema: { type: "object", properties: {} },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(rootDir, "index.js"),
+        'throw new Error("Unexpected fixture cold load");\n',
+      );
     }
+    await withEnvAsync(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      },
+      async () => {
+        const previousRegistry = getActivePluginRegistry();
+        const manifests = loadPluginManifestRegistryCore({ workspaceDir: stateDir });
+        const createProviderRecord = (id: string) => {
+          const manifest = manifests.plugins.find((plugin) => plugin.id === id);
+          if (!manifest || manifest.rootDir !== path.join(bundledRoot, id)) {
+            throw new Error(`Unexpected fixture manifest owner: ${id}`);
+          }
+          return createPluginRecord({
+            id,
+            source: manifest.source,
+            rootDir: manifest.rootDir,
+            origin: "bundled",
+            format: "bundle",
+            enabled: true,
+            providerIds: [id],
+            configSchema: true,
+          });
+        };
+        const registration = createPluginRegistry({
+          runtime: createPluginRuntimeMock(),
+          logger: { info() {}, warn() {}, error() {}, debug() {} },
+          activateGlobalSideEffects: false,
+        });
+        const record = createProviderRecord("openai");
+        const otherProviderRecord = createProviderRecord("anthropic");
+        registration.registry.plugins.push(record, otherProviderRecord);
+        const api = registration.createApi(record, { config: {} });
+        const otherProviderRefresh = vi.fn(async (credential: OAuthCredential) => credential);
+        api.registerProvider({
+          id: "openai",
+          label: "OpenAI",
+          auth: [],
+          refreshOAuth,
+        });
+        registration.createApi(otherProviderRecord, { config: {} }).registerProvider({
+          id: "anthropic",
+          label: "Anthropic",
+          auth: [],
+          refreshOAuth: otherProviderRefresh,
+        });
+        const harness = createClientHarness();
+        try {
+          setActivePluginRegistry(registration.registry, undefined, "default", stateDir);
+
+          const agentDir = path.join(stateDir, "agents", "main", "agent");
+          upsertAuthProfile({
+            agentDir,
+            profileId: PROFILE_ID,
+            credential: {
+              type: "oauth",
+              provider: "openai",
+              access: INITIAL_ACCESS,
+              refresh: "initial-refresh",
+              expires: Date.now() + 60_000,
+              accountId: ACCOUNT_ID,
+            },
+          });
+          const retainedStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
+          ensureCodexAppServerClientRuntime(harness.client, {
+            agentDir,
+            authProfileId: PROFILE_ID,
+            authProfileStore: retainedStore,
+          });
+          recordCodexAppServerAuthHandoff(harness.client, {
+            accessFingerprint: fingerprintTokenAuthProfileCacheKey(INITIAL_ACCESS),
+            chatgptAccountId: ACCOUNT_ID,
+          });
+
+          await run({ agentDir, harness, otherProviderRefresh, retainedStore });
+        } finally {
+          harness.client.close();
+          clearRuntimeAuthProfileStoreSnapshots();
+          closeOpenClawStateDatabaseForTest();
+          if (previousRegistry) {
+            setActivePluginRegistry(previousRegistry);
+          } else {
+            resetPluginRuntimeStateForTest();
+          }
+        }
+      },
+    );
   });
 }
 

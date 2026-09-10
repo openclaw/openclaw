@@ -10,12 +10,14 @@ import {
   page as modelProvidersPage,
   type ModelProvidersRouteData,
 } from "./model-providers/route.ts";
-import type { PluginsRouteData } from "./plugins/plugins-page.ts";
-import { page as pluginsPage } from "./plugins/route.ts";
+import type { PluginsRouteData } from "./plugins/route-data.ts";
+import { pages as pluginPages } from "./plugins/route.ts";
 import { page as skillsPage } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import { page as usagePage } from "./usage/route.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
+
+const pluginsPage = pluginPages[0];
 
 type RouteWithLoader = {
   loader?: (context: ApplicationContext, options: RouteLoaderOptions) => unknown;

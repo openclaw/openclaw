@@ -415,7 +415,9 @@ function ensureSchema(
         },
       ).forEach(retirements.logRetiredStateTableMigration);
     } finally {
-      db.exec("PRAGMA foreign_keys = ON;");
+      if (db.isOpen) {
+        db.exec("PRAGMA foreign_keys = ON;");
+      }
     }
   });
 }

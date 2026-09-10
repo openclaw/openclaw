@@ -261,6 +261,7 @@ The anchors from the single-page version still resolve here.
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                      |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                          |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                     |
+| `categories`                         | No       | `string[]`                   | One to three controlled catalog category slugs, ordered with the primary category first. Bundled plugins must declare at least one category.                                                                                                                                                                                                                                                     |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                    |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                                                                                                                                                                |
 
@@ -269,6 +270,32 @@ An `AuthAlias` is either a provider id string or an object with `provider` and
 endpoint after trimming whitespace and trailing slashes. It does not rename
 stored credential providers or contribute a new setup provider. Existing profile
 order, explicit bindings, and plugin trust checks still apply.
+
+## Catalog categories
+
+Declare `categories` in `openclaw.plugin.json` so every catalog consumer reads the same
+package-owned classification. The array accepts one to three unique slugs. Put the plugin's
+primary category first; catalog surfaces can group it there while still matching every declared
+category in search and filters.
+
+| Slug       | Use for                                                          |
+| ---------- | ---------------------------------------------------------------- |
+| `channels` | Messaging and channel transports                                 |
+| `models`   | Model providers, inference engines, and model routing            |
+| `memory`   | Long-term memory, retrieval, and memory stores                   |
+| `context`  | Context engines, extraction, and context management              |
+| `voice`    | Speech, transcription, and calling                               |
+| `media`    | Image, video, music, and other media generation or understanding |
+| `web`      | Web search, browsing, fetching, and research                     |
+| `tools`    | Agent tools, actions, and workflows                              |
+| `runtime`  | Agent runtimes, execution backends, and development integrations |
+| `gateway`  | Gateway discovery, administration, and observability             |
+| `security` | Authentication, policy, secrets, and sandboxing                  |
+| `other`    | Plugins that do not fit a more specific controlled category      |
+
+Omission remains valid for external plugin compatibility. When an external catalog supplies a
+derived fallback, an explicit package declaration takes precedence. Bundled OpenClaw plugins must
+declare at least one category.
 
 ## JSON Schema requirements
 

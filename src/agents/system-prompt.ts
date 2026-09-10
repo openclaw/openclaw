@@ -810,6 +810,7 @@ export function buildAgentSystemPrompt(params: {
   runtimeInfo?: SystemPromptRuntimeInfo;
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
+  messageTool?: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
   sandboxInfo?: EmbeddedSandboxInfo;
   /** Whether read/write/edit/apply_patch are restricted to the workspace root. */
   fsWorkspaceOnly?: boolean;
@@ -1470,6 +1471,7 @@ export function buildAgentSystemPrompt(params: {
     ...(!isMinimal
       ? [
           buildUiPresentationPrompt({
+            messageTool: messageToolAvailable ? params.messageTool : undefined,
             showWidgetToolName: availableTools.has("show_widget")
               ? resolveToolName("show_widget")
               : undefined,

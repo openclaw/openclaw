@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createCoreGatewayMethodDescriptors,
+  listCoreGatewayMethodNames,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
 } from "./methods/core-descriptors.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
@@ -57,6 +58,94 @@ describe("GATEWAY_EVENTS", () => {
 });
 
 describe("listGatewayMethods", () => {
+  const expectedMethodsAfterModelProbe = [
+    "migrations.memory.plan",
+    "migrations.memory.apply",
+    "ui.command",
+    "approval.history",
+    "plugin.surface.refresh",
+    "conversations.list",
+    "session.discussion.info",
+    "session.discussion.open",
+    "board.prompt.authorize",
+    "board.data.read",
+    "board.action",
+    "sessions.observer.visibility",
+    "session.visibility.set",
+    "session.members.list",
+    "session.members.add",
+    "session.members.remove",
+    "session.suggestions.add",
+    "session.suggestions.list",
+    "session.suggestions.resolve",
+    "session.typing",
+    "sessions.companion.ask",
+    "sessions.companion.state",
+    "sessions.companion.reset",
+    "memory.search",
+    "skills.proposals.events.list",
+    "skills.proposals.evaluate",
+    "hooks.status",
+    "tasks.retry",
+    "tasks.dismiss",
+    "audit.run.inspect",
+    "sessions.patchMany",
+    "update.hold",
+    "sessions.catalog.startTerminal",
+    "worker.desktop.observe",
+    "projects.list",
+    "projects.register",
+    "projects.remove",
+    "worker.desktop.launch",
+    "secrets.store.list",
+    "secrets.store.set",
+    "secrets.store.delete",
+    "users.prefs.get",
+    "users.prefs.set",
+    "projects.add",
+    "projects.searchRemote",
+    "desktop.observe",
+    "desktop.launch",
+    "device.scopes.requestUpgrade",
+    "device.scopes.waitUpgrade",
+    "portal.list",
+    "portal.open",
+    "portal.close",
+    "sessions.move",
+    "sessions.assignOwner",
+    "progressCard.get",
+    "progressCard.put",
+    "tools.github.status",
+    "tools.github.configure",
+    "tools.github.authorize.start",
+    "tools.github.authorize.poll",
+    "tools.github.authorize.cancel",
+    "sessions.github.publish",
+    "diagnostics.lanes",
+    "session.members.listEvidence",
+    "plugins.inspect",
+    "users.github.status",
+    "users.github.authorize.start",
+    "users.github.authorize.poll",
+    "users.github.authorize.cancel",
+    "users.github.disconnect",
+    "sessions.github.options",
+    "sessions.github.status",
+    "sessions.github.confirm",
+    "sessions.title.prepare",
+    "users.mentionable",
+    "mentions.list",
+    "mentions.dismiss",
+    "transcripts.list",
+    "transcripts.get",
+    "models.authOrderSet",
+  ];
+  const pluginDiscoveryMethods = [
+    "plugins.catalog.browse",
+    "plugins.catalog.categories",
+    "plugins.catalog.get",
+  ];
+
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("plugin.surface.refresh");
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
@@ -76,7 +165,26 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
-  it("appends plugin UI, update and transcript methods without changing the legacy prefix", () => {
+  it("appends new methods after model probing without shifting older method indices", () => {
+    const expectedSuffix = [
+      ...expectedMethodsAfterModelProbe,
+      "canvas.document.view",
+      "plugins.controlUi.list",
+      "plugins.controlUi.reload",
+      "plugins.controlUi.report",
+      "plugins.controlUi.status",
+      "update.runs.get",
+      "update.runs.list",
+      "gateway.suspend.handoff",
+      "transcripts.export",
+      "transcripts.status",
+      "update.report",
+      "skills.workshop.read",
+      "session.publicShare.set",
+      "claws.monitors",
+      ...pluginDiscoveryMethods,
+    ];
+    expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
     const legacyCount = LEGACY_ADVERTISED_GATEWAY_METHODS.length;
 
@@ -97,6 +205,7 @@ describe("listGatewayMethods", () => {
       "skills.workshop.read",
       "session.publicShare.set",
       "claws.monitors",
+      ...pluginDiscoveryMethods,
     ]);
   });
 
@@ -202,6 +311,102 @@ describe("listGatewayMethods", () => {
       scope: "node",
       advertise: false,
     });
+  });
+
+  it("preserves the legacy advertised method order", () => {
+    const methods = listGatewayMethods();
+    const coreMethods = listCoreGatewayMethodNames();
+    expect(methods.slice(0, 5)).toEqual([
+      "health",
+      "diagnostics.stability",
+      "doctor.memory.status",
+      "doctor.memory.dreamDiary",
+      "doctor.memory.backfillDreamDiary",
+    ]);
+    expect(methods.slice(31, 36)).toEqual([
+      "exec.approvals.get",
+      "exec.approvals.set",
+      "exec.approvals.node.get",
+      "exec.approvals.node.set",
+      "exec.approval.get",
+    ]);
+    expect(methods).toContain("tts.speak");
+    const expectedCoreSuffix = [
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+      "approval.get",
+      "approval.resolve",
+      "sessions.search",
+      "sessions.dispatch",
+      "sessions.reclaim",
+      "models.probe",
+      ...expectedMethodsAfterModelProbe,
+      "canvas.document.view",
+      "plugins.controlUi.list",
+      "plugins.controlUi.reload",
+      "plugins.controlUi.report",
+      "plugins.controlUi.status",
+      "update.runs.get",
+      "update.runs.list",
+      "gateway.suspend.handoff",
+      "transcripts.export",
+      "transcripts.status",
+      "update.report",
+      "skills.workshop.read",
+      "session.publicShare.set",
+      "claws.monitors",
+      ...pluginDiscoveryMethods,
+    ];
+    expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
+    expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
+    expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
+    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
+    expect(methods.indexOf("sessions.patchMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
+    expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.patchMany") + 1);
+    expect(methods.indexOf("sessions.catalog.startTerminal")).toBe(
+      methods.indexOf("update.hold") + 1,
+    );
+    expect(methods.indexOf("worker.desktop.observe")).toBe(
+      methods.indexOf("sessions.catalog.startTerminal") + 1,
+    );
+    expect(methods.indexOf("projects.list")).toBe(methods.indexOf("worker.desktop.observe") + 1);
+    expect(methods.indexOf("projects.register")).toBe(methods.indexOf("projects.list") + 1);
+    expect(methods.indexOf("projects.remove")).toBe(methods.indexOf("projects.register") + 1);
+    expect(methods.indexOf("worker.desktop.launch")).toBe(methods.indexOf("projects.remove") + 1);
+    expect(methods.indexOf("secrets.store.list")).toBe(
+      methods.indexOf("worker.desktop.launch") + 1,
+    );
+    expect(methods.indexOf("secrets.store.set")).toBe(methods.indexOf("secrets.store.list") + 1);
+    expect(methods.indexOf("secrets.store.delete")).toBe(methods.indexOf("secrets.store.set") + 1);
+    expect(methods.indexOf("users.prefs.get")).toBe(methods.indexOf("secrets.store.delete") + 1);
+    expect(methods.indexOf("users.prefs.set")).toBe(methods.indexOf("users.prefs.get") + 1);
+    expect(methods.indexOf("projects.add")).toBe(methods.indexOf("users.prefs.set") + 1);
+    expect(methods.indexOf("projects.searchRemote")).toBe(methods.indexOf("projects.add") + 1);
+    expect(methods.indexOf("desktop.observe")).toBe(methods.indexOf("projects.searchRemote") + 1);
+    expect(methods.indexOf("desktop.launch")).toBe(methods.indexOf("desktop.observe") + 1);
+    expect(methods.indexOf("device.scopes.requestUpgrade")).toBe(
+      methods.indexOf("desktop.launch") + 1,
+    );
+    expect(methods.indexOf("device.scopes.waitUpgrade")).toBe(
+      methods.indexOf("device.scopes.requestUpgrade") + 1,
+    );
+    expect(methods.indexOf("portal.list")).toBe(methods.indexOf("device.scopes.waitUpgrade") + 1);
+    expect(methods.indexOf("portal.open")).toBe(methods.indexOf("portal.list") + 1);
+    expect(methods.indexOf("portal.close")).toBe(methods.indexOf("portal.open") + 1);
+    expect(methods.indexOf("sessions.move")).toBe(methods.indexOf("portal.close") + 1);
+    expect(methods.indexOf("sessions.assignOwner")).toBe(methods.indexOf("sessions.move") + 1);
+    expect(methods.indexOf("progressCard.get")).toBe(methods.indexOf("sessions.assignOwner") + 1);
+    expect(methods.indexOf("progressCard.put")).toBe(methods.indexOf("progressCard.get") + 1);
+    expect(methods.indexOf("session.members.listEvidence")).toBe(
+      methods.indexOf("diagnostics.lanes") + 1,
+    );
+    expect(methods.indexOf("plugins.catalog.browse")).toBe(methods.indexOf("claws.monitors") + 1);
+    expect(methods.indexOf("plugins.catalog.categories")).toBe(
+      methods.indexOf("plugins.catalog.browse") + 1,
+    );
+    expect(methods.indexOf("plugins.catalog.get")).toBe(
+      methods.indexOf("plugins.catalog.categories") + 1,
+    );
   });
 
   it("advertises the versioned Talk session RPCs", () => {
