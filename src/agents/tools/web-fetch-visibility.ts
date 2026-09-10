@@ -7,7 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readTagToken } from "./web-fetch-html-tag.js";
+import { isAsciiWhitespace, isTagNameChar, readTagToken } from "./web-fetch-html-tag.js";
 
 // Compile property matchers once: this list is checked for every styled element.
 const HIDDEN_STYLE_PATTERNS = (
@@ -119,15 +119,56 @@ function isStyleHidden(style: string): boolean {
   return false;
 }
 
-// The fixed visibility attributes share one grammar; each reader compiles it once per process.
+// The fixed visibility attributes share one reader grammar. It walks real
+// attribute names instead of matching the raw attribute text: a substring like
+// "hidden" inside a quoted value (`title="The hidden cost of cloud"`) is part
+// of a value, not an attribute, and must not flip visibility.
 function createAttributeReader(attribute: "aria-hidden" | "class" | "hidden" | "style" | "type") {
-  const pattern = new RegExp(
-    `(?:^|\\s)${attribute}(?:\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\`]+)))?`,
-    "i",
-  );
   return (attrs: string): string | undefined => {
-    const match = attrs.match(pattern);
-    return match ? (match[1] ?? match[2] ?? match[3] ?? "") : undefined;
+    let pos = 0;
+    while (pos < attrs.length) {
+      while (
+        pos < attrs.length &&
+        (isAsciiWhitespace(attrs.charAt(pos)) || attrs.charAt(pos) === "/")
+      ) {
+        pos += 1;
+      }
+      const nameStart = pos;
+      while (pos < attrs.length && isTagNameChar(attrs.charAt(pos))) {
+        pos += 1;
+      }
+      if (pos === nameStart) {
+        break;
+      }
+      const name = attrs.slice(nameStart, pos).toLowerCase();
+      while (pos < attrs.length && isAsciiWhitespace(attrs.charAt(pos))) {
+        pos += 1;
+      }
+      let value = "";
+      if (attrs.charAt(pos) === "=") {
+        pos += 1;
+        while (pos < attrs.length && isAsciiWhitespace(attrs.charAt(pos))) {
+          pos += 1;
+        }
+        const quote = attrs.charAt(pos);
+        if (quote === '"' || quote === "'") {
+          const valueStart = pos + 1;
+          const valueEnd = attrs.indexOf(quote, valueStart);
+          value = valueEnd === -1 ? attrs.slice(valueStart) : attrs.slice(valueStart, valueEnd);
+          pos = valueEnd === -1 ? attrs.length : valueEnd + 1;
+        } else {
+          const valueStart = pos;
+          while (pos < attrs.length && !isAsciiWhitespace(attrs.charAt(pos))) {
+            pos += 1;
+          }
+          value = attrs.slice(valueStart, pos);
+        }
+      }
+      if (name === attribute) {
+        return value;
+      }
+    }
+    return undefined;
   };
 }
 
@@ -176,6 +217,23 @@ function popDroppedElement(dropStack: string[], tagName: string): void {
   }
 }
 
+// These elements may legally omit their end tag, and HTML closes a dropped one
+// implicitly when the same-name sibling or an ancestor end tag arrives. Without
+// this, a dropped <li>/<p>/<td> swallows the rest of the document.
+const OPTIONALLY_CLOSED_ELEMENTS = new Set(["dd", "dt", "li", "option", "p", "td", "th", "tr"]);
+
+function closeImplicitlyDroppedElement(dropStack: string[], tagName: string): boolean {
+  if (!OPTIONALLY_CLOSED_ELEMENTS.has(tagName)) {
+    return false;
+  }
+  const index = dropStack.lastIndexOf(tagName);
+  if (index >= 0) {
+    dropStack.length = index;
+    return true;
+  }
+  return false;
+}
+
 function removeMarkedElements(html: string): string {
   let output = "";
   let cursor = 0;
@@ -220,9 +278,28 @@ function removeMarkedElements(html: string): string {
 
     if (dropStack.length > 0) {
       if (parsed.closing) {
-        popDroppedElement(dropStack, parsed.name);
+        if (dropStack.lastIndexOf(parsed.name) < 0) {
+          // The dropped element's own end tag was omitted, so this ancestor end
+          // tag closes the drop region. The ancestor's end tag belongs to the
+          // surviving markup.
+          dropStack.length = 0;
+          output += token;
+        } else {
+          popDroppedElement(dropStack, parsed.name);
+        }
       } else if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.name)) {
-        dropStack.push(parsed.name);
+        if (closeImplicitlyDroppedElement(dropStack, parsed.name)) {
+          // A same-name sibling implicitly closed the dropped element (HTML
+          // omits </li>/<p>/<td> freely). Re-evaluate this sibling: it is only
+          // dropped when it is hidden in its own right.
+          if (!shouldRemoveElement(parsed.name, parsed.attrs)) {
+            output += token;
+          } else {
+            dropStack.push(parsed.name);
+          }
+        } else {
+          dropStack.push(parsed.name);
+        }
       }
       cursor = read.next;
       continue;

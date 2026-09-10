@@ -233,6 +233,42 @@ describe("sanitizeHtml", () => {
     expect(result).not.toContain("Still hidden");
   });
 
+  it("keeps elements whose attribute value merely mentions hidden", async () => {
+    const html =
+      '<html><body><article title="The hidden cost of cloud"><h1>Cloud Costs</h1>' +
+      "<p>Real body text of the article.</p></article></body></html>";
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Cloud Costs");
+    expect(result).toContain("Real body text of the article.");
+  });
+
+  it("keeps the page when a body attribute value mentions hidden", async () => {
+    const html =
+      '<html><body aria-label="Show hidden replies"><h1>Thread</h1><p>Every reply in this thread.</p></body></html>';
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Thread");
+    expect(result).toContain("Every reply in this thread.");
+  });
+
+  it("stops the drop region at the container of an optional-end-tag hidden element", async () => {
+    // <li> may legally omit its end tag; the drop must not swallow the rest of
+    // the document past the closing container tag.
+    const html =
+      '<html><body><ul><li class="d-none">Nav item<li>Visible item</ul>' +
+      "<p>Article body follows here.</p></body></html>";
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Visible item");
+    expect(result).toContain("Article body follows here.");
+    expect(result).not.toContain("Nav item");
+  });
+
+  it("still strips an optional-end-tag hidden element closed by its container", async () => {
+    const html = '<ul><li class="d-none">Dropped nav item</ul><p>Kept body</p>';
+    const result = await sanitizeHtml(html);
+    expect(result).not.toContain("Dropped nav item");
+    expect(result).toContain("Kept body");
+  });
+
   it("handles malformed HTML gracefully", async () => {
     const html = "<p>Unclosed <div>Nested";
     await expect(sanitizeHtml(html)).resolves.toContain("Unclosed");
