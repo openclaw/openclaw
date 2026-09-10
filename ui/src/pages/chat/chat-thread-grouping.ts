@@ -8,6 +8,7 @@ import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
+import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
 import {
@@ -384,7 +385,17 @@ export function collapseCompletedTurnWork(
     const answers: TurnRenderItem[] = [];
     for (let index = segmentStart; index <= segmentEnd; index += 1) {
       const item = turn[index]!;
-      if (index !== finalReplyIndex && isCollapsibleWorkGroup(item)) {
+      // Only a later answer can put a failed result inside completed work.
+      // Share the renderer's error classification, including structured results.
+      if (
+        index !== finalReplyIndex &&
+        isCollapsibleWorkGroup(item) &&
+        (finalReplyIndex < 0 ||
+          index < finalReplyIndex ||
+          !item.messages.some(({ message }) =>
+            extractToolCardsCached(message).some(isToolCardError),
+          ))
+      ) {
         groups.push(item);
       } else {
         answers.push(item);
