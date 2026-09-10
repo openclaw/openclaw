@@ -1272,6 +1272,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
+  it.each([true, false])(
+    "permits authorized SSH updates without bypassing local ownership (gateway=%s)",
+    (gateway) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: gateway ? ["gateway", "exec"] : ["exec"],
+      });
+      expect(prompt).toContain("For the Gateway hosting this session:");
+      expect(prompt).toContain("For a user-requested update on another host");
+      expect(prompt).toContain("verify it is not this Gateway");
+      expect(prompt).toContain("exec/SSH with `openclaw update --yes`");
+      expect(prompt).toContain("normal exec approvals still apply");
+    },
+  );
+
   it("routes explicit updates through gateway without exposing config writes", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1351,6 +1366,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("- openclaw:");
+    expect(prompt).not.toContain("exec/SSH with `openclaw update --yes`");
     expect(prompt).not.toContain("ask `openclaw`");
     expect(prompt).not.toContain("Gateway restart, config");
   });

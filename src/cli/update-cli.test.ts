@@ -2195,6 +2195,38 @@ describe("update-cli", () => {
     tempDirsToCleanup.clear();
   });
 
+  it.each([false, true])("admits non-TTY updates with an active session (yes=%s)", async (yes) => {
+    setTty(false);
+    setStdoutTty(false);
+    const { beginSessionWorkAdmission, getActiveSessionWorkAdmissionCount } =
+      await import("../sessions/session-lifecycle-admission.js");
+    const admission = await beginSessionWorkAdmission({
+      scope: path.join(resolveStateDir(), "agents", "main", "sessions", "sessions.json"),
+      identities: ["agent:main:ssh-update", "ssh-update-session"],
+      assertAllowed: () => {},
+    });
+    try {
+      mockRunningManagedGateway([
+        process.execPath,
+        path.join(process.cwd(), "dist", "index.js"),
+        "gateway",
+        "run",
+      ]);
+      vi.mocked(runGatewayUpdate).mockImplementation(async () => {
+        expect(getActiveSessionWorkAdmissionCount()).toBe(1);
+        return makeOkUpdateResult();
+      });
+      await invokeUpdateCli(yes ? { yes: true } : {});
+      expect(runGatewayUpdate).toHaveBeenCalledOnce();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(select).not.toHaveBeenCalled();
+      expect(updateFailureActionMocks.runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
+      expect(getActiveSessionWorkAdmissionCount()).toBe(1);
+    } finally {
+      admission.release();
+    }
+  });
+
   it("refuses to stop a service whose effective launcher changed during inspection", async () => {
     mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
     const original = await serviceReadCommand(process.env);

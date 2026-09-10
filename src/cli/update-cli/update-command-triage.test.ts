@@ -330,29 +330,37 @@ describe("update failure triage boundary", () => {
     },
   );
 
-  it("keeps --yes non-interactive and preserves an unexpected updater exception", async () => {
-    const target: UpdateTriageTarget & { root: string } = await createInstalledTriage();
-    const failure = new Error("Package verification failed unexpectedly");
-    target.failureResult = {
-      ...failedUpdate,
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    };
+  it.each([
+    { yes: true, terminal: true },
+    { yes: false, terminal: false },
+  ])(
+    "preserves non-interactive updater failures (yes=$yes, terminal=$terminal)",
+    async ({ yes, terminal }) => {
+      const target: UpdateTriageTarget & { root: string } = await createInstalledTriage();
+      const failure = new Error("Package verification failed unexpectedly");
+      target.failureResult = {
+        ...failedUpdate,
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      };
 
-    await expect(
-      withUpdateFailureTriage({ yes: true }, target, async () => {
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
+      await withTriageTerminal(terminal, async () => {
+        await expect(
+          withUpdateFailureTriage({ yes }, target, async () => {
+            throw failure;
+          }),
+        ).rejects.toBe(failure);
+      });
 
-    const receipt = await readReceipt(target);
-    expect(receipt.args).toContain("--non-interactive");
-    expect(receipt.failure).toMatchObject({
-      error: failure.message,
-      result: { recovery: { serviceRestartSafe: false } },
-    });
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
-  });
+      const receipt = await readReceipt(target);
+      expect(receipt.args).toContain("--non-interactive");
+      expect(receipt.failure).toMatchObject({
+        error: failure.message,
+        result: { recovery: { serviceRestartSafe: false } },
+      });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["reported", "unexpected"] as const)(
     "exports the final managed %s failure after cleanup without launching triage",
