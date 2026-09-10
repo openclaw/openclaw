@@ -32,6 +32,7 @@ const routes = [
   "labs",
   "model-providers",
   "plugin-settings",
+  "skill-settings",
   "mcp",
   "memory",
   "automation",
