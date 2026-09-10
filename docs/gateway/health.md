@@ -83,6 +83,11 @@ core equivalents: `1` means one CPU core fully occupied over the interval, and
 parallel work can produce values above `1`. It is not a percentage of the host's
 total CPU capacity.
 
+The Control UI's **System busyness** overlay reads the same sampler through
+`status.eventLoop` on both Node and Bun. Its CPU percentage uses `100%` for one
+fully occupied core. CPU and delay show a dash until the first sample completes;
+a persistent dash means the telemetry is unavailable, not zero CPU usage.
+
 Event-loop delay and utilization describe the main thread separately. A `cpu`
 degradation reason reports process CPU pressure with delay co-evidence; it does
 not identify the thread consuming CPU or prove a main-thread hang. Inspect the
