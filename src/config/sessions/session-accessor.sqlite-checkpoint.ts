@@ -5,6 +5,8 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { isKnownCliHistoryBoundary, type CliHistoryBoundary } from "./cli-history-boundary.js";
+import { clearAllCliSessions } from "./cli-session-binding.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   collectSessionEntryLookupKeys,
@@ -23,6 +25,10 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  readNextTranscriptSeq,
+  readTranscriptGenerationInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
@@ -192,10 +198,17 @@ function applySqliteCompactionCheckpointSessionOperationInTransaction(
     return forked;
   }
 
+  const cliHistoryBoundary = resolveCheckpointSuccessorCliHistoryBoundary(database, {
+    currentEntry,
+    nextSessionId: forked.sessionId,
+    ...(forked.sourceSessionId ? { sourceSessionId: forked.sourceSessionId } : {}),
+    ...(forked.sourceMaxSeq !== undefined ? { sourceMaxSeq: forked.sourceMaxSeq } : {}),
+  });
   const nextEntry =
     operation.kind === "branch"
       ? cloneSqliteCheckpointSessionEntry({
           currentEntry,
+          ...(cliHistoryBoundary ? { cliHistoryBoundary } : {}),
           creation: operation.creation,
           label: currentEntry.label?.trim()
             ? `${currentEntry.label.trim()} (checkpoint)`
@@ -206,6 +219,7 @@ function applySqliteCompactionCheckpointSessionOperationInTransaction(
         })
       : cloneSqliteCheckpointSessionEntry({
           currentEntry,
+          ...(cliHistoryBoundary ? { cliHistoryBoundary } : {}),
           nextSessionId: forked.sessionId,
           preserveCompactionCheckpoints: true,
           totalTokens: forked.totalTokens,
@@ -233,6 +247,8 @@ function forkSqliteCheckpointTranscriptInTransaction(
       sessionId: string;
       sessionFile: string;
       totalTokens?: number;
+      sourceSessionId?: string;
+      sourceMaxSeq?: number;
     }
   | { status: "missing-boundary" }
   | { status: "failed" } {
@@ -247,12 +263,13 @@ function forkSqliteCheckpointTranscriptInTransaction(
     | {
         source: SqliteCheckpointTranscriptForkSource;
         rows: TranscriptEvent[];
+        maxSeq: number;
       }
     | undefined;
   for (const source of sources) {
     const rows = readSqliteTranscriptRowsForFork(database, source);
     if (rows.status === "created") {
-      selected = { source, rows: rows.events };
+      selected = { source, rows: rows.events, maxSeq: rows.maxSeq };
       break;
     }
     lastFailure = rows;
@@ -286,6 +303,9 @@ function forkSqliteCheckpointTranscriptInTransaction(
     sessionId,
     sessionFile,
     ...(typeof totalTokens === "number" ? { totalTokens } : {}),
+    ...(selected
+      ? { sourceSessionId: selected.source.sessionId, sourceMaxSeq: selected.maxSeq }
+      : {}),
   };
 }
 
@@ -337,7 +357,9 @@ function resolveSqliteCheckpointTranscriptForkSources(
 function readSqliteTranscriptRowsForFork(
   database: OpenClawAgentDatabase,
   source: { sessionId: string; leafId?: string },
-): { status: "created"; events: TranscriptEvent[] } | { status: "missing-boundary" | "failed" } {
+):
+  | { status: "created"; events: TranscriptEvent[]; maxSeq: number }
+  | { status: "missing-boundary" | "failed" } {
   const boundarySeq = source.leafId
     ? readTranscriptIdentityByEventId(database, source.sessionId, source.leafId)?.seq
     : undefined;
@@ -362,6 +384,7 @@ function readSqliteTranscriptRowsForFork(
     return {
       status: "created",
       events: rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent),
+      maxSeq: rows.reduce((highest, row) => Math.max(highest, Number(row.seq)), 0),
     };
   } catch {
     return { status: "failed" };
@@ -389,10 +412,11 @@ function cloneSqliteCheckpointSessionEntry(params: {
   parentSessionKey?: string;
   totalTokens?: number;
   preserveCompactionCheckpoints?: boolean;
+  cliHistoryBoundary?: CliHistoryBoundary;
 }): SessionEntry {
   const hasTotalTokens =
     typeof params.totalTokens === "number" && Number.isFinite(params.totalTokens);
-  return {
+  const cloned: SessionEntry = {
     ...params.currentEntry,
     // A new branch belongs to its requester, including an explicitly absent
     // sandbox floor. Restore and actorless branches retain the source stamp.
@@ -427,6 +451,48 @@ function cloneSqliteCheckpointSessionEntry(params: {
     compactionCheckpoints: params.preserveCompactionCheckpoints
       ? params.currentEntry.compactionCheckpoints
       : undefined,
+  };
+  clearAllCliSessions(cloned);
+  cloned.cliHistoryBoundary = params.cliHistoryBoundary;
+  return cloned;
+}
+
+function resolveCheckpointSuccessorCliHistoryBoundary(
+  database: OpenClawAgentDatabase,
+  params: {
+    currentEntry: SessionEntry;
+    nextSessionId: string;
+    sourceSessionId?: string;
+    sourceMaxSeq?: number;
+  },
+): CliHistoryBoundary | undefined {
+  const stored = params.currentEntry.cliHistoryBoundary;
+  if (
+    !isKnownCliHistoryBoundary(stored) ||
+    !params.sourceSessionId ||
+    params.sourceMaxSeq === undefined ||
+    stored.sessionId !== params.currentEntry.sessionId ||
+    params.sourceSessionId !== params.currentEntry.sessionId ||
+    stored.generation === null ||
+    stored.maxSeq === null ||
+    stored.maxSeq < params.sourceMaxSeq ||
+    stored.generation !== readTranscriptGenerationInTransaction(database, params.sourceSessionId)
+  ) {
+    return undefined;
+  }
+  const generation = readTranscriptGenerationInTransaction(database, params.nextSessionId);
+  const maxSeq = readNextTranscriptSeq(database, params.nextSessionId) - 1;
+  if (!generation || maxSeq < 0) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    sessionId: params.nextSessionId,
+    state: "known",
+    authFingerprint: stored.authFingerprint,
+    generation,
+    maxSeq,
+    writerRunId: stored.writerRunId,
   };
 }
 
