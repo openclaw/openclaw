@@ -1315,6 +1315,22 @@ function limitProgressDraftLines<TLine extends string | ChannelProgressDraftLine
     .toReversed();
 }
 
+/**
+ * Command output reports the outcome of the command the line already shows.
+ * With command text on, its own detail is the agent's item title ("command
+ * <meta>"), a restatement of the detail the tool line carries, so the detail
+ * the reader has been watching stays and the status carries the result. The
+ * shown detail is kept only when the incoming detail is such a restatement:
+ * empty, the line's own status, the shown detail itself, or the shown detail
+ * behind a "command" prefix (whitespace collapsed, prefix case-insensitive).
+ * Any other incoming detail replaces the shown one, so a command-output line
+ * that ever carries real output or a different description is not discarded
+ * here. A line that already ended (a failed nested command) is replaced whole
+ * when the output names no command, so a recovered run does not keep the
+ * stale failure text; the embedded producer ends the command item before its
+ * output arrives, and that output names the shown command, so the shown
+ * detail stays through the terminal item.
+ */
 function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraftLine>(
   previous: TLine,
   line: TLine,
@@ -1322,18 +1338,22 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
   if (typeof previous !== "object" || typeof line !== "object") {
     return line;
   }
-  if (
-    line.kind !== "command-output" ||
-    !line.status ||
-    (line.detail && line.detail !== line.status)
-  ) {
+  if (line.kind !== "command-output" || !line.status) {
     return line;
   }
   const previousDetail = previous.detail?.trim();
   if (
     !previousDetail ||
     previousDetail === previous.status ||
-    isTerminalProgressStatus(previous.status)
+    line.detail?.trim() === previousDetail ||
+    !isRestatedCommandDetail(line.detail, previousDetail, line.status)
+  ) {
+    return line;
+  }
+  const incomingDetail = line.detail?.trim();
+  if (
+    isTerminalProgressStatus(previous.status) &&
+    (!incomingDetail || incomingDetail === line.status)
   ) {
     return line;
   }
@@ -1347,6 +1367,28 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
     progressDraftLineCorrelationKeys.get(line) ?? progressDraftLineCorrelationKeys.get(previous),
   );
   return replacement;
+}
+
+/**
+ * True when a command-output line's detail only restates the detail the line
+ * already shows: it is empty, it is the line's own status, or after collapsing
+ * whitespace it equals the shown detail with or without a leading "command".
+ */
+function isRestatedCommandDetail(
+  detail: string | undefined,
+  shownDetail: string,
+  status: string,
+): boolean {
+  const incoming = detail?.replace(/\s+/g, " ").trim();
+  if (!incoming || incoming === status) {
+    return true;
+  }
+  const shown = shownDetail.replace(/\s+/g, " ").trim();
+  if (incoming === shown) {
+    return true;
+  }
+  const prefix = incoming.slice(0, "command ".length);
+  return prefix.toLowerCase() === "command " && incoming.slice(prefix.length) === shown;
 }
 
 /**

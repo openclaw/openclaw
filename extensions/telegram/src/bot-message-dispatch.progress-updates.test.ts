@@ -558,10 +558,115 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       },
     });
 
+    // The finished line keeps the command text shown at start; the output
+    // event's item title ("command false") does not relabel it.
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
       telegramProgressPreview(
-        "Shelling\n\n🛠️ exit 2; command false",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b> command false <i>exit 2</i>",
+        "Shelling\n\n🛠️ exit 2; false",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> false <i>exit 2</i>",
+      ),
+    );
+  });
+
+  it("keeps the command text through the embedded producer's terminal command item", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      // The embedded exec producer's event order for one failing command.
+      await replyOptions?.onToolStart?.({
+        itemId: "tool:exec-1",
+        name: "exec",
+        phase: "start",
+        toolCallId: "exec-1",
+        args: { command: "false" },
+      });
+      await replyOptions?.onItemEvent?.({
+        itemId: "tool:exec-1",
+        kind: "tool",
+        title: "exec false",
+        phase: "start",
+        status: "running",
+        name: "exec",
+        meta: "false",
+        toolCallId: "exec-1",
+        commandBearing: true,
+      });
+      await replyOptions?.onItemEvent?.({
+        itemId: "command:exec-1",
+        kind: "command",
+        title: "command false",
+        phase: "start",
+        status: "running",
+        name: "exec",
+        meta: "false",
+        toolCallId: "exec-1",
+      });
+      await replyOptions?.onCommandOutput?.({
+        phase: "end",
+        name: "exec",
+        toolCallId: "exec-1",
+        output: "No such file or directory",
+        status: "failed",
+        exitCode: 2,
+      });
+      await replyOptions?.onItemEvent?.({
+        itemId: "tool:exec-1",
+        kind: "tool",
+        title: "exec false",
+        phase: "end",
+        status: "failed",
+        name: "exec",
+        meta: "false",
+        toolCallId: "exec-1",
+        commandBearing: true,
+      });
+      await replyOptions?.onItemEvent?.({
+        itemId: "command:exec-1",
+        kind: "command",
+        title: "command false",
+        phase: "end",
+        status: "failed",
+        name: "exec",
+        meta: "false",
+        toolCallId: "exec-1",
+        summary: "No such file or directory",
+      });
+      await replyOptions?.onCommandOutput?.({
+        itemId: "command:exec-1",
+        phase: "end",
+        title: "command false",
+        name: "exec",
+        toolCallId: "exec-1",
+        output: "No such file or directory",
+        status: "failed",
+        exitCode: 2,
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commandText: "raw" },
+        },
+      },
+    });
+
+    const previews = draftStream.updatePreview.mock.calls.map((call) => call[0]?.text ?? "");
+    expect(previews.length).toBeGreaterThan(0);
+    for (const preview of previews) {
+      expect(preview).toContain("<b>🛠️ Exec</b> false");
+      expect(preview).not.toContain("command false");
+    }
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ exit 2; false",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> false <i>exit 2</i>",
       ),
     );
   });
