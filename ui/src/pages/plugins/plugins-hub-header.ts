@@ -12,6 +12,10 @@ const HUB_COPY = {
     route: "skills",
     docsUrl: "https://docs.openclaw.ai/tools/skills",
   },
+  "skill-workshop": {
+    route: "skill-workshop",
+    docsUrl: "https://docs.openclaw.ai/tools/skill-workshop",
+  },
 } as const;
 
 type PluginsHubHeaderProps = {

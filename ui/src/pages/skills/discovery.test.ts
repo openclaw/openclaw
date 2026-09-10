@@ -5,6 +5,23 @@ import { createProps, createSkill } from "./view.test-support.ts";
 import { renderSkills } from "./view.ts";
 
 describe("unified skill discovery", () => {
+  it.each(["loading", "clawhubSearchLoading"] as const)(
+    "keeps cards visible without a loading label while %s",
+    (loadingKey) => {
+      const container = document.createElement("div");
+      for (const loading of [true, false]) {
+        render(
+          renderSkills(createProps({ surface: "discovery", [loadingKey]: loading })),
+          container,
+        );
+        expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(1);
+        expect(container.querySelector(".plugin-catalog-grid")?.getAttribute("aria-busy")).toBe(
+          String(loading),
+        );
+        expect(container.textContent).not.toContain("Loading…");
+      }
+    },
+  );
   it("shows separate personal/team copies and merges only their persisted runtime command identity", () => {
     const container = document.createElement("div");
     const libraries = buildSkillLibraryMock().map((item) => item.entry);

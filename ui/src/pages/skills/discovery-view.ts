@@ -88,7 +88,10 @@ export function renderSkillDiscovery(props: SkillsProps) {
         aria-label=${t("skillDiscovery.search")}
         placeholder=${t("skillDiscovery.search")}
         .value=${props.clawhubQuery}
-        @input=${(event: Event) => props.onClawHubQueryChange((event.target as HTMLInputElement).value)}
+        @input=${(event: Event) => {
+          // SAFETY: this listener is attached directly to the search input.
+          props.onClawHubQueryChange((event.currentTarget as HTMLInputElement).value);
+        }}
         ${ref((element) => {
           if (element instanceof HTMLInputElement && !element.dataset.autofocused) {
             element.dataset.autofocused = "true";
@@ -101,7 +104,6 @@ export function renderSkillDiscovery(props: SkillsProps) {
         })}
       />
     </label>
-    ${props.agentSelector ?? nothing}
     ${props.error ? html`<div class="callout danger" role="alert">${props.error}</div>` : nothing}
     ${!props.connected ? html`<p role="status" class="muted">${t("skillsPage.disconnected")}</p>` : nothing}
     ${
@@ -128,7 +130,6 @@ export function renderSkillDiscovery(props: SkillsProps) {
           </div>`
         : nothing
     }
-    ${props.loading || props.clawhubSearchLoading ? html`<span class="muted" role="status">${t("common.loading")}</span>` : nothing}
     <div
       class="plugin-catalog-grid plugin-catalog-grid--results"
       aria-busy=${props.loading || props.clawhubSearchLoading}

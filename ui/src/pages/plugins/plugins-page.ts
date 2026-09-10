@@ -436,7 +436,7 @@ class PluginsPage extends OpenClawLightDomElement {
       }
       return;
     }
-    this.context.navigate("skills");
+    this.context.navigate(tab);
   }
 
   private mutationBlockedReason(): string | null {

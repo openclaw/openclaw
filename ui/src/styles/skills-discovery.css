@@ -10,10 +10,6 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.skill-discovery .skills-toolbar__agent {
-  justify-self: end;
-}
-
 .skill-discovery .plugin-card-author {
   overflow: hidden;
   text-overflow: ellipsis;

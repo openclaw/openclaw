@@ -2,6 +2,7 @@
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   createApplicationContextProvider,
@@ -10,6 +11,7 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
+import { createSkill } from "./view.test-support.ts";
 import "./skills-page.ts";
 
 const personalLibrary = {
@@ -56,7 +58,7 @@ function mountSkills(request: (method: string, params?: unknown) => Promise<unkn
     defaultId: "main",
     mainKey: "main",
     scope: "global" as const,
-    agents: [{ id: "main" }],
+    agents: [{ id: "main" }, { id: "research" }],
   };
   const agents = {
     state: { agentsList, agentsLoading: false, agentsError: null },
@@ -67,6 +69,7 @@ function mountSkills(request: (method: string, params?: unknown) => Promise<unkn
     basePath: "",
     gateway: connection.gateway,
     agents,
+    agentSelection: createAgentSelectionCapability(connection.gateway, agents),
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
   const host = createApplicationContextProvider(context);
@@ -82,17 +85,90 @@ function mountSkills(request: (method: string, params?: unknown) => Promise<unkn
     agents,
     agentsList,
     selectedAgentId: "main",
+    selection: context.agentSelection.state,
     report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
     error: null,
   };
   host.append(page);
   document.body.append(host);
-  return { page, connection, agents };
+  return { page, connection, agents, context };
 }
 
 afterEach(() => document.body.replaceChildren());
 
 describe("Skills discovery lifecycle", () => {
+  it("opens Plugins and Skill workshop from the shared tabs", async () => {
+    const { page, context } = mountSkills(async (method) =>
+      method === "skills.library.list" ? personalLibrary : { results: [] },
+    );
+    await page.updateComplete;
+    for (const tab of ["plugins", "skill-workshop"]) {
+      page
+        .querySelector(`#plugins-tab-${tab}`)
+        ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+      expect(context.navigate).toHaveBeenLastCalledWith(tab);
+    }
+  });
+
+  it("follows sidebar selection and rejects old scope results before installing", async () => {
+    const oldReport = deferred<unknown>();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "skills.search") {
+        return { results: [remoteSkill] };
+      }
+      if (method === "skills.library.list") {
+        return { ...personalLibrary, defaultTarget: "workspace" };
+      }
+      if (method === "skills.status") {
+        if ((params as { agentId: string }).agentId === "research") {
+          return oldReport.promise;
+        }
+        return { skills: [createSkill({ name: "main-only", skillKey: "main-only" })] };
+      }
+      if (method === "skills.install") {
+        return { message: "Installed" };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const { page, context } = mountSkills(request);
+    await waitForFast(() =>
+      expect(page.querySelector(".plugin-catalog-card__install")).not.toBeNull(),
+    );
+    context.agentSelection.set("research");
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("skills.status", { agentId: "research" }),
+    );
+    context.agentSelection.set("main");
+    await waitForFast(() => expect(page.textContent).toContain("main-only"));
+    oldReport.resolve({
+      skills: [createSkill({ name: "research-only", skillKey: "research-only", disabled: true })],
+    });
+    await oldReport.promise;
+    await page.updateComplete;
+    expect(page.textContent).not.toContain("research-only");
+    expect(page.querySelector('[name="skills-agent"]')).toBeNull();
+    context.agentSelection.set("research");
+    await waitForFast(() => expect(page.textContent).toContain("research-only"));
+    expect(
+      page
+        .querySelector('[data-skill-id="local:research-only"] .settings-status')
+        ?.getAttribute("title"),
+    ).toContain("Disabled");
+    page.routeData = { ...page.routeData };
+    await page.updateComplete;
+    expect(context.agentSelection.state.selectedId).toBe("research");
+    expect(page.textContent).toContain("research-only");
+    page.querySelector<HTMLButtonElement>(".plugin-catalog-card__install")!.click();
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("skills.install", {
+        agentId: "research",
+        source: "clawhub",
+        slug: "@alice/calendar",
+      }),
+    );
+    page.querySelector<HTMLButtonElement>('[aria-label="Skill settings"]')!.click();
+    expect(context.navigate).toHaveBeenCalledWith("skill-settings", { search: "?agent=research" });
+  });
   it("reloads empty-query results after a same-client reconnect and ignores the previous search", async () => {
     const staleSearch = deferred<{ results: (typeof remoteSkill)[] }>();
     const search = vi

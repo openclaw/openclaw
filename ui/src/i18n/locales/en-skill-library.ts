@@ -5,7 +5,7 @@ import { en } from "./en.ts";
 // of the Control UI startup catalog.
 const enSkillLibrary = {
   skillDiscovery: {
-    search: "Search installed skills and ClawHub",
+    search: "Search skills",
     settings: "Skill settings",
     libraryStatus: "Library skill. Session selections control when it is used.",
   },

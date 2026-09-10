@@ -48,6 +48,7 @@ export type SkillsRouteData = {
   agents: ApplicationContext["agents"];
   agentsList: AgentsListResult | null;
   selectedAgentId: string | null;
+  selection: ApplicationContext["agentSelection"]["state"];
   report: SkillStatusReport | null;
   error: string | null;
   clawhubRef?: string;
@@ -128,19 +129,32 @@ class SkillsPage extends OpenClawLightDomElement {
     task: ([client, query], { signal }) =>
       client ? searchClawHub(client, query, signal) : initialState,
   });
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.agents,
-    (agents) => {
-      const cleanup = agents.subscribe(() => {
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.agents,
+      (agents) => {
+        const cleanup = agents.subscribe(() => {
+          this.reconcileAgentState();
+          this.ensureInitialData();
+          this.requestUpdate();
+        });
         this.reconcileAgentState();
         this.ensureInitialData();
-        this.requestUpdate();
-      });
-      this.reconcileAgentState();
-      this.ensureInitialData();
-      return cleanup;
-    },
-  );
+        return cleanup;
+      },
+    )
+    .watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      () => {
+        const previous = this.skillsAgentId;
+        this.reconcileAgentState();
+        if (this.routeDataInitialized && previous !== this.skillsAgentId) {
+          this.routeDataEnabled = false;
+          this.ensureInitialData();
+        }
+      },
+    );
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
@@ -160,13 +174,18 @@ class SkillsPage extends OpenClawLightDomElement {
 
   private reconcileAgentState() {
     const agentState = this.context.agents.state;
+    const previousAgentId = this.skillsAgentId;
+    setSkillsAgentId(
+      this,
+      this.context.agentSelection.state.selectedId ?? agentState.agentsList?.defaultId ?? null,
+    );
     if (agentState.agentsList) {
-      const previousAgentId = this.skillsAgentId;
       reconcileSkillsAgentId(this, agentState.agentsList);
-      if (previousAgentId !== this.skillsAgentId) {
-        this.skillsDetailKey = null;
-        this.skillsDetailTab = "overview";
-      }
+    }
+    if (previousAgentId !== this.skillsAgentId) {
+      this.skillsDetailKey = null;
+      this.skillsDetailTab = "overview";
+      closeClawHubDetail(this);
     }
   }
 
@@ -216,15 +235,22 @@ class SkillsPage extends OpenClawLightDomElement {
       this.routeDataEnabled = false;
       return;
     }
+    const selection = this.context.agentSelection.state;
+    // A route preload must not undo a sidebar switch that happened while it loaded.
     if (
-      this.skillsAgentId &&
-      data.selectedAgentId &&
-      data.selectedAgentId !== this.skillsAgentId &&
-      !data.clawhubRef
+      selection !== data.selection &&
+      !(data.selection.selectedId === null && selection.selectedId === data.selectedAgentId)
     ) {
+      this.routeDataEnabled = false;
+      this.reconcileAgentState();
       return;
     }
-    this.skillsAgentId = data.selectedAgentId ?? this.skillsAgentId;
+    setSkillsAgentId(this, data.selectedAgentId);
+    if (data.selectedAgentId && selection.selectedId !== data.selectedAgentId) {
+      this.context.agentSelection.set(data.selectedAgentId);
+    }
+    this.reconcileAgentState();
+    this.routeDataEnabled = true;
     this.skillsLoading = false;
     this.skillsReport = data.report;
     this.skillsError = data.error;
@@ -283,13 +309,7 @@ class SkillsPage extends OpenClawLightDomElement {
     if (this.skillOperation || this.skillsLoading) {
       return;
     }
-    const previousAgentId = this.skillsAgentId;
-    setSkillsAgentId(this, agentId);
-    if (previousAgentId !== this.skillsAgentId) {
-      this.skillsDetailKey = null;
-      this.skillsDetailTab = "overview";
-    }
-    void loadSkills(this, { clearMessages: true });
+    this.context.agentSelection.set(agentId);
   }
 
   private changeClawHubQuery(query: string) {
@@ -362,7 +382,7 @@ class SkillsPage extends OpenClawLightDomElement {
     if (tab === "skills") {
       return;
     }
-    this.context.navigate("plugins");
+    this.context.navigate(tab);
   }
 
   override render() {

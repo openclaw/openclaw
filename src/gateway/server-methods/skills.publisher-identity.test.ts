@@ -71,13 +71,15 @@ function fakeClawHub(input: string): Response {
     return Response.json(searchPayload());
   }
   if (url.pathname === "/api/v1/trending") {
-    const [native, , external] = searchPayload().results;
     return Response.json({
-      items: [native, external].map(({ ownerHandle, score: _score, ...entry }) => ({
-        ...entry,
-        publisher: entry.source === "clawhub" ? { handle: ownerHandle } : null,
-        metrics: { updatedAt: 123 },
-      })),
+      items: searchPayload()
+        .results.filter((_, index) => index !== 1)
+        .map(({ ownerHandle, score: _score, ...entry }) =>
+          Object.assign(entry, {
+            publisher: entry.source === "clawhub" ? { handle: ownerHandle } : null,
+            metrics: { updatedAt: 123 },
+          }),
+        ),
     });
   }
   if (url.pathname === `/api/v1/skills/${SLUG}`) {
@@ -132,7 +134,7 @@ describe("ClawHub publisher identity across skills.search, skills.detail, and sk
         }
       ).results;
       expect(requestedUrls).toHaveLength(1);
-      expect(new URL(requestedUrls[0]).origin).toBe(registry);
+      expect(new URL(expectDefined(requestedUrls[0], "search request")).origin).toBe(registry);
       expect(results.map((r) => r.registry)).toEqual([registry, registry, registry]);
       expect(results.map((r) => r.installRef)).toEqual([
         `@gzlicanyi/${SLUG}`,

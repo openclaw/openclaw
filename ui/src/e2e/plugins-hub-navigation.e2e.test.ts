@@ -80,6 +80,19 @@ const methodResponses = {
     managedSkillsDir: "/tmp/openclaw-e2e/skills",
     skills: [],
   },
+  "skills.search": {
+    results: [
+      { slug: "calendar", displayName: "Calendar", score: 1, registry: "https://clawhub.ai" },
+    ],
+  },
+  "skills.library.list": {
+    entries: [],
+    profileId: "alice",
+    multipleProfiles: true,
+    defaultTarget: "personal",
+    canManageWorkspace: true,
+    defaultSelectionLimit: 64,
+  },
 };
 
 type HeaderGeometry = {
@@ -120,25 +133,47 @@ function expectStableHeader(actual: HeaderGeometry, expected: HeaderGeometry) {
   expect(Math.abs(actual.width - expected.width)).toBeLessThanOrEqual(1);
 }
 
-async function expectHeaderCopy(page: Page, active: "plugins" | "skills") {
-  const expected =
-    active === "plugins"
-      ? {
-          title: "Plugins",
-          subtitle: "Extend your Claw with tools",
-          docs: "https://docs.openclaw.ai/plugins/manage-plugins",
-        }
-      : {
-          title: "Skills",
-          subtitle: "Manage agent skills and find new ones on ClawHub.",
-          docs: "https://docs.openclaw.ai/tools/skills",
-        };
+async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skill-workshop") {
+  const expected = {
+    plugins: {
+      title: "Plugins",
+      subtitle: "Extend your Claw with tools",
+      docs: "https://docs.openclaw.ai/plugins/manage-plugins",
+    },
+    skills: {
+      title: "Skills",
+      subtitle: "Manage your agent skills",
+      docs: "https://docs.openclaw.ai/tools/skills",
+    },
+    "skill-workshop": {
+      title: "Skill workshop",
+      subtitle:
+        "The skills your agent uses now, suggestions waiting for review, and past decisions.",
+      docs: "https://docs.openclaw.ai/tools/skill-workshop",
+    },
+  }[active];
   const header = page.locator(".plugins-hub-header");
   expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
   expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
   expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
     expected.docs,
   );
+}
+
+async function installButtonPresentation(page: Page) {
+  const button = page.getByRole("button", { name: /^Install /u }).first();
+  await button.waitFor({ state: "visible" });
+  return button.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      color: style.color,
+      border: style.border,
+      padding: style.padding,
+      font: style.font,
+      height: element.getBoundingClientRect().height,
+    };
+  });
 }
 
 async function captureScreenshot(page: Page, name: string) {
@@ -207,6 +242,8 @@ suite.define(() => {
           "skills.proposals.historyStatus",
           "skills.proposals.list",
           "skills.status",
+          "skills.search",
+          "skills.library.list",
         ],
         methodResponses,
       });
@@ -223,7 +260,7 @@ suite.define(() => {
         const pluginsHeader = await headerGeometry(page);
         expect(pluginsHeader.title).toBe("Plugins");
         await expectHeaderCopy(page, "plugins");
-        expect(await page.locator(".plugins-hub-tabs").getByRole("tab").count()).toBe(2);
+        expect(await page.locator(".plugins-hub-tabs").getByRole("tab").count()).toBe(3);
         expect(
           await page.getByRole("tab", { name: "Plugins", exact: true }).getAttribute("active"),
         ).not.toBeNull();
@@ -242,32 +279,39 @@ suite.define(() => {
         expect(Math.abs((tabBox?.x ?? 0) - (titleBox?.x ?? 0))).toBeLessThanOrEqual(1);
         expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
         await expectActivePanelLabel(page, "plugins-tab-plugins");
+        const pluginInstallPresentation = await installButtonPresentation(page);
         await captureScreenshot(page, `${label}-01-installed-plugins.png`);
 
-        await page.getByRole("tab", { name: "Skills", exact: true }).click();
+        await page
+          .locator(".plugins-hub-tabs")
+          .getByRole("tab", { name: "Skills", exact: true })
+          .click();
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
         await expectActivePanelLabel(page, "plugins-tab-skills");
-        expect(await page.getByRole("button", { name: "Workshop", exact: true }).isVisible()).toBe(
-          true,
-        );
+        expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
         await captureScreenshot(page, `${label}-02-skills.png`);
 
-        await page.getByRole("button", { name: "Workshop", exact: true }).click();
+        await page.getByRole("tab", { name: "Skill workshop", exact: true }).click();
         await waitForControlUiRoute(page, {
           pathname: "/skills/workshop",
           routeId: "skill-workshop",
         });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
-        await expectHeaderCopy(page, "skills");
-        await expectActivePanelLabel(page, "plugins-tab-skills");
+        await expectHeaderCopy(page, "skill-workshop");
+        await expectActivePanelLabel(page, "plugins-tab-skill-workshop");
         expect(
-          await page.getByRole("button", { name: "Back to Skills", exact: true }).isVisible(),
-        ).toBe(true);
+          await page
+            .getByRole("tab", { name: "Skill workshop", exact: true })
+            .getAttribute("active"),
+        ).not.toBeNull();
         await captureScreenshot(page, `${label}-03-workshop.png`);
 
-        await page.getByRole("button", { name: "Back to Skills", exact: true }).click();
+        await page
+          .locator(".plugins-hub-tabs")
+          .getByRole("tab", { name: "Skills", exact: true })
+          .click();
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
         await page.getByRole("tab", { name: "Plugins", exact: true }).click();
         await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });

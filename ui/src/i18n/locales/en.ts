@@ -2385,7 +2385,7 @@ export const en: TranslationMap & {
     tasks: "Tasks",
     skills: "Skills",
     plugins: "Plugins",
-    skillWorkshop: "Skill Workshop",
+    skillWorkshop: "Skill workshop",
     devices: "Devices",
     cloudWorkers: "Cloud workers",
     chat: "Chat",
@@ -2429,7 +2429,7 @@ export const en: TranslationMap & {
     usage: "API usage and costs.",
     cron: "Scheduled tasks and recurring agent runs.",
     tasks: "Background tasks: subagents, automation runs, CLI.",
-    skills: "Manage agent skills and find new ones on ClawHub.",
+    skills: "Manage your agent skills",
     plugins: "Extend your Claw with tools",
     skillWorkshop:
       "The skills your agent uses now, suggestions waiting for review, and past decisions.",

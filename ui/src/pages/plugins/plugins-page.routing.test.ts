@@ -48,7 +48,7 @@ function discoveryDetail(
   };
 }
 
-function clickHubTab(page: HTMLElement, tab: "plugins" | "skills") {
+function clickHubTab(page: HTMLElement, tab: "plugins" | "skills" | "skill-workshop") {
   page
     .querySelector(`#plugins-tab-${tab}`)
     ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
@@ -121,7 +121,7 @@ describe("PluginsPage routing", () => {
     },
   );
 
-  it("switches between the Plugins and Skills workspace without reviving catalog tabs", async () => {
+  it("switches between Plugins, Skills, and Skill workshop without reviving catalog tabs", async () => {
     const { client } = createClient(async (method) => {
       if (method === "plugins.catalog.categories") {
         return { categories: [] };
@@ -146,6 +146,8 @@ describe("PluginsPage routing", () => {
     expect(context.navigate).not.toHaveBeenCalled();
     clickHubTab(page, "skills");
     expect(context.navigate).toHaveBeenCalledWith("skills");
+    clickHubTab(page, "skill-workshop");
+    expect(context.navigate).toHaveBeenCalledWith("skill-workshop");
   });
 
   it("keeps the canonical settings inventory at /settings/plugins", async () => {

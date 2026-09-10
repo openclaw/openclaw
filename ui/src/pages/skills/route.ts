@@ -15,6 +15,7 @@ async function loadSkillsRouteData(
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const agents = context.agents;
+  const selection = context.agentSelection.state;
   const client = gatewaySnapshot.client;
   if (gatewaySnapshot.phase !== "connected" || !client) {
     return {
@@ -23,6 +24,7 @@ async function loadSkillsRouteData(
       agents,
       agentsList: null,
       selectedAgentId: null,
+      selection,
       report: null,
       error: null,
       clawhubRef,
@@ -36,7 +38,8 @@ async function loadSkillsRouteData(
   try {
     const loadedAgentsList = await agents.ensureList();
     agentsList = loadedAgentsList;
-    const requestedAgentId = search.get("agent") ?? loadedAgentsList?.defaultId;
+    const requestedAgentId =
+      search.get("agent") ?? selection.selectedId ?? loadedAgentsList?.defaultId;
     selectedAgentId = loadedAgentsList?.agents.some((agent) => agent.id === requestedAgentId)
       ? (requestedAgentId ?? null)
       : null;
@@ -56,6 +59,7 @@ async function loadSkillsRouteData(
     agents,
     agentsList,
     selectedAgentId,
+    selection,
     report,
     error,
     clawhubRef,

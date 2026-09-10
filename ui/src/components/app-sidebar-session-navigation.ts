@@ -525,7 +525,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   switchChipAgent(agentId: string) {
     this.closeAgentMenu();
     this.expandAgent(agentId);
-    this.openAgentConversation(agentId);
+    // Skills uses the shared agent selection in place; opening chat would
+    // discard the discovery page instead of updating its workspace scope.
+    if (this.activeRouteId !== "skills") {
+      this.openAgentConversation(agentId);
+    }
   }
 
   askAgentCapabilities(agentId: string) {

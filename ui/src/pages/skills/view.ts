@@ -63,7 +63,6 @@ export type SkillsProps = {
   surface?: "discovery" | "settings";
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;
-  agentSelector?: TemplateResult;
   library?: TemplateResult;
   showInventory?: boolean;
   personalImport?: boolean;
@@ -237,10 +236,7 @@ export function renderSkills(props: SkillsProps) {
   return html`
     ${renderSettingsPage(
       props.surface === "discovery"
-        ? html`
-            ${renderSkillDiscovery({ ...props, agentSelector: renderSkillsAgentSelector(props) })}
-            ${props.library ?? nothing}
-          `
+        ? html` ${renderSkillDiscovery(props)} ${props.library ?? nothing} `
         : html`
             ${props.library ?? nothing}
             ${
@@ -265,7 +261,7 @@ export function renderSkills(props: SkillsProps) {
                   : groups.map((group) => renderSkillGroup(group, props))
             }
           `,
-      { wide: true },
+      { wide: true, carapace: props.surface === "discovery" },
     )}
     ${detailSkill ? renderSkillDetail(detailSkill, props) : nothing}
     ${props.clawhubDetailRef ? renderClawHubDetailDialog(props) : nothing}
