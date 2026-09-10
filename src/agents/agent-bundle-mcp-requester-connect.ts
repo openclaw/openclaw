@@ -86,6 +86,12 @@ async function connectRequesterOAuthServer(params: {
     sent = { status: "failed" };
   }
   assertActive();
+  if (sent.status === "unavailable") {
+    return failure(
+      `Private sign-in delivery for MCP server "${params.serverName}" is not supported by this messaging channel. ` +
+        "Ask the operator to add private-delivery support to this channel's plugin. Changing DM settings will not enable this capability, and no sign-in link was posted to this conversation.",
+    );
+  }
   if (sent.status !== "sent") {
     return failure(
       `Could not privately deliver the sign-in link for MCP server "${params.serverName}". ` +

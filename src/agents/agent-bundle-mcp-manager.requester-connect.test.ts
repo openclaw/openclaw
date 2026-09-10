@@ -199,6 +199,28 @@ describe("requester MCP connect runtime", () => {
     }
   });
 
+  it("distinguishes an unsupported channel from blocked private messages", async () => {
+    const runtime = await manager.getOrCreate(request);
+    const materialized = await materializeBundleMcpToolsForRun({
+      runtime,
+      requesterConnectDelivery: {
+        assertActive: () => {},
+        send: async () => ({ status: "unavailable" }),
+      },
+    });
+    try {
+      const result = await materialized.tools[0]!.execute("connect", {});
+      expect(result.details).toMatchObject({ status: "error" });
+      expect(result.content[0]).toMatchObject({
+        text: expect.stringContaining("not supported by this messaging channel"),
+      });
+      expect(JSON.stringify(result)).not.toContain("https://auth.example");
+      expect(JSON.stringify(result)).not.toContain("Allow private messages");
+    } finally {
+      await materialized.dispose();
+    }
+  });
+
   it.each(["oauth", "delivery", "rejected-delivery"])(
     "keeps sensitive %s failures out of tool results",
     async (failure) => {

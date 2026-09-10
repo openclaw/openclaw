@@ -85,6 +85,36 @@ async function runStreamOperation(
 const STREAM_METHODS = ["chat.startStream", "chat.appendStream", "chat.stopStream"] as const;
 
 describe("Slack explicit rate-limit recovery", () => {
+  it("rechecks authority after the SDK request queue releases a waiting send", async () => {
+    const entered = createDeferred<void>();
+    const firstResponse = createDeferred<Response>();
+    const bodies: string[] = [];
+    let active = true;
+    const client = createSlackWriteClient("synthetic-private-queue-fixture", {
+      maxRequestConcurrency: 1,
+      assertPlatformSendAuthorized: () => {
+        if (!active) {
+          throw new Error("Run closed");
+        }
+      },
+      fetch: async (_input, init) => {
+        bodies.push(String(init?.body));
+        entered.resolve();
+        return firstResponse.promise;
+      },
+    });
+    const first = client.chat.postMessage({ channel: "UFIXTURE", text: "first" });
+    await entered.promise;
+    const second = client.chat.postMessage({ channel: "UFIXTURE", text: "private link" });
+    const rejected = expect(second).rejects.toThrow("Run closed");
+    active = false;
+    firstResponse.resolve(new Response(JSON.stringify({ ok: true, ts: STREAM_TS })));
+    await expect(first).resolves.toMatchObject({ ok: true });
+    await rejected;
+    expect(bodies).toHaveLength(1);
+    expect(new URLSearchParams(bodies[0]).get("text")).toBe("first");
+  });
+
   it("recovers an authoritative rejection even if its discarded body fails", async () => {
     const transport = createRateLimitTransport("chat.startStream", "success", true);
     const session = await runStreamOperation("chat.startStream", transport.fetch);

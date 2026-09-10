@@ -60,6 +60,7 @@ export type RequestData = {
   multipartStyle?: "message" | "form";
   rawBody?: boolean;
   headers?: Record<string, string>;
+  assertRequestAuthorized?: () => void;
 };
 
 type QueuedRequest = {
@@ -247,6 +248,9 @@ export class RequestClient {
       : controller.signal;
     this.requestControllers.add(controller);
     try {
+      // Queue waits and 429 retries can outlive the caller's authority. Keep
+      // this check on the request, immediately before every physical send.
+      params.data?.assertRequestAuthorized?.();
       const response = await (this.customFetch ?? fetch)(url, {
         method,
         headers,

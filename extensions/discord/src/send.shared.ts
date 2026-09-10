@@ -385,7 +385,7 @@ async function sendDiscordChunks(
           return createChannelMessage<{ id: string; channel_id: string }>(
             params.rest,
             params.channelId,
-            { body },
+            { body, assertRequestAuthorized: params.assertPlatformSendAuthorized },
           );
         },
         files ? "media" : "text",

@@ -6,9 +6,12 @@ import {
   type APIMessageTopLevelComponent,
 } from "discord-api-types/v10";
 // Discord tests cover send.sends basic channel messages plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Container, TextDisplay } from "./internal/discord.js";
+import { RequestClient } from "./internal/rest.js";
+import { createJsonResponse } from "./internal/test-builders.test-support.js";
 import {
   createDiscordLoopbackRest,
   discordWebMediaMockFactory,
@@ -692,6 +695,67 @@ describe("sendMessageDiscord", () => {
       expect(messageRequests).toHaveLength(0);
     } finally {
       await loopback.close();
+    }
+  });
+
+  it("fences private text at the physical send after an internal REST rate-limit retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstAttempt = createDeferred<void>();
+      const authorityRevoked = new Error("delivery authority revoked");
+      let authorityActive = true;
+      const messageBodies: unknown[] = [];
+      const rest = new RequestClient("test-token", {
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/api/v10/users/@me/channels") {
+            return createJsonResponse({ id: "789" });
+          }
+          if (path === "/api/v10/channels/789" && init?.method === "GET") {
+            return createJsonResponse({ id: "789", type: ChannelType.DM });
+          }
+          if (path === "/api/v10/channels/789/messages" && init?.method === "POST") {
+            messageBodies.push(JSON.parse(String(init.body)));
+            if (messageBodies.length === 1) {
+              authorityActive = false;
+              firstAttempt.resolve();
+              return createJsonResponse(
+                { message: "Rate limited", retry_after: 0.1, global: false },
+                { status: 429 },
+              );
+            }
+            return createJsonResponse({ id: "message", channel_id: "789" });
+          }
+          throw new Error(`Unexpected Discord request: ${init?.method} ${path}`);
+        },
+      });
+      const result = sendMessageDiscord("user:123", "https://example.com/connect", {
+        rest,
+        token: "test-token",
+        cfg: DISCORD_TEST_CFG,
+        suppressEmbeds: true,
+        allowedMentions: { parse: [] },
+        assertPlatformSendAuthorized: () => {
+          if (!authorityActive) {
+            throw authorityRevoked;
+          }
+        },
+      });
+      const rejected = expect(result).rejects.toBe(authorityRevoked);
+      await firstAttempt.promise;
+      await vi.advanceTimersByTimeAsync(100);
+      await rejected;
+
+      expect(messageBodies).toEqual([
+        expect.objectContaining({
+          content: "https://example.com/connect",
+          flags: MessageFlags.SuppressEmbeds,
+          allowed_mentions: { parse: [] },
+        }),
+      ]);
+      expect(rest.queueSize).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

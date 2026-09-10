@@ -27,6 +27,11 @@ export type SlackLookupClientOptions = Pick<
   "fetch" | "slackApiUrl" | "teamId" | "timeout"
 >;
 
+export type SlackWriteClientOptions = WebClientOptions & {
+  /** Invocation-owned authority; clients carrying it must never be cached. */
+  assertPlatformSendAuthorized?: () => void;
+};
+
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
   factor: 2,
@@ -137,11 +142,24 @@ export function resolveSlackReadClientOptions(
 }
 
 export function resolveSlackWriteClientOptions(
-  options: WebClientOptions = {},
+  options: SlackWriteClientOptions = {},
   dispatcher = resolveSlackProxyDispatcher(),
 ): WebClientOptions {
-  const resolved: WebClientOptions = Object.assign({}, options);
+  const { assertPlatformSendAuthorized, ...clientOptions } = options;
+  const resolved: WebClientOptions = Object.assign({}, clientOptions);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
+  if (assertPlatformSendAuthorized) {
+    const slackFetch = resolved.fetch ?? buildSlackFetch(dispatcher);
+    if (!slackFetch) {
+      throw new Error("Slack authorized delivery requires a fetch transport");
+    }
+    // The SDK queues requests and our 429 recovery retries below. Guard the
+    // underlying fetch so neither wait can outlive the originating authority.
+    resolved.fetch = (input, init) => {
+      assertPlatformSendAuthorized();
+      return slackFetch(input, init);
+    };
+  }
   resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
   // A caller's nonzero SDK retry policy already owns rate-limit recovery.
   if (resolved.rejectRateLimitedCalls !== true && resolved.retryConfig.retries === 0) {
