@@ -562,11 +562,14 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     if (
       code === 4000 &&
-      reason === "control-taken" &&
+      (reason === "control-taken" || reason?.startsWith("control-taken:")) &&
       this.controlling &&
       !this.controlTakeoverRecoveryUsed
     ) {
-      this.noticeText = t("desktop.controlTaken");
+      const operator = formatUiExternalText(reason.slice("control-taken:".length));
+      this.noticeText = operator
+        ? t("desktop.controlTakenBy", { operator })
+        : t("desktop.controlTaken");
       void this.connectEnvironment(environmentId, false, {
         preserveNotice: true,
         takeoverRecovery: true,

@@ -43,6 +43,7 @@ const enDesktop = {
     usernameLabel: "macOS username",
     accountPasswordLabel: "macOS password",
     controlTaken: "Another operator took control",
+    controlTakenBy: "{operator} took control",
     disconnected: "Desktop disconnected: {reason}",
     closeCode: "connection closed with code {code}",
     unknownReason: "unknown reason",

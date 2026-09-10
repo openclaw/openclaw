@@ -96,6 +96,46 @@ describe("embedded desktop panel presentation", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    { reason: "control-taken:Alex Rivera", notice: "Alex Rivera took control" },
+    { reason: "control-taken:林 🦞", notice: "林 🦞 took control" },
+    { reason: "control-taken:<b>Alex</b>", notice: "<b>Alex</b> took control" },
+    { reason: "control-taken", notice: "Another operator took control" },
+  ])("identifies a takeover ($reason) and reconnects view-only", async ({ reason, notice }) => {
+    const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
+      if (method === "environments.list") {
+        return { environments: [desktopEnvironment] };
+      }
+      return { transport: "rfb", wsPath: "/desktop/observe?token=test", control: params?.control };
+    });
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      options.onConnect?.();
+      return createConnectionHandle();
+    });
+    const panel = createPanel();
+    panel.client = createGatewayClient(request).client;
+    panel.available = true;
+    panel.documentMode = true;
+    panel.documentControl = true;
+    panel.embedded = true;
+    panel.presented = true;
+    panel.requestedSource = desktopEnvironment.id;
+    panel.desktopClientFactory = () => ({ connect });
+    document.body.append(panel);
+
+    await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+    await settleTasks();
+    connect.mock.calls[0]?.[0].onDisconnect?.({ clean: true, code: 4000, reason });
+
+    await waitForFast(() => expect(panel.renderRoot.textContent).toContain(notice));
+    await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenLastCalledWith("desktop.observe", {
+      source: { kind: "environment", environmentId: desktopEnvironment.id },
+      control: false,
+    });
+    expect(connect.mock.calls[1]?.[0].viewOnly).toBe(true);
+  });
+
   it("follows the session desktop and retires its connection before resolving a new placement", async () => {
     const replacement = { ...desktopEnvironment, id: "worker-desktop-2" };
     let refresh: Promise<void> | undefined;
