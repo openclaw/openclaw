@@ -901,11 +901,13 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
-    const work = requireWorkGroup(items[1]);
-    expect(work.groups).toHaveLength(2);
+    // Pre-final assistant text stays visible; only the tool work folds.
+    expect(items.map((item) => item.kind)).toEqual(["group", "group", "work-group", "group"]);
+    expect(messageRecord(requireGroup(items[1])).content).toBe("Checking…");
+    const work = requireWorkGroup(items[2]);
+    expect(work.groups.map((group) => group.role)).toEqual(["tool"]);
     expect(work.durationMs).toBe(9_000);
-    expect(requireGroup(items[2]).role).toBe("assistant");
+    expect(requireGroup(items[3]).role).toBe("assistant");
   });
 
   it.each([
@@ -1005,7 +1007,7 @@ describe("collapseCompletedTurnWork", () => {
         2_000,
       ),
       commentary: [],
-      workRoles: ["tool"],
+      visibleBeforeWork: 2,
     },
     {
       role: "tool",
@@ -1016,11 +1018,11 @@ describe("collapseCompletedTurnWork", () => {
         2_000,
       ),
       commentary: [assistantMessage("Checking the details.", 2_500)],
-      workRoles: ["assistant", "tool"],
+      visibleBeforeWork: 3,
     },
   ])(
     "keeps an earlier visualization visible while collapsing only tool work ($role)",
-    ({ visualization, commentary, workRoles }) => {
+    ({ visualization, commentary, visibleBeforeWork }) => {
       const items = collapsedItems({
         messages: [
           userMessage("show the result", 1_000),
@@ -1031,10 +1033,21 @@ describe("collapseCompletedTurnWork", () => {
         ],
       });
 
-      expect(items.map((item) => item.kind)).toEqual(["group", "group", "work-group", "group"]);
+      // Assistant commentary text stays visible alongside the visualization;
+      // only the tool work folds behind the rollup.
+      expect(items.map((item) => item.kind)).toEqual([
+        ...Array.from({ length: visibleBeforeWork }, () => "group"),
+        "work-group",
+        "group",
+      ]);
       expect(canvasBlocksIn(requireGroup(items[1]))).toHaveLength(1);
-      expect(requireWorkGroup(items[2]).groups.map((group) => group.role)).toEqual(workRoles);
-      expect(messageRecord(requireGroup(items[3])).content).toBe("All done.");
+      for (const message of commentary) {
+        expect(messageRecord(requireGroup(items[2])).content).toBe(message.content);
+      }
+      expect(requireWorkGroup(items[visibleBeforeWork]).groups.map((group) => group.role)).toEqual([
+        "tool",
+      ]);
+      expect(messageRecord(requireGroup(items[visibleBeforeWork + 1])).content).toBe("All done.");
     },
   );
 
@@ -1106,12 +1119,16 @@ describe("collapseCompletedTurnWork", () => {
       const completed = collapsedItems({ messages });
       expect(completed.map((item) => item.kind)).toEqual([
         "group",
+        "group",
         "work-group",
         "group",
         "group",
         "group",
       ]);
-      expect(requireWorkGroup(completed[1]).durationMs).toBe(4_000);
+      expect(messageRecord(requireGroup(completed[1])).content).toBe("Checking…");
+      const work = requireWorkGroup(completed[2]);
+      expect(work.groups.map((group) => group.role)).toEqual(["tool"]);
+      expect(work.durationMs).toBe(4_000);
     },
   );
 
@@ -1306,9 +1323,10 @@ describe("collapseCompletedTurnWork", () => {
 
     const prepended = collapsedItems({
       messages: [
-        assistantMessage("Checking.", 1_000, {
-          __openclaw: { id: "older-commentary", seq: 1 },
-        }),
+        {
+          ...toolResult("call-0", 1_000),
+          __openclaw: { id: "older-work", seq: 1 },
+        },
         toolResult("call-1", 2_000),
         finalReply,
       ],
@@ -1316,7 +1334,35 @@ describe("collapseCompletedTurnWork", () => {
     const prependedWork = requireWorkGroup(prepended[0]);
 
     expect(prependedWork.key).toBe(initialWork.key);
+    expect(groupAt(prependedWork.groups, 0).messages).toHaveLength(2);
     expect(prependedWork.durationMs).toBeGreaterThan(initialWork.durationMs ?? 0);
+  });
+
+  it("keeps prepended assistant text visible ahead of the completed-work row", () => {
+    resetChatThreadState();
+    const finalReply = assistantMessage("Done.", 3_000, {
+      __openclaw: { id: "final-reply", seq: 3 },
+    });
+    const initial = collapsedItems({
+      messages: [toolResult("call-1", 2_000), finalReply],
+    });
+    const initialWork = requireWorkGroup(initial[0]);
+
+    const prepended = collapsedItems({
+      messages: [
+        assistantMessage("Checking.", 1_000, {
+          __openclaw: { id: "older-commentary", seq: 1 },
+        }),
+        toolResult("call-1", 2_000),
+        finalReply,
+      ],
+    });
+
+    expect(prepended.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+    expect(messageRecord(requireGroup(prepended[0])).content).toBe("Checking.");
+    const prependedWork = requireWorkGroup(prepended[1]);
+    expect(prependedWork.key).toBe(initialWork.key);
+    expect(prependedWork.groups.map((group) => group.role)).toEqual(["tool"]);
   });
 });
 
