@@ -632,6 +632,13 @@ function normalizeUnion(
       }
       remaining.pop();
       literals.unshift(true, false);
+    } else {
+      // Pass the union through UNCHANGED: the renderer renders mixed
+      // primitives as a text input, and value coercion reads the original
+      // branches to recognize literal sentinels (typing `false` must stay a
+      // boolean). Replacing the union with its scalar branch here would drop
+      // the literal and turn that edit into the string "false".
+      return { schema, unsupportedPaths: [] };
     }
   }
 

@@ -22,6 +22,17 @@ describe("analyzeConfigSchema mixed literal unions", () => {
 
     expect(analysis.unsupportedPaths).not.toContain("cron.sessionRetention");
     expect(analysis.schema).not.toBeNull();
+    // The union must pass through UNCHANGED: value coercion recognizes the
+    // boolean sentinel through the original branches, so dropping them would
+    // turn a typed `false` into the string "false".
+    const cronSchema = (
+      analysis.schema as {
+        properties: {
+          cron: { properties: { sessionRetention: { anyOf: unknown } } };
+        };
+      }
+    ).properties.cron.properties.sessionRetention;
+    expect(cronSchema.anyOf).toEqual([{ type: "string" }, { type: "boolean", const: false }]);
   });
 
   it("keeps a string + literal(true) union renderable (same failure class)", () => {
