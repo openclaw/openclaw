@@ -59,6 +59,8 @@ export function createWorkerProjectPreparation(params: {
   preparation?: {
     key: string;
     cacheKey: string;
+    purpose: "session" | "reserve";
+    demandAtMs: number;
     setupRecipe?: string;
     runSetupScript?: boolean;
   };
@@ -78,6 +80,9 @@ export function createWorkerProjectPreparation(params: {
     preparation &&
     (!/^[a-f0-9]{64}$/u.test(preparation.key) ||
       !/^[a-f0-9]{64}$/u.test(preparation.cacheKey) ||
+      (preparation.purpose !== "session" && preparation.purpose !== "reserve") ||
+      !Number.isSafeInteger(preparation.demandAtMs) ||
+      preparation.demandAtMs < 0 ||
       (preparation.setupRecipe !== undefined &&
         !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(preparation.setupRecipe)))
   ) {
@@ -280,6 +285,8 @@ export function createWorkerProjectPreparation(params: {
             preparation: {
               key: preparation.key,
               cacheKey: preparation.cacheKey,
+              purpose: preparation.purpose,
+              demandAtMs: preparation.demandAtMs,
             },
           }
         : {}),

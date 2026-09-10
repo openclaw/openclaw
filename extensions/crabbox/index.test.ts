@@ -307,14 +307,17 @@ describe("Crabbox plugin generation lifecycle", () => {
     });
     const old = Date.now() - 14 * 24 * 60 * 60 * 1_000;
     store.register("expired", {
-      version: 2,
+      version: 3,
       allocations: {},
       image: {
         checkpointId: "chk_expired",
         kind: "aws-ebs-snapshot",
         state: "available",
         createdAtMs: old,
-        lastUsedAtMs: old,
+        preparationKey: null,
+        cacheKey: null,
+        purpose: null,
+        lastDemandAtMs: old,
       },
     });
     const started = createDeferred<AbortSignal>();

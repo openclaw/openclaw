@@ -20,6 +20,7 @@ type NodeLease = Extract<WorkerLease, { node: { deviceId: string } }>;
 type WorkerNodeProvisioningOptions = Pick<
   WorkerProviderLifecycleOptions,
   | "store"
+  | "now"
   | "isStopping"
   | "prepareNodeBootstrap"
   | "prepareInstallation"
@@ -44,6 +45,7 @@ type WorkerNodeProvisioningOptions = Pick<
 };
 
 export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOptions) {
+  const now = options.now ?? Date.now;
   const prepareBundle = async (
     preparedInstallation?: WorkerInstallationArtifact,
     signal?: AbortSignal,
@@ -65,6 +67,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     signal?: AbortSignal,
+    beforeProvision?: () => void,
   ) => {
     if (!provider.requiresNodeEnrollment || !options.prepareNodeBootstrap) {
       return undefined;
@@ -113,6 +116,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         `Worker node bootstrap preparation failed: ${boundedError(error)}`,
       );
     }
+    beforeProvision?.();
     const current = options.store.get(record.environmentId);
     if (
       options.isStopping() ||
@@ -136,6 +140,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     signal?: AbortSignal,
     preparedInstallation?: WorkerInstallationArtifact,
     identity?: WorkerNodeRuntimeIdentity,
+    beforeProvision?: () => void,
   ) => {
     if (provider.requiresNodeEnrollment !== true) {
       return undefined;
@@ -172,6 +177,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       close();
     }
     const assertCurrent = () => {
+      beforeProvision?.();
       const current = options.store.get(record.environmentId);
       if (
         !open ||
@@ -179,7 +185,8 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         current?.state !== "provisioning" ||
         current.destroyRequestedAtMs !== null ||
         current.provisionOperationId !== record.provisionOperationId ||
-        current.ownerEpoch !== record.ownerEpoch
+        current.ownerEpoch !== record.ownerEpoch ||
+        (current.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now())
       ) {
         controller.abort();
         throw new DOMException("Worker provisioning operation is closed", "AbortError");
@@ -259,33 +266,53 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     preparedWorkspace?: ReturnType<
       ReturnType<typeof createWorkerProjectPreparation>["getPreparedWorkspace"]
     >,
+    beforeProvision?: () => void,
   ): Promise<WorkerEnvironmentRecord> => {
     const nodePatch = {
       ...patch,
       nodeDeviceId: lease.node.deviceId,
       sshEndpoint: null,
     };
+    const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
+    const enrollmentOwner = options.store.get(record.environmentId);
     const assertCurrent = () => {
       cancellation?.assertActive();
+      beforeProvision?.();
       const current = options.store.get(record.environmentId);
+      if (current?.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now()) {
+        options.store.requestDestroy({
+          environmentId: current.environmentId,
+          state: current.state,
+          lastError: "Unused prepared worker expired before readiness",
+        });
+      }
       if (
         options.isStopping() ||
         !current ||
         current.state !== record.state ||
         current.provisionOperationId !== record.provisionOperationId ||
         current.ownerEpoch !== record.ownerEpoch ||
-        current.destroyRequestedAtMs !== null
+        (current.preparation !== null && current.preparation.consumedAtMs !== null) ||
+        (preparation !== undefined &&
+          (!enrollmentOwner?.nodeSetupId ||
+            current.nodeSetupId !== enrollmentOwner.nodeSetupId ||
+            current.nodeDeviceId !== lease.node.deviceId)) ||
+        options.store.get(record.environmentId)?.destroyRequestedAtMs !== null
       ) {
         throw new Error("Prepared worker provisioning owner is no longer current");
       }
     };
     let nodeBuild: WorkerAdmissionHandshake;
     try {
+      assertCurrent();
       if (!options.ensureNodeWorkerBundle) {
         throw new Error("Device worker bundle installer is unavailable");
       }
       const artifact = await prepareBundle(preparedInstallation, cancellation?.signal);
-      cancellation?.assertActive();
+      assertCurrent();
+      if (preparation && artifact.tarballSha256 !== preparation.artifacts.workerArchiveSha256) {
+        throw new Error("Worker bundle differs from its admitted preparation");
+      }
       nodeBuild = await options.ensureNodeWorkerBundle({
         deviceId: lease.node.deviceId,
         artifact,
@@ -294,7 +321,6 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         signal: cancellation?.signal,
       });
       assertCurrent();
-      const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
       if (preparation) {
         if (
           lease.sharedHost !== false ||

@@ -413,6 +413,12 @@ describe("worker turn launcher failure recovery", () => {
     const environments: WorkerTurnEnvironmentService &
       Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
       ...unusedEnvironments(),
+      prepareProjectIntent: async () => {
+        throw new Error("unexpected prepared intent");
+      },
+      assertPreparedIntentCurrent: vi.fn(),
+      getPreparedCandidates: () => [],
+      schedulePreparedRefill: vi.fn(),
       bindPreparedWorkspace: async () => {
         throw new Error("unexpected prepared binding");
       },

@@ -68,6 +68,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "abandonWorkspaceResult"
   | "listForReconcile"
   | "releaseTurn"
+  | "bindPreparedEnvironment"
   | "startDispatch"
   | "startDrain"
   | "startWorkspaceResultDrain"
@@ -80,6 +81,10 @@ export type WorkerDispatchEnvironmentService = Pick<
   WorkerEnvironmentService,
   | "attachSession"
   | "bindPreparedWorkspace"
+  | "prepareProjectIntent"
+  | "assertPreparedIntentCurrent"
+  | "getPreparedCandidates"
+  | "schedulePreparedRefill"
   | "create"
   | "createFromProfileSnapshot"
   | "destroy"

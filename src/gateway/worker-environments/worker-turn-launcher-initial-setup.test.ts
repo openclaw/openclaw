@@ -16,6 +16,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -24,6 +25,7 @@ import {
   SESSION_ID,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
+  database,
   createWorkerSessionTurnPlacementProvider,
   placements,
   root,
@@ -53,6 +55,11 @@ async function setup(executionMode: "worker-turn" | "remote-exec", pauseAt = "sy
           }
         };
         await publish();
+        seedAttachedPlacementEnvironment(database, {
+          environmentId: ENVIRONMENT_ID,
+          sessionId: SESSION_ID,
+          ownerEpoch: OWNER_EPOCH,
+        });
         for (const step of [
           { to: "provisioning", patch: { environmentId: ENVIRONMENT_ID } },
           { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },

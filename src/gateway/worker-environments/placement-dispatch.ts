@@ -109,12 +109,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
   ): Promise<WorkerActiveDispatchPlacement> => {
-    const assertCurrent = signal
-      ? () => {
-          signal.throwIfAborted();
-          authorize?.();
-        }
-      : authorize;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      authorize?.();
+    };
     let placement: WorkerDispatchPlacement | undefined;
     try {
       signal?.throwIfAborted();
@@ -172,43 +170,74 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       const projectPath = workspace.kind === "local" ? workspace.path : undefined;
       // Workspace preparation yields; fence the current paired node again before durable provision.
       await startup.validateDevicePlacement(request);
-      assertCurrent?.();
+      const preparedIntent =
+        !request.deviceId && workspace.kind === "local"
+          ? await environments.prepareProjectIntent(request.profileId, {
+              machineClass: request.machineClass,
+              executionMode: request.executionMode,
+              projectPath,
+              inherited: request.inheritedProfile,
+              signal,
+              os: request.os,
+              runSetupScript: request.runSetupScript,
+              setupAuthorized: request.runSetupScript !== undefined,
+            })
+          : undefined;
+      assertCurrent();
+      const prepared = preparedIntent
+        ? await startup.bindPreparedPlacement({
+            request,
+            placement,
+            intent: preparedIntent,
+            assertCurrent,
+          })
+        : undefined;
+      assertCurrent();
       const idempotencyKey =
         request.idempotencyKey ?? `session-dispatch:${request.sessionId}:${placement.generation}`;
-      const expectedEnvironmentId = deriveEnvironmentIntent(idempotencyKey).environmentId;
-      placement = placements.transition({
-        sessionId: request.sessionId,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: placement.generation,
-        patch: { environmentId: expectedEnvironmentId },
-      });
+      // Select the reserve before assigning a cold environment identity.
+      const expectedEnvironmentId =
+        prepared?.environment.environmentId ??
+        deriveEnvironmentIntent(idempotencyKey).environmentId;
+      placement =
+        prepared?.placement ??
+        placements.transition({
+          sessionId: request.sessionId,
+          from: "requested",
+          to: "provisioning",
+          expectedGeneration: placement.generation,
+          patch: { environmentId: expectedEnvironmentId },
+        });
       reportPlacementTransition(onTransition, placement);
-      const environment = request.inheritedProfile
-        ? await environments.createFromProfileSnapshot(
-            {
-              profileId: request.profileId,
-              providerId: request.inheritedProfile.providerId,
-              profileSnapshot: request.inheritedProfile.profileSnapshot,
-            },
-            idempotencyKey,
-            request.machineClass,
-            request.executionMode,
-            projectPath,
-            signal,
-            request.os,
-            request.runSetupScript,
-          )
-        : await environments.create(
-            request.profileId,
-            idempotencyKey,
-            request.machineClass,
-            request.executionMode,
-            projectPath,
-            signal,
-            request.os,
-            request.runSetupScript,
-          );
+      const environment = prepared
+        ? prepared.environment
+        : request.inheritedProfile
+          ? await environments.createFromProfileSnapshot(
+              {
+                profileId: request.profileId,
+                providerId: request.inheritedProfile.providerId,
+                profileSnapshot: request.inheritedProfile.profileSnapshot,
+              },
+              idempotencyKey,
+              request.machineClass,
+              request.executionMode,
+              projectPath,
+              signal,
+              request.os,
+              request.runSetupScript,
+              preparedIntent,
+            )
+          : await environments.create(
+              request.profileId,
+              idempotencyKey,
+              request.machineClass,
+              request.executionMode,
+              projectPath,
+              signal,
+              request.os,
+              request.runSetupScript,
+              preparedIntent,
+            );
       return await startup.continueProvisionedDispatch({
         request,
         placement,
@@ -218,6 +247,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         onTransition,
         authorize: assertCurrent,
         signal,
+        ...(prepared ? { admittedNode: prepared.admittedNode } : {}),
       });
     } catch (error) {
       try {

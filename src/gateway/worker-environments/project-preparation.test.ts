@@ -82,6 +82,8 @@ async function fixture(setup?: string, symlink = false) {
       project: snapshot,
       namespace: "gateway",
       preparation: {
+        purpose: "session",
+        demandAtMs: 1_000,
         key: options.key ?? "a".repeat(64),
         cacheKey: options.cacheKey ?? "c".repeat(64),
         setupRecipe: await readWorkerProjectSetupRecipe(snapshot),
@@ -854,6 +856,8 @@ ${action}
       project: f.project,
       namespace: "gateway",
       preparation: {
+        purpose: "session",
+        demandAtMs: 1_000,
         key: "a".repeat(64),
         cacheKey: "c".repeat(64),
       },
@@ -911,6 +915,8 @@ ${failure === "failed recipe" ? "exit 17" : "printf '#' >> .openclaw/worktree-se
         project: f.project,
         namespace: "gateway",
         preparation: {
+          purpose: "session",
+          demandAtMs: 1_000,
           key: "a".repeat(64),
           cacheKey: "c".repeat(64),
           setupRecipe,

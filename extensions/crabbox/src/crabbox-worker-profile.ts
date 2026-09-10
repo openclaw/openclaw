@@ -46,6 +46,7 @@ type CrabboxProfile = {
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
   idleTimeout: string;
+  idleTimeoutMs: number;
   provider: string;
   ttl: string;
   target: CrabboxOperatingSystem;
@@ -223,6 +224,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
       Math.max(1, Math.floor(idleTimeoutMs / 2)),
     ),
     idleTimeout,
+    idleTimeoutMs,
     provider,
     setup,
     setupEnv,

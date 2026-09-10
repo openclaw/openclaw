@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import type {
   WorkerProvider,
   WorkerNodeRuntimePreparation,
@@ -84,6 +85,17 @@ describe("worker provider project preparation ownership", () => {
               }),
           });
           const enrollment = await options!.beginNodeEnrollment!();
+          if (enrollment.mode !== "connect") {
+            throw new Error("Fresh worker must use its pending enrollment");
+          }
+          bindCloudWorkerSetupCompletion({
+            db: support.testState.stateDb.db,
+            completion: {
+              setupId: enrollment.setupId,
+              deviceId,
+              completedAtMs: support.testState.nowMs,
+            },
+          });
           return {
             leaseId: "lease-prepared-host",
             node: { deviceId: await enrollment.waitForDeviceId() },
@@ -104,14 +116,18 @@ describe("worker provider project preparation ownership", () => {
           },
           assertCurrent: () => {},
         }),
-        prepareNodeEnrollment: async () => ({
-          mode: "resume",
-          deviceId,
-          displayName: "Prepared node",
-          openclawVersion: support.NODE_BOOTSTRAP.openclawVersion,
-          nodeBootstrap: support.NODE_BOOTSTRAP,
-          waitForDeviceId: async () => deviceId,
-        }),
+        prepareNodeEnrollment: async (record) => {
+          const pending = support.testState.store.ensureNodeEnrollment(record.environmentId);
+          return {
+            mode: "connect",
+            setupId: expectDefined(pending.nodeSetupId, "pending node enrollment"),
+            setupCode: "synthetic-setup",
+            displayName: "Prepared node",
+            openclawVersion: support.NODE_BOOTSTRAP.openclawVersion,
+            nodeBootstrap: support.NODE_BOOTSTRAP,
+            waitForDeviceId: async () => deviceId,
+          };
+        },
         ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
         registerPreparedWorkspace,
       });

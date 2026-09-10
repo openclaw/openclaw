@@ -80,6 +80,8 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     terminalAtMs: null,
   };
   const environment: WorkerEnvironmentRecord = {
+    preparation: null,
+    lastActivatedAtMs: null,
     environmentId: "environment-1",
     providerId: sharedHost ? "device" : "fixture-cloud",
     profileId: "desktop",

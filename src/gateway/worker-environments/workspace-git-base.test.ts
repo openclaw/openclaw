@@ -40,6 +40,20 @@ describe("prepared worker projects", () => {
     expect(updated?.baseCommit).not.toBe(original?.baseCommit);
     expect(updated?.baseCommit).toBe(await requireGit(worktree, ["rev-parse", "HEAD"]));
     expect((await prepare(worktree, "gateway-two"))?.key).not.toBe(original?.key);
+    expect(
+      await prepareWorkerProjectSnapshot({
+        localPath: worktree,
+        namespace: "gateway-one",
+        baseCommit: original!.baseCommit,
+      }),
+    ).toEqual({ ...original, root: worktree });
+    await expect(
+      prepareWorkerProjectSnapshot({
+        localPath: worktree,
+        namespace: "gateway-one",
+        baseCommit: "HEAD",
+      }),
+    ).rejects.toThrow("not a commit id");
 
     const unrelated = path.join(root, "unrelated");
     await createRepository(unrelated);
@@ -50,6 +64,13 @@ describe("prepared worker projects", () => {
     const root = await fs.realpath(tempDirs.make("worker-project-unborn-"));
     const prepare = () => prepareWorkerProjectSnapshot({ localPath: root, namespace: "gateway" });
     expect(await prepare()).toBeUndefined();
+    await expect(
+      prepareWorkerProjectSnapshot({
+        localPath: root,
+        namespace: "gateway",
+        baseCommit: "a".repeat(40),
+      }),
+    ).rejects.toThrow("no longer available");
     await requireGit(root, ["init", "--quiet"]);
     await fs.writeFile(path.join(root, "input.txt"), "uncommitted\n");
     await requireGit(root, ["add", "."]);

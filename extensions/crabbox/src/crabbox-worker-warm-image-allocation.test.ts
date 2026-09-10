@@ -5,10 +5,7 @@ import {
   resolveCrabboxProvisionProfile,
   resolveCrabboxWarmImageProfileKey,
 } from "./crabbox-worker-profile.js";
-import {
-  WARM_IMAGE_MAX_ALLOCATIONS,
-  type WarmProfileRecord,
-} from "./crabbox-worker-warm-image-store.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 import {
   CHECKPOINT_ID,
@@ -79,6 +76,99 @@ function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it("preserves exact preparation replay and cache compatibility across reopen", async () => {
+    const { manager, context, calls } = fixture();
+    const owner = manager();
+    const source = {
+      ...context("cbx_prepared", "project-a"),
+      preparation: {
+        key: "a".repeat(64),
+        cacheKey: "b".repeat(64),
+        purpose: "reserve" as const,
+        demandAtMs: Date.now(),
+      },
+    };
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    resetPluginStateStoreForTests();
+    const restarted = manager();
+    const recorded = structuredClone(openWarmImageStore().entries());
+    calls.length = 0;
+    for (const changed of [
+      { key: "c".repeat(64) },
+      { cacheKey: "c".repeat(64) },
+      { purpose: "session" as const },
+      { demandAtMs: source.preparation.demandAtMs + 1 },
+    ]) {
+      await expect(
+        restarted.allocate({
+          ...source,
+          preparation: { ...source.preparation, ...changed },
+        }),
+      ).rejects.toThrow("recorded profile or project identity");
+    }
+    expect(calls).toEqual([]);
+    expect(openWarmImageStore().entries()).toEqual(recorded);
+
+    const compatible = {
+      ...source,
+      id: "cbx_compatible",
+      preparation: { ...source.preparation, key: "c".repeat(64), purpose: "session" as const },
+    };
+    expect(await restarted.allocate(compatible)).toEqual({
+      kind: "checkpoint",
+      checkpointId: CHECKPOINT_ID,
+    });
+    expect(
+      await restarted.allocate({
+        ...compatible,
+        id: "cbx_incompatible",
+        preparation: { ...compatible.preparation, cacheKey: "d".repeat(64) },
+      }),
+    ).toEqual({ kind: "cold" });
+    const before = structuredClone(openWarmImageStore().entries());
+    restarted.notePreparedDemand(compatible.id, {
+      preparationKey: "e".repeat(64),
+      demandAtMs: Date.now() + 60_000,
+    });
+    expect(openWarmImageStore().entries()).toEqual(before);
+  });
+
+  it("does not keep an image alive through refill after actual demand expires", async () => {
+    const { manager, context, calls } = fixture();
+    const owner = manager();
+    const demandAtMs = Date.now();
+    const source = {
+      ...context("cbx_source", "project-a"),
+      preparation: {
+        key: "a".repeat(64),
+        cacheKey: "b".repeat(64),
+        purpose: "reserve" as const,
+        demandAtMs,
+      },
+    };
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    await owner.release(source);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(demandAtMs + 13 * 86_400_000);
+    const reserve = { ...source, id: "cbx_refill" };
+    expect(await owner.allocate(reserve)).toEqual({
+      kind: "checkpoint",
+      checkpointId: CHECKPOINT_ID,
+    });
+    expect(openWarmImageStore().entries()[0]!.value.image?.lastDemandAtMs).toBe(demandAtMs);
+    await owner.release(reserve);
+    clock.mockReturnValue(demandAtMs + 14 * 86_400_000);
+    calls.length = 0;
+    await owner.maintain({ binaries: ["crabbox"] });
+    expect(calls.filter((argv) => argv[2] === "delete").map((argv) => argv[3])).toEqual([
+      CHECKPOINT_ID,
+    ]);
+    expect(openWarmImageStore().entries()).toEqual([]);
+  });
+
   it("preserves persisted Linux profile keys", () => {
     const linux = parseCrabboxProfile(PROFILE);
     const historicalKey = "e35cd88dba7a4bea90d23da00f994d326515a833ab64fdaa982c5c346bfc9e0f";
@@ -250,11 +340,9 @@ describe("Crabbox durable allocation admission", () => {
     const store = openWarmImageStore();
     const entry = store.entries()[0]!;
     const allocations: WarmProfileRecord["allocations"] = { ...entry.value.allocations };
-    for (let index = 1; index < WARM_IMAGE_MAX_ALLOCATIONS; index++) {
+    for (let index = 1; index < 256; index++) {
       allocations[`cbx_pending_${index}`] = {
-        choice: { kind: "cold" },
-        machineClass: "standard",
-        phase: "pending",
+        ...entry.value.allocations.cbx_existing!,
       };
     }
     store.register(entry.key, { ...entry.value, allocations });

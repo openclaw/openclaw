@@ -34,11 +34,13 @@ Schema 17 adds the complete prepared-worker storage contract. The nullable
 `worker_environments` columns `preparation_key`, `preparation_demand_at_ms`,
 `preparation_expires_at_ms`, and `preparation_consumed_at_ms` form one constrained
 tuple for one-use capacity. The separate nullable `last_activated_at_ms` column
-stores successful activation time. These Gateway fields reserve storage for the
-ready-pool lifecycle and remain `NULL` in this release; completed-checkout
-adoption does not allocate reserves. Existing workers keep all five values
-`NULL`. Migration does
-not infer demand, activation, or unused capacity from historical rows.
+stores successful activation time. Ready-pool admission writes the preparation
+tuple; consuming that capacity and assigning a session placement share one
+transaction. Successful placement activation records its demand time in the
+same transaction. Consumption survives failed attachment, placement retirement,
+and reopen, while terminal rows retain unexpired demand and uncertain cleanup.
+Migration leaves all five values `NULL` on existing workers and does not infer
+demand, activation, or unused capacity from historical rows.
 
 Dedicated nodes register fixed build paths in the first-use
 `node_worker_prepared_workspaces` table. It records the exact environment and

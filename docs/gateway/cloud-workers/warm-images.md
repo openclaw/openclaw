@@ -44,6 +44,50 @@ A warm start provisions a fresh lease with fresh node enrollment. Cold allocatio
 
 Project preparation checks for a verified completed checkout and pristine seed before building or uploading a Git pack. Reusing the same commit skips clone and setup. A changed commit refreshes the existing checkout with a thin Git transfer, removes obsolete eligible setup outputs, and reruns its admitted recipe while preserving compatible ignored caches and absolute paths. Tracked paths in the new commit take precedence over conflicting cache files or directories; unrelated ignored caches and the prepared `HOME` remain in place. If the Gateway has garbage-collected the previous commit after rewriting history, it transfers a full snapshot of the current commit while keeping the verified remote workspace and caches. Completion is invalidated before mutation, so interrupted setup cannot advertise readiness or silently rerun. Before enrollment, replay of an already allocated prepared worker conservatively captures its completed setup when it still owns the current source image. This can add one snapshot if an already-complete warm reuse was interrupted before enrollment; a published replacement and enrolled-session replay do not capture again. An enrolled provisioning retry only inspects the original completion witness; it never runs setup or captures a session. Already-bound session restart preserves user edits through the stored binding. Placements without a completed checkout retain the existing flow: copy the seed's Git objects into a fresh repository, recreate its Git metadata, and apply the current eligible file manifest. A matching seed skips both an origin fetch and a full Git pack download, including for private or unpublished commits. A missing seed uses the Gateway pack; an invalid prepared seed fails visibly. Workspaces without a prepared project keep the eligible origin/seed path. The Gateway builds transfer packs only on demand, and each transfer retains its original base commit even if local commits change later.
 
+### Ready workers
+
+For an eligible local Git project, a successful session activation can prepare a
+dedicated worker for the next session in the background. The default target is
+one unassigned worker per project and profile, with a Gateway-wide cap of four.
+The next matching dispatch consumes a ready worker once, then schedules refill;
+if no eligible worker is ready, dispatch uses ordinary provisioning.
+Repository-only sessions and paired-device dispatch do not use this pool.
+A ready-worker hit bypasses provisioning. A foreground miss uses ordinary
+snapshot refresh and may wait for a required capture before enrollment; disabling
+reserves preserves that refresh behavior.
+
+Set `cloudWorkers.profiles.<id>.readyWorkers` to change the per-project target and
+`cloudWorkers.preparedPool.maxTotal` to change the shared cap. Zero disables the
+corresponding reserves and drains unused capacity while preserving active
+sessions and image reuse. Preparing workers and workers awaiting confirmed
+cleanup count against the limits. Ready workers incur running-machine charges
+until the provider confirms deletion.
+
+Each reserve expires from the successful activation that created its demand,
+using the provider's existing idle timeout. Refill and Gateway restart do not
+extend that window. An already-admitted capture can finish within its provider
+budget after expiry, while its worker remains counted. Expiry blocks subsequent
+enrollment, readiness, and consumption; cleanup follows settled capture custody.
+Provider TTL and idle-timeout settings remain unchanged. A failed dispatch does
+not create fresh demand. Claiming a worker and assigning its placement commit
+together; failed attachment or placement deletion cannot make that worker
+available to another session.
+Expired, disabled, incompatible, and surplus workers are cleaned up without
+waiting for unrelated project preparation.
+
+Prepared-project images record foreground demand only after successful session
+activation. Failed enrollment or dispatch does not renew image demand. A newly
+captured image stays protected by its producing worker until confirmed source
+stop; without successful demand, it is then eligible for ordinary cleanup.
+
+Crabbox reserves require an eligible dedicated Linux warm-image profile, a known
+machine class, and immutable setup inputs without `setupEnv`. A changed cache
+identity may require cold preparation. The project recipe and normal runtime
+installation still complete before readiness, but that cold worker cannot
+replace an unrelated image generation. This can reduce snapshot reuse until an
+eligible generation can publish; it does not permit incomplete setup or extend
+an older image's demand window.
+
 ### Recover a paused capture
 
 Inspect local ownership without contacting the cloud:
@@ -64,13 +108,13 @@ The acknowledgement attests that the original capture and worker are stopped and
 
 ### Upgrade warm-image state
 
-Warm profiles use a version-2 envelope in the existing `warm-images` plugin-state namespace; the SQLite schema version does not change. Stop the owning Gateway and original capture processes, then run:
+Warm profiles use a version-3 envelope in the existing `warm-images` plugin-state namespace; the SQLite schema version does not change. Stop the owning Gateway and original capture processes, then run:
 
 ```bash
 openclaw doctor --fix
 ```
 
-Doctor performs this migration under the Gateway's exclusive maintenance lock. It preserves legacy image metadata, capture selectors, and retirement obligations, but does not invent allocation choices. Older empty capture markers become explicitly uncertain captures with their original recovery selector. Unsupported records stay unchanged and produce a warning. Runtime provisioning requires the canonical envelope; it does not silently convert old rows.
+Doctor performs this migration under the Gateway's exclusive maintenance lock. It preserves legacy image metadata, allocation choices, operating-system/runtime identity, capture selectors, and retirement obligations. Historical records do not acquire preparation, reserve-purpose, or successful-demand facts. Older empty capture markers become explicitly uncertain captures with their original recovery selector. Unsupported records stay unchanged and produce a warning. Runtime provisioning requires the canonical envelope; it does not silently convert old rows.
 
 Older `warm-leases` rows record an enrolled class but cannot establish whether a lease originally started cold or from a checkpoint. These rows block new warm-image allocations until resolved. Doctor reports their count and exact recovery commands. Resolve each lease through its original Gateway or provider, stop its worker and owning processes, and reconcile provider artifacts before using the reported selector:
 

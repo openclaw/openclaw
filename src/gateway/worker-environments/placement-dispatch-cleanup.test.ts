@@ -12,7 +12,7 @@ describe("worker placement cleanup", () => {
       database: support.testState.stateDb,
       now: () => 1_000,
     });
-    const harness = createHarness(placementStore, {
+    const harness = createHarness(support.testState.stateDb, placementStore, {
       failAt: "sync",
       destroyFails: true,
       destroyFailureState: "destroying",

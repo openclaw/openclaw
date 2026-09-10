@@ -94,6 +94,7 @@ export type WorkerProviderLifecycleInputOptions = {
   projectNamespace?: string;
   placementStore?: WorkerSessionPlacementGate;
   providerCallTimeoutMs?: number;
+  now?: () => number;
 };
 
 export type WorkerProviderLifecycleOptions = Omit<

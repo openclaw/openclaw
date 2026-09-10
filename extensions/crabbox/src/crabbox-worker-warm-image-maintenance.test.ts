@@ -24,14 +24,17 @@ const mixedContext = () => ({
   ],
 });
 const expiredImage = (id: string): WarmProfileRecord => ({
-  version: 2,
+  version: 3,
   allocations: {},
   image: {
     checkpointId: id,
     kind: "aws-ebs-snapshot",
     state: "available",
     createdAtMs: Date.now() - RETENTION_MS,
-    lastUsedAtMs: Date.now() - RETENTION_MS,
+    preparationKey: null,
+    cacheKey: null,
+    purpose: null,
+    lastDemandAtMs: Date.now() - RETENTION_MS,
   },
 });
 
@@ -42,11 +45,16 @@ describe("Crabbox idle image maintenance", () => {
       const { provider, calls, warn } = createWarmProvider();
       const store = openWarmImageStore();
       const recent = expiredImage("chk_recent");
-      recent.image!.lastUsedAtMs = Date.now();
+      recent.image!.lastDemandAtMs = Date.now();
       const pinned = expiredImage("chk_pinned");
       pinned.allocations.cbx_pending = {
         choice: { kind: "checkpoint", checkpointId: "chk_pinned" },
         machineClass: "standard",
+        preparationKey: null,
+        cacheKey: null,
+        purpose: null,
+        demandAtMs: null,
+        imageGeneration: null,
         phase: "pending",
       };
       const capturing = expiredImage("chk_capturing");

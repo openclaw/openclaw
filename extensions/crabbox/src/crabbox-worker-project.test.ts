@@ -11,6 +11,9 @@ import { operationLeaseId } from "./crabbox-worker-profile.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   CHECKPOINT_ID,
+  PROJECT_KEY,
+  BASE_COMMIT,
+  createProjectOptions as projectOptions,
   CLASSLESS_PROFILE,
   PROFILE,
   commandResult,
@@ -21,8 +24,6 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
-const PROJECT_KEY = "a".repeat(64);
-const BASE_COMMIT = "b".repeat(40);
 
 function notSubmittedReceipt(leaseId: string) {
   return {
@@ -33,60 +34,6 @@ function notSubmittedReceipt(leaseId: string) {
     checkpointId: "chk_not_submitted",
     localReservation: "removed",
   };
-}
-
-function projectOptions(events: string[], controller = new AbortController()) {
-  let enrollmentStarted = false;
-  const observe = ({ argv }: CommandCall) => {
-    if (argv[1] === "run" && argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
-      events.push(enrollmentStarted ? "enrollment-install" : "runtime-install");
-    }
-    if (argv[1] === "checkpoint" && argv[2] === "create") {
-      events.push("capture");
-    }
-    return undefined;
-  };
-  const options = {
-    nodeRuntimeIdentity: {
-      nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
-      executionMode: "worker-turn" as const,
-      workerBundleSha256: createWorkerArchiveFixture().sha256,
-    },
-    project: {
-      key: PROJECT_KEY,
-      baseCommit: BASE_COMMIT,
-      signal: controller.signal,
-      assertCurrent: () => controller.signal.throwIfAborted(),
-      prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
-        await transport.runScript("project-checkout", controller.signal);
-        events.push("project-prepared");
-        return { seedKey: PROJECT_KEY, cacheHit: false };
-      }),
-    },
-    prepareNodeRuntime: vi.fn(async () => {
-      events.push("runtime-granted");
-      return {
-        nodeBootstrap: createNodeBootstrapFixture(),
-        workerBundle: createWorkerArchiveFixture(),
-        signal: controller.signal,
-      };
-    }),
-    beginNodeEnrollment: vi.fn(async () => {
-      events.push("enrollment-begun");
-      enrollmentStarted = true;
-      return {
-        mode: "connect" as const,
-        setupCode: "synthetic-setup-code",
-        setupId: "project-setup",
-        openclawVersion: "2026.8.1",
-        nodeBootstrap: createNodeBootstrapFixture(),
-        displayName: "Project worker",
-        signal: controller.signal,
-        waitForDeviceId: async () => "project-node",
-      };
-    }),
-  } satisfies ProvisionOptions;
-  return { options, observe };
 }
 
 describe("Crabbox project snapshot provisioning", () => {
@@ -151,7 +98,12 @@ describe("Crabbox project snapshot provisioning", () => {
       ...current.options,
       project: {
         ...current.options.project,
-        preparation: { key: "c".repeat(64), cacheKey: "d".repeat(64) },
+        preparation: {
+          key: "c".repeat(64),
+          cacheKey: "d".repeat(64),
+          purpose: "session",
+          demandAtMs: Date.now(),
+        },
         inspectPreparedWorkspace: inspected,
       },
     };
@@ -173,8 +125,14 @@ describe("Crabbox project snapshot provisioning", () => {
     { crash: "pending", alreadyComplete: true, replayCaptures: 1 },
     { crash: "none", alreadyComplete: true, replayCaptures: 0 },
   ])(
-    "preserves prepared capture on $crash replay (image complete=$alreadyComplete)",
+    "preserves reserve capture on $crash replay (image complete=$alreadyComplete)",
     async ({ crash, alreadyComplete, replayCaptures }) => {
+      const preparation = {
+        key: "c".repeat(64),
+        cacheKey: "d".repeat(64),
+        purpose: "reserve" as const,
+        demandAtMs: Date.now(),
+      };
       let captures = 0;
       const command = ({ argv }: CommandCall) =>
         argv[2] === "create"
@@ -188,7 +146,7 @@ describe("Crabbox project snapshot provisioning", () => {
       const baseline = await initial.provider.provision(
         PROFILE,
         "replay-baseline",
-        projectOptions([]).options,
+        projectOptions([], new AbortController(), preparation).options,
       );
       await initial.provider.destroy({ ...baseline, profile: PROFILE });
       await initial.provider.dispose();
@@ -201,7 +159,7 @@ describe("Crabbox project snapshot provisioning", () => {
         const prepare = options.project.prepare;
         const project: NonNullable<ProvisionOptions["project"]> = {
           ...options.project,
-          preparation: { key: "c".repeat(64), cacheKey: "d".repeat(64) },
+          preparation,
           inspectPreparedWorkspace: vi.fn(async () => {}),
           prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
             const result = await prepare(transport);

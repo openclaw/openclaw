@@ -22,6 +22,7 @@ export function workerProjectSeedKey(project: Pick<WorkerProjectSnapshot, "key" 
 export async function prepareWorkerProjectSnapshot(params: {
   localPath: string;
   namespace: string;
+  baseCommit?: string;
   signal?: AbortSignal;
 }): Promise<WorkerProjectSnapshot | undefined> {
   params.signal?.throwIfAborted();
@@ -33,6 +34,9 @@ export async function prepareWorkerProjectSnapshot(params: {
     throw error;
   });
   if (!gitAdmin) {
+    if (params.baseCommit !== undefined) {
+      throw new Error("Pinned worker project snapshot is no longer available");
+    }
     return undefined;
   }
   const options = {
@@ -46,8 +50,15 @@ export async function prepareWorkerProjectSnapshot(params: {
   if (gitRoot !== root) {
     throw new Error("Worker git workspace sync requires the managed worktree root");
   }
-  const head = await runGit(root, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], options);
-  if (head.code === 1) {
+  if (params.baseCommit !== undefined && !COMMIT_PATTERN.test(params.baseCommit)) {
+    throw new Error("Worker project snapshot is not a commit id");
+  }
+  const head = await runGit(
+    root,
+    ["rev-parse", "--verify", "--quiet", `${params.baseCommit ?? "HEAD"}^{commit}`],
+    options,
+  );
+  if (head.code === 1 && params.baseCommit === undefined) {
     return undefined;
   }
   if (head.code !== 0) {

@@ -267,6 +267,11 @@ export function createCrabboxWorkerProvider(
       : CRABBOX_WARMUP_TIMEOUT_MS;
     const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
     const project = parsed.warmImage ? options?.project : undefined;
+    if (options?.project?.preparation && (!project || parsed.setupEnv?.length)) {
+      throw new WorkerProviderError(
+        "Crabbox prepared workers require warm images and immutable setup inputs without setupEnv",
+      );
+    }
     const preparationSignal =
       signal && project ? AbortSignal.any([signal, project.signal]) : (signal ?? project?.signal);
     const setupDeadline =
@@ -310,6 +315,7 @@ export function createCrabboxWorkerProvider(
         profile: parsed,
         nodeRuntimeIdentity,
         ...(project ? { projectKey: project.key } : {}),
+        ...(project?.preparation ? { preparation: project.preparation } : {}),
         ...(project ? { assertCurrent: project.assertCurrent } : {}),
         signal: preparationSignal,
         slug: operationSlug(operationId),
@@ -358,7 +364,7 @@ export function createCrabboxWorkerProvider(
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
       inspectedParams.deadline = setupDeadline;
-      if (parsed.setup) {
+      if (parsed.setup && !(project?.preparation && allocationChoice.kind === "checkpoint")) {
         inspectedParams.inspect = await runProvisionSetupAndWaitReady({
           ...inspectedParams,
           phase: "profile setup",
@@ -601,6 +607,12 @@ export function createCrabboxWorkerProvider(
         os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
       ).warmImage;
     },
+    resolvePreparedIdleTimeoutMs(profile) {
+      const parsed = parseCrabboxProfile(profile);
+      return parsed.warmImage === false || parsed.target !== "linux" || parsed.setupEnv?.length
+        ? undefined
+        : parsed.idleTimeoutMs;
+    },
     resolvePreparationTarget(profile, machineClass, os) {
       const parsed = parseCrabboxProfile(profile);
       const effective = resolveCrabboxWarmImageProfile(
@@ -608,9 +620,12 @@ export function createCrabboxWorkerProvider(
         machineClass ?? parsed.class,
         os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
       );
-      return effective.warmImage && effective.class
+      return effective.warmImage && effective.class && !effective.setupEnv?.length
         ? { machineClass: effective.class, platform: effective.target }
         : undefined;
+    },
+    async notePreparedDemand(lease, preparation) {
+      warmImages.notePreparedDemand(lease.leaseId, preparation);
     },
     resolveAllocation,
     resolveProvisionTimeoutMs(profile) {
