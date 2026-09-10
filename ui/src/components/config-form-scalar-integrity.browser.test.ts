@@ -2,6 +2,15 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderNumberInput, renderSelect, renderTextInput } from "./config-form.node.scalar.ts";
+import { analyzeConfigSchema, renderConfigForm as renderConfigFormBase } from "./config-form.ts";
+
+function renderConfigForm(
+  props: Omit<Parameters<typeof renderConfigFormBase>[0], "onShowAdvanced"> & {
+    onShowAdvanced?: () => void;
+  },
+) {
+  return renderConfigFormBase({ showAdvanced: true, onShowAdvanced: () => {}, ...props });
+}
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -791,5 +800,41 @@ describe("config form scalar integrity", () => {
     expect(eye.getAttribute("aria-label")).toBe(
       "Stored secrets are never sent to the browser; enter a new value to replace it",
     );
+  });
+
+  it("commits literal(false) in string-or-false unions through the analyzer path", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const schema = {
+      type: "object",
+      properties: {
+        sessionRetention: {
+          anyOf: [{ type: "string" }, { type: "boolean", const: false }],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("sessionRetention");
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { sessionRetention: false },
+        onPatch,
+      }),
+      container,
+    );
+
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input"),
+      "string-or-false union input",
+    );
+    expect(input.value).toBe("false");
+
+    input.value = "30d";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["sessionRetention"], "30d");
   });
 });

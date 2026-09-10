@@ -598,6 +598,24 @@ function normalizeUnion(
       literals.includes("false") ||
       (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
     ) {
+      // Fallback: when the remaining branches are all plain string-typed
+      // (e.g. string|literal(false) for cron.sessionRetention), keep the union
+      // intact so the renderer can use a text input with literal coercion.
+      // Only a plain { type: "string" } is admitted — nullable type arrays
+      // (e.g. ["string", "null"]) are excluded because the renderer filters
+      // out null-containing branches, which would leave only the literal
+      // branch and render an incorrect control. Numeric and boolean branches
+      // are excluded because the text-input renderer cannot faithfully
+      // represent numeric sentinels or constrained booleans.
+      const allRenderableScalars = remaining.every((entry) => {
+        return entry.type === "string";
+      });
+      if (allRenderableScalars) {
+        return {
+          schema: { ...schema, nullable },
+          unsupportedPaths: [],
+        };
+      }
       return null;
     }
     remaining.pop();

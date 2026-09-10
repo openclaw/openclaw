@@ -943,4 +943,35 @@ describe("config form renderer", () => {
 
     expect(container.querySelector(".settings-section__help-button")).toBeNull();
   });
+
+  it("renders text input for literal-plus-scalar unions like cron.sessionRetention", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        sessionRetention: {
+          anyOf: [{ type: "string" }, { type: "boolean", const: false }],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+
+    expect(analysis.unsupportedPaths).not.toContain("sessionRetention");
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { sessionRetention: "30d" },
+        onPatch,
+      }),
+      container,
+    );
+
+    const input = container.querySelector("input");
+    expect(input).not.toBeNull();
+    expect((input as HTMLInputElement)?.value).toBe("30d");
+  });
 });
