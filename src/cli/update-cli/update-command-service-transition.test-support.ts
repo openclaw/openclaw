@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
@@ -124,7 +125,11 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
         mocks.health.mockImplementation(async ({ port, expectedBuildId }) => ({
           healthy: mocks.running && (!expectedBuildId || expectedBuildId === servingBuildId),
           staleGatewayPids: [],
-          runtime: { status: mocks.running ? "running" : "stopped" },
+          runtime: {
+            status: mocks.running ? "running" : "stopped",
+            pid: mocks.running ? 4242 : undefined,
+          },
+          gatewayBootId: "service-boot",
           portUsage: { port, status: "busy", listeners: [], hints: [] },
         }));
         mocks.script.mockImplementation(async () => {
@@ -400,7 +405,13 @@ export function registerRestartOutcomeTests(
 
 type PluginMaintenanceFixture = InstallRootTransitionFixture & {
   writeConfig: (version: string) => Promise<void>;
-  mocks: { log: Mock; start: Mock; restart: Mock; doctor: Mock };
+  mocks: {
+    log: Mock;
+    start: Mock;
+    restart: Mock;
+    doctor: Mock;
+    call: Mock<typeof import("../../gateway/call.js").callGateway>;
+  };
 };
 
 export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenanceFixture) {
@@ -424,6 +435,9 @@ export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenan
       expect(before.stopped).toBe(true);
       mocks.events.push("core updated");
       await writeConfig("9999.1.1");
+      mocks.call.mockImplementation(
+        gatewayHealthResponse({ server: { version: "9999.1.1", bootId: "service-boot" } }),
+      );
       mocks.events.push("candidate doctor stamped config");
       const service = resolveGatewayService();
       const state = await readGatewayServiceState(service, { requireEffective: true });

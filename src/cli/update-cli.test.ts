@@ -9340,11 +9340,13 @@ describe("update-cli", () => {
           after: { version: "1.0.0", buildId: "candidate-build" },
         }),
       );
+      mockGatewayHealth("1.0.0", "candidate-gateway", "candidate-build");
       restartHealthTestControl.snapshot = {
         runtime: { status: "running", pid: gatewayFixturePid },
         portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
         healthy: fault === "none",
         staleGatewayPids: [],
+        gatewayBootId: "test-gateway-boot",
         gatewayVersion: "1.0.0",
         gatewayBuildId: "candidate-build",
         expectedVersion: "1.0.0",

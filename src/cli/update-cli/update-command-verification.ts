@@ -8,6 +8,8 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolveGatewayRestartProbeContext } from "../daemon-cli/restart-health-probe.js";
 import {
+  inspectGatewayRestart,
+  isSameGatewayRestartGeneration,
   renderRestartDiagnostics,
   waitForGatewayHealthyRestart,
   waitForGatewayHttpReadiness,
@@ -102,6 +104,14 @@ export async function verifyUpdatedGateway(params: {
   };
   assertCurrent();
   const service = resolveGatewayService();
+  const probeParams = {
+    service,
+    port: params.gatewayPort,
+    expectedVersion: params.expectedVersion,
+    ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
+    env: params.serviceEnv,
+    ...(params.signal ? { signal: params.signal } : {}),
+  };
   const waitForHealthy = async () => {
     assertCurrent();
     const supervisorKeepsAlive = await hasLoadedLaunchdKeepAliveSupervisor({
@@ -110,14 +120,9 @@ export async function verifyUpdatedGateway(params: {
     });
     assertCurrent();
     const health = await waitForGatewayHealthyRestart({
-      service,
-      port: params.gatewayPort,
-      expectedVersion: params.expectedVersion,
-      ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-      env: params.serviceEnv,
+      ...probeParams,
       requireRunningService: params.requireRunningService,
       settle: { probes: 12 },
-      ...(params.signal ? { signal: params.signal } : {}),
       supervisorKeepsAlive,
     });
     assertCurrent();
@@ -141,6 +146,29 @@ export async function verifyUpdatedGateway(params: {
   });
   assertCurrent();
   const readyz = http.readyz === 200;
+  if (
+    health.healthy &&
+    readyz &&
+    (!params.requireRunningService || health.runtime.status === "running")
+  ) {
+    // HTTP readiness cannot transfer an earlier settle to a replacement boot.
+    const settled = health;
+    const inspected = await inspectGatewayRestart({ ...probeParams, probeContext: context });
+    assertCurrent();
+    // Bracket the final native observation with health/hello probes so a same-PID
+    // or PID-less reboot during that observation cannot inherit the old boot.
+    health = inspected.healthy
+      ? await inspectGatewayRestart({ ...probeParams, probeContext: context })
+      : inspected;
+    assertCurrent();
+    const sameGeneration =
+      isSameGatewayRestartGeneration(settled, inspected) &&
+      isSameGatewayRestartGeneration(inspected, health);
+    if (!sameGeneration) {
+      health.healthy = false;
+      health.probeError = "Gateway process changed during final readiness verification.";
+    }
+  }
   if (launchAgentRecovery?.attempted) {
     defaultRuntime.error(
       launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
