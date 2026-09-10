@@ -934,6 +934,7 @@ enum class GatewayMethod(
   TasksHistory("tasks.history"),
   EnvironmentsPrepare("environments.prepare"),
   ModelsAuthRefresh("models.authRefresh"),
+  ModelsAuthLogin("models.authLogin"),
 }
 
 enum class GatewayEvent(

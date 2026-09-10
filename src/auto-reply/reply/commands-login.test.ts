@@ -698,6 +698,7 @@ describe("handleLoginCommand", () => {
     const result = await handleLoginCommand(buildLoginParams("/login unavailable-provider"), true);
 
     expect(result?.reply?.text).toContain("Unsupported login provider");
+    expect(result?.shouldContinue).toBe(false);
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
   });
 });

@@ -148,7 +148,8 @@ export class ModelProviderLoginController implements ReactiveController {
                   data-models-login-choice
                   .value=${picker.choice}
                   @change=${(event: Event) => {
-                    picker.choice = (event.target as HTMLSelectElement).value;
+                    // SAFETY: This change handler is attached directly to the select element.
+                    picker.choice = (event.currentTarget as HTMLSelectElement).value;
                     this.host.requestUpdate();
                   }}
                 >

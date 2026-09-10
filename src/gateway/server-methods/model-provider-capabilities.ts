@@ -36,6 +36,7 @@ export function resolveModelProviderCapabilities(params: {
     ...lookup,
     includeWorkspacePlugins: false,
   });
+  const loginOptions = listProviderLoginOptions(loginChoices);
   for (const choice of resolveManifestProviderAuthChoices(lookup)) {
     const provider = resolveProvider(choice.providerId);
     // Setup descriptors also include tools and media-only services, not just model accounts.
@@ -45,13 +46,14 @@ export function resolveModelProviderCapabilities(params: {
     const current = capabilities.get(provider);
     const apiKeySupported = choice.methodId === "api-key";
     const quickApiKeySetup = apiKeySupported && supportsSetupManualSecret(choice);
+    const providerLoginOptions = loginOptions.filter(
+      (option) => resolveProvider(option.brandId) === provider,
+    );
     capabilities.set(provider, {
       provider,
       apiKeySupported: current?.apiKeySupported === true || apiKeySupported,
       quickApiKeySetup: current?.quickApiKeySetup === true || quickApiKeySetup,
-      loginOptions: listProviderLoginOptions(
-        loginChoices.filter((entry) => resolveProvider(entry.providerId) === provider),
-      ),
+      ...(providerLoginOptions.length > 0 ? { loginOptions: providerLoginOptions } : {}),
     });
   }
   return {
