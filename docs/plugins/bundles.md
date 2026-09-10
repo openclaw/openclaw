@@ -340,9 +340,10 @@ bundles as trusted content for the features they do expose.
     not wired, that is a product limit, not a broken install.
   </Accordion>
 
-  <Accordion title="Claude command files do not appear">
+  <Accordion title="Claude command, agent, or output-style files do not appear">
     Make sure the bundle is enabled and the markdown files are inside a detected
-    `commands/` or `skills/` root.
+    `skills/`, `commands/`, `agents/`, or `output-styles/` root. All four load
+    through the same skill loader.
   </Accordion>
 
   <Accordion title="Claude settings do not apply">
