@@ -46,6 +46,25 @@ schemes:
     test:
       targets:
         - OpenClawUITests
+  OpenClawWidgetProof:
+    shared: true
+    build:
+      targets:
+        OpenClawLogicTests: all
+        OpenClawWidgetProofHost: all
+        OpenClawWidgetAccessibilityTests: all
+    test:
+      targets:
+        - name: OpenClawLogicTests
+          parallelizable: false
+          selectedTests:
+            - OpenClawWidgetVisualProofTests/testHomeAndLockFamiliesWithLongLabelsAndDynamicType
+            - OpenClawWidgetVisualProofTests/testCompactOfflineAndFactAgeRemainIndependentlyVisible
+            - OpenClawWidgetVisualProofTests/testRecoveryAndPrivacyAreExposedWithoutSelectedDetails
+        - name: OpenClawWidgetAccessibilityTests
+          parallelizable: false
+          selectedTests:
+            - OpenClawWidgetAccessibilityTests/testWidgetAccessibilityCatalog
   OpenClawWatchApp:
     shared: true
     build:
@@ -84,6 +103,8 @@ targets:
         product: OpenClawChatUI
       - package: OpenClawKit
         product: OpenClawProtocol
+      - package: OpenClawKit
+        product: OpenClawNativeState
       - package: Swabble
         product: SwabbleKit
       - package: WebRTC
@@ -118,6 +139,7 @@ targets:
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         OPENCLAW_ACTIVE_APP_GROUP_ID: "$(OPENCLAW_APP_GROUP_ID)"
+        OPENCLAW_ACTIVE_WIDGET_APP_GROUP_ID: "$(OPENCLAW_WIDGET_APP_GROUP_ID)"
         OPENCLAW_URL_SCHEME: openclaw
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID)"
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_APP_PROFILE)"
@@ -132,6 +154,7 @@ targets:
           ASSETCATALOG_COMPILER_APPICON_NAME: AppIconDebug
           CODE_SIGN_STYLE: Automatic
           OPENCLAW_ACTIVE_APP_GROUP_ID: "$(OPENCLAW_DEBUG_APP_GROUP_ID)"
+          OPENCLAW_ACTIVE_WIDGET_APP_GROUP_ID: "$(OPENCLAW_DEBUG_WIDGET_APP_GROUP_ID)"
           OPENCLAW_CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
           OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT: development
           OPENCLAW_URL_SCHEME: openclaw-debug
@@ -158,6 +181,7 @@ targets:
         OpenClawGitCommit: "$(OPENCLAW_GIT_COMMIT)"
         OpenClawBuildTimestamp: "$(OPENCLAW_BUILD_TIMESTAMP)"
         OpenClawAppGroupIdentifier: "$(OPENCLAW_ACTIVE_APP_GROUP_ID)"
+        OpenClawWidgetAppGroupIdentifier: "$(OPENCLAW_ACTIVE_WIDGET_APP_GROUP_ID)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -266,6 +290,9 @@ targets:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
       - path: Sources/LiveActivity/OpenClawRunActivityAttributes.swift
+      - path: Sources/Widgets/OpenClawWidgetSnapshot.swift
+      - path: Sources/Widgets/OpenClawWidgetCache.swift
+      - path: Sources/Widgets/OpenClawWidgetContainer.swift
       # Shared continuous avatar waveform; dependency-free for widget isolation.
       - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
         group: Shared
@@ -276,12 +303,17 @@ targets:
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: ActivityKit.framework
+      - package: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawNativeState
     settings:
       base:
         CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID)"
+        CODE_SIGN_ENTITLEMENTS: ActivityWidget/OpenClawActivityWidget.entitlements
+        OPENCLAW_ACTIVE_WIDGET_APP_GROUP_ID: "$(OPENCLAW_WIDGET_APP_GROUP_ID)"
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_ACTIVITY_WIDGET_PROFILE)"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
@@ -291,11 +323,13 @@ targets:
         Debug:
           CODE_SIGN_STYLE: Automatic
           PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_DEBUG_ACTIVITY_WIDGET_BUNDLE_ID)"
+          OPENCLAW_ACTIVE_WIDGET_APP_GROUP_ID: "$(OPENCLAW_DEBUG_WIDGET_APP_GROUP_ID)"
           PROVISIONING_PROFILE_SPECIFIER: ""
     info:
       path: ActivityWidget/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Activity
+        OpenClawWidgetAppGroupIdentifier: "$(OPENCLAW_ACTIVE_WIDGET_APP_GROUP_ID)"
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSSupportsLiveActivities: true
@@ -421,6 +455,7 @@ targets:
       - path: Tests
         excludes:
           - Logic
+          - WidgetProof
       - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
         group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift
@@ -467,6 +502,19 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Tests/Logic
+      - path: Tests/WidgetProof/Fixtures.swift
+      - path: Sources/Widgets/OpenClawWidgetSnapshot.swift
+      - path: Sources/Widgets/OpenClawWidgetCache.swift
+      - path: Sources/Widgets/OpenClawWidgetCacheWriter.swift
+      - path: Sources/Widgets/OpenClawWidgetContainer.swift
+      - path: ActivityWidget/OpenClawStatusWidgetView.swift
+        group: ActivityWidget
+      - path: ActivityWidget/OpenClawActivityTypography.swift
+        group: ActivityWidget
+      - path: Sources/Fonts/Inter[opsz,wght].ttf
+        buildPhase: resources
+      - path: Sources/Fonts/RedHatDisplay[wght].ttf
+        buildPhase: resources
       - path: ShareExtension/ShareDraftComposer.swift
         group: ShareExtension
       - path: ShareExtension/ShareContentExtractor.swift
@@ -493,6 +541,10 @@ targets:
         group: Sources/Services
     dependencies:
       - package: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawNativeState
+      - sdk: WidgetKit.framework
+      - sdk: UIKit.framework
     settings:
       base:
         CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
@@ -506,11 +558,84 @@ targets:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_DEBUG_APP_BUNDLE_ID).logic-tests"
     info:
-      path: Tests/Info.plist
+      path: build/OpenClawLogicTests-Info.plist
       properties:
         CFBundleDisplayName: "$(PRODUCT_NAME)"
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
+        OpenClawGitCommit: "$(OPENCLAW_GIT_COMMIT)"
+
+  OpenClawWidgetProofHost:
+    type: application
+    platform: iOS
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    sources:
+      - path: Tests/WidgetProof/Host/OpenClawWidgetProofApp.swift
+      - path: Tests/WidgetProof/Fixtures.swift
+      - path: Sources/Widgets/OpenClawWidgetSnapshot.swift
+      - path: ActivityWidget/OpenClawStatusWidgetView.swift
+      - path: ActivityWidget/OpenClawActivityTypography.swift
+      - path: Sources/Fonts/Inter[opsz,wght].ttf
+        buildPhase: resources
+      - path: Sources/Fonts/RedHatDisplay[wght].ttf
+        buildPhase: resources
+    dependencies:
+      - package: OpenClawKit
+      - sdk: WidgetKit.framework
+      - sdk: UIKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclawfoundation.widget-proof-host
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: build/OpenClawWidgetProofHost-Info.plist
+      properties:
+        CFBundleDisplayName: Widget Proof
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
+        OpenClawGitCommit: "$(OPENCLAW_GIT_COMMIT)"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIAppFonts:
+          - Inter[opsz,wght].ttf
+          - RedHatDisplay[wght].ttf
+
+  OpenClawWidgetAccessibilityTests:
+    type: bundle.ui-testing
+    platform: iOS
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    sources:
+      - path: Tests/WidgetProof/UITests/OpenClawWidgetAccessibilityTests.swift
+      - path: Tests/WidgetProof/Fixtures.swift
+      - path: Sources/Widgets/OpenClawWidgetSnapshot.swift
+    dependencies:
+      - target: OpenClawWidgetProofHost
+      - package: OpenClawKit
+      - sdk: WidgetKit.framework
+      - sdk: UIKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclawfoundation.widget-proof-ui-tests
+        TARGETED_DEVICE_FAMILY: "1,2"
+        TEST_TARGET_NAME: OpenClawWidgetProofHost
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: build/OpenClawWidgetAccessibilityTests-Info.plist
+      properties:
+        CFBundleDisplayName: Widget Accessibility Tests
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
+        OpenClawGitCommit: "$(OPENCLAW_GIT_COMMIT)"
 
   OpenClawUITests:
     type: bundle.ui-testing

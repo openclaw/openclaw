@@ -109,6 +109,12 @@ struct OpenClawTypographyTests {
     @Test func `extension text surfaces use branded typography helpers`() throws {
         let activityTypeSource = try String(contentsOf: Self.activityWidgetTypographySourceURL(), encoding: .utf8)
         let activitySource = try String(contentsOf: Self.activityWidgetSourceURL(), encoding: .utf8)
+        let statusWidgetPath = "ActivityWidget/OpenClawStatusWidgetView.swift"
+        let statusWidgetSource = try String(
+            contentsOf: Self.iosRootURL().appendingPathComponent(statusWidgetPath), encoding: .utf8)
+        let statusWidgetOffenders = Self.unbrandedTextCallOffenders(
+            in: statusWidgetSource, relativePath: "apps/ios/\(statusWidgetPath)")
+        #expect(statusWidgetOffenders.isEmpty, Comment(rawValue: statusWidgetOffenders.joined(separator: "\n")))
         let watchTypeSource = try String(contentsOf: Self.watchTypographySourceURL(), encoding: .utf8)
         let watchSource = try String(contentsOf: Self.watchInboxSourceURL(), encoding: .utf8)
 
@@ -614,7 +620,10 @@ struct OpenClawTypographyTests {
     }
 
     private static func unbrandedTextCallOffenders(in source: String, relativePath: String) -> [String] {
-        let fontTokens = ["OpenClawType", "OpenClawChatTypography", "WatchClawType", "typography."]
+        var fontTokens = ["OpenClawType", "OpenClawChatTypography", "WatchClawType", "typography."]
+        if relativePath.hasPrefix("apps/ios/ActivityWidget/") {
+            fontTokens.append("OpenClawActivityType")
+        }
         let sourceBytes = Array(source.utf8)
         let code = self.maskedSwiftCode(source)
         let imageFontRanges = Set(self.directImageFontModifierRanges(in: code))
