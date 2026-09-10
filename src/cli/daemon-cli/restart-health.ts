@@ -39,87 +39,48 @@ export {
   renderRestartDiagnostics,
 } from "./restart-health-diagnostics.js";
 export { waitForGatewayHealthyListener } from "./restart-health-external.js";
-export type {
-  GatewayPortHealthSnapshot,
-  GatewayRestartSnapshot,
-  GatewayRestartWaitOutcome,
-} from "./restart-health.types.js";
+export type { GatewayRestartSnapshot } from "./restart-health.types.js";
 export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
 const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
 
-function applyExpectedVersion(
-  snapshot: GatewayRestartSnapshot,
-  expectedVersion: string | undefined,
-): GatewayRestartSnapshot {
-  if (!expectedVersion) {
-    return snapshot;
-  }
-  if (snapshot.gatewayVersion === expectedVersion) {
-    return { ...snapshot, expectedVersion };
-  }
-  if (snapshot.gatewayVersion == null) {
-    return { ...snapshot, healthy: false, expectedVersion };
-  }
-  return {
-    ...snapshot,
-    healthy: false,
-    expectedVersion,
-    versionMismatch: {
-      expected: expectedVersion,
-      actual: snapshot.gatewayVersion ?? null,
-    },
-  };
-}
-
-function applyExpectedBuildId(
-  snapshot: GatewayRestartSnapshot,
-  expectedBuildId: string | undefined,
-): GatewayRestartSnapshot {
-  // Git restart verification owns Gateway runtime identity. UI artifact source
-  // must not exempt a stale process from this check.
-  if (!expectedBuildId) {
-    return snapshot;
-  }
-  if (snapshot.gatewayBuildId === expectedBuildId) {
-    return { ...snapshot, expectedBuildId };
-  }
-  if (snapshot.gatewayBuildId === undefined) {
-    return { ...snapshot, healthy: false, expectedBuildId };
-  }
-  return {
-    ...snapshot,
-    healthy: false,
-    expectedBuildId,
-    buildIdMismatch: {
-      expected: expectedBuildId,
-      actual: snapshot.gatewayBuildId ?? null,
-    },
-  };
-}
-
-function applyExpectedGatewayIdentity(
+// Both callers pass a fresh snapshot that has not escaped inspection.
+function finalizeGatewayRestartSnapshot(
   snapshot: GatewayRestartSnapshot,
   expectedVersion: string | undefined,
   expectedBuildId: string | undefined,
 ): GatewayRestartSnapshot {
-  return applyExpectedBuildId(applyExpectedVersion(snapshot, expectedVersion), expectedBuildId);
-}
-
-function applyActivatedPluginErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
-  if (!snapshot.activatedPluginErrors?.length) {
-    return snapshot;
+  if (expectedVersion) {
+    snapshot.expectedVersion = expectedVersion;
+    if (snapshot.gatewayVersion !== expectedVersion) {
+      snapshot.healthy = false;
+      if (snapshot.gatewayVersion != null) {
+        snapshot.versionMismatch = {
+          expected: expectedVersion,
+          actual: snapshot.gatewayVersion,
+        };
+      }
+    }
   }
-  return { ...snapshot, healthy: false };
-}
-
-function applyChannelProbeErrors(snapshot: GatewayRestartSnapshot): GatewayRestartSnapshot {
-  if (!snapshot.channelProbeErrors?.length) {
-    return snapshot;
+  // Runtime identity remains required even with a separately configured UI root.
+  if (expectedBuildId) {
+    snapshot.expectedBuildId = expectedBuildId;
+    if (snapshot.gatewayBuildId !== expectedBuildId) {
+      snapshot.healthy = false;
+      if (snapshot.gatewayBuildId !== undefined) {
+        snapshot.buildIdMismatch = {
+          expected: expectedBuildId,
+          actual: snapshot.gatewayBuildId ?? null,
+        };
+      }
+    }
   }
-  return { ...snapshot, healthy: false };
+  if (snapshot.activatedPluginErrors?.length || snapshot.channelProbeErrors?.length) {
+    snapshot.healthy = false;
+  }
+  return snapshot;
 }
 
 export async function inspectGatewayRestart(params: {
@@ -191,27 +152,24 @@ export async function inspectGatewayRestart(params: {
   if (portUsage.status === "busy" && runtime.status !== "running") {
     const reachable = await loadReachability();
     if (reachable.reachable) {
-      return applyChannelProbeErrors(
-        applyActivatedPluginErrors(
-          applyExpectedGatewayIdentity(
-            {
-              runtime,
-              portUsage,
-              healthy: true,
-              staleGatewayPids: [],
-              gatewayVersion: reachable.gatewayVersion,
-              gatewayBuildId: reachable.gatewayBuildId,
-              ...(reachable.activatedPluginErrors.length > 0
-                ? { activatedPluginErrors: reachable.activatedPluginErrors }
-                : {}),
-              ...(reachable.channelProbeErrors.length > 0
-                ? { channelProbeErrors: reachable.channelProbeErrors }
-                : {}),
-            },
-            expectedVersion,
-            expectedBuildId,
-          ),
-        ),
+      return finalizeGatewayRestartSnapshot(
+        {
+          runtime,
+          portUsage,
+          healthy: true,
+          staleGatewayPids: [],
+          gatewayVersion: reachable.gatewayVersion,
+          ...(reachable.gatewayBootId ? { gatewayBootId: reachable.gatewayBootId } : {}),
+          gatewayBuildId: reachable.gatewayBuildId,
+          ...(reachable.activatedPluginErrors.length > 0
+            ? { activatedPluginErrors: reachable.activatedPluginErrors }
+            : {}),
+          ...(reachable.channelProbeErrors.length > 0
+            ? { channelProbeErrors: reachable.channelProbeErrors }
+            : {}),
+        },
+        expectedVersion,
+        expectedBuildId,
       );
     }
   }
@@ -242,23 +200,20 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort;
+  let gatewayBootId: string | undefined;
   let gatewayVersion: string | null | undefined;
   let gatewayBuildId: string | null | undefined;
   if (requiresGatewayProbe && healthy && portUsage.status === "busy") {
     const reachable = await loadReachability();
     healthy = reachable.reachable;
+    gatewayBootId = reachable.gatewayBootId;
     gatewayVersion = reachable.gatewayVersion;
     gatewayBuildId = reachable.gatewayBuildId;
-    if (reachable.activatedPluginErrors.length > 0) {
-      healthy = false;
-    }
-    if (reachable.channelProbeErrors.length > 0) {
-      healthy = false;
-    }
   }
   if (!healthy && running && portUsage.status === "busy" && !requiresGatewayProbe) {
     const reachable = await loadReachability();
     healthy = reachable.reachable;
+    gatewayBootId = reachable.gatewayBootId;
     gatewayVersion = reachable.gatewayVersion;
     gatewayBuildId = reachable.gatewayBuildId;
   }
@@ -282,24 +237,21 @@ export async function inspectGatewayRestart(params: {
     ]),
   );
 
-  return applyChannelProbeErrors(
-    applyActivatedPluginErrors(
-      applyExpectedGatewayIdentity(
-        {
-          runtime,
-          portUsage,
-          healthy,
-          staleGatewayPids,
-          ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
-          ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
-          ...(probeError ? { probeError } : {}),
-          ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
-          ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
-        },
-        expectedVersion,
-        expectedBuildId,
-      ),
-    ),
+  return finalizeGatewayRestartSnapshot(
+    {
+      runtime,
+      portUsage,
+      healthy,
+      staleGatewayPids,
+      ...(gatewayBootId ? { gatewayBootId } : {}),
+      ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
+      ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
+      ...(probeError ? { probeError } : {}),
+      ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
+      ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
+    },
+    expectedVersion,
+    expectedBuildId,
   );
 }
 
@@ -327,6 +279,17 @@ function withWaitContext(
   elapsedMs: number,
 ): GatewayRestartSnapshot {
   return { ...snapshot, waitOutcome, elapsedMs };
+}
+
+export function isSameGatewayRestartGeneration(
+  previous: GatewayRestartSnapshot,
+  current: GatewayRestartSnapshot,
+): boolean {
+  return (
+    previous.runtime.status === current.runtime.status &&
+    previous.runtime.pid === current.runtime.pid &&
+    previous.gatewayBootId === current.gatewayBootId
+  );
 }
 
 export async function waitForGatewayHealthyRestart(params: {
@@ -387,7 +350,7 @@ export async function waitForGatewayHealthyRestart(params: {
   let postMigrationDeadlineMs: number | undefined;
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
-  let healthyStreak: { pid: number | undefined; probes: number } | undefined;
+  let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
 
   for (let attempt = 0; ; attempt += 1) {
     params.signal?.throwIfAborted();
@@ -402,10 +365,10 @@ export async function waitForGatewayHealthyRestart(params: {
         (snapshot.runtime.status === "running" &&
           (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
     if (healthy) {
-      if (healthyStreak && healthyStreak.pid === snapshot.runtime.pid) {
+      if (healthyStreak && isSameGatewayRestartGeneration(healthyStreak.snapshot, snapshot)) {
         healthyStreak.probes += 1;
       } else {
-        healthyStreak = { pid: snapshot.runtime.pid, probes: 1 };
+        healthyStreak = { snapshot, probes: 1 };
       }
       if (healthyStreak.probes >= settleProbes) {
         return withWaitContext(snapshot, "healthy", elapsedMs);

@@ -2,6 +2,7 @@
 // JSON-RPC surface, including hook filtering and context propagation.
 import { EventEmitter } from "node:events";
 import { request, ServerResponse } from "node:http";
+import { connect } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -3907,6 +3908,125 @@ describe("mcp loopback server", () => {
       }
     }
   });
+
+  it.each(["exact-size", "declared-size", "timeout", "disconnect", "pipeline"] as const)(
+    "preserves body admission and capture cleanup over real HTTP: %s",
+    async (mode) => {
+      vi.stubEnv(
+        "OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS",
+        mode === "timeout" || mode === "declared-size" ? "30" : "30000",
+      );
+      const captureKey = `body-lifecycle-${mode}`;
+      const events: string[] = [];
+      const admitted = createDeferred();
+      const finished = createDeferred();
+      const execute = vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] }));
+      mockScopedTools([makeMessageTool({ execute })]);
+      beginMcpLoopbackToolCallCapture({
+        captureKey,
+        onRequestStart: () => {
+          events.push("start");
+          admitted.resolve();
+        },
+        onRequestClassified: () => events.push("classified"),
+        onRequestFinish: () => {
+          events.push("finish");
+          finished.resolve();
+        },
+        onToolCallResult: () => events.push("result"),
+      });
+      const { runtime, port } = await startLoopbackServerForTest();
+      const socket = connect({ host: "127.0.0.1", port, allowHalfOpen: true });
+      const received: Buffer[] = [];
+      let captureFinishedAtPeerEnd = false;
+      const socketErrors: string[] = [];
+      socket.on("error", (error) => socketErrors.push(error.message));
+      socket.on("data", (chunk: Buffer) => received.push(chunk));
+      socket.on("end", () => {
+        captureFinishedAtPeerEnd = events.includes("finish");
+        socket.end();
+      });
+      const closed = new Promise<void>((resolve) => {
+        socket.once("close", resolve);
+      });
+      const headers = (framing: string) =>
+        `POST /mcp HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer ${runtime.ownerToken}\r\nContent-Type: application/json\r\nX-OpenClaw-Cli-Capture-Key: ${captureKey}\r\n${framing}\r\n\r\n`;
+      const call = Buffer.from(mcpToolCallBody("message", { text: "🦞" }));
+      try {
+        if (mode === "exact-size") {
+          const body = Buffer.concat([call, Buffer.alloc(1_048_576 - call.length, 0x20)]);
+          const split = call.indexOf(Buffer.from("🦞")) + 2;
+          socket.write(headers(`Content-Length: ${body.length}\r\nConnection: close`));
+          socket.write(body.subarray(0, split));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          socket.write(body.subarray(split));
+        } else if (mode === "declared-size") {
+          socket.write(headers("Content-Length: 1048577"));
+        } else if (mode === "timeout") {
+          socket.write(headers("Transfer-Encoding: chunked") + "1\r\n{\r\n");
+        } else if (mode === "disconnect") {
+          socket.write(headers("Content-Length: 100"));
+          await admitted.promise;
+          socket.destroy();
+        } else {
+          const oversized = "x".repeat(1_048_577);
+          socket.write(
+            headers("Transfer-Encoding: chunked") +
+              `${oversized.length.toString(16)}\r\n${oversized}\r\n0\r\n\r\n` +
+              headers(`Content-Length: ${call.length}\r\nConnection: close`) +
+              call.toString(),
+          );
+        }
+        await expectPromiseResolvesWithin(closed, 2_000, "body probe socket close");
+        await expectPromiseResolvesWithin(finished.promise, 500, "body probe capture finish");
+        const wire = Buffer.concat(received).toString();
+        const statuses = [...wire.matchAll(/HTTP\/1\.1 (\d{3}) /g)].map((match) =>
+          Number(match[1]),
+        );
+        expect(socketErrors).toEqual([]);
+        expect(events.filter((event) => event === "start").length).toBeGreaterThan(0);
+        expect(events.filter((event) => event === "finish")).toHaveLength(
+          events.filter((event) => event === "start").length,
+        );
+        expect(events.filter((event) => event === "classified")).toHaveLength(
+          events.filter((event) => event === "start").length,
+        );
+        expect(
+          await waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+            timeoutMs: 100,
+            admissionGraceMs: 0,
+          }),
+        ).toBe(true);
+        expect(execute).toHaveBeenCalledTimes(mode === "exact-size" ? 1 : 0);
+        if (mode === "exact-size") {
+          expect(execute).toHaveBeenCalledWith(
+            expect.any(String),
+            { text: "🦞" },
+            expect.any(AbortSignal),
+          );
+        }
+        if (mode !== "disconnect") {
+          expect(captureFinishedAtPeerEnd).toBe(true);
+          const status = mode === "exact-size" ? 200 : mode === "timeout" ? 408 : 413;
+          expect(statuses).toEqual([status]);
+          if (status !== 200) {
+            expect(wire).toContain(
+              JSON.stringify({
+                error: status === 413 ? "payload_too_large" : "request_body_timeout",
+              }),
+            );
+          }
+        }
+      } finally {
+        socket.destroy();
+        await closed;
+        clearMcpLoopbackToolCallCapture(captureKey);
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it("rejects cross-origin browser requests before auth", async () => {
     await expectBrowserToolsListStatus({

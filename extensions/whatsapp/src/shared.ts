@@ -14,6 +14,7 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
+  setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 import {
@@ -87,16 +88,7 @@ function createWhatsAppSetupWizardProxy(
     resolveShouldPromptAccountIds: (params) => params.shouldPromptAccountIds,
     credentials: [],
     delegateFinalize: true,
-    disable: (cfg) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        whatsapp: {
-          ...cfg.channels?.whatsapp,
-          enabled: false,
-        },
-      },
-    }),
+    disable: (cfg) => setSetupChannelEnabled(cfg, WHATSAPP_CHANNEL, false),
     onAccountRecorded: (accountId, options) => {
       options?.onAccountId?.(WHATSAPP_CHANNEL, accountId);
     },

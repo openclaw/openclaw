@@ -6,6 +6,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap.js";
+import { createWorkerEnvironmentBuildPreparation } from "./build-preparation.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerEnvironmentAccess } from "./environment-access.js";
@@ -20,6 +21,8 @@ import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import { createPreparedWorkerPool } from "./prepared-pool.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type {
   WorkerEnvironmentAbandonment,
@@ -41,6 +44,8 @@ type WorkerEnvironmentServiceErrorCode =
   | "provider_not_found"
   | "environment_not_found"
   | "invalid_profile"
+  | "invalid_project"
+  | "capacity"
   | "invalid_state"
   | "desktop_app_not_found"
   | "unsupported_platform"
@@ -274,6 +279,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const providerLifecycle = createWorkerProviderLifecycle({
     ...options,
+    now,
     store,
     prepareInstallation,
     tunnelManager: tunnelLifecycle,
@@ -302,6 +308,23 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     serviceError,
     withLock,
   });
+
+  const preparedPool = createPreparedWorkerPool({
+    store,
+    getConfig: options.getConfig,
+    resolveProvider: options.resolveProvider,
+    prepareIntent: providerLifecycle.prepareIntent,
+    prepareRetention: providerLifecycle.prepareRetention,
+    assertIntentCurrent: providerLifecycle.assertPreparedIntentCurrent,
+    reconcile: async (record, signal, beforeReconcile) => {
+      await providerLifecycle.resumePrepared(record, signal, beforeReconcile);
+    },
+    now,
+    signal: maintenanceAbort.signal,
+    warn,
+  });
+  const schedulePreparedRefill = (environmentId?: string) =>
+    void trackOperation(preparedPool.maintain(environmentId));
 
   const turnRpc = createWorkerTurnRpc({
     ...options,
@@ -387,7 +410,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const reconcilePass = async (environmentId?: string) => {
     const candidates =
       environmentId === undefined
-        ? store.listForReconcile()
+        ? store.listForReconcile().filter((record) => record.preparation?.consumedAtMs !== null)
         : [store.get(environmentId)].filter((candidate) => candidate !== undefined);
     const tasks = candidates.map(
       (candidate) => () =>
@@ -402,7 +425,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     try {
-      store.pruneTerminalEnvironments();
+      store.pruneTerminalEnvironments({ canPruneDemand: preparedPool.canPruneDemand });
     } catch (error) {
       // Pruning is opportunistic and retries on the next sweep; lock contention must not
       // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
@@ -421,6 +444,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       // Shutdown still owns this pass; the installed guard coalesces its exact environment.
       return trackOperation(reconcilePass(environmentId));
     }
+    // Unassigned capacity has no placement owner; provider waits must not hold its fence.
+    schedulePreparedRefill();
     if (options.maintainProviders && !maintenanceInFlight) {
       // Keep cleanup off the placement/reconcile wait path, but retain the actual promise
       // until shutdown has aborted and drained every provider-owned command.
@@ -523,14 +548,32 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
   };
   const configuredProfileProviderId = (profileId: string) => {
-    const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
+    const profiles = options.getConfig().cloudWorkers?.profiles;
+    const profile =
+      profiles && Object.hasOwn(profiles, profileId) ? profiles[profileId] : undefined;
     if (!profile) {
       throw serviceError("profile_not_found", `Unknown worker profile: ${profileId}`);
     }
     return profile.provider;
   };
 
+  const prepareBuild = createWorkerEnvironmentBuildPreparation({
+    store,
+    getConfig: options.getConfig,
+    resolveProvider: options.resolveProvider,
+    projectNamespace: options.projectNamespace,
+    providerLifecycle,
+    signal: maintenanceAbort.signal,
+    now,
+    serviceError,
+    configuredProfileProviderId,
+    requireProviderExecutionMode,
+    schedulePreparedRefill,
+  });
+
   const service = {
+    prepare: (request: { profileId: string; projectPath: string }, authorize?: () => void) =>
+      trackOperation(prepareBuild(request, authorize)),
     isStopping: () => stopping,
     recordError: saveError,
     list: environmentAccess.list,
@@ -544,6 +587,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
     },
     get: environmentAccess.get,
+    prepareProjectIntent: providerLifecycle.prepareIntent,
+    assertPreparedIntentCurrent: providerLifecycle.assertPreparedIntentCurrent,
+    getPreparedCandidates: (intent: WorkerProviderPreparedIntent) =>
+      preparedPool.candidates(intent).map(environmentAccess.project),
+    schedulePreparedRefill,
     inventoryVersion: store.inventoryVersion,
     supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>
       (await options.nodePortalCarrier?.supports(environmentId, ownerEpoch)) === true,
@@ -553,6 +601,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       providerLifecycle.listMachineOptions(profileId),
     listOperatingSystems: async (profileId: string) =>
       providerLifecycle.listOperatingSystems(profileId),
+    bindPreparedWorkspace: environmentAccess.bindPreparedWorkspace,
     create: async (
       profileId: string,
       idempotencyKey: string,
@@ -561,18 +610,26 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       projectPath?: string,
       signal?: AbortSignal,
       os?: string,
+      runSetupScript?: boolean,
+      admittedIntent?: WorkerProviderPreparedIntent,
     ) => {
       if (executionMode) {
         requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
       }
       return environmentAccess.project(
-        await providerLifecycle.createWithProfile(profileId, idempotencyKey, {
-          machineClass,
-          os,
-          executionMode,
-          projectPath,
-          signal,
-        }),
+        await providerLifecycle.createWithProfile(
+          profileId,
+          idempotencyKey,
+          {
+            machineClass,
+            os,
+            executionMode,
+            projectPath,
+            runSetupScript,
+            signal,
+          },
+          admittedIntent,
+        ),
       );
     },
     createFromProfileSnapshot: async (
@@ -583,20 +640,28 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       projectPath?: string,
       signal?: AbortSignal,
       os?: string,
+      runSetupScript?: boolean,
+      admittedIntent?: WorkerProviderPreparedIntent,
     ) => {
       requireProviderExecutionMode(profile.providerId, executionMode);
       return environmentAccess.project(
-        await providerLifecycle.createWithProfile(profile.profileId, idempotencyKey, {
-          inherited: {
-            providerId: profile.providerId,
-            profileSnapshot: profile.profileSnapshot,
+        await providerLifecycle.createWithProfile(
+          profile.profileId,
+          idempotencyKey,
+          {
+            inherited: {
+              providerId: profile.providerId,
+              profileSnapshot: profile.profileSnapshot,
+            },
+            machineClass,
+            os,
+            executionMode,
+            projectPath,
+            runSetupScript,
+            signal,
           },
-          machineClass,
-          os,
-          executionMode,
-          projectPath,
-          signal,
-        }),
+          admittedIntent,
+        ),
       );
     },
     destroy: async (environmentId: string, abandonment?: WorkerEnvironmentAbandonment) =>
@@ -605,10 +670,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
-    destroyUnattached: async (environmentId: string) =>
-      environmentAccess.project(
+    destroyUnattached: async (environmentId: string) => {
+      preparedPool.cancelBuild(environmentId);
+      return environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),
-      ),
+      );
+    },
     observeDesktop: environmentAccess.observeDesktop,
     launchDesktopApp: environmentAccess.launchDesktopApp,
     admitWorker: turnRpc.admitWorker,

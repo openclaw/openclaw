@@ -551,7 +551,7 @@ Obsidian.
 
 Agent-scoped vaults can still use Obsidian-friendly Markdown, but configuration
 validation rejects `obsidian.useOfficialCli: true` with `vault.scope: "agent"`.
-The current `obsidian.vaultName` setting is global and cannot select a distinct
+The `obsidian.vaultName` setting is global and cannot select a distinct
 Obsidian vault for each agent. Use the wiki tools and CLI operations instead,
 or keep an Obsidian-operated wiki in global scope.
 
@@ -584,3 +584,4 @@ Set `render.createDashboards: true` (default).
 - [CLI: memory](/cli/memory)
 - [CLI: wiki](/cli/wiki)
 - [Plugin SDK overview](/plugins/sdk-overview)
+- [Memory LanceDB](/plugins/memory-lancedb)

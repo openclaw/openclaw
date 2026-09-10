@@ -798,7 +798,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
       expect(sessionStore[sessionKey]?.sessionId).toBe(sessionId);
       expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
-      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
       const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
@@ -806,7 +806,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
       expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
       expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
-      expect(persisted[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
+      expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
     });
   });
 

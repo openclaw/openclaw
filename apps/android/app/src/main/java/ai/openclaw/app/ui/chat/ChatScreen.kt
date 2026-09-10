@@ -32,6 +32,7 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.MessageSpeechPhase
@@ -99,6 +100,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -124,9 +126,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AdminPanelSettings
@@ -136,12 +140,16 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
@@ -150,11 +158,13 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -189,6 +199,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -218,6 +229,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
@@ -309,6 +321,11 @@ internal fun shouldUseUserMessageDisclosure(
     content.isNotEmpty() &&
     content.all { it.type == "text" } &&
     ChatUserMessageDisclosurePolicy.collapsedPreview(chatMessagePlainText(content)) != null
+
+private class ChatBranchOpening(
+  val session: ChatModelPickerSession,
+  val selectionGeneration: Long,
+)
 
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
@@ -464,13 +481,52 @@ internal fun ChatScreen(
       }
     }
   val shareStaging =
-    chatShareDraft?.let { viewModel.chatShareDraftTargetsOwner(it.id, composerOwner, mainSessionKey) } == true
+    composerState.hasPendingImport(composerOwner) ||
+      chatShareDraft?.let { viewModel.chatShareDraftTargetsOwner(it.id, composerOwner, mainSessionKey) } == true
   val pendingSendAdmissionIds = sendStates[composerOwner]?.pendingAdmissionIds.orEmpty()
   val currentPickerOwner by rememberUpdatedState(composerOwner)
   val currentPickerMainSessionKey by rememberUpdatedState(mainSessionKey)
   val sendInFlight = composerOwner in sendStates
   val pickerActivity = LocalActivity.current
   val pickerView = LocalView.current
+
+  // Admission reads current settings, not the last composed enabled state.
+  fun currentEffortSession() =
+    viewModel.chatSessions.value.firstOrNull {
+      isActiveSessionChoice(it.key, viewModel.chatSessionKey.value, viewModel.mainSessionKey.value)
+    }
+
+  fun currentFastModeProviderSupported() =
+    fastModeProviderSupportedForSelection(
+      selectedModelRef = viewModel.chatSelectedModelRef.value,
+      sessionModelProvider = currentEffortSession()?.modelProvider,
+      catalog = viewModel.chatModelCatalog.value,
+    )
+
+  fun canChangeThinking() =
+    operatorScopesAllowAdmin(viewModel.operatorScopes.value) &&
+      chatThinkingSupported(
+        selection = viewModel.chatThinkingLevelSelection.value,
+        fallbackSupported = thinkingSupportedForSelection(viewModel.chatSelectedModelRef.value, viewModel.chatModelCatalog.value),
+      )
+
+  fun canChangeFastMode(expected: ChatComposerOwner) =
+    chatFastModeControlEnabled(
+      supported =
+        fastModeSupportedForSelection(
+          providerSupported = currentFastModeProviderSupported(),
+          hasConfiguredFastModeOverride = currentEffortSession()?.fastMode != null,
+        ),
+      adminAuthorized = operatorScopesAllowAdmin(viewModel.operatorScopes.value),
+      connected = viewModel.gatewayConnectionDisplay.value.isConnected,
+      gatewayAvailable = viewModel.chatHealthOk.value,
+      loading = viewModel.chatHistoryLoading.value || viewModel.chatSessionCreating.value,
+      sending = expected in composerState.sendStates.value,
+      activeRun = viewModel.pendingRunCount.value > 0,
+      streaming = viewModel.chatStreamingAssistantText.value != null,
+      settingsMutationPending = viewModel.chatSessionKey.value in viewModel.chatPendingSessionSettingsKeys.value,
+    )
+
   val modelPicker =
     remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
       ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
@@ -479,11 +535,56 @@ internal fun ChatScreen(
           operatorScopesAllowWrite(viewModel.operatorScopes.value)
       }
     }
-  rememberWindowDisplayFeatureState(modelPicker::publishFeatures)
-  SideEffect { modelPicker.refreshTarget() }
-  DisposableEffect(modelPicker) { onDispose { modelPicker.dispose() } }
-  var showBackgroundTasks by rememberSaveable { mutableStateOf(false) }
-  var showBranchSwitcher by rememberSaveable { mutableStateOf(false) }
+  val effortPicker =
+    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
+      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
+        viewModel.isCurrentChatComposerOwner(expected) && (canChangeThinking() || canChangeFastMode(expected))
+      }
+    }
+  val backgroundTasks =
+    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
+      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
+        viewModel.isCurrentChatComposerOwner(expected)
+      }
+    }
+  val branchPicker =
+    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
+      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
+        viewModel.isCurrentChatComposerOwner(expected)
+      }
+    }
+  var branchOpening by remember(branchPicker) { mutableStateOf<ChatBranchOpening?>(null) }
+
+  fun isCurrentBranchOpening(opening: ChatBranchOpening): Boolean {
+    if (branchPicker.visible !== opening.session || opening.session.geometry.revoked) return false
+    if (!viewModel.isCurrentChatBranchTarget(opening.session.composerOwner, opening.selectionGeneration)) {
+      branchPicker.retire(opening.session)
+      return false
+    }
+    return true
+  }
+
+  rememberWindowDisplayFeatureState { publication ->
+    modelPicker.publishFeatures(publication)
+    effortPicker.publishFeatures(publication)
+    backgroundTasks.publishFeatures(publication)
+    branchPicker.publishFeatures(publication)
+  }
+  SideEffect {
+    modelPicker.refreshTarget()
+    effortPicker.refreshTarget()
+    backgroundTasks.refreshTarget()
+    branchPicker.refreshTarget()
+    branchOpening?.let { isCurrentBranchOpening(it) }
+  }
+  DisposableEffect(modelPicker, effortPicker, backgroundTasks, branchPicker) {
+    onDispose {
+      modelPicker.dispose()
+      effortPicker.dispose()
+      backgroundTasks.dispose()
+      branchPicker.dispose()
+    }
+  }
   var detailsExpanded by rememberSaveable { mutableStateOf(false) }
   var sendMessageTooLong by rememberSaveable(composerOwner) { mutableStateOf(false) }
   var sendCheckpointFull by rememberSaveable(composerOwner) { mutableStateOf(false) }
@@ -775,9 +876,7 @@ internal fun ChatScreen(
       newChatEnabled = newChatEnabled,
       workspaceGit = workspaceGit,
       branches = sessionBranches,
-      branchesLoading = sessionBranchesLoading,
-      branchSwitchEnabled =
-        outboxPresentationRestored && pendingRunCount == 0 && !sessionBranchSwitching && currentSessionOutboxItems.isEmpty(),
+      branchSwitchEnabled = viewModel.isCurrentChatBranchTarget(composerOwner, selectionGeneration),
       onNewChatInWorktree = {
         dismissDetails()
         startNewChat(true)
@@ -792,12 +891,22 @@ internal fun ChatScreen(
       },
       onOpenBackgroundTasks = {
         dismissDetails()
-        showBackgroundTasks = true
+        backgroundTasks.open(composerOwner, sessionKey)
       },
       onOpenBranchSwitcher = {
         dismissDetails()
-        showBranchSwitcher = true
-        scope.launch { viewModel.refreshChatSessionBranches() }
+        if (viewModel.isCurrentChatBranchTarget(composerOwner, selectionGeneration)) {
+          val previous = branchPicker.visible
+          branchPicker.open(composerOwner, sessionKey)
+          branchPicker.visible?.takeIf { it !== previous && !it.geometry.revoked }?.let { session ->
+            val opening = ChatBranchOpening(session, selectionGeneration)
+            branchOpening = opening
+            // Reads can start before placement; admitted operations outlive the keyed sheet.
+            scope.launch {
+              if (isCurrentBranchOpening(opening)) viewModel.refreshChatSessionBranches()
+            }
+          }
+        }
       },
     )
   }
@@ -945,14 +1054,7 @@ internal fun ChatScreen(
         composerState.clearAttachmentOmission(composerOwner)
       },
       commands = chatCommands,
-      onThinkingLevelChange = viewModel::setChatThinkingLevel,
-      onFastModeChange = { enabled ->
-        viewModel.setChatSessionFastMode(
-          sessionKey = sessionKey,
-          enabled = enabled,
-          clearOverride = !fastModeProviderSupported,
-        )
-      },
+      onOpenEffortPicker = { effortPicker.open(composerOwner, sessionKey) },
       onOpenModelPicker = { modelPicker.open(composerOwner, sessionKey) },
       onPickImages = {
         if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
@@ -1070,6 +1172,35 @@ internal fun ChatScreen(
     )
   }
 
+  effortPicker.visible?.let { opening ->
+    key(opening) {
+      ChatEffortSheet(
+        opening = opening,
+        options = thinkingLevelSelection.options,
+        selectedId = thinkingLevel,
+        thinkingSupported = thinkingSupported,
+        thinkingLevelEnabled = canAdminSessionSettings,
+        fastMode = fastMode,
+        fastModeEnabled = canChangeFastMode(opening.composerOwner),
+        onSelect = { level ->
+          if (effortPicker.admit(opening) && canChangeThinking()) {
+            viewModel.setChatThinkingLevel(level)
+          }
+        },
+        onFastModeChange = { enabled ->
+          if (effortPicker.admit(opening) && canChangeFastMode(opening.composerOwner)) {
+            viewModel.setChatSessionFastMode(
+              sessionKey = opening.sessionKey,
+              enabled = enabled,
+              clearOverride = !currentFastModeProviderSupported(),
+            )
+          }
+        },
+        onDismiss = { if (effortPicker.admit(opening)) effortPicker.retire(opening) },
+      )
+    }
+  }
+
   modelPicker.visible?.let { opening ->
     // The original callback target never becomes the newest opening after a coalesced close/open.
     fun currentSession() =
@@ -1149,27 +1280,39 @@ internal fun ChatScreen(
     }
   }
 
-  if (showBranchSwitcher) {
-    BranchSwitcherSheet(
-      branches = sessionBranches,
-      loading = sessionBranchesLoading || sessionBranchSwitching,
-      onDismiss = { showBranchSwitcher = false },
-      onSelect = { leafEntryId ->
-        scope.launch {
-          if (viewModel.switchChatSessionBranch(leafEntryId)) {
-            showBranchSwitcher = false
-            viewModel.refreshChatSessionBranches()
+  branchOpening?.takeIf { branchPicker.visible === it.session }?.let { opening ->
+    key(opening) {
+      BranchSwitcherSheet(
+        opening = opening.session,
+        branches = sessionBranches,
+        selectionEnabled =
+          canAdminSessionSettings && !sessionBranchesLoading &&
+            viewModel.canSwitchChatSessionBranch(opening.session.composerOwner, opening.selectionGeneration),
+        onDismiss = {
+          if (isCurrentBranchOpening(opening) && branchPicker.admit(opening.session)) branchPicker.retire(opening.session)
+        },
+        onSelect = { leafEntryId ->
+          scope.launch {
+            if (isCurrentBranchOpening(opening) && branchPicker.admit(opening.session) &&
+              viewModel.canSwitchChatSessionBranch(opening.session.composerOwner, opening.selectionGeneration, leafEntryId) &&
+              viewModel.switchChatSessionBranch(leafEntryId)
+            ) {
+              branchPicker.retire(opening.session)
+            }
           }
-        }
-      },
-    )
+        },
+      )
+    }
   }
-  if (showBackgroundTasks) {
-    BackgroundTasksSheet(
-      viewModel = viewModel,
-      agentId = sessionAgentId,
-      onDismiss = { showBackgroundTasks = false },
-    )
+  backgroundTasks.visible?.let { opening ->
+    key(opening) {
+      BackgroundTasksSheet(
+        viewModel = viewModel,
+        opening = opening,
+        admit = { backgroundTasks.admit(opening) },
+        onDismiss = { if (backgroundTasks.admit(opening)) backgroundTasks.retire(opening) },
+      )
+    }
   }
 }
 
@@ -1211,7 +1354,6 @@ private fun ChatHeader(
   newChatEnabled: Boolean,
   workspaceGit: Boolean,
   branches: List<SessionBranch>,
-  branchesLoading: Boolean,
   branchSwitchEnabled: Boolean,
   onNewChatInWorktree: () -> Unit,
   onRefresh: () -> Unit,
@@ -1226,7 +1368,7 @@ private fun ChatHeader(
       sessionCreating -> nativeString("Loading")
       pendingRunCount > 0 -> nativeString("Working")
       healthOk -> nativeString("Ready")
-      else -> nativeString("Offline")
+      else -> nativeString("Not ready")
     }
   val statusColor =
     when {
@@ -1354,7 +1496,7 @@ private fun ChatHeader(
                     nativeString("Switch branch"),
                     onOpenBranchSwitcher,
                     Icons.Default.ArrowDropDown,
-                    enabled = branchSwitchEnabled && !branchesLoading,
+                    enabled = branchSwitchEnabled,
                   ),
                 )
               }
@@ -1475,7 +1617,11 @@ private fun ChatMessageList(
           completedNewestItemId = transcriptAnchor?.completedNewestItemId,
         ),
     )
-  val timeline = remember(baseTimeline, turnRecap) { baseTimeline.withTurnRecap(turnRecap) }
+  var expandedWorkKeys by remember(sessionKey) { mutableStateOf(emptySet<String>()) }
+  val timeline =
+    remember(baseTimeline, turnRecap, expandedWorkKeys, activeRunCount, sessionKey) {
+      baseTimeline.withCompletedWorkGroups(messages, activeRunCount > 0, expandedWorkKeys, sessionKey).withTurnRecap(turnRecap)
+    }
   val readerScroll =
     rememberChatReaderScrollController(
       sessionKey = sessionKey,
@@ -1535,7 +1681,7 @@ private fun ChatMessageList(
                         entryId = item.message.entryId,
                         role = item.message.role,
                         live = false,
-                        content = visibleContent(item.message),
+                        content = visibleContent(item.message).filter { it.toolActivity == null },
                         timestampMs = item.message.timestampMs,
                         onReplyMessage = onReplyMessage,
                         sessionActionsEnabled = sessionActionsEnabled,
@@ -1585,6 +1731,10 @@ private fun ChatMessageList(
                       ToolBubble(toolCalls = item.toolCalls)
                     }
 
+                    is ChatTimelineItem.CompletedTools -> {
+                      CompletedToolActivity(tools = item.tools, stableKey = item.key)
+                    }
+
                     is ChatTimelineItem.SubagentActivity -> {
                       SubagentActivityRows(
                         activities = item.activities,
@@ -1594,6 +1744,12 @@ private fun ChatMessageList(
 
                     is ChatTimelineItem.QuestionPrompt -> {
                       ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
+                    }
+
+                    is ChatTimelineItem.WorkedSummary -> {
+                      ChatWorkedSummary(item) {
+                        expandedWorkKeys = if (item.expanded) expandedWorkKeys - item.key else expandedWorkKeys + item.key
+                      }
                     }
 
                     is ChatTimelineItem.TurnRecapSummary -> {
@@ -1727,7 +1883,18 @@ private fun EmptyChatHint(
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = if (healthOk) nativeString("Ready when you are") else nativeString("Gateway offline"), style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp), color = ClawTheme.colors.text)
+      Text(
+        text =
+          if (healthOk) {
+            nativeString("Ready when you are")
+          } else if (gatewayOffline) {
+            nativeString("Gateway offline")
+          } else {
+            nativeString("Chat not ready")
+          },
+        style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+        color = ClawTheme.colors.text,
+      )
       Text(
         text =
           if (healthOk) {
@@ -1735,7 +1902,7 @@ private fun EmptyChatHint(
           } else if (gatewayOffline) {
             nativeString("Use the recovery options below to reconnect.")
           } else {
-            nativeString("Chat is checking Gateway health.")
+            nativeString("Use Refresh chat to check Gateway health.")
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
@@ -2190,6 +2357,354 @@ private fun ToolBubble(toolCalls: List<ChatPendingToolCall>) {
 }
 
 @Composable
+private fun CompletedToolActivity(
+  tools: List<ChatToolActivity>,
+  stableKey: String,
+) {
+  if (tools.isEmpty()) return
+  if (tools.size == 1) {
+    val tool = tools.single()
+    CompletedToolActivityItem(
+      tool = tool,
+      saveableKey = tool.toolCallId ?: "${tool.name}:${tool.detail.orEmpty().hashCode()}",
+      parentStableKey = stableKey,
+    )
+    return
+  }
+  if (tools.all { completedToolKind(it.name) == CompletedToolKind.Progress }) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      tools.forEach { ProgressToolReceipt(it) }
+    }
+    return
+  }
+  var expanded by rememberSaveable(stableKey) { mutableStateOf(false) }
+  var showAll by rememberSaveable(stableKey) { mutableStateOf(false) }
+  val summary = completedToolGroupSummary(tools)
+  val state = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+  // Remeasure disclosures immediately: nested size springs leave blank space
+  // while the reverse-layout transcript readjusts its bottom anchor.
+  Column(
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Surface(
+      onClick = {
+        expanded = !expanded
+        if (!expanded) showAll = false
+      },
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .semantics(mergeDescendants = true) {
+            role = Role.Button
+            stateDescription = state
+          },
+      shape = RoundedCornerShape(4.dp),
+      color = Color.Transparent,
+      contentColor = ClawTheme.colors.textMuted,
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.List,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+          tint = ClawTheme.colors.textMuted,
+        )
+        Text(
+          text = summary,
+          modifier = Modifier.weight(1f, fill = false),
+          style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Normal),
+          color = ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Icon(
+          imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+          tint = ClawTheme.colors.textMuted,
+        )
+      }
+    }
+    if (expanded) {
+      val guideColor = ClawTheme.colors.border
+      Column(
+        modifier =
+          Modifier
+            .padding(start = 7.dp)
+            .drawBehind {
+              drawLine(
+                color = guideColor,
+                start = Offset(0f, 0f),
+                end = Offset(0f, size.height),
+                strokeWidth = 1.dp.toPx(),
+              )
+            }.padding(start = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+      ) {
+        (if (showAll) tools else tools.take(COMPLETED_TOOL_DETAIL_LIMIT)).forEachIndexed { index, tool ->
+          CompletedToolActivityItem(
+            tool = tool,
+            saveableKey = tool.toolCallId ?: "$index:${tool.name}:${tool.detail.orEmpty().hashCode()}",
+            parentStableKey = stableKey,
+          )
+        }
+        if (!showAll && tools.size > COMPLETED_TOOL_DETAIL_LIMIT) {
+          Surface(
+            onClick = { showAll = true },
+            modifier = Modifier.fillMaxWidth().semantics { role = Role.Button },
+            shape = RoundedCornerShape(4.dp),
+            color = Color.Transparent,
+            contentColor = ClawTheme.colors.textMuted,
+          ) {
+            Row(
+              modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget).padding(vertical = 12.dp),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = nativeString("Show all \${count} tools", tools.size),
+                modifier = Modifier.weight(1f, fill = false),
+                style = ClawTheme.type.caption,
+              )
+              Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun CompletedToolActivityItem(
+  tool: ChatToolActivity,
+  saveableKey: String,
+  parentStableKey: String,
+) {
+  if (completedToolKind(tool.name) == CompletedToolKind.Progress) {
+    ProgressToolReceipt(tool)
+    return
+  }
+  var expanded by rememberSaveable(parentStableKey, saveableKey) { mutableStateOf(false) }
+  val kind = completedToolKind(tool.name)
+  val resultPresentation = completedToolResultPresentation(tool)
+  val preview =
+    tool.detail
+      ?.lineSequence()
+      ?.firstOrNull { it.isNotBlank() }
+      ?.trim()
+  val summary =
+    if (kind == CompletedToolKind.Command) {
+      completedCommandText(tool).orEmpty()
+    } else {
+      val name = completedToolDisplayName(tool.name)
+      preview?.substringAfter(": ", preview)?.let { "$name · $it" } ?: name
+    }
+  val expandable = resultPresentation.expandable
+  val state = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+  Column(
+    verticalArrangement = Arrangement.spacedBy(3.dp),
+  ) {
+    Surface(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .then(if (expandable) Modifier.clickable { expanded = !expanded } else Modifier)
+          .semantics(mergeDescendants = true) {
+            if (expandable) {
+              role = Role.Button
+              stateDescription = state
+            }
+          },
+      color = Color.Transparent,
+      contentColor = ClawTheme.colors.textMuted,
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Icon(
+          imageVector =
+            when (kind) {
+              CompletedToolKind.Command -> Icons.Default.Terminal
+              CompletedToolKind.Read -> Icons.Default.Description
+              CompletedToolKind.Edit, CompletedToolKind.Write -> Icons.Default.Edit
+              CompletedToolKind.Search, CompletedToolKind.Fetch -> Icons.Default.Search
+              else -> Icons.AutoMirrored.Filled.List
+            },
+          contentDescription = null,
+          modifier = Modifier.size(16.dp),
+          tint = ClawTheme.colors.textMuted,
+        )
+        Row(
+          modifier = Modifier.weight(1f),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          if (kind == CompletedToolKind.Command) {
+            Text(
+              text = nativeString("\$"),
+              modifier = Modifier.alignByBaseline().padding(end = 2.dp),
+              style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace),
+              color = ClawTheme.colors.textMuted,
+            )
+          }
+          Text(
+            text = summary,
+            modifier = Modifier.weight(1f).alignByBaseline(),
+            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Normal),
+            color = ClawTheme.colors.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+        if (expandable) {
+          Icon(
+            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            modifier = Modifier.size(15.dp),
+            tint = ClawTheme.colors.textSubtle,
+          )
+        }
+      }
+    }
+    if (expanded && kind == CompletedToolKind.Command) {
+      CompletedCommandOutput(tool)
+    } else if (expanded) {
+      tool.detail?.let { detail ->
+        Text(
+          text = detail,
+          modifier = Modifier.padding(start = 2.dp, end = 8.dp),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+          maxLines = 4,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      resultPresentation.output?.let { result ->
+        resultPresentation.outputLabel?.let { label ->
+          Text(
+            text = label,
+            modifier = Modifier.padding(start = 2.dp, end = 8.dp),
+            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+        Text(
+          text = result,
+          modifier = Modifier.padding(start = 2.dp, end = 8.dp, bottom = 5.dp),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textSubtle,
+          maxLines = 12,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      resultPresentation.outcome?.let { outcome ->
+        Text(
+          text = outcome,
+          modifier = Modifier.padding(start = 2.dp, end = 8.dp, bottom = 5.dp),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun CompletedCommandOutput(tool: ChatToolActivity) {
+  val resultPresentation = completedToolResultPresentation(tool)
+  val shellShape = RoundedCornerShape(14.dp)
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .padding(top = 5.dp, bottom = 8.dp)
+        .border(1.dp, ClawTheme.colors.border, shellShape)
+        .clip(shellShape)
+        .heightIn(max = 360.dp)
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = 14.dp, vertical = 12.dp),
+  ) {
+    SelectionContainer {
+      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+          Text(
+            text = nativeString("\$"),
+            style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace),
+            color = ClawTheme.colors.textMuted,
+          )
+          Text(
+            text = completedCommandText(tool, singleLine = false).orEmpty(),
+            modifier = Modifier.weight(1f),
+            style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace),
+            color = ClawTheme.colors.text,
+          )
+        }
+        resultPresentation.output?.let { result ->
+          Text(
+            text = result,
+            style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace),
+            color = ClawTheme.colors.text,
+          )
+        }
+        resultPresentation.outcome?.let { outcome ->
+          Text(
+            text = outcome,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ProgressToolReceipt(tool: ChatToolActivity) {
+  Row(
+    modifier = Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(vertical = 6.dp),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Icon(
+      imageVector = Icons.Default.Checklist,
+      contentDescription = null,
+      modifier = Modifier.size(16.dp),
+      tint = ClawTheme.colors.textMuted,
+    )
+    Text(
+      text = progressReceiptLabel(tool),
+      modifier = Modifier.weight(1f),
+      style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Normal),
+      color = ClawTheme.colors.textMuted,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+  }
+}
+
+private const val COMPLETED_TOOL_DETAIL_LIMIT = 20
+
+internal fun readableToolName(name: String): String =
+  name
+    .trim()
+    .replace('_', ' ')
+    .replace('.', ' ')
+    .split(Regex("\\s+"))
+    .filter(String::isNotEmpty)
+    .joinToString(" ") { word -> word.replaceFirstChar { it.titlecase(Locale.US) } }
+    .ifEmpty { nativeString("Tool") }
+
+@Composable
 private fun SubagentActivityRows(
   activities: List<ChatSubagentActivity>,
   moreWorkingCount: Int,
@@ -2586,8 +3101,7 @@ private fun ChatComposer(
   modelUnavailableMessage: NativeText?,
   onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
-  onThinkingLevelChange: (String) -> Unit,
-  onFastModeChange: (Boolean) -> Unit,
+  onOpenEffortPicker: () -> Unit,
   onOpenModelPicker: () -> Unit,
   onPickImages: () -> Unit,
   onPickAudioOrDocument: () -> Unit,
@@ -2647,7 +3161,7 @@ private fun ChatComposer(
           modifier = Modifier.weight(1f),
         )
         IconButton(onClick = onDismissShareImportNotice, modifier = Modifier.size(32.dp)) {
-          Icon(Icons.Default.Close, contentDescription = nativeString("Dismiss shared-image warning"))
+          Icon(Icons.Default.Close, contentDescription = nativeString("Dismiss attachment warning"))
         }
       }
     }
@@ -2762,8 +3276,7 @@ private fun ChatComposer(
             thinkingLevelEnabled = thinkingLevelEnabled,
             fastMode = fastMode,
             fastModeEnabled = fastModeEnabled,
-            onFastModeChange = onFastModeChange,
-            onThinkingLevelChange = onThinkingLevelChange,
+            onOpenEffortPicker = onOpenEffortPicker,
             contextUsage = contextUsage,
             modifier = Modifier.weight(1f),
           )
@@ -2848,21 +3361,16 @@ private fun ChatThinkingLevelPicker(
   thinkingLevelEnabled: Boolean,
   fastMode: Boolean,
   fastModeEnabled: Boolean,
-  onSelect: (String) -> Unit,
-  onFastModeChange: (Boolean) -> Unit,
+  onOpen: () -> Unit,
 ) {
-  var expanded by rememberSaveable { mutableStateOf(false) }
   val enabled = (thinkingSupported && thinkingLevelEnabled) || fastModeEnabled
-  LaunchedEffect(enabled) {
-    if (!enabled) expanded = false
-  }
   val languageTag = currentAppLanguage().languageTag
   val position = resolveChatEffortPosition(selectedId, options)
   val description = nativeString("Thinking")
   val dialColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
   val needleColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle
   Surface(
-    onClick = { expanded = true },
+    onClick = onOpen,
     enabled = enabled,
     modifier =
       Modifier.size(ClawTheme.spacing.touchTarget).semantics {
@@ -2910,19 +3418,6 @@ private fun ChatThinkingLevelPicker(
         }
       }
     }
-  }
-  if (expanded) {
-    ChatEffortSheet(
-      options = options,
-      selectedId = selectedId,
-      thinkingSupported = thinkingSupported,
-      thinkingLevelEnabled = thinkingLevelEnabled,
-      fastMode = fastMode,
-      fastModeEnabled = fastModeEnabled,
-      onSelect = onSelect,
-      onFastModeChange = onFastModeChange,
-      onDismiss = { expanded = false },
-    )
   }
 }
 
@@ -3068,6 +3563,7 @@ private fun ChatEffortSliderTrack(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatEffortSheet(
+  opening: ChatModelPickerSession,
   options: List<ChatThinkingLevelOption>,
   selectedId: String,
   thinkingSupported: Boolean,
@@ -3080,6 +3576,7 @@ private fun ChatEffortSheet(
 ) {
   val thinkingOptions = if (thinkingSupported) options else emptyList()
   ModalBottomSheet(
+    modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     containerColor = ClawTheme.colors.surface,
@@ -3132,62 +3629,64 @@ private fun ChatEffortSheet(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BranchSwitcherSheet(
+  opening: ChatModelPickerSession,
   branches: List<SessionBranch>,
-  loading: Boolean,
+  selectionEnabled: Boolean,
   onDismiss: () -> Unit,
   onSelect: (String) -> Unit,
 ) {
   ModalBottomSheet(
+    modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     containerColor = ClawTheme.colors.surface,
     contentColor = ClawTheme.colors.text,
   ) {
-    Column(modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
-      Text(
-        text = nativeString("Switch branch"),
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-        style = ClawTheme.type.title,
-        color = ClawTheme.colors.text,
-      )
-      HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(bottom = 24.dp),
-      ) {
-        itemsIndexed(branches, key = { _, branch -> branch.leafEntryId }) { _, branch ->
-          Surface(
-            onClick = { if (!branch.active) onSelect(branch.leafEntryId) },
-            enabled = !loading && !branch.active,
-            color = if (branch.active) ClawTheme.colors.surfacePressed else Color.Transparent,
-            contentColor = ClawTheme.colors.text,
+    LazyColumn(
+      modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
+      contentPadding = PaddingValues(bottom = 24.dp),
+    ) {
+      item {
+        Text(
+          text = nativeString("Switch branch"),
+          modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+          style = ClawTheme.type.title,
+          color = ClawTheme.colors.text,
+        )
+        HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+      }
+      itemsIndexed(branches, key = { _, branch -> branch.leafEntryId }) { _, branch ->
+        Surface(
+          onClick = { if (!branch.active) onSelect(branch.leafEntryId) },
+          enabled = selectionEnabled && !branch.active,
+          color = if (branch.active) ClawTheme.colors.surfacePressed else Color.Transparent,
+          contentColor = ClawTheme.colors.text,
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget).padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            Row(
-              modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget).padding(horizontal = 20.dp, vertical = 12.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-              Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                  text = branch.headline.trim().takeIf(String::isNotEmpty) ?: nativeString("Untitled branch"),
-                  style = ClawTheme.type.body,
-                  color = ClawTheme.colors.text,
-                  maxLines = 2,
-                  overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                  text = branchMetadataText(branch),
-                  style = ClawTheme.type.caption,
-                  color = ClawTheme.colors.textMuted,
-                )
-              }
-              if (branch.active) {
-                Icon(
-                  imageVector = Icons.Default.Check,
-                  contentDescription = nativeString("Current branch"),
-                  tint = ClawTheme.colors.primary,
-                )
-              }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+              Text(
+                text = branch.headline.trim().takeIf(String::isNotEmpty) ?: nativeString("Untitled branch"),
+                style = ClawTheme.type.body,
+                color = ClawTheme.colors.text,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Text(
+                text = branchMetadataText(branch),
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+              )
+            }
+            if (branch.active) {
+              Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = nativeString("Current branch"),
+                tint = ClawTheme.colors.primary,
+              )
             }
           }
         }
@@ -3653,8 +4152,7 @@ private fun ChatInputPill(
   thinkingLevelEnabled: Boolean,
   fastMode: Boolean,
   fastModeEnabled: Boolean,
-  onFastModeChange: (Boolean) -> Unit,
-  onThinkingLevelChange: (String) -> Unit,
+  onOpenEffortPicker: () -> Unit,
   contextUsage: ChatContextUsage,
   modifier: Modifier = Modifier,
 ) {
@@ -3755,8 +4253,7 @@ private fun ChatInputPill(
               thinkingLevelEnabled = thinkingLevelEnabled,
               fastMode = fastMode,
               fastModeEnabled = fastModeEnabled,
-              onSelect = onThinkingLevelChange,
-              onFastModeChange = onFastModeChange,
+              onOpen = onOpenEffortPicker,
             )
           }
         }

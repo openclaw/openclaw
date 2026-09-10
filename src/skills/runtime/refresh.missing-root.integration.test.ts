@@ -11,6 +11,64 @@ vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRootsFromMetadata: () => [],
 }));
 
+it.each(["initial", "closed", "disabled", "evicted"] as const)(
+  "reads repaired skills immediately after %s watcher acquisition",
+  async (lifecycle) => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "skills-acquire-")));
+    const workspaceDir = path.join(root, "workspace");
+    const skillDir = path.join(workspaceDir, "skills", "acquire-proof");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const { ensureSkillsWatcher, closeSkillsWatchers } = await import("./refresh.js");
+    const { getSkillsSnapshotVersion } = await import("./refresh-state.js");
+    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+    const options = { config: {}, agentId: "main" };
+    try {
+      await fs.mkdir(skillDir, { recursive: true });
+      if (lifecycle !== "initial") {
+        ensureSkillsWatcher({ workspaceDir, ...options });
+        if (lifecycle === "closed") {
+          await closeSkillsWatchers();
+        } else if (lifecycle === "disabled") {
+          ensureSkillsWatcher({
+            workspaceDir,
+            ...options,
+            config: { skills: { load: { watch: false } } },
+          });
+        } else {
+          const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61 * 60_000);
+          try {
+            ensureSkillsWatcher({ workspaceDir: path.join(root, "other"), ...options });
+          } finally {
+            clock.mockRestore();
+          }
+        }
+      }
+      // Cache the invalid file after teardown, so teardown invalidation cannot
+      // accidentally prove freshness on reacquisition.
+      nativeFs.writeFileSync(skillFile, "not valid skill frontmatter\n");
+      const readSkill = () =>
+        loadWorkspaceSkills(workspaceDir, options).find(
+          (entry) => entry.skill.name === "acquire-proof",
+        );
+      expect(readSkill()).toBeUndefined();
+      nativeFs.writeFileSync(
+        skillFile,
+        "---\nname: acquire-proof\ndescription: Repaired before acquisition\n---\n",
+      );
+      expect(readSkill()).toBeUndefined();
+      // No await: the first synchronous consumer must not need a ready/change event.
+      ensureSkillsWatcher({ workspaceDir, ...options });
+      expect(readSkill()?.skill.description).toBe("Repaired before acquisition");
+      const version = getSkillsSnapshotVersion(workspaceDir);
+      ensureSkillsWatcher({ workspaceDir, ...options });
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
+    } finally {
+      await closeSkillsWatchers();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 it.each(["create", "edit"] as const)(
   "refreshes cached skills after %s during initial watcher registration",
   async (operation) => {

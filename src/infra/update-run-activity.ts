@@ -42,14 +42,21 @@ export function inspectUpdateRunAbandonment(
   record: UpdateRunRecord,
   input: { explicit?: boolean } = {},
 ): string | undefined {
-  const lastActivity = updateRunLastActivity(record);
-  if (record.status !== "running" || Date.now() - lastActivity <= ABANDONED_UPDATE_RUN_MS) {
+  if (record.status !== "running") {
     return undefined;
   }
-  if (!input.explicit && record.steps.some((step) => step.step === "driver:identity-unavailable")) {
+  const identityUnavailable = record.steps.some(
+    (step) => step.step === "driver:identity-unavailable",
+  );
+  if (!input.explicit && identityUnavailable) {
     return undefined;
   }
   const drivers = recordedUpdateRunDrivers(record);
+  // Explicit repair need not wait for dead drivers, but an unrecorded adopter may still be working.
+  const requiresInactivity = !input.explicit || !drivers.length || identityUnavailable;
+  if (requiresInactivity && Date.now() - updateRunLastActivity(record) <= ABANDONED_UPDATE_RUN_MS) {
+    return undefined;
+  }
   if (drivers.length) {
     return drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead")
       ? "inactive-driver-dead"

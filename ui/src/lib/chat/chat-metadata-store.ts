@@ -3,17 +3,12 @@ import {
   resolveGatewayStartupRetryAfterMs,
 } from "@openclaw/gateway-client/browser";
 import type {
-  ChatAccountSelection,
   ChatMetadataParams,
   CommandsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
 
-export type ChatMetadataResult = CommandsListResult & {
-  models?: ModelCatalogEntry[];
-  accountSelection?: ChatAccountSelection;
-};
+export type ChatMetadataResult = CommandsListResult;
 
 type ChatMetadataUpdate =
   | { type: "invalidated" }
@@ -141,12 +136,15 @@ function beginPublication(entry: ChatMetadataEntry) {
   notifyChatMetadataListeners(entry, { type: "loading" });
   return {
     isCurrent,
-    publish: (result: ChatMetadataResult) => {
+    publish: (result: ChatMetadataResult & { models?: unknown; accountSelection?: unknown }) => {
+      // Legacy/startup responses can carry models. The direct catalog is their only UI owner.
+      const { models: _models, accountSelection: _accountSelection, ...metadata } = result;
       if (isCurrent()) {
-        entry.result = result;
-        notifyChatMetadataListeners(entry, { type: "result", result });
+        entry.result = metadata;
+        notifyChatMetadataListeners(entry, { type: "result", result: metadata });
       }
       entry.release();
+      return metadata;
     },
     fail: (error: unknown) => {
       if (isCurrent()) {
@@ -166,8 +164,7 @@ function beginChatMetadataRequest(
   const pending = request
     .then(
       (result) => {
-        publication.publish(result);
-        return result;
+        return publication.publish(result);
       },
       (error: unknown) => {
         publication.fail(error);

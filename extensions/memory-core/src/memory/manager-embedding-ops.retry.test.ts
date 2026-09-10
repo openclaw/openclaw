@@ -1,10 +1,22 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createMemorySearchDeadlineControl,
+  type MemorySearchDeadlineControl,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { EmbeddingProvider, EmbeddingProviderRuntime } from "./embeddings.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 
 type EmbeddingQueryRetryHarness = {
   provider: EmbeddingProvider;
-  embedQueryWithRetry: (text: string, signal?: AbortSignal) => Promise<number[]>;
+  embedQueryWithRetry: (
+    text: string,
+    signal?: AbortSignal,
+    provider?: EmbeddingProvider,
+    markDegraded?: boolean,
+    providerRuntime?: EmbeddingProviderRuntime,
+    deadlineControl?: MemorySearchDeadlineControl,
+  ) => Promise<number[]>;
   markLocalEmbeddingProviderDegraded: (error: unknown) => void;
   resolveEmbeddingTimeout: () => number;
   withProviderUse: <T>(provider: EmbeddingProvider, run: () => Promise<T>) => Promise<T>;
@@ -50,6 +62,39 @@ function createEmbeddingBatchRetryHarness(embedBatch: EmbeddingProvider["embedBa
 describe("memory embedding query retry cancellation", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("waits for an already-active readiness phase before arming its query deadline", async () => {
+    vi.useFakeTimers();
+    const control = createMemorySearchDeadlineControl();
+    control.report("pause");
+    const ready = createDeferred<void>();
+    const embedQuery = vi.fn<EmbeddingProvider["embed"]>(async () => {
+      await ready.promise;
+      return [1, 0, 0, 0];
+    });
+    const manager = createEmbeddingQueryRetryHarness(embedQuery);
+    const pending = manager.embedQueryWithRetry(
+      "search terms",
+      undefined,
+      undefined,
+      true,
+      undefined,
+      control,
+    );
+    void pending.catch(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(embedQuery).toHaveBeenCalledOnce();
+      expect(embedQuery.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+      control.report("resume");
+      ready.resolve();
+      await expect(pending).resolves.toEqual([1, 0, 0, 0]);
+    } finally {
+      ready.resolve();
+      await vi.runAllTimersAsync();
+      await pending.catch(() => {});
+    }
   });
 
   it("cancels provider backoff immediately without sending a second request", async () => {

@@ -19,7 +19,6 @@ export const SKILL_WORKSHOP_ACTIONS = [
   "quarantine",
   "history",
   "restore_collection",
-  "complete",
 ] as const;
 
 export const SKILL_PROPOSAL_STATUSES = [
@@ -30,14 +29,13 @@ export const SKILL_PROPOSAL_STATUSES = [
   "stale",
 ] as const satisfies readonly SkillProposalStatus[];
 
-export function resolveProposalOnlyActions(updateProposals: boolean, supportsCompletion: boolean) {
+export function resolveProposalOnlyActions(updateProposals: boolean) {
   return [
     "create",
     ...(updateProposals ? ["prepare_patch", "patch", "update", "read"] : []),
     "revise",
     "list",
     "inspect",
-    ...(supportsCompletion ? ["complete"] : []),
   ];
 }
 
@@ -47,7 +45,7 @@ export function buildSkillWorkshopToolSchema(proposalRevision = false) {
       action: stringEnum(proposalRevision ? ["inspect", "revise"] : [...SKILL_WORKSHOP_ACTIONS], {
         description: proposalRevision
           ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
-          : "create = stage a pending proposal for a new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = stage a full-body rewrite; history = read historical collection review records (current runs use automation history); restore_collection = restore a retained backup from the previous collection reviewer; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
+          : "create = stage a pending proposal for a new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = stage a full-body rewrite; history = read historical collection review records (current runs use automation history); restore_collection = restore a retained backup from the previous collection reviewer; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
       }),
       proposal_id: Type.Optional(
         Type.String({

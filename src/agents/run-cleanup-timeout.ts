@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 // Cleanup failures follow the originating run across nested async cleanup.
@@ -177,6 +178,7 @@ async function settleAgentCleanupStep(
       );
       return { error };
     });
+  void trackAsyncWork(() => observedCleanupPromise).catch(() => {});
   const timeoutPromise = new Promise<"timeout">((resolve) => {
     timeoutHandle = setTimeout(() => {
       timedOut = true;

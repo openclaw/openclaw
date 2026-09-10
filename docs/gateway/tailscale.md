@@ -56,7 +56,11 @@ Connect a native or CLI client from another Tailnet device:
 
 - WebSocket: `ws://<tailscale-ip>:18789`
 
-Do not use the direct plain-HTTP address for the browser Control UI. Remote plain HTTP cannot create browser device identity, and token/password auth does not replace it. Use Tailscale Serve for the Control UI.
+The browser Control UI can create and sign device identity over the direct plain-HTTP address using pure-JavaScript Ed25519. With token/password auth, the shared secret still does not replace browser device identity.
+
+Plain HTTP remains a downgraded transport: identity signing does not encrypt the page, shared secret, or Gateway traffic. Prefer Tailscale Serve for HTTPS; see [Insecure HTTP](/web/control-ui#insecure-http).
+
+Loading the Control UI from the Tailnet address itself is a private same-origin request and needs no `gateway.controlUi.allowedOrigins` entry. Public or cross-origin browser deployments need an allowed origin.
 
 <Note>
 When a bindable Tailnet IPv4 is present, the Gateway also requires `http://127.0.0.1:18789` for authenticated same-host clients. If no Tailnet address is available at startup, it falls back to loopback only; restart after Tailscale becomes available to add direct Tailnet access. Neither path adds LAN or public exposure.
@@ -92,12 +96,16 @@ openclaw gateway --tailscale funnel --auth password
 
 `gateway.auth.mode` controls the handshake:
 
-| Mode                                                   | Use case                                                                            |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `none`                                                 | Private ingress only                                                                |
-| `token` (default when `OPENCLAW_GATEWAY_TOKEN` is set) | Shared token                                                                        |
-| `password`                                             | Shared secret via `OPENCLAW_GATEWAY_PASSWORD` or config                             |
-| `trusted-proxy`                                        | Identity-aware reverse proxy; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth) |
+| Mode              | Use case                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `none`            | Private ingress only                                                                |
+| `token` (default) | Shared token via `OPENCLAW_GATEWAY_TOKEN` or config                                 |
+| `password`        | Shared secret via `OPENCLAW_GATEWAY_PASSWORD` or config                             |
+| `trusted-proxy`   | Identity-aware reverse proxy; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth) |
+
+When `gateway.auth.mode` is unset, a resolved password selects password mode; without one, token is the default. If both `gateway.auth.token` and `gateway.auth.password` are configured, set the mode explicitly.
+
+When token mode has no credential, loopback startup generates a runtime-only token without writing it to config. A separate `openclaw qr` command still needs usable configured or supplied token/password authentication; that startup-only token does not configure pairing. See [QR auth resolution](/cli/qr).
 
 ### Tailscale identity headers (Serve only)
 
@@ -127,7 +135,7 @@ This compatibility path does not grant managed Tailscale semantics: `gateway.aut
 - Older releases could advertise an externally configured default HTTPS Serve route that targeted a `gateway.bind: "lan"` listener. That route does not automatically gain trusted ingress provenance. Run `openclaw doctor` to inspect it; Doctor leaves the configuration unchanged because it cannot prove who owns the route. If you confirm the route belongs to the current Tailscale hostname and is stale from an older OpenClaw release, remove only its root handler with `tailscale serve --yes --https=443 --set-path=/ off` or `tailscale funnel --yes --https=443 --set-path=/ off`, then configure `gateway.bind: "loopback"` plus `gateway.tailscale.mode: "serve"` manually and restart the Gateway. If another service must retain ownership, leave managed Tailscale ingress off and use the explicit `trustedProxies` compatibility path above.
 - `gateway.tailscale.preserveFunnel: true` is a deprecated migration guard. It detects an externally configured `tailscale funnel` route before reapplying Serve. If that route still targets the ordinary Gateway listener, OpenClaw leaves it unchanged and warns because the route is not managed ingress. Gateway-authenticated routes work only through the explicit `trustedProxies` compatibility path above and continue to require the configured auth; plugin-authenticated webhook routes such as Google Chat and SMS keep using their own signature/auth checks. To migrate, first configure a durable `gateway.auth.password` (prefer a SecretRef) or `OPENCLAW_GATEWAY_PASSWORD`, set `gateway.auth.mode` to `password`, run `openclaw config set gateway.tailscale.mode funnel`, then `openclaw config unset gateway.tailscale.preserveFunnel`.
 - `gateway.bind: "tailnet"` uses a direct Tailnet bind (no HTTPS, no Serve/Funnel) plus required local `127.0.0.1` when a Tailnet IPv4 is available; otherwise it falls back to loopback only.
-- `gateway.bind: "auto"` prefers loopback; use `tailnet` to limit network exposure to the Tailnet while retaining same-host loopback access.
+- `gateway.bind: "auto"` uses `0.0.0.0` in detected containers and prefers loopback otherwise; use `tailnet` to limit direct network exposure to the Tailnet while retaining same-host loopback access.
 - Serve/Funnel only expose the **Gateway control UI + WS**. Nodes connect over the same Gateway WS endpoint, so Serve works for node access too.
 
 ### Tailscale prerequisites and limits

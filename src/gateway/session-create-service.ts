@@ -23,6 +23,7 @@ import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "../agents/inherited-tool-deny.js";
+import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { findModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
@@ -247,6 +248,7 @@ type CreatedGatewaySession = {
   agentId: string;
   entry: SessionEntry;
   storePath: string;
+  isNew: boolean;
 };
 
 type TrustedInitialSessionEntry = {
@@ -1358,7 +1360,11 @@ export async function createGatewaySession(params: {
             commitGuard?.();
             const model = resolveSessionModelRef(params.cfg, entry, target.agentId);
             const linked = resolveUserLinkedAuthProfile({
-              cfg: params.cfg,
+              cfg: resolveModelProviderAuthConfig({
+                config: params.cfg,
+                provider: model.provider,
+                modelId: model.model,
+              }),
               agentDir: resolveAgentDir(params.cfg, target.agentId),
               provider: model.provider,
               requesterProfileId: personalAccountDefaults.owner,
@@ -1479,6 +1485,7 @@ export async function createGatewaySession(params: {
       agentId: target.agentId,
       entry: projectPublicSessionEntry(created.entry),
       storePath: target.storePath,
+      isNew: createdNewEntry,
     };
     lifecyclePreparationCommitted = true;
     if (createdNewEntry) {

@@ -111,6 +111,11 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       response: { marketplaces: [], marketplaceLoadErrors: [] },
     },
     {
+      method: "experimentalFeature/list" as const,
+      requestParams: {},
+      response: { data: [], nextCursor: null },
+    },
+    {
       method: "config/batchWrite" as const,
       requestParams: {
         edits: [
@@ -371,6 +376,29 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not let an expired attempt abort its replacement", async () => {
+    const firstClient = {
+      request: vi.fn(async () => {
+        throw new sharedClientMocks.CodexAppServerStartSelectionChangedError();
+      }),
+    };
+    const secondClient = { request: vi.fn(async () => ({ ok: true })) };
+    sharedClientMocks.getSharedCodexAppServerClient
+      .mockResolvedValueOnce(firstClient)
+      .mockResolvedValueOnce(secondClient);
+    let abortPrevious: ((reason: Error) => void) | undefined;
+
+    const result = await withCodexAppServerJsonClient({}, async (request, _client, scope) => {
+      abortPrevious?.(new Error("old account changed"));
+      abortPrevious = scope.abort;
+      return await request({ method: "account/read" });
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(secondClient.request).toHaveBeenCalledOnce();
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
   });
 
   it("shares one deadline across a selection retry and suppresses a late request", async () => {

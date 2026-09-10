@@ -105,6 +105,10 @@ const AGENTS_POLICY_DIGEST_RATIO = 0.35;
 const AGENTS_POLICY_HEAD_RATIO = 0.45;
 const AGENTS_POLICY_TAIL_RATIO = 0.15;
 const AGENTS_POLICY_DIGEST_MAX_LINE_CHARS = 240;
+const AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|owner|security|secret|credential|test|validation|command|commit|push|github|pr)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿|必須|務必|一律|紅線)/iu;
+const AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN =
+  /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿)/iu;
 
 type TrimBootstrapResult = {
   content: string;
@@ -113,7 +117,7 @@ type TrimBootstrapResult = {
   originalLength: number;
 };
 
-type PolicyDigestCandidate = { line: string; highPriority: boolean };
+type PolicyDigestCandidate = { text: string; highPriority: boolean };
 
 type PolicyDigest = {
   text: string;
@@ -159,9 +163,7 @@ function isPolicyDigestCandidate(line: string): boolean {
   if (/^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line)) {
     return true;
   }
-  return /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|owner|security|secret|credential|test|validation|command|commit|push|github|pr)\b/iu.test(
-    line,
-  );
+  return AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line);
 }
 
 function normalizePolicyDigestLine(line: string): string {
@@ -184,11 +186,11 @@ function buildAgentsPolicyDigest(
   let used = 0;
   const trySelect = (candidate: PolicyDigestCandidate) => {
     const separatorChars = selected.size > 0 ? 1 : 0;
-    if (used + separatorChars + candidate.line.length > budget) {
+    if (used + separatorChars + candidate.text.length > budget) {
       return;
     }
     selected.add(candidate);
-    used += separatorChars + candidate.line.length;
+    used += separatorChars + candidate.text.length;
   };
 
   for (const candidate of candidates) {
@@ -204,10 +206,10 @@ function buildAgentsPolicyDigest(
 
   const lines = candidates
     .filter((candidate) => selected.has(candidate))
-    .map((candidate) => candidate.line);
+    .map((candidate) => candidate.text);
   return {
     text: lines.join("\n"),
-    omittedLines: Math.max(0, candidates.length - lines.length),
+    omittedLines: Math.max(0, candidates.length - selected.size),
   };
 }
 
@@ -218,12 +220,25 @@ function trimAgentsBootstrapContent(trimmed: string, maxChars: number): TrimBoot
   // Budget refinement reselects these distinct source-ordered lines without reparsing them.
   const candidates: PolicyDigestCandidate[] = [];
   if (!(digestBudget <= 0)) {
-    const highPriorityPattern =
-      /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b/iu;
+    let lastProseLine: string | null = null;
     for (const sourceLine of trimmed.split(/\r?\n/u)) {
       const line = normalizePolicyDigestLine(sourceLine);
-      if (line.length > 0 && isPolicyDigestCandidate(line)) {
-        candidates.push({ line, highPriority: highPriorityPattern.test(line) });
+      if (line.length === 0) {
+        lastProseLine = null;
+        continue;
+      }
+      if (/^\s*(?:`{3,}|~{3,})/u.test(line)) {
+        // Framing cannot cross a fence boundary.
+        lastProseLine = null;
+      } else if (isPolicyDigestCandidate(line)) {
+        candidates.push({
+          // Select framing and its candidate as one indivisible text unit.
+          text: lastProseLine === null ? line : `${lastProseLine}\n${line}`,
+          highPriority: AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN.test(line),
+        });
+        lastProseLine = null;
+      } else {
+        lastProseLine = line;
       }
     }
   }

@@ -5,6 +5,15 @@ set -euo pipefail
 openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
 openclaw_npm_expected_workflow_sha="${PARENT_WORKFLOW_SHA}"
 
+record_postpublish_diagnostics() {
+  CHILD_PLUGIN_NPM_RUN_ID="${plugin_npm_run_id:-${CHILD_PLUGIN_NPM_RUN_ID:-}}" \
+    CHILD_PLUGIN_CLAWHUB_RUN_ID="${plugin_clawhub_run_id:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" \
+    CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID="${plugin_clawhub_bootstrap_run_id:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}" \
+    CHILD_OPENCLAW_NPM_RUN_ID="${openclaw_npm_run_id:-${CHILD_OPENCLAW_NPM_RUN_ID:-}}" \
+    node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-beta-verifier.ts" "$1" \
+    || echo "Warning: postpublish diagnostics unavailable; primary result unchanged." >&2
+}
+
 is_stable_release() {
   [[ "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
 }
@@ -1033,14 +1042,19 @@ upload_release_evidence_assets() {
 }
 
 verify_published_release() {
-  local release_version evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
+  local release_version evidence_path canonical_evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
   local validation_file workflow_ref telegram_waiver
   local -a verify_args
 
   release_version="${RELEASE_TAG#v}"
-  evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
+  canonical_evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
+  evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.pending.json"
   mkdir -p "${POSTPUBLISH_EVIDENCE_DIR}"
+  if [[ -e "${canonical_evidence_path}" || -L "${canonical_evidence_path}" ]]; then
+    echo "Postpublish success evidence already exists; use a fresh invocation output directory." >&2
+    return 1
+  fi
 
   verify_args=(
     "${release_version}"
@@ -1092,6 +1106,7 @@ verify_published_release() {
       "${GITHUB_WORKSPACE}/.release-harness/scripts/release-verify-beta.ts" \
       "${verify_args[@]}"
 
+  record_postpublish_diagnostics binding-start
   if [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
     validation_file="${FOCUSED_RELEASE_EVIDENCE_DIR}/evidence.json"
     run_id="$(jq -er '.producer.runId | select(type == "string" and test("^[1-9][0-9]*$"))' "${validation_file}")"
@@ -1143,10 +1158,14 @@ verify_published_release() {
       }]
     ' \
     "${evidence_path}" > "${evidence_path}.next"
-  mv "${evidence_path}.next" "${evidence_path}"
+  # Expose a success receipt only after both verifier and parent binding pass.
+  # The no-clobber link also refuses a stale receipt without deleting history.
+  ln "${evidence_path}.next" "${canonical_evidence_path}"
+  record_postpublish_diagnostics binding-success
+  echo "postpublish_evidence_ready=true" >> "$GITHUB_OUTPUT"
   {
     echo "- Postpublish verification: passed"
-    echo "- Postpublish evidence: \`${evidence_path}\`"
+    echo "- Postpublish evidence: \`${canonical_evidence_path}\`"
   } >> "$GITHUB_STEP_SUMMARY"
 }
 

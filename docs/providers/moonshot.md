@@ -236,7 +236,7 @@ onboarding.
       </Step>
     </Steps>
 
-    Kimi Code K3 always uses adaptive thinking when reasoning is enabled and
+    Kimi Coding K3 always uses adaptive thinking when reasoning is enabled and
     defaults to high effort. `/think minimal|low` maps to low effort,
     `/think medium|high|adaptive` maps to high effort, and `/think xhigh|max`
     maps to max effort. `/think off` sends `thinking.type: "disabled"`.
@@ -322,7 +322,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     `/think max`, sends `reasoning_effort: "max"`, and ignores stale lower or
     `off` settings.
 
-    Kimi Code K3 exposes `/think off|minimal|low|medium|high|adaptive|xhigh|max`.
+    Kimi Coding K3 exposes `/think off|minimal|low|medium|high|adaptive|xhigh|max`.
     Its Anthropic-compatible endpoint receives `thinking.type: "disabled"` for
     off. Every enabled level uses adaptive thinking; minimal/low maps to low
     effort, medium/high/adaptive maps to high effort, and xhigh/max maps to max
@@ -443,6 +443,9 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config schema for providers, models, and plugins.
+  </Card>
+  <Card title="Fireworks" href="/providers/fireworks" icon="server">
+    Kimi models on Fireworks, including their thinking-off behavior.
   </Card>
   <Card title="Moonshot Open Platform" href="https://platform.moonshot.ai" icon="globe">
     Moonshot API key management and documentation.

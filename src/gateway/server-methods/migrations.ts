@@ -14,7 +14,7 @@ import {
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   applyProviderMemoryImport,
-  listMemoryMigrationProviders,
+  withMemoryMigrationProviders,
   planProviderMemoryImport,
 } from "../../commands/migrate/memory-import.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,11 +34,11 @@ function emptySummary() {
 
 type CachedMemoryApply = {
   requestFingerprint: string;
-  result: MigrationsMemoryApplyResult;
+  outcome: MemoryApplyOutcome;
 };
 
 type MemoryApplyOutcome =
-  | { ok: true; result: MigrationsMemoryApplyResult }
+  | { ok: true; resultJson: string }
   | { ok: false; error: ReturnType<typeof errorShape> };
 
 type InFlightMemoryApply = {
@@ -78,7 +78,16 @@ function isCachedMemoryApply(value: unknown): value is CachedMemoryApply {
     return false;
   }
   const candidate = value as Partial<CachedMemoryApply>;
-  return typeof candidate.requestFingerprint === "string" && candidate.result !== undefined;
+  return typeof candidate.requestFingerprint === "string" && candidate.outcome !== undefined;
+}
+
+function respondMemoryApply(outcome: MemoryApplyOutcome, respond: RespondFn, cached = false): void {
+  const meta = cached ? { cached: true } : undefined;
+  if (outcome.ok) {
+    respond(true, JSON.parse(outcome.resultJson), undefined, meta);
+  } else {
+    respond(false, undefined, outcome.error, meta);
+  }
 }
 
 function toWireItem(item: MigrationItem): MemoryMigrationItem {
@@ -217,9 +226,8 @@ export const migrationsHandlers: GatewayRequestHandlers = {
     if (!agentId) {
       return;
     }
-    const providers = listMemoryMigrationProviders(config);
-    const planned = await Promise.all(
-      providers.map(
+    const resultJson = await withMemoryMigrationProviders(config, async (providers) => {
+      const planning = providers.map(
         async (provider) =>
           await planMemoryProvider({
             provider,
@@ -227,14 +235,23 @@ export const migrationsHandlers: GatewayRequestHandlers = {
             agentId,
             overwrite: params.overwrite,
           }),
-      ),
-    );
-    const result: MigrationsMemoryPlanResult = {
-      agentId,
-      workspace: resolveAgentWorkspaceDir(config, agentId),
-      providers: planned,
-    };
-    respond(true, result, undefined);
+      );
+      let planned: MemoryMigrationProviderPlan[];
+      try {
+        planned = await Promise.all(planning);
+      } catch (error) {
+        // Preserve the first whole-request rejection, but keep resources until every issued plan settles.
+        await Promise.allSettled(planning);
+        throw error;
+      }
+      const result: MigrationsMemoryPlanResult = {
+        agentId,
+        workspace: resolveAgentWorkspaceDir(config, agentId),
+        providers: planned,
+      };
+      return JSON.stringify(result);
+    });
+    respond(true, JSON.parse(resultJson), undefined);
   },
 
   "migrations.memory.apply": async ({ params, respond, context }) => {
@@ -271,16 +288,7 @@ export const migrationsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, cached.payload.result, undefined, { cached: true });
-      return;
-    }
-    const provider = findMemoryProvider(listMemoryMigrationProviders(config), params.providerId);
-    if (!provider) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "unknown memory migration provider"),
-      );
+      respondMemoryApply(cached.payload.outcome, respond, true);
       return;
     }
     const inFlightMap = memoryApplyInflightMap(context.dedupe);
@@ -294,127 +302,149 @@ export const migrationsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const outcome = await inFlight.completion;
-      if (outcome.ok) {
-        respond(true, outcome.result, undefined, { cached: true });
-      } else {
-        respond(false, undefined, outcome.error, { cached: true });
-      }
+      respondMemoryApply(await inFlight.completion, respond, true);
       return;
     }
     let settle!: (outcome: MemoryApplyOutcome) => void;
     const completion = new Promise<MemoryApplyOutcome>((resolve) => {
       settle = resolve;
     });
-    // Reserve before awaited planning/apply work. Success moves to the gateway dedupe cache;
-    // failure releases the key so the same frozen request can be retried.
+    // Reserve before acquisition. Once apply completes, even an unreadable result is terminal.
     inFlightMap.set(dedupeKey, { requestFingerprint, completion });
-    const complete = (outcome: MemoryApplyOutcome) => {
-      settle(outcome);
-      if (outcome.ok) {
-        respond(true, outcome.result, undefined);
-      } else {
-        respond(false, undefined, outcome.error);
+    let applyCompleted = false;
+    let producedOutcome: MemoryApplyOutcome | undefined;
+    let outcome: MemoryApplyOutcome;
+    const runApply = async (providers: MigrationProviderPlugin[]): Promise<MemoryApplyOutcome> => {
+      const provider = findMemoryProvider(providers, params.providerId);
+      if (!provider) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "unknown memory migration provider"),
+        };
+      }
+      const applyKey = `${agentId}:${provider.id}`;
+      if (activeApplies.has(applyKey)) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, "memory import already running", {
+            retryable: true,
+            retryAfterMs: 1000,
+          }),
+        };
+      }
+      activeApplies.add(applyKey);
+      try {
+        const { plan } = await planProviderMemoryImport({
+          provider,
+          config,
+          agentId,
+          overwrite: params.overwrite,
+        });
+        const currentFingerprint = fingerprintMemoryPlan({
+          agentId,
+          workspace: resolveAgentWorkspaceDir(config, agentId),
+          providerId: provider.id,
+          overwrite: params.overwrite,
+          plan,
+        });
+        if (currentFingerprint !== params.planFingerprint) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "memory migration plan changed; refresh the plan before importing",
+            ),
+          };
+        }
+        const selectable = new Map(
+          plan.items
+            .filter((item) => item.status === "planned" || item.status === "conflict")
+            .map((item) => [item.id, item]),
+        );
+        const unavailable = params.itemIds.filter((id) => !selectable.has(id));
+        if (unavailable.length > 0) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `memory migration items changed; refresh the plan (${unavailable.join(", ")})`,
+            ),
+          };
+        }
+        const selectedConflicts = params.itemIds.filter(
+          (id) => selectable.get(id)?.status === "conflict",
+        );
+        if (!params.overwrite && selectedConflicts.length > 0) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "selected memory was already imported; enable replacement and refresh the plan",
+            ),
+          };
+        }
+        const applied = await applyProviderMemoryImport({
+          provider,
+          config,
+          agentId,
+          itemIds: params.itemIds,
+          overwrite: params.overwrite,
+          preflightPlan: plan,
+          onApplyCompleted: () => {
+            applyCompleted = true;
+          },
+        });
+        const result: MigrationsMemoryApplyResult = {
+          providerId: applied.providerId,
+          source: applied.source,
+          ...(applied.target ? { target: applied.target } : {}),
+          summary: applied.summary,
+          items: applied.items.map(toWireItem),
+          ...(applied.warnings?.length ? { warnings: applied.warnings } : {}),
+          ...(applied.backupPath ? { backupPath: applied.backupPath } : {}),
+          ...(applied.reportDir ? { reportDir: applied.reportDir } : {}),
+        };
+        // Only the projected JSON transport result crosses the registration lifetime.
+        return { ok: true, resultJson: JSON.stringify(result) };
+      } finally {
+        activeApplies.delete(applyKey);
       }
     };
-    const applyKey = `${agentId}:${provider.id}`;
-    if (activeApplies.has(applyKey)) {
-      complete({
-        ok: false,
-        error: errorShape(ErrorCodes.UNAVAILABLE, "memory import already running", {
-          retryable: true,
-          retryAfterMs: 1000,
-        }),
-      });
-      inFlightMap.delete(dedupeKey);
-      return;
-    }
-    activeApplies.add(applyKey);
     try {
-      const { plan } = await planProviderMemoryImport({
-        provider,
-        config,
-        agentId,
-        overwrite: params.overwrite,
+      outcome = await withMemoryMigrationProviders(config, async (providers) => {
+        try {
+          producedOutcome = await runApply(providers);
+        } catch (error) {
+          producedOutcome = {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              applyCompleted
+                ? `Memory import apply completed, but its result could not be returned: ${errorMessage(error)}. Inspect the migration report before starting another import.`
+                : errorMessage(error),
+            ),
+          };
+        }
+        if (applyCompleted) {
+          context.dedupe.set(dedupeKey, {
+            ts: Date.now(),
+            ok: producedOutcome.ok,
+            payload: { requestFingerprint, outcome: producedOutcome } satisfies CachedMemoryApply,
+          });
+        }
+        return producedOutcome;
       });
-      const currentFingerprint = fingerprintMemoryPlan({
-        agentId,
-        workspace: resolveAgentWorkspaceDir(config, agentId),
-        providerId: provider.id,
-        overwrite: params.overwrite,
-        plan,
-      });
-      if (currentFingerprint !== params.planFingerprint) {
-        complete({
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "memory migration plan changed; refresh the plan before importing",
-          ),
-        });
-        return;
-      }
-      const selectable = new Map(
-        plan.items
-          .filter((item) => item.status === "planned" || item.status === "conflict")
-          .map((item) => [item.id, item]),
-      );
-      const unavailable = params.itemIds.filter((id) => !selectable.has(id));
-      if (unavailable.length > 0) {
-        complete({
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `memory migration items changed; refresh the plan (${unavailable.join(", ")})`,
-          ),
-        });
-        return;
-      }
-      const selectedConflicts = params.itemIds.filter(
-        (id) => selectable.get(id)?.status === "conflict",
-      );
-      if (!params.overwrite && selectedConflicts.length > 0) {
-        complete({
-          ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "selected memory was already imported; enable replacement and refresh the plan",
-          ),
-        });
-        return;
-      }
-      const applied = await applyProviderMemoryImport({
-        provider,
-        config,
-        agentId,
-        itemIds: params.itemIds,
-        overwrite: params.overwrite,
-        preflightPlan: plan,
-      });
-      const result: MigrationsMemoryApplyResult = {
-        providerId: applied.providerId,
-        source: applied.source,
-        ...(applied.target ? { target: applied.target } : {}),
-        summary: applied.summary,
-        items: applied.items.map(toWireItem),
-        ...(applied.warnings?.length ? { warnings: applied.warnings } : {}),
-        ...(applied.backupPath ? { backupPath: applied.backupPath } : {}),
-        ...(applied.reportDir ? { reportDir: applied.reportDir } : {}),
-      };
-      context.dedupe.set(dedupeKey, {
-        ts: Date.now(),
-        ok: true,
-        payload: { requestFingerprint, result } satisfies CachedMemoryApply,
-      });
-      complete({ ok: true, result });
     } catch (error) {
-      complete({
-        ok: false,
-        error: errorShape(ErrorCodes.UNAVAILABLE, errorMessage(error)),
-      });
+      if (producedOutcome) {
+        context.logGateway.warn(`Memory migration plugin cleanup failed: ${errorMessage(error)}`);
+        outcome = producedOutcome;
+      } else {
+        outcome = { ok: false, error: errorShape(ErrorCodes.UNAVAILABLE, errorMessage(error)) };
+      }
     } finally {
-      activeApplies.delete(applyKey);
       inFlightMap.delete(dedupeKey);
     }
+    settle(outcome);
+    respondMemoryApply(outcome, respond);
   },
 };

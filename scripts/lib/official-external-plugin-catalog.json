@@ -16,6 +16,7 @@
           "label": "ACPX Runtime"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/acpx",
           "npmSpec": "@openclaw/acpx",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
@@ -513,6 +514,7 @@
           "label": "OpenShell Sandbox"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/openshell-sandbox",
           "npmSpec": "@openclaw/openshell-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"

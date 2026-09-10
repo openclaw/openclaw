@@ -27,6 +27,7 @@ export function materializeMcpAppChannelPresentation(params: {
   const ticket = createMcpAppStandaloneTicket({
     sessionKey: params.sessionKey,
     view,
+    toolOperationsAuthorized: true,
     nowMs,
   });
   if (!ticket) {

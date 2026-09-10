@@ -127,6 +127,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       includeUntrustedWorkspacePlugins: false,
     }),
     choice: params.authChoice,
+    manifestChoice: trustedManifestMatch,
   });
   if (!providerChoice) {
     if (prefixedProviderId) {
@@ -213,6 +214,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         includeUntrustedWorkspacePlugins: false,
       }),
       choice: params.authChoice,
+      manifestChoice: installCatalogEntry,
     });
     if (!providerChoice) {
       return reject(

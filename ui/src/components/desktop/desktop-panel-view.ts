@@ -88,11 +88,23 @@ export function renderDesktopPanelHeader(options: {
 }
 
 export function renderDesktopPicker(options: {
+  automatic: boolean;
   environments: EnvironmentSummary[];
   loading: boolean;
   onConnect: (environmentId: string) => void;
   onRefresh: () => void;
 }) {
+  if (options.automatic) {
+    return html`<div class="desktop-status" role="status">
+      ${
+        options.loading
+          ? t("desktop.connecting")
+          : html`<button class="desktop-button" type="button" @click=${options.onRefresh}>
+              ${t("common.retry")}
+            </button>`
+      }
+    </div>`;
+  }
   return html`
     <div class="desktop-toolbar">
       <span>${t("desktop.pickerTitle")}</span>

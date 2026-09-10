@@ -5,6 +5,7 @@ import {
   WorkerMachineOptionsSchema,
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
@@ -12,12 +13,25 @@ import {
   type WorkerLease,
   type WorkerLeaseStatus,
   type WorkerProvider,
+  type WorkerProfile,
   type WorkerMachineOption,
   type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { normalizeWorkerDesktopEndpoint, normalizeWorkerSshEndpoint } from "./store.js";
+
+export function requireWorkerProfile(
+  value: unknown,
+  serviceError: (code: "invalid_profile", message: string) => Error,
+): WorkerProfile {
+  const error = validateCloudWorkerProfileSettings(value);
+  if (error) {
+    throw serviceError("invalid_profile", error);
+  }
+  // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
+  return value as WorkerProfile;
+}
 
 export function requireInheritedWorkerProfileAuthorization(
   profileId: string,
@@ -109,6 +123,8 @@ export function normalizeWorkerOperatingSystems(
       !Value.Check(WorkerOperatingSystemSchema, option) ||
       option.id.trim() !== option.id ||
       option.label.trim() !== option.label ||
+      (option.disabledReason !== undefined &&
+        option.disabledReason.trim() !== option.disabledReason) ||
       ids.has(option.id) ||
       (option.default === true && hasDefault)
     ) {
@@ -120,6 +136,7 @@ export function normalizeWorkerOperatingSystems(
       id: option.id,
       label: option.label,
       ...(option.default === undefined ? {} : { default: option.default }),
+      ...(option.disabledReason === undefined ? {} : { disabledReason: option.disabledReason }),
     });
   }
   return systems;
@@ -207,7 +224,7 @@ export function requireWorkerLease(value: unknown): WorkerLease {
   }
   const common = {
     leaseId: value.leaseId.trim(),
-    ...(value.sharedHost === true ? { sharedHost: true } : {}),
+    ...(value.sharedHost === undefined ? {} : { sharedHost: value.sharedHost }),
     ...(value.desktop === undefined
       ? {}
       : { desktop: normalizeWorkerDesktopEndpoint(value.desktop as WorkerDesktopEndpoint) }),

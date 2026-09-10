@@ -4,11 +4,7 @@
  * isolate built-in normalization behavior.
  */
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import {
-  findNormalizedProviderKey as findNormalizedProviderKeyCore,
-  normalizeProviderId as normalizeProviderIdCore,
-  normalizeProviderIdForAuth as normalizeProviderIdForAuthCore,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeBuiltInProviderModelId,
   normalizeConfiguredProviderCatalogModelRef,
@@ -22,6 +18,11 @@ import {
 } from "../plugins/manifest-model-id-normalization.js";
 import { modelKey } from "../shared/model-key.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
+export {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+  normalizeProviderIdForAuth,
+} from "@openclaw/model-catalog-core/provider-id";
 export { modelKey } from "../shared/model-key.js";
 
 export type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
@@ -33,24 +34,6 @@ export type ModelManifestNormalizationContext = {
 export type ProviderModelIdNormalizationOptions = ModelManifestNormalizationContext & {
   allowManifestNormalization?: boolean;
 };
-
-/** Normalize a provider ID using the shared catalog rules. */
-export function normalizeProviderId(provider: string): string {
-  return normalizeProviderIdCore(provider);
-}
-
-/** Normalize a provider ID for auth lookup. */
-export function normalizeProviderIdForAuth(provider: string): string {
-  return normalizeProviderIdForAuthCore(provider);
-}
-
-/** Find the original provider key matching a normalized provider ID. */
-export function findNormalizedProviderKey(
-  entries: Record<string, unknown> | undefined,
-  provider: string,
-): string | undefined {
-  return findNormalizedProviderKeyCore(entries, provider);
-}
 
 /** Normalize a static provider model ID with built-in and optional manifest policy. */
 export function normalizeStaticProviderModelId(

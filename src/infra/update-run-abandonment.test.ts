@@ -6,6 +6,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import {
@@ -18,6 +19,7 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
+import { loadUpdateRecovery } from "./update-run-recovery.js";
 import { ABANDONED_UPDATE_RUN_MS, UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import { runStep } from "./update-runner-command.js";
 import type { CommandRunner } from "./update-runner-types.js";
@@ -55,6 +57,38 @@ afterEach(() => {
 });
 
 describe("abandoned update runs", () => {
+  it.each(["automatic", "explicit", "supersede"] as const)(
+    "preserves a durable run and its descriptor during %s stale-run cleanup",
+    (mode) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun(
+        { trigger: "cli", origin: mode === "supersede" ? {} : { driver: exitedDriver() } },
+        options,
+      );
+      const from = {
+        root: options.env.OPENCLAW_STATE_DIR,
+        nodePath: process.execPath,
+        version: "1.0.0",
+        buildId: null,
+      };
+      // This fixture owns every writer of its disposable database; the transaction is real.
+      const recovery = createRetainedUpdateRecovery(
+        { runId: run.runId, from, to: { ...from, version: "2.0.0" } },
+        options,
+      );
+      vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+      if (mode === "supersede") {
+        createUpdateRun({ trigger: "cli", supersedeStaleIdentityless: true }, options);
+      } else {
+        expect(reconcileAbandonedUpdateRuns({ explicit: mode === "explicit" }, options)).toEqual(
+          [],
+        );
+      }
+      expect(getUpdateRun(run.runId, options)).toEqual(run);
+      expect(loadUpdateRecovery(run.runId, options)).toEqual(recovery);
+    },
+  );
+
   it("adopts without identity when process inspection is unavailable", () => {
     const options = isolatedOptions();
     const created = createUpdateRun({ trigger: "cli" }, options);
@@ -90,6 +124,8 @@ describe("abandoned update runs", () => {
         options,
       );
     }
+    inspection.mockReturnValue(Number(parent.startIdentity) + 1);
+    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 1_000);
     inspection.mockReturnValue(Number(parent.startIdentity));
     expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
@@ -168,14 +204,17 @@ describe("abandoned update runs", () => {
     expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
   });
 
-  it("preserves a recent run even when its driver exited", () => {
+  it("requires explicit recovery for a recent run whose driver exited", () => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli", origin: { driver: exitedDriver() } }, options);
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS - 1);
 
-    expect(inspectUpdateRunAbandonment(run, { explicit: true })).toBeUndefined();
-    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
+    expect(inspectUpdateRunAbandonment(run)).toBeUndefined();
+    expect(reconcileAbandonedUpdateRuns({}, options)).toEqual([]);
     expect(getUpdateRun(run.runId, options)).toEqual(run);
+    expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toMatchObject([
+      { runId: run.runId, phase: "finished", status: "failed", reason: "abandoned" },
+    ]);
   });
 
   it.each([false, true])("preserves an aged live staging driver with explicit=%s", (explicit) => {
@@ -320,12 +359,13 @@ describe("abandoned update runs", () => {
     },
   );
 
-  it("rechecks current activity when a previously stale run advanced", () => {
+  it("rechecks current ownership when a previously stale run was adopted", () => {
     const options = isolatedOptions();
     const run = createUpdateRun({ trigger: "cli", origin: { driver: exitedDriver() } }, options);
     vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 1);
     expect(inspectUpdateRunAbandonment(run)).toBe("inactive-driver-dead");
 
+    adoptUpdateRun(run.runId, options);
     const advanced = recordUpdateRunStep(
       run.runId,
       { step: "build", status: "completed", endedAtMs: Date.now() },
@@ -463,9 +503,13 @@ describe("abandoned update runs", () => {
     expect(reconcileAbandonedUpdateRuns({ explicit: true }, options)).toEqual([]);
   });
 
-  it.each(["alive", "unknown", "dead"] as const)(
-    "reconciles a dead current driver only when its previous driver is also dead (%s)",
-    (liveness) => {
+  it.each(
+    (["alive", "unknown", "dead"] as const).flatMap((liveness) =>
+      [60_000, ABANDONED_UPDATE_RUN_MS + 10].map((ageMs) => ({ liveness, ageMs })),
+    ),
+  )(
+    "reconciles only when the previous driver is also dead ($liveness, age=$ageMs)",
+    ({ liveness, ageMs }) => {
       const options = isolatedOptions();
       const previous =
         liveness === "alive"
@@ -477,7 +521,7 @@ describe("abandoned update runs", () => {
         { trigger: "cli", origin: { driver: exitedDriver(), previousDrivers: [previous] } },
         options,
       );
-      vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS + 10);
+      vi.advanceTimersByTime(ageMs);
       const reconciled = reconcileAbandonedUpdateRuns({ explicit: true }, options);
       expect(reconciled).toHaveLength(liveness === "dead" ? 1 : 0);
       expect(getUpdateRun(run.runId, options)?.status).toBe(

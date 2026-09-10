@@ -47,7 +47,13 @@ async function startBrokerServer(params: {
       connId === params.session.connId && (await (params.pairingCurrent?.() ?? true)),
   };
   const server = http.createServer();
+  const upgradedSocketsClosed: Promise<void>[] = [];
   server.on("upgrade", (req, socket, head) => {
+    upgradedSocketsClosed.push(
+      new Promise<void>((resolve) => {
+        socket.once("close", () => resolve());
+      }),
+    );
     void params.broker.handleUpgrade(req, socket, head, registry as never);
   });
   await new Promise<void>((resolve) => {
@@ -57,12 +63,13 @@ async function startBrokerServer(params: {
   if (!address || typeof address === "string") {
     throw new Error("expected broker test address");
   }
-  cleanups.push(
-    async () =>
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      }),
-  );
+  cleanups.push(async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    // HTTP close excludes upgraded sockets; their late diagnostics belong to this test.
+    await Promise.all(upgradedSocketsClosed);
+  });
   return `ws://127.0.0.1:${address.port}`;
 }
 

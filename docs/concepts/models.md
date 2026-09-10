@@ -29,7 +29,7 @@ route policy may select Codex only for an exact official HTTPS Platform
 Responses or ChatGPT Responses route with no authored request override; the
 `openai/*` prefix alone never selects Codex. Completions adapters, custom
 endpoints, and authored request behavior stay on OpenClaw. Plaintext official
-HTTP endpoints are rejected. See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+HTTP endpoints are rejected. See [OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime).
 
 Subscription Copilot refs (`github-copilot/*`) can be opted into the external
 GitHub Copilot agent runtime plugin, but that path is always explicit (never
@@ -66,7 +66,9 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
-For directly authored legacy model maps, `openclaw doctor --fix` copies the complete restriction into `modelPolicy.allow` when every ref is valid. If any ref needs provider qualification, Doctor preserves the entire legacy restriction and reports how to set an explicit policy. Until then, model-map edits still change the legacy restriction; no keys are silently dropped and no empty policy is substituted. Include-owned migrations retain the existing edit-owning-file requirement.
+Explicit `modelPolicy.allow` restrictions were introduced in v2026.8.1. For directly authored legacy model maps, `openclaw doctor --fix` copies the complete restriction into `modelPolicy.allow` when every ref is valid. If any ref needs provider qualification, Doctor preserves the entire legacy restriction and reports how to set an explicit policy. Until then, model-map edits still change the legacy restriction; no keys are silently dropped and no empty policy is substituted. Include-owned migrations retain the existing edit-owning-file requirement.
+
+<a id="selection-source-and-fallback-behavior" />
 
 ## Selection source and fallback strictness
 
@@ -91,8 +93,19 @@ configured or completed catalog. They do not start provider discovery, including
 after a restart. If the owner is not yet published, the request reports that the
 catalog is not ready. Retry after startup or an in-progress refresh finishes.
 Use an explicit Refresh action or `openclaw models list --refresh` to acquire
-provider inventory. Startup and turn-path capability preparation keep their
-separate runtime responsibilities.
+provider inventory. Model selection, subagent capability checks, and hook-model
+validation also use the published inventory. Missing capability facts do not
+start another provider discovery. Without a published owner, turn-path thinking
+and input checks leave catalog facts absent instead of loading provider plugins.
+Native runtime observations keep their separate owner and authentication requirements.
+
+Internal catalog loads default to passive reads. Without a published owner they
+use existing read-only facts. The public SDK's `loadPreparedModelCatalog` and legacy
+`loadModelCatalog` keep their writable default for compatibility and can acquire
+provider inventory. Pass `readOnly: true` for a passive SDK read. Explicit full
+refreshes keep inventory acquisition; explicit read-only requests keep their
+narrower refresh scope.
+
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication; a provider API key does not substitute for its
 native login.
@@ -292,7 +305,8 @@ Without a scope flag, selections change only the current session. `agents.defaul
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
 - `/model status` is the detailed view: auth candidates per provider, and (when configured) the provider endpoint `baseUrl` plus `api` mode.
 - Model refs are parsed by splitting on the first `/`; type `provider/model`. If the model ID itself contains `/` (OpenRouter-style), include the provider prefix, e.g. `/model openrouter/moonshotai/kimi-k2`. If you omit the provider, OpenClaw tries: (1) alias match, (2) unique configured-provider match for that exact unprefixed model id, (3) the configured default provider (deprecated fallback) — and if that provider no longer exposes the configured default model, the first configured provider/model instead, to avoid surfacing a stale removed-provider default.
-- Model refs are normalized to lowercase; provider IDs are otherwise exact, so use the ID advertised by the plugin.
+- When inferring a provider, exact model ID case takes precedence over case-insensitive matches within the same configuration scope. A case-insensitive match is used only when it identifies one provider. Per-agent model entries take precedence over global entries and configured provider catalogs.
+- Provider IDs are normalized to lowercase; model IDs follow the provider's normalization rules. Use the spelling advertised by the plugin.
 
 Full command behavior and config: [Slash commands](/tools/slash-commands).
 
@@ -379,6 +393,12 @@ values. A self-hosted mirror can be selected with an HTTPS
 
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default; set `models.mode: "replace"` to use only your configured providers.
 
+Generated plugin catalogs supply model inventory, not request credentials. Their
+cached API keys, authentication modes, and request headers do not authorize model
+requests. Use a current auth profile or authored request configuration instead.
+The session SDK preserves authored `models.json` keys and headers while merging
+generated model metadata below authored rows.
+
 <AccordionGroup>
   <Accordion title="Merge mode precedence">
     For matching provider IDs:
@@ -406,3 +426,4 @@ Marker persistence is source-authoritative: OpenClaw writes markers from the act
 - [Models CLI reference](/cli/models) — full command and flag reference
 - [Music generation](/tools/music-generation) — music model configuration
 - [Video generation](/tools/video-generation) — video model configuration
+- [`openclaw infer`](/cli/infer) — infer-first CLI for provider-backed model, media, and embedding workflows

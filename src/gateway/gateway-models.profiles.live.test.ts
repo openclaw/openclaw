@@ -6,6 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -53,7 +54,6 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   appendPrioritizedDynamicLiveModels,
   applyLiveProviderPluginDiscoveryCompat,
@@ -5704,13 +5704,15 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
     const workspaceDir = path.join(tempStateDir, "workspace-dev");
     await prepareLiveGatewayWorkspace(workspaceDir);
-    const nonceA = randomUUID();
-    const nonceB = randomUUID();
+    // Prefix the random values so provider safety heuristics do not mistake the
+    // harmless readback proof for secret material.
+    const nonceA = `tool-read-alpha-${randomUUID()}`;
+    const nonceB = `tool-read-beta-${randomUUID()}`;
     // Keep probe values out of the path: weak tool callers may echo the filename
     // instead of reading the file, turning nonceA into a false duplicate answer.
     const toolProbePath = path.join(workspaceDir, ".openclaw-live-tool-probe.txt");
     cleanupToolProbePath = toolProbePath;
-    await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
+    await fs.writeFile(toolProbePath, `testMarkerA=${nonceA}\ntestMarkerB=${nonceB}\n`);
 
     const sanitizedCfg: OpenClawConfig = {
       ...params.cfg,
@@ -5980,7 +5982,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 });
               }
 
-              // Real tool invocation: force the agent to Read a local file and echo a nonce.
+              // Real tool invocation: force the agent to read a local file and
+              // return two harmless, uniquely generated test markers.
               phase = "tool-read";
               logProgress(`${progressLabel}: tool-read`);
               const runIdTool = randomUUID();
@@ -6004,10 +6007,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     message: strictReply
                       ? "OpenClaw live tool probe (local, safe): " +
                         `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                        "Then reply with exactly the two nonce values from that file, separated by one space. No extra text."
+                        "Then reply with exactly the two test marker values from that file, separated by one space. No extra text."
                       : "OpenClaw live tool probe (local, safe): " +
                         `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                        "Then reply with the two nonce values you read (include both).",
+                        "Then reply with the two test marker values you read (include both).",
                     thinkingLevel,
                     context: `${progressLabel}: tool-read`,
                   });
@@ -6243,7 +6246,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                   sessionKey,
                   idempotencyKey: `idem-${runId2}-2`,
                   modelKey,
-                  message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
+                  message: `Now answer: what are the values of testMarkerA and testMarkerB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
                   thinkingLevel,
                   context: `${progressLabel}: tool-only-regression-second`,
                 });

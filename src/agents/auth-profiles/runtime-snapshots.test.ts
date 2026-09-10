@@ -7,6 +7,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as authProfileClone from "./clone.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   getPreparedRuntimeAuthMaterializations,
   recordRuntimeAuthMaterialization,
@@ -115,75 +116,78 @@ describe("runtime auth profile snapshots", () => {
     }
   });
 
-  it("publishes successful-auth facts without impersonating credential rotation", () => {
-    const agentDir = "/tmp/openclaw-auth-runtime-materialized";
-    const pluginStoreListener = vi.fn();
-    const materializationListener = vi.fn();
-    setRuntimeAuthProfileStoreSnapshot(createStore("materialized"), agentDir);
-    const unregisterStore = registerRuntimeAuthProfileStoreMutationListener(pluginStoreListener);
-    const unregisterMaterialization =
-      registerRuntimeAuthMaterializationMutationListener(materializationListener);
-    try {
-      const materialization = {
-        agentDir,
-        provider: "openai",
-        modelId: "gpt-5.4",
-        modelApi: "openai-chatgpt-responses",
-        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
-        requestTransportOverrides: "none",
-        authMode: "oauth",
-        runtimeOwnerId: "codex",
-        authProfileId: "openai:default",
-      } as const;
-      expect(recordRuntimeAuthMaterialization(materialization)).toBe(true);
-      expect(recordRuntimeAuthMaterialization(materialization)).toBe(false);
-      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
-        {
+  it.each(["Model", "model"])(
+    "publishes %s auth facts without impersonating credential rotation",
+    (modelId) => {
+      const agentDir = "/tmp/openclaw-auth-runtime-materialized";
+      const pluginStoreListener = vi.fn();
+      const materializationListener = vi.fn();
+      setRuntimeAuthProfileStoreSnapshot(createStore("materialized"), agentDir);
+      const unregisterStore = registerRuntimeAuthProfileStoreMutationListener(pluginStoreListener);
+      const unregisterMaterialization =
+        registerRuntimeAuthMaterializationMutationListener(materializationListener);
+      try {
+        const materialization = {
+          agentDir,
           provider: "openai",
-          modelId: "gpt-5.4",
+          modelId,
           modelApi: "openai-chatgpt-responses",
           modelBaseUrl: "https://chatgpt.com/backend-api/codex",
           requestTransportOverrides: "none",
           authMode: "oauth",
           runtimeOwnerId: "codex",
           authProfileId: "openai:default",
-        },
-      ]);
-      const sibling = { ...materialization, modelId: "gpt-5.5" };
-      const distinctOwner = { ...materialization, runtimeOwnerId: "other-harness" };
-      recordRuntimeAuthMaterialization(sibling);
-      recordRuntimeAuthMaterialization(distinctOwner);
-      expect(
-        revokeRuntimeAuthMaterializations({
-          agentDir,
-          provider: "openai",
-          runtimeOwnerId: "codex",
-        }),
-      ).toBe(true);
-      expect(
-        revokeRuntimeAuthMaterializations({
-          agentDir,
-          provider: "openai",
-          runtimeOwnerId: "codex",
-        }),
-      ).toBe(false);
-      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
-        expect.objectContaining({ runtimeOwnerId: "other-harness", modelId: "gpt-5.4" }),
-      ]);
-      expect(materializationListener).toHaveBeenCalledTimes(4);
-      expect(pluginStoreListener).not.toHaveBeenCalled();
+        } as const;
+        expect(recordRuntimeAuthMaterialization(materialization)).toBe(true);
+        expect(recordRuntimeAuthMaterialization(materialization)).toBe(false);
+        expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
+          {
+            provider: "openai",
+            modelId,
+            modelApi: "openai-chatgpt-responses",
+            modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+            requestTransportOverrides: "none",
+            authMode: "oauth",
+            runtimeOwnerId: "codex",
+            authProfileId: "openai:default",
+          },
+        ]);
+        const sibling = { ...materialization, modelId: modelId === "Model" ? "model" : "Model" };
+        const distinctOwner = { ...materialization, runtimeOwnerId: "other-harness" };
+        expect(recordRuntimeAuthMaterialization(sibling)).toBe(true);
+        recordRuntimeAuthMaterialization(distinctOwner);
+        expect(
+          revokeRuntimeAuthMaterializations({
+            agentDir,
+            provider: "openai",
+            runtimeOwnerId: "codex",
+          }),
+        ).toBe(true);
+        expect(
+          revokeRuntimeAuthMaterializations({
+            agentDir,
+            provider: "openai",
+            runtimeOwnerId: "codex",
+          }),
+        ).toBe(false);
+        expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
+          expect.objectContaining({ runtimeOwnerId: "other-harness", modelId }),
+        ]);
+        expect(materializationListener).toHaveBeenCalledTimes(4);
+        expect(pluginStoreListener).not.toHaveBeenCalled();
 
-      recordRuntimeAuthMaterialization(materialization);
+        recordRuntimeAuthMaterialization(materialization);
 
-      setRuntimeAuthProfileStoreSnapshot(createStore("replaced"), agentDir);
-      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([]);
-      expect(pluginStoreListener).toHaveBeenCalledOnce();
-    } finally {
-      unregisterMaterialization();
-      unregisterStore();
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
-  });
+        setRuntimeAuthProfileStoreSnapshot(createStore("replaced"), agentDir);
+        expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([]);
+        expect(pluginStoreListener).toHaveBeenCalledOnce();
+      } finally {
+        unregisterMaterialization();
+        unregisterStore();
+        clearRuntimeAuthProfileStoreSnapshots();
+      }
+    },
+  );
 
   it("notifies listeners only when credential ownership changes", () => {
     const agentDir = "/tmp/openclaw-auth-runtime-listener";
@@ -384,11 +388,7 @@ describe("runtime auth profile snapshots", () => {
           ...createStore("inherited"),
           profiles: {
             ...createStore("inherited").profiles,
-            "anthropic:default": {
-              type: "api_key",
-              provider: "anthropic",
-              key: "inherited-key",
-            },
+            "anthropic:default": createApiKeyCredential("anthropic", "inherited-key"),
           },
         },
         inheritedAuthDir,

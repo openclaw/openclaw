@@ -547,6 +547,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: context.agentSelection.state,
       report,
       error: null,
     } as unknown as SkillsRouteData;
@@ -611,6 +612,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: context.agentSelection.state,
       report,
       error: null,
     } as SkillsRouteData;
@@ -676,6 +678,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: harness.context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: harness.context.agentSelection.state,
       report,
       error: null,
     } as SkillsRouteData;
@@ -739,6 +742,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: context.agentSelection.state,
       report: null,
       error: null,
     };
@@ -773,6 +777,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       agents: context.agents,
       agentsList,
       selectedAgentId: "main",
+      selection: context.agentSelection.state,
       report: staleReport,
       error: null,
     } as unknown as SkillsRouteData;

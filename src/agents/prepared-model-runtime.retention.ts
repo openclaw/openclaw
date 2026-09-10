@@ -10,10 +10,13 @@ export function retirePreparedModelRuntimeOwnerIfUnused(
     (owner.provenance === "run" || owner.provenance === "ephemeral") &&
     (owner.admissionCount ?? 0) === 0 &&
     (owner.leaseCount ?? 0) === 0 &&
-    !retained &&
-    owners.get(key) === owner
+    !retained
   ) {
-    owners.delete(key);
+    if (owners.get(key) === owner) {
+      owners.delete(key);
+    }
+    owner.resourceClaim?.release();
+    owner.resourceClaim = undefined;
   }
 }
 

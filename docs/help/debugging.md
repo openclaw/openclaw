@@ -159,7 +159,20 @@ Benchmark mode suppresses sync-I/O trace spam by default. Set `OPENCLAW_TRACE_SY
 
 The tmux wrapper carries common non-secret runtime selectors into the pane, including `OPENCLAW_PROFILE`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, `OPENCLAW_GATEWAY_PORT`, and `OPENCLAW_SKIP_CHANNELS`. Put provider credentials in your normal profile/config, or use raw foreground mode for one-off ephemeral secrets.
 
-If the watched Gateway exits during startup, the watcher runs `openclaw doctor --fix --non-interactive` once and restarts the Gateway child. Set `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to see the original startup failure without the dev-only repair pass.
+If the watched Gateway returns a startup error, the watcher runs `openclaw doctor --fix --non-interactive` once and restarts the Gateway child. Set `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to see the original startup failure without the dev-only repair pass.
+
+On Unix, if a native runner is terminated by a signal, the foreground command
+preserves that signal and stops instead of running doctor or restarting. This also applies
+when a requested restart or shutdown has to kill an unresponsive runner. Its
+detached workers may still need cleanup; signal termination does not certify
+that they stopped. Ordinary returned errors, acknowledged stops, and source
+changes keep their existing recovery and rebuild behavior. Windows retains its
+existing termination and restart behavior because its signal emulation does not
+make the same distinction.
+
+The UI dev wrapper acknowledges a requested stop only after its child returns
+normally and the captured child tree has stopped. A signaled child or forced
+cleanup retains a signal outcome instead of reporting an acknowledged stop.
 
 The managed tmux pane defaults to colored Gateway logs; set `FORCE_COLOR=0` when starting `pnpm gateway:watch` to disable ANSI output.
 

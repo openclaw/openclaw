@@ -327,3 +327,9 @@ Policy and validation errors:
 | `POLICY_CHANGED`                                   | Config changed between approval and execution                                |
 | `GRANT_EXPIRED`                                    | Standing grant lapsed before execution                                       |
 | `APPROVAL_CANCELLED`                               | The run was aborted while the approval was pending                           |
+
+## Related
+
+- [Secrets management](/gateway/secrets)
+- [1Password](/gateway/1password) — the built-in `op://` secret source, and how the plugin, skill, and MCP options compare
+- [`openclaw secrets`](/cli/secrets) — store, reload, audit, configure, and apply SecretRefs from the CLI

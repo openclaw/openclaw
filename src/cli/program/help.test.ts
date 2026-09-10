@@ -1,7 +1,6 @@
 // Help tests cover command help generation and inherited help options.
 import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProgramContext } from "./context.js";
 import { configureProgramHelp } from "./help.js";
 import { OpenClawCommand } from "./openclaw-command.js";
 
@@ -44,12 +43,7 @@ vi.mock("./register.subclis.js", () => ({
   getSubCliCommandsWithSubcommands: () => ["gateway"],
 }));
 
-const testProgramContext: ProgramContext = {
-  programVersion: "9.9.9-test",
-  channelOptions: ["quietchat"],
-  messageChannelOptions: "quietchat",
-  agentChannelOptions: "last|quietchat",
-};
+const testProgramContext = { programVersion: "9.9.9-test" };
 
 describe("configureProgramHelp", () => {
   let originalArgv: string[];

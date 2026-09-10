@@ -11,6 +11,7 @@ import { reactivateCompletedSubagentSession } from "../../../gateway/session-sub
 import type { WorkerConnectionIdentity } from "../../../gateway/worker-environments/connection-identity.js";
 import { createWorkerLiveEventReceiver } from "../../../gateway/worker-environments/live-events.js";
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-environments/placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "../../../gateway/worker-environments/placement-worker-gate.js";
 import {
   emitAgentEvent,
@@ -90,6 +91,11 @@ it.each(["end", "error"] as const)(
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const placementStore = createWorkerSessionPlacementStore();
     const placementIdentity = { sessionId, sessionKey: childSessionKey, agentId: "main" };
+    seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+      environmentId: "timeout-worker",
+      sessionId,
+      ownerEpoch: 1,
+    });
     let placement = placementStore.startDispatch(placementIdentity);
     for (const transition of [
       { from: "requested", to: "provisioning", patch: { environmentId: "timeout-worker" } },

@@ -170,7 +170,7 @@ function buildCliSource(args: string[]): string {
 
 describe("agent exec built runtime", () => {
   it.skipIf(process.platform === "win32")(
-    "reclaims authentication-probe descendants when the CLI run times out",
+    "reclaims CLI transport descendants when the run times out",
     async () => {
       const root = tempDirs.make("openclaw-agent-exec-auth-timeout-");
       const binDir = path.join(root, "bin");
@@ -254,7 +254,7 @@ if (process.argv[2] === "--version") {
         expect(result.status, result.stderr).toBe(2);
         expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, status: "timeout" });
         const receipts = await readProcesses();
-        expect(receipts.map(({ phase }) => phase)).toContain("auth");
+        expect(receipts.map(({ phase }) => phase)).toContain("agent");
         await Promise.all(
           receipts.flatMap(({ pids }) => pids.map((pid) => waitForDead(pid, 5_000))),
         );

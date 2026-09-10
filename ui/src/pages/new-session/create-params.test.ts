@@ -36,7 +36,8 @@ describe("buildDraftSessionCreateParams", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
-        message: "",
+        message: `${"x".repeat(999)}🦞 longer prompt`,
+        deferInitialTurn: true,
         repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
         projectId: "old-clone",
         worktree: true,
@@ -48,6 +49,7 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({
       agentId: "main",
       message: "",
+      titleSource: "x".repeat(999),
       repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
     });
   });
@@ -65,16 +67,24 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
-  it("adds incognito only when that visibility is selected", () => {
-    expect(
-      buildDraftSessionCreateParams({
+  it.each([false, true])(
+    "keeps incognito prompts out of early naming (deferred=%s)",
+    (deferInitialTurn) => {
+      expect(
+        buildDraftSessionCreateParams({
+          agentId: "main",
+          message: "private task",
+          deferInitialTurn,
+          visibility: "incognito",
+          worktree: false,
+        }),
+      ).toEqual({
         agentId: "main",
-        message: "private task",
-        visibility: "incognito",
-        worktree: false,
-      }),
-    ).toEqual({ agentId: "main", message: "private task", incognito: true });
-  });
+        message: deferInitialTurn ? "" : "private task",
+        incognito: true,
+      });
+    },
+  );
 
   it("adds draft visibility only when selected", () => {
     expect(

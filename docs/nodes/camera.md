@@ -222,3 +222,6 @@ Requires macOS **Screen Recording** permission (TCC).
 - [Image and media support](/nodes/images)
 - [Media understanding](/nodes/media-understanding)
 - [Location command](/nodes/location-command)
+- [Computer use](/nodes/computer-use)
+- [Node troubleshooting](/nodes/troubleshooting)
+- [Nodes overview](/nodes)

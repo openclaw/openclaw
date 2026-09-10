@@ -15,16 +15,9 @@ const {
 
 installProviderHttpMockCleanup();
 
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 function mockGeneratedPngResponse() {
   postJsonRequestMock.mockResolvedValue({
-    response: jsonResponse({
+    response: Response.json({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
     }),
     release: vi.fn(async () => {}),
@@ -33,7 +26,7 @@ function mockGeneratedPngResponse() {
 
 function mockEditedPngResponse() {
   postMultipartRequestMock.mockResolvedValue({
-    response: jsonResponse({
+    response: Response.json({
       data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
     }),
     release: vi.fn(async () => {}),

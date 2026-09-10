@@ -9,7 +9,7 @@ import type { UpdateRecovery } from "./update-recovery.js";
 
 export type UpdateStepAdvisory =
   | PackageUpdateStepAdvisory
-  | { kind: "candidate-runtime-unavailable"; message: string };
+  | { kind: "candidate-runtime-unavailable" | "recoverable-maintenance"; message: string };
 
 export type UpdateStepResult = {
   name: string;
@@ -23,6 +23,8 @@ export type UpdateStepResult = {
   killed?: boolean;
   termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
   advisory?: UpdateStepAdvisory;
+  /** Complete owner-classified warnings when one step reports several outcomes. */
+  warnings?: string[];
 };
 
 export type UpdateRunResult = {

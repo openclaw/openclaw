@@ -9,6 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
 import {
   createReplyOperation,
@@ -52,7 +53,11 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -690,6 +695,53 @@ describe("prepareCliRunContext", () => {
     setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
     fixture.cleanup();
+  });
+
+  it("closes owned state handles before removing preparation directories", () => {
+    const sessions = [fixture.session, fixture.createSession()];
+    const ownedState = sessions.map(({ dir }) => ({
+      dir,
+      database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } }),
+    }));
+    const unrelatedDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-unrelated-")),
+    );
+    const unrelated = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: unrelatedDir } });
+    const removed: string[] = [];
+    const remove = fs.rmSync;
+    const removal = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      const owned = ownedState.find(({ dir }) => dir === target);
+      if (owned) {
+        // Refuse unsafe unlink on the original bug, leaving files intact for finally cleanup.
+        expect(owned.database.db.isOpen, "state handle must close before directory removal").toBe(
+          false,
+        );
+        removed.push(owned.dir);
+      }
+      remove(target, options);
+    });
+    try {
+      fixture.cleanup();
+      expect(removed).toEqual(sessions.map(({ dir }) => dir));
+      for (const { dir } of sessions) {
+        expect(fs.existsSync(dir)).toBe(false);
+      }
+      unrelated.db.exec(
+        "CREATE TEMP TABLE cleanup_probe (value INTEGER); INSERT INTO cleanup_probe VALUES (7);",
+      );
+      expect(unrelated.db.prepare("SELECT value FROM cleanup_probe").get()).toEqual({ value: 7 });
+    } finally {
+      removal.mockRestore();
+      for (const { sessionTarget } of sessions) {
+        closeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
+      }
+      for (const { database } of ownedState) {
+        closeOpenClawStateDatabaseByPath(database.path);
+      }
+      fixture.cleanup();
+      closeOpenClawStateDatabaseByPath(unrelated.path);
+      fs.rmSync(unrelatedDir, { recursive: true, force: true });
+    }
   });
 
   it.each(["process", "plugin"] as const)(
@@ -2420,11 +2472,7 @@ describe("prepareCliRunContext", () => {
         id: "msg-1",
         parentId: null,
         timestamp: new Date(1).toISOString(),
-        message: {
-          role: "user",
-          content: "prior room event",
-          timestamp: 1,
-        },
+        message: makeUserMessage("prior room event", 1),
       });
       // Room resumes carry compact event text into the CLI prompt but keep the
       // richer room context in OpenClaw history for reseed and audits.
@@ -3103,95 +3151,91 @@ describe("prepareCliRunContext", () => {
     "reuses CLI session bindings across new inbound messages with stable binding facts for $name",
     async ({ stableMode, staticPrompt, expectedStrongPrompt }) => {
       const { dir } = fixture.session;
-      try {
-        const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-          port: 31783,
-          ownerToken: "loopback-owner-token",
-          nonOwnerToken: "loopback-non-owner-token",
-        }));
-        const resolveMcpLoopbackScopedTools = vi.fn(() => ({
-          agentId: "main",
-          tools: [
-            {
-              name: "message",
-              label: "Message",
-              description: "Send a message",
-              parameters: { type: "object", properties: {} },
-              execute: vi.fn(),
-            },
-          ],
-        }));
-        setCliRunnerPrepareTestDeps({
-          getActiveMcpLoopbackRuntime,
-          resolveMcpLoopbackScopedTools,
-        });
-        const cliSessionBindingFacts = {
-          extraSystemPromptStatic: staticPrompt,
-          sourceReplyDeliveryMode: stableMode,
-        };
-        const config = createCliBackendConfig({ bundleMcp: true });
-        const first = await fixture.prepare({
-          config,
-          sessionKey: "main",
-          prompt: "first ask",
-          requireExplicitMessageTarget: true,
-          extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
-          sourceReplyDeliveryMode: "message_tool_only",
-          currentMessageId: "msg-1",
-          cliSessionBindingFacts,
-        });
-        const second = await fixture.prepare({
-          config,
-          sessionKey: "main",
-          prompt: "second ask",
-          extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
-          sourceReplyDeliveryMode: stableMode,
-          currentMessageId: "msg-2",
-          cliSessionBindingFacts,
-          cliSessionBinding: {
-            sessionId: "cli-session",
-            extraSystemPromptHash: first.extraSystemPromptHash,
-            messageToolPolicyHash: first.messageToolPolicyHash,
-            promptToolNamesHash: first.promptToolNamesHash,
-            cwdHash: hashCliSessionText(dir),
-            mcpConfigHash: first.preparedBackend.mcpConfigHash,
-            mcpResumeHash: first.preparedBackend.mcpResumeHash,
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      }));
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "message",
+            label: "Message",
+            description: "Send a message",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
           },
-        });
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        resolveMcpLoopbackScopedTools,
+      });
+      const cliSessionBindingFacts = {
+        extraSystemPromptStatic: staticPrompt,
+        sourceReplyDeliveryMode: stableMode,
+      };
+      const config = createCliBackendConfig({ bundleMcp: true });
+      const first = await fixture.prepare({
+        config,
+        sessionKey: "main",
+        prompt: "first ask",
+        requireExplicitMessageTarget: true,
+        extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentMessageId: "msg-1",
+        cliSessionBindingFacts,
+      });
+      const second = await fixture.prepare({
+        config,
+        sessionKey: "main",
+        prompt: "second ask",
+        extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
+        sourceReplyDeliveryMode: stableMode,
+        currentMessageId: "msg-2",
+        cliSessionBindingFacts,
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: first.extraSystemPromptHash,
+          messageToolPolicyHash: first.messageToolPolicyHash,
+          promptToolNamesHash: first.promptToolNamesHash,
+          cwdHash: hashCliSessionText(dir),
+          mcpConfigHash: first.preparedBackend.mcpConfigHash,
+          mcpResumeHash: first.preparedBackend.mcpResumeHash,
+        },
+      });
 
-        expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
-          1,
-          expect.objectContaining({
-            context: expect.objectContaining({ requireExplicitMessageTarget: true }),
-          }),
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          context: expect.objectContaining({ requireExplicitMessageTarget: true }),
+        }),
+      );
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          context: expect.objectContaining({ requireExplicitMessageTarget: undefined }),
+        }),
+      );
+      expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
+      expect(first.messageToolPolicyHash).toBeDefined();
+      expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+      expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
+      expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
+      if (expectedStrongPrompt) {
+        expect(first.systemPrompt).toContain(
+          "Current source visible reply MUST use `message(action=send)`",
         );
-        expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
-          2,
-          expect.objectContaining({
-            context: expect.objectContaining({ requireExplicitMessageTarget: undefined }),
-          }),
+      } else {
+        expect(first.systemPrompt).toContain(
+          "Current-session final text normally routes to source",
         );
-        expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
-        expect(first.messageToolPolicyHash).toBeDefined();
-        expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
-        expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
-        expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
-        if (expectedStrongPrompt) {
-          expect(first.systemPrompt).toContain(
-            "Current source visible reply MUST use `message(action=send)`",
-          );
-        } else {
-          expect(first.systemPrompt).toContain(
-            "Current-session final text normally routes to source",
-          );
-          expect(first.systemPrompt).toContain(
-            "If turn says final private, visible output uses `message(action=send)`",
-          );
-        }
-        expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
+        expect(first.systemPrompt).toContain(
+          "If turn says final private, visible output uses `message(action=send)`",
+        );
       }
+      expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
     },
   );
 
@@ -3384,11 +3428,7 @@ describe("prepareCliRunContext", () => {
         id: "msg-1",
         parentId: null,
         timestamp: new Date(1).toISOString(),
-        message: {
-          role: "user",
-          content: "prior no-compaction ask",
-          timestamp: 1,
-        },
+        message: makeUserMessage("prior no-compaction ask", 1),
       });
 
       const context = await prepare({
@@ -3420,11 +3460,7 @@ describe("prepareCliRunContext", () => {
         id: "msg-1",
         parentId: null,
         timestamp: new Date(1).toISOString(),
-        message: {
-          role: "user",
-          content: "prior resumable ask",
-          timestamp: 1,
-        },
+        message: makeUserMessage("prior resumable ask", 1),
       });
 
       const context = await prepare({
@@ -5690,11 +5726,7 @@ describe("prepareCliRunContext", () => {
           id: "msg-1",
           parentId: null,
           timestamp: recoveredAt,
-          message: {
-            role: "user",
-            content: "prior claude-cli ask",
-            timestamp: 1,
-          },
+          message: makeUserMessage("prior claude-cli ask", 1),
         });
         fixture.appendTranscript({
           id: "result-1",
@@ -5870,11 +5902,7 @@ describe("prepareCliRunContext", () => {
         id: "msg-warm-1",
         parentId: null,
         timestamp: new Date(1).toISOString(),
-        message: {
-          role: "user",
-          content: "earlier warm context",
-          timestamp: 1,
-        },
+        message: makeUserMessage("earlier warm context", 1),
       });
       setCliBackendForPrepareTest({
         liveSession: true,
@@ -6272,11 +6300,7 @@ describe("prepareCliRunContext", () => {
     const { dir, sessionTarget } = fixture.session;
     const durable = SessionManager.open(sessionTarget, dir);
     durable.appendMessage({ role: "user", content: "BORROWED_PREFIX", timestamp: 1 });
-    const retained = durable.appendMessage({
-      role: "user",
-      content: "BORROWED_RETAINED",
-      timestamp: 2,
-    });
+    const retained = durable.appendMessage(makeUserMessage("BORROWED_RETAINED", 2));
     durable.appendCompaction("BORROWED_SUMMARY", retained, 1000);
     durable.appendMessage({ role: "user", content: "BORROWED_TAIL", timestamp: 3 });
     durable.flushPendingPersistence();
@@ -6351,11 +6375,7 @@ describe("prepareCliRunContext", () => {
           ? { ...fixtureTarget, storePath: path.join(dir, "absent", "openclaw-agent.sqlite") }
           : fixtureTarget;
       const durable = SessionManager.open(fixtureTarget, dir);
-      const retained = durable.appendMessage({
-        role: "user",
-        content: "BORROWED_RETAINED",
-        timestamp: 1,
-      });
+      const retained = durable.appendMessage(makeUserMessage("BORROWED_RETAINED", 1));
       durable.appendCompaction("BORROWED_SUMMARY", retained, 1000);
       durable.appendMessage({ role: "user", content: "BORROWED_TAIL", timestamp: 2 });
       durable.flushPendingPersistence();
@@ -6363,11 +6383,7 @@ describe("prepareCliRunContext", () => {
       const entryBefore = loadSessionEntryReadOnly(fixtureTarget);
       const sessionManager = SessionManager.inMemory(dir);
       if (scenario === "raw" || scenario === "compacted") {
-        const kept = sessionManager.appendMessage({
-          role: "user",
-          content: "OWNED_RETAINED",
-          timestamp: 1,
-        });
+        const kept = sessionManager.appendMessage(makeUserMessage("OWNED_RETAINED", 1));
         if (scenario === "compacted") {
           sessionManager.appendCompaction("OWNED_SUMMARY", kept, 1000);
         }
@@ -6648,11 +6664,7 @@ describe("prepareCliRunContext", () => {
         setCliBackendForPrepareTest({ modelAliases: testCase.modelAliases });
       }
       const manager = SessionManager.open(sessionTarget, dir);
-      const firstKeptEntryId = manager.appendMessage({
-        role: "user",
-        content: "RESEED_RETAINED_PREFIX",
-        timestamp: 1,
-      });
+      const firstKeptEntryId = manager.appendMessage(makeUserMessage("RESEED_RETAINED_PREFIX", 1));
       manager.appendCompaction(
         `${testCase.marker} ${"x".repeat(testCase.padding)}`,
         firstKeptEntryId,

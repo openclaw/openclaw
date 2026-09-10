@@ -137,6 +137,7 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
         scopeKey: "",
         cleanupSource: "remove",
         cleanupWhenEmpty: true,
+        cleanupWarningDisposition: "recoverable",
         // Rebuildable cache: discard file-era hashes and reconcile once against Discord.
         readEntries: () => [],
       });

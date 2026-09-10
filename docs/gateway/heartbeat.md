@@ -343,21 +343,32 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
 
 By default, quiet heartbeat acknowledgments are suppressed while alert content is delivered. You can adjust this per channel or per account:
 
-```yaml
-channels:
-  defaults:
-    heartbeatVisibility:
-      showOk: false # Hide HEARTBEAT_OK (default)
-      showAlerts: true # Show alert messages (default)
-      useIndicator: true # Emit indicator events (default)
-  telegram:
-    heartbeatVisibility:
-      showOk: true # Show OK acknowledgments on Telegram
-  whatsapp:
-    accounts:
-      work:
-        heartbeatVisibility:
-          showAlerts: false # Suppress alert delivery for this account
+```json5
+{
+  channels: {
+    defaults: {
+      heartbeatVisibility: {
+        showOk: false, // Hide HEARTBEAT_OK (default)
+        showAlerts: true, // Show alert messages (default)
+        useIndicator: true, // Emit indicator events (default)
+      },
+    },
+    telegram: {
+      heartbeatVisibility: {
+        showOk: true, // Show OK acknowledgments on Telegram
+      },
+    },
+    whatsapp: {
+      accounts: {
+        work: {
+          heartbeatVisibility: {
+            showAlerts: false, // Suppress alert delivery for this account
+          },
+        },
+      },
+    },
+  },
+}
 ```
 
 Precedence: per-account → per-channel → channel defaults → built-in defaults.
@@ -372,23 +383,35 @@ If **all three** are false, OpenClaw skips the heartbeat run entirely (no model 
 
 ### Per-channel vs per-account examples
 
-```yaml
-channels:
-  defaults:
-    heartbeatVisibility:
-      showOk: false
-      showAlerts: true
-      useIndicator: true
-  slack:
-    heartbeatVisibility:
-      showOk: true # all Slack accounts
-    accounts:
-      ops:
-        heartbeatVisibility:
-          showAlerts: false # suppress alerts for the ops account only
-  telegram:
-    heartbeatVisibility:
-      showOk: true
+```json5
+{
+  channels: {
+    defaults: {
+      heartbeatVisibility: {
+        showOk: false,
+        showAlerts: true,
+        useIndicator: true,
+      },
+    },
+    slack: {
+      heartbeatVisibility: {
+        showOk: true, // all Slack accounts
+      },
+      accounts: {
+        ops: {
+          heartbeatVisibility: {
+            showAlerts: false, // suppress alerts for the ops account only
+          },
+        },
+      },
+    },
+    telegram: {
+      heartbeatVisibility: {
+        showOk: true,
+      },
+    },
+  },
+}
 ```
 
 ### Common patterns

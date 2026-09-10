@@ -34,12 +34,6 @@ import {
   type AgentsState,
 } from "../../lib/agents/index.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
-import {
-  loadChatMetadata,
-  peekChatMetadata,
-  revalidateChatMetadata,
-  subscribeChatMetadata,
-} from "../../lib/chat/chat-metadata-store.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
   createInitialCronState,
@@ -56,11 +50,22 @@ import {
   type GatewayMethodOperatorScope,
 } from "../../lib/gateway-methods.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import {
+  loadModelCatalog,
+  modelCatalogRefreshError,
+  subscribeModelCatalogChanges,
+} from "../../lib/model-catalog-store.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { loadAgentFileContent, saveAgentFile } from "./files.ts";
+import {
+  loadAgentFileContent,
+  overwriteAgentFile,
+  reloadAgentFile,
+  resetAgentFile,
+  saveAgentFile,
+} from "./files.ts";
 import {
   resetIdentityDraft,
   saveIdentityDraft,
@@ -107,10 +112,14 @@ class AgentsPage
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatModelCatalogStatus = createPanelRefreshStatus();
   private chatModelCatalogPending: Promise<unknown> | null = null;
+  private chatModelCatalogRequest: AbortController | null = null;
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
   @state() agentFileContents: Record<string, string> = {};
+  @state() agentFileBaseHashes: Record<string, string> = {};
+  @state() agentFileHashes: Record<string, string> = {};
+  @state() agentFileConflict: string | null = null;
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
@@ -600,6 +609,8 @@ class AgentsPage
   }
 
   private resetModelCatalog() {
+    this.chatModelCatalogRequest?.abort();
+    this.chatModelCatalogRequest = null;
     this.chatModelCatalogSubscription?.unsubscribe();
     this.chatModelCatalogSubscription = null;
     this.chatModelCatalog = [];
@@ -623,36 +634,17 @@ class AgentsPage
           this.chatModelCatalogSubscription === subscription &&
           this.context?.gateway === gateway &&
           this.isCurrentRequest(client, generation, agentId, { agents }),
-        unsubscribe: subscribeChatMetadata(client, { agentId }, (update) => {
+        unsubscribe: subscribeModelCatalogChanges(this.context.gateway, () => {
           if (!subscription.isCurrent()) {
             return;
           }
-          if (update.type === "invalidated") {
-            this.chatModelCatalogPending = null;
-            this.ensureModelCatalog({ refresh: true });
-          } else if (update.type === "error") {
-            this.chatModelCatalogStatus = failPanelRefresh(
-              this.chatModelCatalogStatus,
-              update.error,
-              this.gateway.snapshot,
-            );
-          } else {
-            this.chatModelCatalogStatus =
-              update.type === "loading"
-                ? beginPanelRefresh(this.chatModelCatalogStatus)
-                : completePanelRefresh();
-            if (update.type === "result") {
-              this.chatModelCatalog = update.result.models ?? [];
-            }
-          }
+          this.chatModelCatalogRequest?.abort();
+          this.chatModelCatalogRequest = null;
+          this.chatModelCatalogPending = null;
+          this.ensureModelCatalog({ refresh: true });
         }),
       };
       this.chatModelCatalogSubscription = subscription;
-      const cached = peekChatMetadata(client, { agentId });
-      if (cached) {
-        this.chatModelCatalog = cached.models ?? [];
-        this.chatModelCatalogStatus = completePanelRefresh();
-      }
     }
     if (
       this.chatModelCatalogPending ||
@@ -660,16 +652,38 @@ class AgentsPage
     ) {
       return;
     }
-    // The store owns current publications and pending reads. A superseded promise
-    // must not overwrite its newer result or erase retained choices on failure.
-    const metadataRequest = options.refresh
-      ? revalidateChatMetadata(client, { agentId })
-      : loadChatMetadata(client, { agentId });
-    const pending = metadataRequest
-      .catch(() => undefined)
+    const subscription = this.chatModelCatalogSubscription;
+    const controller = new AbortController();
+    this.chatModelCatalogRequest = controller;
+    const ownsRequest = () =>
+      subscription?.isCurrent() && this.chatModelCatalogRequest === controller;
+    this.chatModelCatalogStatus = beginPanelRefresh(this.chatModelCatalogStatus);
+    const pending = loadModelCatalog(client, { agentId, signal: controller.signal })
+      .then(
+        (result) => {
+          if (!ownsRequest()) {
+            return;
+          }
+          this.chatModelCatalog = result.models;
+          const error = modelCatalogRefreshError(result);
+          this.chatModelCatalogStatus = error
+            ? failPanelRefresh(completePanelRefresh(), new Error(error), this.gateway.snapshot)
+            : completePanelRefresh();
+        },
+        (error: unknown) => {
+          if (ownsRequest()) {
+            this.chatModelCatalogStatus = failPanelRefresh(
+              this.chatModelCatalogStatus,
+              error,
+              this.gateway.snapshot,
+            );
+          }
+        },
+      )
       .finally(() => {
         if (this.chatModelCatalogPending === pending) {
           this.chatModelCatalogPending = null;
+          this.chatModelCatalogRequest = null;
         }
       });
     this.chatModelCatalogPending = pending;
@@ -781,6 +795,9 @@ class AgentsPage
     this.agentFilesError = null;
     this.agentFileActive = null;
     this.agentFileContents = {};
+    this.agentFileBaseHashes = {};
+    this.agentFileHashes = {};
+    this.agentFileConflict = null;
     this.agentFileDrafts = {};
     this.agentFileWriteRevisions.clear();
     this.agentFilesLoading = false;
@@ -899,6 +916,13 @@ class AgentsPage
     void saveAgentFile(this, agentId, name, content);
   }
 
+  private overwriteSelectedAgentFile(agentId: string, name: string, content: string) {
+    if (!this.canCall("agents.files.set", "operator.admin")) {
+      return;
+    }
+    void overwriteAgentFile(this, agentId, name, content);
+  }
+
   private reloadConfig() {
     void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
   }
@@ -1007,6 +1031,7 @@ class AgentsPage
               contents: this.agentFileContents,
               drafts: this.agentFileDrafts,
               saving: this.agentFileSaving,
+              conflict: this.agentFileConflict,
             },
             agentIdentityLoading: this.agentIdentityLoading,
             agentIdentityError: this.agentIdentityError,
@@ -1062,14 +1087,25 @@ class AgentsPage
               this.agentFileDrafts = { ...this.agentFileDrafts, [name]: content };
             },
             onFileReset: (name) => {
-              this.agentFileDrafts = {
-                ...this.agentFileDrafts,
-                [name]: this.agentFileContents[name] ?? "",
-              };
+              resetAgentFile(this, name);
             },
             onFileSave: (name) => {
               if (selectedAgentId) {
                 this.saveSelectedAgentFile(
+                  selectedAgentId,
+                  name,
+                  this.agentFileDrafts[name] ?? this.agentFileContents[name] ?? "",
+                );
+              }
+            },
+            onFileReload: (name) => {
+              if (selectedAgentId) {
+                void reloadAgentFile(this, selectedAgentId, name);
+              }
+            },
+            onFileOverwrite: (name) => {
+              if (selectedAgentId) {
+                this.overwriteSelectedAgentFile(
                   selectedAgentId,
                   name,
                   this.agentFileDrafts[name] ?? this.agentFileContents[name] ?? "",

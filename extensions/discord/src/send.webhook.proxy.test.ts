@@ -1,6 +1,7 @@
 // Discord tests cover send.webhook.proxy plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { DiscordError, RateLimitError } from "./internal/rest-errors.js";
 import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
@@ -14,28 +15,6 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
     makeProxyFetch: makeProxyFetchMock,
   };
 });
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
 
 describe("sendWebhookMessageDiscord proxy support", () => {
   beforeEach(() => {
@@ -203,7 +182,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
   });
 
   it("keeps a successful send when the webhook response body exceeds the limit", async () => {
-    const tracked = cancelTrackedResponse(`{"id":"${"x".repeat(16 * 1024 * 1024)}"}`, {
+    const tracked = cancelTrackedTextResponse(`{"id":"${"x".repeat(16 * 1024 * 1024)}"}`, {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -412,7 +391,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
   });
 
   it("bounds webhook error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"upstream unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"upstream unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "content-type": "text/plain" },
     });

@@ -115,26 +115,7 @@ describe("provider prompt state", () => {
       const rawPayload = { input: "raw", model: model.id };
       const replacement = await options?.onPayload?.(rawPayload, model);
       sentPayloads.push(replacement === undefined ? rawPayload : replacement);
-      const stream = createAssistantMessageEventStream();
-      stream.end({
-        role: "assistant",
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "error",
-        errorMessage: "context length exceeded",
-        timestamp: 1,
-      });
-      return stream;
+      return createResultStream("error");
     });
     const finalPayload = { input: "final", model: model.id };
     const wrapped = wrapStreamFnWithProviderPromptState({

@@ -27,6 +27,22 @@ export default definePluginEntry({
         ],
       },
     );
+    api.registerGatewayMethod(
+      "crabbox.images.list",
+      async (request) => {
+        const { listCrabboxImages } = await import("./src/crabbox-gateway-methods.js");
+        listCrabboxImages(api, request);
+      },
+      { scope: "operator.admin" },
+    );
+    api.registerGatewayMethod(
+      "crabbox.images.recover",
+      async (request) => {
+        const { recoverCrabboxImage } = await import("./src/crabbox-gateway-methods.js");
+        recoverCrabboxImage(request);
+      },
+      { scope: "operator.admin" },
+    );
     const provider = createCrabboxWorkerProvider({
       openclawRoot: resolveOpenClawRoot(api.rootDir),
       wallpaperPath: workerWallpaperPath,

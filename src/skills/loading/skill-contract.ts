@@ -42,26 +42,6 @@ export function decodeSkillXml(value: string): string {
 }
 
 export const COMPACT_DESCRIPTION_MAX_CHARS = 220;
-const SKILL_FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u;
-const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/mu;
-
-function humanizeSkillIdentifier(value: string): string {
-  return value
-    .trim()
-    .split(/[-_]+/u)
-    .filter(Boolean)
-    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
-    .join(" ");
-}
-
-export function resolveSkillDisplayName(content: string, fallbackName: string): string {
-  const body = content.replace(SKILL_FRONTMATTER_BLOCK, "");
-  const heading = body.match(SKILL_TITLE_HEADING)?.[1]?.trim();
-  const displayName = heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
-  // A captured heading can retain the whole skill body in metadata caches.
-  // Copy UTF-16 code units without changing lone surrogates.
-  return Buffer.from(displayName, "utf16le").toString("utf16le");
-}
 
 function truncateSkillDescription(description: string, maxChars: number): string {
   const normalized = description.replace(/\s+/g, " ").trim();

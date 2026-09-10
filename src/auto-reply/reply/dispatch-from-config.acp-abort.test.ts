@@ -31,6 +31,7 @@ import {
   sessionStoreMocks,
   setDiscordTestRegistry,
 } from "./dispatch-from-config.shared.test-harness.js";
+import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -452,10 +453,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(tailAbortSignal).toBeDefined();
       expect(replyRunRegistry.abort("agent:tail-abort")).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get("agent:tail-abort")).toBe(operation);
       expect(operation?.abortSignal.aborted).toBe(true);
       expect(tailAbortSignal?.aborted).toBe(true);
@@ -528,10 +526,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(operation?.ownerSettlement).toBeDefined();
       expect(replyRunRegistry.abort("agent:reply-dispatch-abort")).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get("agent:reply-dispatch-abort")).toBe(operation);
       expect(operation?.abortSignal.aborted).toBe(true);
       expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
@@ -665,10 +660,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(replyRunRegistry.abort(boundAcpSessionKey)).toBe(false);
       expect(replyRunRegistry.abort(sourceSessionKey)).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get(sourceSessionKey)).toBe(operation);
       expect(replyRunRegistry.get(boundAcpSessionKey)).toBeUndefined();
       expect(operation?.abortSignal.aborted).toBe(true);
@@ -724,10 +716,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(operation?.ownerSettlement).toBeDefined();
       expect(replyRunRegistry.abort("agent:pre-dispatch-abort")).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get("agent:pre-dispatch-abort")).toBe(operation);
       expect(operation?.abortSignal.aborted).toBe(true);
       expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
@@ -787,10 +776,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(operation?.ownerSettlement).toBeDefined();
       expect(replyRunRegistry.abort("agent:diagnostics-disabled-abort")).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get("agent:diagnostics-disabled-abort")).toBe(operation);
       expect(operation?.abortSignal.aborted).toBe(true);
       expect(diagnosticMocks.logMessageProcessed).not.toHaveBeenCalled();
@@ -904,10 +890,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       replyResolver: vi.fn(),
     });
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
@@ -995,10 +978,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(existingOperation.abortSignal.aborted).toBe(true);
     expect(hookAbortSignal?.aborted).toBe(true);
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
 
     releaseHook();
@@ -1040,10 +1020,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     expect(replyRunRegistry.abort("agent:already-active-resolver")).toBe(true);
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -1081,10 +1058,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
 
     callerAbort.abort();
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(existingOperation.result).toBeNull();
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -1130,10 +1104,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     await resolverStartedPromise;
     expect(replyRunRegistry.abort("agent:resolver-abort")).toBe(true);
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
 
     releaseResolver();
@@ -1186,10 +1157,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     await resolverStartedPromise;
     expect(replyRunRegistry.abort("agent:resolver-abort-error")).toBe(true);
 
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({
         outcome: "skipped",
@@ -1257,10 +1225,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       expect(replyRunRegistry.abort(targetSessionKey)).toBe(false);
       expect(replyRunRegistry.abort(sourceSessionKey)).toBe(true);
 
-      await expect(dispatchPromise).resolves.toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
       expect(replyRunRegistry.get(sourceSessionKey)).toBe(operation);
       expect(replyRunRegistry.get(targetSessionKey)).toBeUndefined();
       expect(operation?.abortSignal.aborted).toBe(true);

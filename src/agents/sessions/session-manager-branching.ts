@@ -158,7 +158,8 @@ export class SessionManagerBranching extends SessionManagerEntries {
       this.sessionId = newSessionId;
       this.buildIndex();
       this.persistenceTarget = target;
-      this.transcriptVersion = version;
+      this.transcriptVersion = target ? version : undefined;
+      this.transcriptMutationAt = target ? version?.updatedAt : undefined;
       this.persistenceHeaderPending = false;
     };
     if (persistenceTarget) {

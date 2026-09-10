@@ -46,6 +46,47 @@ describe("diagnostic support export", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it.each(["current", "other-state alias"])(
+    "excludes %s capture files selected as config, logs, or a stability bundle",
+    async (owner) => {
+      const stateDir = path.join(tempDir, "state");
+      let capture = `${stateDir}.update-captures`;
+      if (owner !== "current") {
+        const otherState = path.join(tempDir, "other-state");
+        fs.mkdirSync(otherState);
+        capture = `${otherState}.update-captures`;
+      }
+      fs.mkdirSync(capture);
+      if (owner !== "current") {
+        const alias = path.join(tempDir, "capture-alias");
+        fs.symlinkSync(capture, alias, process.platform === "win32" ? "junction" : "dir");
+        capture = alias;
+      }
+      const privatePath = path.join(capture, "private.json");
+      const marker = "synthetic-retained-record-not-for-support";
+      fs.writeFileSync(privatePath, JSON.stringify({ agents: { entries: { [marker]: {} } } }));
+      const outputPath = path.join(tempDir, "support.zip");
+      await writeDiagnosticSupportExport({
+        stateDir,
+        env: { OPENCLAW_CONFIG_PATH: privatePath },
+        outputPath,
+        stabilityBundle: privatePath,
+        readLogTail: async () => ({
+          file: privatePath,
+          cursor: 1,
+          size: 1,
+          lines: [JSON.stringify({ msg: marker })],
+          truncated: false,
+          reset: false,
+        }),
+      });
+      const files = await readZipTextEntries(outputPath);
+      expect(Object.values(files).join("\n")).not.toContain(marker);
+      expect(Object.values(files).join("\n")).toContain("Private update captures are excluded");
+      expect(fs.readFileSync(privatePath, "utf8")).toContain(marker);
+    },
+  );
+
   it("writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
     const fakeAwsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");

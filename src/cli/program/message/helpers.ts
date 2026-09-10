@@ -9,6 +9,7 @@ import {
   type ChannelMessageActionName,
 } from "../../../channels/plugins/types.public.js";
 import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
+import { parseAccountSelector } from "../../../commands/channels/account-selector.js";
 import { messageCommand } from "../../../commands/message.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
@@ -150,7 +151,7 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
     withMessageBase: (command) =>
       command
         .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
-        .option("--account <id>", "Channel account id (accountId)")
+        .option("--account <id>", "Channel account id (accountId)", parseAccountSelector)
         .option("--json", "Output result as JSON", false)
         .option("--dry-run", "Print payload and skip sending", false)
         .option("--verbose", "Verbose logging", false),

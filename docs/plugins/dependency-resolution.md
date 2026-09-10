@@ -258,6 +258,9 @@ node scripts/lib/plugin-npm-runtime-build.mjs --prepare-native-import extensions
 This requires existing root SDK output in `dist/plugin-sdk` and the selected
 package's standalone runtime output. If the package output is missing, build
 it first with `node scripts/lib/plugin-npm-runtime-build.mjs extensions/<package>`.
+The standalone build runs the selected package's asset build command and copies
+its declared `openclaw.build.staticAssets` into `dist`, including for new packages
+that are not yet tracked by Git. Missing declared source files fail the build.
 The preparation command does not rebuild either output or execute plugin code.
 It only links the checkout as `node_modules/openclaw` for a real immediate
 source package that declares `openclaw` in `peerDependencies` or `dependencies`.
@@ -282,8 +285,9 @@ absent from the packaged inventory, and empty `dist` directories.
 `plugin-runtime-deps` only when the alias itself is genuinely dangling. Live
 aliases are preserved. Neither Doctor nor postinstall deletes shared
 `plugin-runtime-deps` roots or mirrors, which may still serve another
-installation or profile. The deprecated `core/doctor/legacy-plugin-dependencies`
-selector is informational only; it no longer scans shared roots for removal.
+installation or profile. Since 2026.9.2 the deprecated
+`core/doctor/legacy-plugin-dependencies` selector is informational only; it no
+longer scans shared roots for removal.
 
 Older npm installs also used a shared `~/.openclaw/npm/node_modules` root.
 Current install, update, uninstall, and doctor flows still recognize that

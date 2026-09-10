@@ -119,7 +119,7 @@ class EventRecorder:
             "isOutgoing": bool(message.get("is_outgoing")),
             **self._reply_fields(message),
         }
-        self.messages[message_id] = message
+        self.messages[message_id] = dict(message)
 
     def _known_message_fields(self, message_id):
         return self.message_fields.get(message_id, {})
@@ -166,6 +166,8 @@ class EventRecorder:
         elif kind == "updateMessageContent":
             content = update.get("new_content") or {}
             message_id = update.get("message_id")
+            if message_id in self.messages:
+                self.messages[message_id]["content"] = content
             text = content_text(content)
             rich_message = content.get("message") if content.get("@type") == "messageRichMessage" else None
             yield (

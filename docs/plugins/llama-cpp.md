@@ -29,7 +29,7 @@ openclaw onboard
 `models.providers.llama-cpp.localService` is the ownership discriminator. If
 it exists, OpenClaw manages the process. Without it, `baseUrl` identifies an
 existing endpoint. Switching choices rewrites ownership-specific state on the
-same provider; it never creates another provider namespace.
+same provider. It never creates another provider namespace.
 
 ## Managed local server
 
@@ -45,13 +45,13 @@ prepares a loopback endpoint, and checks inference before saving the new
 default. Guided activation also asks the model to read a temporary file through
 an OpenClaw tool and return its contents. The tool check uses an isolated
 workspace without your agent's bootstrap instructions. A plain text reply alone
-does not pass that check. Each verification check has a 90-second deadline;
-changing `agents.defaults.timeoutSeconds` does not extend setup verification.
+does not pass that check. Each verification check has a 90-second deadline.
+Changing `agents.defaults.timeoutSeconds` does not extend setup verification.
 Failures identify whether the response check or tool-use check timed out.
 
 Managed local models automatically use structured [Tool Search](/tools/tool-search)
-unless you have explicitly configured it. Optional capabilities remain available;
-their schemas load as needed, reducing the input the model must process before
+unless you have explicitly configured it. Optional capabilities remain available.
+Their schemas load as needed, reducing the input the model must process before
 replying. Setup does not enable lean mode. Normal chats still
 include your agent's instructions. On CPU-only hosts, the first reply can take
 several minutes even after setup verification succeeds.
@@ -84,7 +84,7 @@ configurations and cached custom models remain supported.
 
 The chat download also includes your configured local embedding model, or
 EmbeddingGemma by default (about 0.3 GB). Leave additional disk space for the
-runtime and download staging; setup checks this before offering a new model.
+runtime and download staging. Setup checks this before offering a new model.
 When the cache and runtime use independent volumes, setup checks each volume's
 free space separately. Shared storage pools and volumes whose independence cannot
 be established use a combined reserve.
@@ -157,7 +157,7 @@ Add a model under `models.providers.llama-cpp.models`, select its
 
 `modelPath` accepts local paths, cache-relative filenames, full `hf:` file
 URIs, and HTTPS GGUF URLs that publish a SHA-256 response digest. The default
-cache is `~/.openclaw/models/llama.cpp`; a configured `modelCacheDir` remains
+cache is `~/.openclaw/models/llama.cpp`. A configured `modelCacheDir` remains
 authoritative for managed setup.
 
 ## Existing llama-server
@@ -193,14 +193,14 @@ manager, or machine owns the process.
 </Steps>
 
 OpenClaw reads `/health`, `/models` (falling back to `/v1/models`), and
-`/props`. Router property probes use `autoload=false`; discovery never loads,
+`/props`. Router property probes use `autoload=false`. Discovery never loads,
 wakes, unloads, downloads, or reloads models. Explicit configured model rows
 remain authoritative over discovered rows with the same ID.
 
 Refreshing a configured external server reports authentication rejection or
 unavailability when discovery fails. Previously discovered models remain visible
 only while their endpoint and credentials are unchanged. A successful empty list
-removes discovered rows; explicit configured models remain. Restore the server or
+removes discovered rows. Explicit configured models remain. Restore the server or
 correct its credentials, then refresh again to recover the live inventory.
 
 ### Authentication and endpoint replacement
@@ -260,7 +260,7 @@ shape is:
 
 Custom provider IDs may also point at llama-server through the generic
 OpenAI-compatible path. They remain custom providers and should declare the
-`llamacpp` tool-schema profile explicitly; see [custom provider capability
+`llamacpp` tool-schema profile explicitly. See [custom provider capability
 declarations](/gateway/config-tools#custom-provider-capability-declarations).
 
 ## Requests and local embeddings
@@ -292,7 +292,7 @@ embedding model.
 ## Troubleshooting
 
 - Managed setup: run `openclaw doctor` and `openclaw memory status --deep`.
-- Existing server: inspect `/health`, `/models`, and `/props`; HTTP 503 means
+- Existing server: inspect `/health`, `/models`, and `/props`. HTTP 503 means
   the model is still loading.
 - Missing tools: verify both tool capability flags in `/props` and use a
   tool-capable Jinja chat template.
@@ -310,3 +310,4 @@ OpenClaw does not auto-select ROCm, SYCL, OpenVINO, or Vulkan archives.
 - [Local model services](/gateway/local-model-services)
 - [Model providers](/concepts/model-providers)
 - [LM Studio](/providers/lmstudio)
+- [Llama Cpp plugin reference](/plugins/reference/llama-cpp) — manifest and config reference for the managed and external llama.cpp servers

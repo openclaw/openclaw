@@ -4,9 +4,11 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -20,8 +22,11 @@ import type {
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
+import { hasUsableCustomProviderApiKey } from "../model-auth-provider-config.js";
 import { parseModelCatalogJson } from "../model-catalog-json.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
+import { mergeProviderModels } from "../models-config.merge.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
@@ -215,6 +220,12 @@ const validateModelsConfig = Compile(ModelsConfigSchema);
 
 type ModelsConfig = Static<typeof ModelsConfigSchema>;
 type MaxTokensSource = "configured" | "discovered";
+type RegistryProviderSources = Record<
+  string,
+  Omit<ModelsConfig["providers"][string], "models"> & {
+    models?: Array<Static<typeof ModelDefinitionSchema> & { maxTokensSource?: MaxTokensSource }>;
+  }
+>;
 
 function formatValidationPath(error: TLocalizedValidationError): string {
   if (error.keyword === "required") {
@@ -231,6 +242,7 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 }
 
 interface ProviderRequestConfig {
+  baseUrls?: readonly string[];
   apiKey?: string;
   auth?: ProviderAuthMode;
   headers?: Record<string, string>;
@@ -250,15 +262,16 @@ export type ResolvedRequestAuth =
 
 /** Result of loading custom models from models.json */
 interface CustomModelsResult {
-  models: Model[];
+  providers: RegistryProviderSources;
   error: string | undefined;
 }
 
 function emptyCustomModelsResult(error?: string): CustomModelsResult {
-  return { models: [], error };
+  return { providers: {}, error };
 }
 
 type ModelRegistryOptions = {
+  config?: OpenClawConfig;
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
@@ -317,6 +330,7 @@ function mergeCompat(
  */
 export class ModelRegistry {
   private models: Model[] = [];
+  private config: OpenClawConfig | undefined;
   private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
   private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
   private registeredProviders: Map<string, ProviderConfigInput> = new Map();
@@ -336,6 +350,7 @@ export class ModelRegistry {
     options: ModelRegistryOptions = {},
   ) {
     this.authStorage = authStorage;
+    this.config = options.config ?? options.sourceSnapshot?.config;
     this.includePluginCatalogs = options.includePluginCatalogs !== false;
     initializeModelRegistryRuntime(this);
     if (options.sourceSnapshot) {
@@ -477,7 +492,9 @@ export class ModelRegistry {
       // Plugin catalog failures can return salvaged models; root failures return empty.
     }
 
-    let combined = [...customResult.models, ...capturedPluginResult.models];
+    let combined = this.parseModels(
+      this.mergeProviderSources(capturedPluginResult.providers, customResult.providers),
+    );
 
     // Let OAuth providers modify their models (e.g., update baseUrl)
     for (const oauthProvider of this.authStorage.getOAuthProviders()) {
@@ -490,10 +507,29 @@ export class ModelRegistry {
     this.models = combined;
   }
 
+  private mergeProviderSources(
+    ...sources: readonly RegistryProviderSources[]
+  ): RegistryProviderSources {
+    const providers: RegistryProviderSources = {};
+    for (const source of sources) {
+      for (const [providerId, provider] of Object.entries(source)) {
+        const existing = providers[providerId];
+        providers[providerId] = existing
+          ? mergeProviderModels(existing, provider, {
+              providerId,
+              modelIdMatching: "exact",
+              manifestPlugins: this.pluginMetadataSnapshot,
+            })
+          : provider;
+      }
+    }
+    return providers;
+  }
+
   private loadCapturedPluginCatalogs(
     pluginCatalogs: readonly PersistedPluginModelCatalog[],
   ): CustomModelsResult {
-    const models: Model[] = [];
+    let providers: RegistryProviderSources = {};
     const errors: string[] = [];
     for (const pluginCatalog of pluginCatalogs) {
       const result = this.loadCustomModels(
@@ -505,12 +541,12 @@ export class ModelRegistry {
           requireGeneratedCatalog: true,
         },
       );
-      models.push(...result.models);
+      providers = this.mergeProviderSources(providers, result.providers);
       if (result.error) {
         errors.push(result.error);
       }
     }
-    return { models, error: errors.join("\n\n") || undefined };
+    return { providers, error: errors.join("\n\n") || undefined };
   }
 
   private loadCustomModels(
@@ -551,6 +587,10 @@ export class ModelRegistry {
         options.requireGeneratedCatalog === true
           ? filterGeneratedPluginModelCatalogProviders({
               catalogPluginId: options.catalogPluginId,
+              config: this.config,
+              isProviderAvailable: (providerId) =>
+                this.authStorage.hasAuth(normalizeProviderId(providerId)) ||
+                hasUsableCustomProviderApiKey(this.config, providerId),
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: config.providers,
@@ -564,18 +604,36 @@ export class ModelRegistry {
       // Additional validation
       this.validateConfig(configForUse);
 
+      const generated = options.requireGeneratedCatalog === true;
+      const maxTokensSource: MaxTokensSource = generated ? "discovered" : "configured";
+      let sourceProviders: RegistryProviderSources = {};
       for (const [providerName, providerConfig] of Object.entries(configForUse.providers)) {
-        if ((providerConfig.models ?? []).length > 0) {
+        if (!generated && (providerConfig.models ?? []).length > 0) {
           this.storeProviderRequestConfig(providerName, providerConfig);
         }
+        // Generated catalogs supply inventory, never request authority. Record the
+        // source before merging so their headers cannot replace an authored row's.
+        sourceProviders[providerName] = {
+          ...(generated
+            ? {
+                api: providerConfig.api,
+                baseUrl: providerConfig.baseUrl,
+                compat: providerConfig.compat,
+              }
+            : providerConfig),
+          models: providerConfig.models?.map((model) => {
+            const { headers: _headers, ...inventory } = model;
+            // Capture route and effective compatibility before provider defaults merge.
+            return Object.assign(generated ? inventory : model, {
+              maxTokensSource,
+              api: model.api ?? providerConfig.api,
+              baseUrl: model.baseUrl ?? providerConfig.baseUrl,
+              compat: mergeCompat(providerConfig.compat, model.compat),
+            });
+          }),
+        };
       }
 
-      // Root models.json rows are author-owned; generated plugin shards are
-      // catalog-owned. Preserve that distinction before runtime resolution.
-      const models = this.parseModels(
-        configForUse,
-        options.requireGeneratedCatalog === true ? "discovered" : "configured",
-      );
       const pluginCatalogErrors: string[] = [];
       if (options.includePluginCatalogs !== false) {
         let pluginCatalogs: readonly PersistedPluginModelCatalog[] = [];
@@ -591,13 +649,13 @@ export class ModelRegistry {
           );
         }
         const pluginResult = this.loadCapturedPluginCatalogs(pluginCatalogs);
-        models.push(...pluginResult.models);
+        sourceProviders = this.mergeProviderSources(pluginResult.providers, sourceProviders);
         if (pluginResult.error) {
           pluginCatalogErrors.push(pluginResult.error);
         }
       }
 
-      return { models, error: pluginCatalogErrors.join("\n\n") || undefined };
+      return { providers: sourceProviders, error: pluginCatalogErrors.join("\n\n") || undefined };
     } catch (error) {
       if (error instanceof SyntaxError) {
         if (options.requireGeneratedCatalog === true) {
@@ -651,10 +709,10 @@ export class ModelRegistry {
     }
   }
 
-  private parseModels(config: ModelsConfig, maxTokensSource: MaxTokensSource): Model[] {
+  private parseModels(providers: RegistryProviderSources): Model[] {
     const models: Model[] = [];
 
-    for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+    for (const [providerName, providerConfig] of Object.entries(providers)) {
       const modelDefs = providerConfig.models ?? [];
       if (modelDefs.length === 0) {
         continue;
@@ -680,7 +738,6 @@ export class ModelRegistry {
           continue;
         }
 
-        const compat = mergeCompat(providerConfig.compat, modelDef.compat);
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
         const defaultCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
         models.push({
@@ -695,10 +752,12 @@ export class ModelRegistry {
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
           maxTokens: modelDef.maxTokens ?? 16384,
-          ...(modelDef.maxTokens !== undefined ? { maxTokensSource } : {}),
+          ...(modelDef.maxTokens !== undefined
+            ? { maxTokensSource: modelDef.maxTokensSource }
+            : {}),
           params: modelDef.params,
           headers: undefined,
-          compat,
+          compat: modelDef.compat,
         } as Model);
       }
     }
@@ -732,20 +791,36 @@ export class ModelRegistry {
    * Get API key for a model.
    */
   hasConfiguredAuth(model: Model): boolean {
+    const providerConfig = this.getModelProviderRequestConfig(model);
     return (
       this.authStorage.hasAuth(model.provider) ||
-      this.providerRequestConfigs.get(model.provider)?.auth === "aws-sdk" ||
-      this.providerRequestConfigs.get(model.provider)?.apiKey !== undefined
+      providerConfig?.auth === "aws-sdk" ||
+      providerConfig?.apiKey !== undefined
     );
   }
 
+  private getModelProviderRequestConfig(model: Model): ProviderRequestConfig | undefined {
+    const config = this.providerRequestConfigs.get(model.provider);
+    if (
+      config?.baseUrls &&
+      !config.baseUrls.some((baseUrl) =>
+        modelTransportRoutesMatch({ baseUrl }, { baseUrl: model.baseUrl }),
+      )
+    ) {
+      return undefined;
+    }
+    return config;
+  }
+
   private getModelRequestKey(provider: string, modelId: string): string {
-    return `${provider}:${modelId}`;
+    return JSON.stringify([provider, modelId]);
   }
 
   private storeProviderRequestConfig(
     providerName: string,
     config: {
+      baseUrl?: string;
+      models?: readonly { baseUrl?: string }[];
       apiKey?: string;
       auth?: ProviderAuthMode;
       headers?: Record<string, string>;
@@ -757,6 +832,11 @@ export class ModelRegistry {
     }
 
     this.providerRequestConfigs.set(providerName, {
+      // File-authored endpoints authorize these settings; generated destinations do not.
+      // Route-less runtime registrations retain their explicit caller-owned scope.
+      baseUrls: config.baseUrl
+        ? [config.baseUrl, ...(config.models ?? []).flatMap((model) => model.baseUrl ?? [])]
+        : undefined,
       apiKey: config.apiKey,
       auth: config.auth,
       headers: config.headers,
@@ -782,12 +862,13 @@ export class ModelRegistry {
    */
   async getApiKeyAndHeaders(model: Model): Promise<ResolvedRequestAuth> {
     try {
-      const providerConfig = this.providerRequestConfigs.get(model.provider);
+      const providerConfig = this.getModelProviderRequestConfig(model);
       const usesAwsSdkAuth = providerConfig?.auth === "aws-sdk";
       const apiKeyFromAuthStorage = usesAwsSdkAuth
         ? undefined
         : await this.authStorage.getApiKey(model.provider, {
             includeFallback: false,
+            baseUrl: model.baseUrl,
           });
       const apiKey =
         apiKeyFromAuthStorage ??

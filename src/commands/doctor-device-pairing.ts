@@ -361,13 +361,14 @@ function collectPairedRecordIssues(snapshot: DoctorPairingSnapshot): PairedRecor
           allowedScopes: approvedScopes,
         })
       ) {
+        const recoveryCommand = role === "node" ? `${rotateCommand} --no-scopes` : rotateCommand;
         issues.push({
           kind: "token-outside-approved-scope",
           deviceId: device.deviceId,
           deviceLabel,
           role,
-          message: `Paired device ${deviceLabel} has a ${role} token outside the approved scope baseline [${formatScopes(approvedScopes)}]. Rotate it with ${rotateCommand}.`,
-          fixHint: `Rotate it with ${rotateCommand}.`,
+          message: `Paired device ${deviceLabel} has a ${role} token outside the approved scope baseline [${formatScopes(approvedScopes)}]. Rotate it with ${recoveryCommand}.`,
+          fixHint: `Rotate it with ${recoveryCommand}.`,
         });
       }
     }

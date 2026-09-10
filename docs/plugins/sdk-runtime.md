@@ -89,6 +89,8 @@ Use `createPluginRuntimeStore` to store the runtime reference for use outside th
   </Step>
   <Step title="Wire into the entry point">
     ```typescript
+    import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
+
     export default defineChannelPluginEntry({
       id: "my-plugin",
       name: "My Plugin",
@@ -97,6 +99,7 @@ Use `createPluginRuntimeStore` to store the runtime reference for use outside th
       setRuntime: store.setRuntime,
     });
     ```
+
   </Step>
   <Step title="Access from other files">
     ```typescript

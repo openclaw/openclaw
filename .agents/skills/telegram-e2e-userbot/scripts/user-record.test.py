@@ -162,6 +162,52 @@ class CallbackScenarioTest(unittest.TestCase):
             ],
         )
 
+    def test_finds_callback_under_current_heading_after_content_and_keyboard_edits(self):
+        for content_first in (True, False):
+            with self.subTest(content_first=content_first):
+                recorder = record.EventRecorder(FakeClient(), -1001, "", 42)
+                message = {
+                    "id": 1048576, "chat_id": -1001,
+                    "sender_id": {"@type": "messageSenderUser", "user_id": 42},
+                    "content": {
+                        "@type": "messageText",
+                        "text": {"@type": "formattedText", "text": "Select a provider:"},
+                    },
+                    "reply_markup": {
+                        "@type": "replyMarkupInlineKeyboard",
+                        "rows": [[{"text": "Example", "type": {
+                            "@type": "inlineKeyboardButtonTypeCallback", "data": "cHJvdmlkZXI=",
+                        }}]],
+                    },
+                }
+                content_edit = {
+                    "@type": "updateMessageContent", "chat_id": -1001, "message_id": 1048576,
+                    "new_content": {
+                        "@type": "messageText",
+                        "text": {"@type": "formattedText", "text": "Models (example) — 2 available"},
+                    },
+                }
+                keyboard_edit = {
+                    "@type": "updateMessageEdited", "chat_id": -1001, "message_id": 1048576,
+                    "reply_markup": {
+                        "@type": "replyMarkupInlineKeyboard",
+                        "rows": [[{"text": "middle", "type": {
+                            "@type": "inlineKeyboardButtonTypeCallback", "data": "bWlkZGxl",
+                        }}]],
+                    },
+                }
+                recorder.ingest({"@type": "updateNewMessage", "message": message})
+                edits = ((content_edit, keyboard_edit) if content_first
+                         else (keyboard_edit, content_edit))
+                for update in edits:
+                    recorder.ingest(update)
+
+                self.assertEqual(recorder.find_callback_button("Models (", "middle"),
+                                 (1048576, "bWlkZGxl"))
+                self.assertIsNone(recorder.find_callback_button("Select a provider:", "middle"))
+                self.assertEqual(message["content"]["text"]["text"], "Select a provider:")
+                self.assertEqual(message["reply_markup"]["rows"][0][0]["text"], "Example")
+
 
 if __name__ == "__main__":
     unittest.main()

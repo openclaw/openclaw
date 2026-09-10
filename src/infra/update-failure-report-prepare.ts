@@ -210,6 +210,7 @@ export async function prepareUpdateFailureReport(
     "",
     `- OpenClaw version: ${version}`,
     `- Platform: ${platform}`,
+    `- Node version: ${sanitizeReportField(process.versions.node ?? "unknown", context)}`,
     `- Update target: ${target}`,
     `- Failed phase: ${phase}`,
     `- Rollback outcome: ${rollback}`,

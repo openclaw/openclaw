@@ -101,6 +101,7 @@ vi.mock("./presence.js", () => ({
   resolveDiscordPresenceUpdate: vi.fn(() => undefined),
 }));
 
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import { registerDiscordListener } from "./listeners.js";
 import {
@@ -115,14 +116,6 @@ describe("createDiscordMonitorClient", () => {
     waitForDiscordGatewayPluginRegistrationMock.mockReset().mockReturnValue(undefined);
     vi.mocked(registerDiscordListener).mockClear();
   });
-
-  function createRuntime() {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-  }
 
   function createClientWithPlugins(
     _options: ConstructorParameters<typeof import("../internal/discord.js").Client>[0],
@@ -184,7 +177,7 @@ describe("createDiscordMonitorClient", () => {
       modals: [],
       voiceEnabled: true,
       discordConfig: {},
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       createClient: createClientWithPlugins,
       createGatewayPlugin: () => gatewayPlugin as never,
       createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
@@ -217,7 +210,7 @@ describe("createDiscordMonitorClient", () => {
       modals: [],
       voiceEnabled: false,
       discordConfig: {},
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       createClient: createClientWithPlugins,
       createGatewayPlugin: () => gatewayPlugin as never,
       createGatewaySupervisor: createGatewaySupervisor as never,
@@ -252,7 +245,7 @@ describe("createDiscordMonitorClient", () => {
       modals: [],
       voiceEnabled: false,
       discordConfig: {},
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       commandDeployHashStore,
       createClient,
       createGatewayPlugin: () => ({ id: "gateway" }) as never,
@@ -291,7 +284,7 @@ describe("createDiscordMonitorClient", () => {
       modals: [],
       voiceEnabled: false,
       discordConfig: {},
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       createClient,
       createGatewayPlugin: () => ({ id: "gateway" }) as never,
       createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
@@ -331,7 +324,7 @@ describe("createDiscordMonitorClient", () => {
         modals: [],
         voiceEnabled: false,
         discordConfig: {},
-        runtime: createRuntime(),
+        runtime: createRuntimeSpies(),
         createClient: createClientWithPlugins,
         createGatewayPlugin: () => gatewayPlugin as never,
         createGatewaySupervisor: createGatewaySupervisor as never,
@@ -350,14 +343,6 @@ describe("registerDiscordMonitorListeners", () => {
     vi.mocked(registerDiscordListener).mockClear();
   });
 
-  function createRuntime() {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-  }
-
   function createListenerParams(
     overrides: Partial<Parameters<typeof registerDiscordMonitorListeners>[0]> = {},
   ): Parameters<typeof registerDiscordMonitorListeners>[0] {
@@ -366,7 +351,7 @@ describe("registerDiscordMonitorListeners", () => {
       client: { listeners: [] },
       accountId: "default",
       discordConfig: {},
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       botUserId: "bot-1",
       dmEnabled: false,
       groupDmEnabled: false,

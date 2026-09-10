@@ -114,6 +114,99 @@ async function clickField(element: MultiSelectElement) {
   await element.updateComplete;
 }
 
+it("does not commit a disabled choice but keeps available choices usable", async () => {
+  const element = await createMultiSelect({
+    value: [],
+    isExcluded: () => false,
+    options: [
+      { value: "fixture/blocked", label: "Blocked", disabled: true },
+      { value: "fixture/ready", label: "Ready" },
+    ],
+  });
+  await clickField(element);
+  const blocked = element.querySelector<HTMLElement>('[data-value="fixture/blocked"]');
+  blocked?.click();
+  expect(element.onChange).not.toHaveBeenCalled();
+  expect(blocked?.getAttribute("aria-disabled")).toBe("true");
+
+  await pressKey(element, "Enter");
+  expect(element.onChange).toHaveBeenCalledWith(["fixture/ready"]);
+});
+
+it("keeps disabled choices out of typed additions without discarding saved chips", async () => {
+  const element = await createMultiSelect({
+    value: ["fixture/saved"],
+    isExcluded: () => false,
+    options: [
+      { value: "fixture/saved", label: "Saved", disabled: true },
+      { value: "fixture/blocked", label: "Blocked", disabled: true },
+      { value: "fixture/ready", label: "Ready" },
+    ],
+  });
+  await typeText(element, "fixture/blocked, fixture/ready");
+  await pressKey(element, ",");
+  expect(element.onChange).toHaveBeenCalledWith(["fixture/saved", "fixture/ready"]);
+  expect(chipValues(element)).toEqual(["fixture/saved"]);
+  element.querySelector<HTMLButtonElement>(".chip-remove")?.click();
+  expect(element.onChange).toHaveBeenLastCalledWith([]);
+});
+
+it("skips disabled choices in both keyboard directions", async () => {
+  const element = await createMultiSelect({
+    value: [],
+    isExcluded: () => false,
+    options: [
+      { value: "fixture/first", label: "First" },
+      { value: "fixture/blocked", label: "Blocked", disabled: true },
+      { value: "fixture/last", label: "Last" },
+    ],
+  });
+  await clickField(element);
+  await pressKey(element, "ArrowDown");
+  expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
+    "fixture/last",
+  );
+  await pressKey(element, "ArrowUp");
+  expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
+    "fixture/first",
+  );
+  await pressKey(element, "ArrowUp");
+  await pressKey(element, "Enter");
+  expect(element.onChange).toHaveBeenCalledExactlyOnceWith(["fixture/last"]);
+});
+
+it("leaves no active choice when the only match becomes disabled", async () => {
+  const element = await createMultiSelect({
+    value: [],
+    isExcluded: () => false,
+    options: [{ value: "fixture/model", label: "Model" }],
+  });
+  await typeText(element, "fixture/model");
+  element.options = [{ value: "fixture/model", label: "Model", disabled: true }];
+  await element.updateComplete;
+  await pressKey(element, "ArrowDown");
+  await pressKey(element, "Enter");
+  expect(input(element).hasAttribute("aria-activedescendant")).toBe(false);
+  expect(element.onChange).not.toHaveBeenCalled();
+});
+
+it("does not disable a case-distinct model with the same lowercase spelling", async () => {
+  const element = await createMultiSelect({
+    value: [],
+    isExcluded: () => false,
+    getValueKey: normalizeAgentModelRefForConfig,
+    options: [
+      { value: "custom/model-a", label: "Blocked", disabled: true },
+      { value: "custom/Model-A", label: "Ready" },
+    ],
+  });
+
+  await typeText(element, "CUSTOM/Model-A");
+  await pressKey(element, "Enter");
+
+  expect(element.onChange).toHaveBeenCalledExactlyOnceWith(["custom/Model-A"]);
+});
+
 it("renders chips with option labels and lists only unchosen, unexcluded options once opened", async () => {
   const element = await createMultiSelect();
 

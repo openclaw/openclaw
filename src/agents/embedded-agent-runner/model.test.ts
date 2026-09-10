@@ -289,7 +289,11 @@ import { getModelProviderRequestTransport } from "../provider-request-config.js"
 import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
-import { resolveModelAsync, resolveModelWithRegistry } from "./model.js";
+import {
+  createEmptyAgentDiscoveryStores,
+  resolveModelAsync,
+  resolveModelWithRegistry,
+} from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeOpenClawConfigFixture,
@@ -1262,7 +1266,7 @@ describe("resolveModel", () => {
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
       inlineProviderModels: [],
-      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+      createStores: createEmptyAgentDiscoveryStores,
     } satisfies PreparedModelRuntimeSnapshot;
     resolveBundledProviderStaticCatalogModelMock.mockResolvedValueOnce({
       provider: "google",

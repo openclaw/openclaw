@@ -2,6 +2,7 @@ import type { AgentPlanStep } from "../channels/streaming.js";
 // Gateway chat run state registries.
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
   normalizeLiveAssistantBufferedText,
@@ -115,7 +116,7 @@ type ChatRunRecord = {
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
-  assistantScope?: { itemId: string; prefix: string };
+  assistantScope?: AssistantTextSnapshot["scope"];
   managedMediaUrls?: Set<string>;
   deltaLastBroadcastText?: string;
   agentText?: Partial<

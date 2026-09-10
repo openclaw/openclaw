@@ -303,7 +303,7 @@ CLI backend defaults are part of the plugin surface:
 - Command, argv, environment, parser, session, and watchdog behavior stays in plugin code.
 - Backend-specific normalization stays plugin-owned through the optional `normalizeConfig` hook.
 
-Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex agent runs use the Codex app-server harness through `openai/*`; OpenClaw no longer registers a bundled `codex-cli` backend.
+Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex agent runs use the Codex app-server harness through `openai/*`; there is no bundled `codex-cli` backend.
 
 The bundled Anthropic plugin registers for `claude-cli`:
 
@@ -500,3 +500,4 @@ retry, authentication, timeout, or fallback classification.
 
 - [Gateway runbook](/gateway)
 - [Local models](/gateway/local-models)
+- [Thinking levels](/tools/thinking) — how the reasoning budget maps onto a CLI backend

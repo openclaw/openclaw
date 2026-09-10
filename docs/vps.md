@@ -136,3 +136,6 @@ diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-p
 - [DigitalOcean](/install/digitalocean)
 - [Fly.io](/install/fly)
 - [Hetzner](/install/hetzner)
+- [Ansible](/install/ansible) — automated deployment to remote Debian/Ubuntu servers with Tailscale VPN and firewall isolation
+- [Kubernetes](/install/kubernetes) — a minimal Kustomize starting point when you run the Gateway on a cluster instead of a single VPS
+- [macOS VMs](/install/macos-vm) — a sandboxed macOS VM when you need macOS itself (iMessage) rather than a Linux host

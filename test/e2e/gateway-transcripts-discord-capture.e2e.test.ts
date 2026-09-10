@@ -559,7 +559,10 @@ describe("Gateway admitted Discord transcript capture", () => {
       phase("model-publication:published");
       for (const agentId of ["main", "agent-b"]) {
         const published = await loadPublishedGatewayReplyDispatchRuntime({ agentId });
-        expect(published?.inboundPluginRegistry).toBe(registration.registry);
+        const inboundProvider = published?.inboundPluginRegistry.transcriptSourceProviders.find(
+          (entry) => entry.provider.id === "discord-voice",
+        )?.provider;
+        expect(inboundProvider).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
         const selectedRegistry = published?.pluginGeneration.pluginRegistry;
         const selectedProvider = selectedRegistry?.transcriptSourceProviders.find(
           (entry) => entry.provider.id === "discord-voice",

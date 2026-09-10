@@ -98,16 +98,15 @@ describeControlUiE2e("Control UI chat file links", () => {
               browser: { path: "", entries: [] },
             },
             "tasks.list": { tasks: intent === "task" ? [task] : [] },
-            "chat.history": {
+            "tasks.history": {
               cases: [
                 {
-                  match: { sessionKey: task.childSessionKey },
+                  match: { taskId: task.id },
                   response: {
-                    sessionId: "review-intent-child",
-                    thinkingLevel: null,
                     messages: [
                       {
                         role: "assistant",
+                        messageId: "review-intent-result",
                         content: [{ type: "text", text: "Current task result." }],
                         timestamp: Date.now(),
                       },
@@ -175,8 +174,8 @@ describeControlUiE2e("Control UI chat file links", () => {
               },
               files: await gateway.getRequests("sessions.files.get"),
               lists: await gateway.getRequests("sessions.files.list"),
-              taskHistory: (await gateway.getRequests("chat.history")).filter(
-                (request) => asNullableRecord(request.params)?.sessionKey === task.childSessionKey,
+              taskHistory: (await gateway.getRequests("tasks.history")).filter(
+                (request) => asNullableRecord(request.params)?.taskId === task.id,
               ),
             },
             null,

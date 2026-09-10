@@ -86,18 +86,23 @@ per-agent `auth.json`, or shared `credentials/oauth.json`. Run
 records a migration receipt, and renames the original file to a timestamped
 archive.
 
-Runtime never reads these retired files. What happens when one is still present
-depends on whether the SQLite store can already serve credentials for that
-agent:
+Runtime never uses credentials from these retired files. What happens when one
+is still present depends on whether SQLite can already serve credentials for
+that agent:
 
 - The store holds profiles: the retired file is leftover bytes. Runtime logs a
   one-time warning naming the file and keeps working; Doctor archives it on the
   next `--fix`. Doctor never overwrites a usable stored credential with imported
   values, so the file cannot resurrect a stale token.
-- The store is empty: the credentials still live only in that file, so runtime
-  fails closed for that agent with `AUTH_PROFILE_MIGRATION_REQUIRED` rather than
-  falling through to environment auth. Gateway startup degrades this owner to
-  configured-unavailable instead of refusing to start.
+- The store is empty: runtime reads only the provider metadata in
+  `auth-profiles.json` to scope `AUTH_PROFILE_MIGRATION_REQUIRED`. Providers named
+  there cannot fall through to environment or config auth; unrelated providers
+  keep resolving normally. The error and Doctor finding list affected providers
+  and the recovery command, `openclaw doctor --fix`.
+- If provider scope cannot be determined (including malformed JSON or other
+  retired credential formats), the refusal remains agent-wide. Gateway startup
+  degrades the credential owner instead of refusing to start. Credential writes
+  and snapshot publication remain fenced until the migration is cleared.
 
 The database and migration sources respect `$OPENCLAW_STATE_DIR`. Full reference: [/gateway/config-secrets-env#auth-storage](/gateway/config-secrets-env#auth-storage)
 

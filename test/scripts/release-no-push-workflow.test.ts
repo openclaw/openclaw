@@ -2017,11 +2017,16 @@ describe("release validation no-push transport", () => {
       },
     ];
     for (const scenario of cases) {
-      const evaluate = (name: string) =>
+      const evaluate = (name: string, preparedPlugins = "") =>
         runInNewContext(job(workflow, name).if!.slice(3, -2), {
           always: () => true,
           contains: (value: string, search: string) => value.includes(search),
-          inputs: { tag: scenario.tag, publish_openclaw_npm: true, publish_docker_only: false },
+          inputs: {
+            tag: scenario.tag,
+            publish_openclaw_npm: true,
+            publish_docker_only: false,
+            prepared_plugins: preparedPlugins,
+          },
           needs: {
             publish: { result: scenario.npm },
             publish_docker: { result: scenario.docker },
@@ -2030,6 +2035,8 @@ describe("release validation no-push transport", () => {
         });
       expect(evaluate("publish_docker"), JSON.stringify(scenario)).toBe(scenario.publishDocker);
       expect(evaluate("finalize_github_release"), JSON.stringify(scenario)).toBe(scenario.finalize);
+      expect(evaluate("finalize_github_release", '{"npm":{},"clawhub":{}}')).toBe(false);
+      expect(evaluate("publish_docker", '{"npm":{},"clawhub":{}}')).toBe(scenario.publishDocker);
     }
   });
 

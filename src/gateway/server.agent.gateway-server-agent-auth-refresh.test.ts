@@ -12,6 +12,11 @@ import {
   registerPreparedModelRuntimePublicationListener,
 } from "../agents/prepared-model-runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
   agentCommandMock,
@@ -428,6 +433,38 @@ describe("gateway agent auth refresh dispatch", () => {
     } finally {
       unregister();
       ensureSpy.mockRestore();
+    }
+  });
+
+  test("reports provider auth refresh failures over the connected Gateway", async () => {
+    let authStoreReads = 0;
+    const prepared = await prepareSecretsRuntimeSnapshot({
+      config: {},
+      agentDirs: [resolveAgentDir({}, "main")],
+      includeConfigRefs: false,
+      manifestRegistry: { plugins: [] },
+      loadAuthStore: () => {
+        authStoreReads += 1;
+        if (authStoreReads > 1) {
+          throw new Error("simulated provider auth refresh failure");
+        }
+        return { version: 1, profiles: {} };
+      },
+    });
+    activateSecretsRuntimeSnapshot(prepared);
+    try {
+      const response = await rpcReq(gatewaySuite.ws, "models.authStatus", { refresh: true });
+
+      expect(authStoreReads).toBe(2);
+      expect(response).toMatchObject({
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("simulated provider auth refresh failure"),
+        },
+      });
+    } finally {
+      clearSecretsRuntimeSnapshot();
     }
   });
 });

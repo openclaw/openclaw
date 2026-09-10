@@ -161,6 +161,7 @@ function createNodeExecServerProcessOwner(
 export async function runCodexNodeExecServer(params: {
   assertExecAuthorized: () => void;
   workspaceDir: string;
+  homeDir?: string;
   io: OpenClawPluginNodeHostCommandIo;
   activeProcesses: Set<() => Promise<void>>;
   onFrameReceiver: (receiver: (message: Uint8Array) => Promise<void> | void) => void;
@@ -231,11 +232,11 @@ export async function runCodexNodeExecServer(params: {
             headers: {},
             cwd,
             env: {
-              HOME: dir,
+              HOME: params.homeDir ?? dir,
               CODEX_HOME: codexHome,
               RUST_LOG:
                 "error,opentelemetry_sdk=off,opentelemetry_otlp=off,codex_exec_server::server::transport=info",
-              ...(process.platform === "win32" ? { USERPROFILE: dir } : {}),
+              ...(process.platform === "win32" ? { USERPROFILE: params.homeDir ?? dir } : {}),
             },
             clearEnv: ["NODE_OPTIONS"],
           },

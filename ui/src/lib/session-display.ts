@@ -2,8 +2,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-// Control UI module implements session display behavior.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -340,4 +340,11 @@ export function isCronSessionKey(key: string): boolean {
     normalized.startsWith("cron:") ||
     (normalized.startsWith("agent:") && parts.length >= 4 && parts[2] === "cron")
   );
+}
+
+// Wire kinds exclude cron; labels, sorting and grouping share this display classification.
+export function resolveSessionDisplayKind(
+  row: GatewaySessionRow,
+): GatewaySessionRow["kind"] | "cron" {
+  return isCronSessionKey(row.key) ? "cron" : row.kind;
 }

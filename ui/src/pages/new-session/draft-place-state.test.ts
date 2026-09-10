@@ -27,12 +27,15 @@ function createRepositoryFixture(
   const persistPreference = vi.fn();
   const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));
   const request = vi.fn<(method: string) => Promise<unknown>>(async (method) =>
-    method === "fs.listDir"
-      ? { path: "/plain", entries: [] }
-      : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
+    method === "models.list"
+      ? { models: [] }
+      : method === "fs.listDir"
+        ? { path: "/plain", entries: [] }
+        : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
   );
   const context = {
     gateway: {
+      subscribeEvents: () => () => undefined,
       snapshot: {
         phase: "connected",
         client: { request },
@@ -359,6 +362,7 @@ describe("DraftPlaceState cloud machine selection", () => {
         operatingSystems: [
           { id: "linux", label: "Linux", default: true },
           { id: "windows/wsl2", label: "Windows (WSL2)" },
+          { id: "macos", label: "macOS", disabledReason: "Upgrade the worker provider." },
         ],
         machines: [
           { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
@@ -391,6 +395,7 @@ describe("DraftPlaceState cloud machine selection", () => {
     expect(state.resolve("aws")).toBe("custom");
     expect(state.resolveOs("other")).toBe("other-os");
     expect(state.selectOs("aws", "windows/wsl2", profiles, true)).toBe(false);
+    expect(state.selectOs("aws", "macos", profiles)).toBe(false);
     expect(state.resolveOs("aws")).toBe("");
   });
 

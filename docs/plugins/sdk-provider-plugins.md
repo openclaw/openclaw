@@ -11,6 +11,10 @@ read_when:
 Build a provider plugin to add a model provider (LLM) to OpenClaw: a model
 catalog, API-key auth, and dynamic model resolution.
 
+Acme AI is a fictional vendor used throughout this guide and its child pages.
+Helpers named `fetchAcme*` in the samples are placeholders for your own vendor
+API calls, not exported OpenClaw functions.
+
 <Info>
   New to OpenClaw plugins? Read [Getting Started](/plugins/building-plugins)
   first for package structure and manifest setup.
@@ -23,6 +27,31 @@ catalog, API-key auth, and dynamic model resolution.
   harness](/plugins/sdk-agent-harness) instead of putting daemon protocol
   details in core.
 </Tip>
+
+## Import an existing credential during sign-in
+
+An auth method can declare `credentialImport` with a `migrationProviderId`,
+an exact `itemId`, and a `credentialKind` (`api_key`, `oauth`, or `token`).
+`models auth login` asks that migration owner for an auth-only plan before
+starting interactive sign-in. `--force`, `--profile-id`, and `--set-default` skip
+import. `--set-default` uses the auth method's recommended model through the normal
+sign-in flow.
+
+The migration plugin declares its ID in `contracts.migrationProviders` and can
+export `buildMigrationProvider()` from a top-level `migration-provider-api.ts`
+public artifact. Keep that entry lightweight. Bundled plugins and enabled
+installed plugins can supply it without replacing the running plugin registry.
+Explicitly disabled or denied migration owners cannot execute their artifacts.
+The existing bundled migration compatibility rules still apply.
+
+The login caller selects only the declared auth item. Its details must contain
+the matching `provider` and `credentialKind`; a migrated result also supplies
+the saved `profileId`. The owner must honor cancellation, reread the selected
+source before persistence, and reject a changed credential. Login passes
+`configPatchMode: "none"` so import preserves model defaults and restrictions.
+Unavailable storage or an unusable matching OAuth profile continues to interactive
+sign-in. A matching account identity alone does not make expired credentials usable.
+A failed selected import stops the operation instead of silently starting a different login.
 
 ## Walkthrough
 
@@ -211,7 +240,9 @@ catalog, API-key auth, and dynamic model resolution.
     `openclaw/plugin-sdk/provider-auth`. This keeps provider entrypoints from
     loading the full agent runtime just to select a credential. The deprecated
     `agent-runtime` exports remain available for compatibility; use the narrower
-    `provider-auth` route in new code.
+    `provider-auth` route in new code. See the [removal
+    timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
+    that govern deprecated surfaces named on this page and its child pages.
 
     A custom interactive auth method that mints a static token or API key can
     request protected persistence on its returned profile:
@@ -431,3 +462,4 @@ resolve here.
 - [Plugin SDK setup](/plugins/sdk-setup)
 - [Building plugins](/plugins/building-plugins)
 - [Building channel plugins](/plugins/sdk-channel-plugins)
+- [Model providers](/concepts/model-providers)

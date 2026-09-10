@@ -18,6 +18,7 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 
 describe("worker placement dispatch", () => {
@@ -25,9 +26,9 @@ describe("worker placement dispatch", () => {
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
   const createTestHarness = (
-    options: Parameters<typeof createHarness>[1] = {},
+    options: Parameters<typeof createHarness>[2] = {},
     store: PlacementStore = placementStore,
-  ) => createHarness(store, { workspacePath: path.join(root, "workspace"), ...options });
+  ) => createHarness(database, store, { workspacePath: path.join(root, "workspace"), ...options });
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-dispatch-"));
@@ -84,31 +85,37 @@ describe("worker placement dispatch", () => {
     expect(states).toEqual(["requested", "provisioning", "syncing", "starting", "active"]);
   });
 
-  it("provisions an inherited dispatch from the exact durable profile snapshot", async () => {
-    const harness = createTestHarness();
-    const inheritedProfile = {
-      providerId: "fake",
-      profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
-    };
+  it.each([false, true])(
+    "provisions an inherited dispatch with its exact profile and setup authority (%s)",
+    async (runSetupScript) => {
+      const harness = createTestHarness();
+      const inheritedProfile = {
+        providerId: "fake",
+        profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
+      };
 
-    await harness.service.dispatch({
-      ...REQUEST,
-      inheritedProfile,
-      machineClass: "beast",
-      os: "os-a",
-    });
+      await harness.service.dispatch({
+        ...REQUEST,
+        inheritedProfile,
+        runSetupScript,
+        machineClass: "beast",
+        os: "os-a",
+      });
 
-    expect(harness.environments.create).not.toHaveBeenCalled();
-    expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
-      { profileId: REQUEST.profileId, ...inheritedProfile },
-      expect.stringMatching(/^session-dispatch:/u),
-      "beast",
-      REQUEST.executionMode,
-      path.join(root, "workspace"),
-      undefined,
-      "os-a",
-    );
-  });
+      expect(harness.environments.create).not.toHaveBeenCalled();
+      expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
+        { profileId: REQUEST.profileId, ...inheritedProfile },
+        expect.stringMatching(/^session-dispatch:/u),
+        "beast",
+        REQUEST.executionMode,
+        path.join(root, "workspace"),
+        undefined,
+        "os-a",
+        runSetupScript,
+        inheritedProfile,
+      );
+    },
+  );
 
   it("normalizes profile OS overrides and rejects choices without a profile", () => {
     const cfg = { cloudWorkers: { profiles: { cloud: { provider: "fake" } } } };
@@ -213,6 +220,11 @@ describe("worker placement dispatch", () => {
         remoteWorkspaceDir: active.remoteWorkspaceDir,
       },
     });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: active.environmentId,
+      sessionId: otherRequest.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
     placementStore.transition({
       sessionId: otherRequest.sessionId,
       from: "starting",
@@ -231,6 +243,11 @@ describe("worker placement dispatch", () => {
       },
     });
     placementStore.markWorkspaceResultPending(otherClaim);
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: active.environmentId,
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
 
     await harness.service.reconcile();
 

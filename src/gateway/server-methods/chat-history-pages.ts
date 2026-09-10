@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/session-accessor.js";
 import {
   dropPreSessionStartAnnouncePairs,
@@ -14,6 +15,7 @@ import {
 } from "../cli-session-history.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
+  capOffsetChatHistoryProjectedMessages,
   dropChatHistoryOverreadContextMessage,
   readChatHistoryMessageId,
   readChatHistoryRecoveryContext,
@@ -44,6 +46,52 @@ type ChatHistoryPage = {
     exhausted?: true;
   };
 };
+
+function readCliIdentityProjectionKey(message: unknown): string | undefined {
+  const id = readChatHistoryMessageId(message);
+  if (id) {
+    return `id:${id}`;
+  }
+  const record = asOptionalRecord(message);
+  const meta = asOptionalRecord(record?.["__openclaw"]);
+  const position = readTranscriptDisplayPosition(meta?.transcriptPosition);
+  if (!record || !position) {
+    return undefined;
+  }
+  return JSON.stringify([position, record.role, record.text, record.content]);
+}
+
+function projectCliIdentityOntoPagedMessages(params: {
+  pagedMessages: unknown[];
+  completeMessages: unknown[];
+}): unknown[] {
+  const importedMetaByKey = new Map<string, Record<string, unknown>>();
+  for (const message of params.completeMessages) {
+    const key = readCliIdentityProjectionKey(message);
+    const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+    if (key && meta) {
+      importedMetaByKey.set(key, meta);
+    }
+  }
+  return params.pagedMessages.map((message) => {
+    const record = asOptionalRecord(message);
+    const key = readCliIdentityProjectionKey(message);
+    const importedMeta = key ? importedMetaByKey.get(key) : undefined;
+    if (!record || !importedMeta) {
+      return message;
+    }
+    const localMeta = asOptionalRecord(record["__openclaw"]);
+    return {
+      ...record,
+      __openclaw: {
+        ...localMeta,
+        importedFrom: importedMeta.importedFrom,
+        externalId: importedMeta.externalId,
+        cliSessionId: importedMeta.cliSessionId,
+      },
+    };
+  });
+}
 
 export function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
@@ -381,6 +429,7 @@ export async function readChatHistoryPage(params: {
     effectiveMaxChars,
     max,
     maxBytes: maxHistoryBytes,
+    offset,
   });
   const { readPage } = incrementalTail;
   const activeLeafEntryId = resolveChatHistoryActiveLeafEntryId(readPage);
@@ -396,7 +445,7 @@ export async function readChatHistoryPage(params: {
         localMessages: localMessagesWithBoundaryFilter,
       });
   const cliHistory = params.ignoreCliSessionImports
-    ? { messages: localMessagesWithBoundaryFilter, imported: false }
+    ? { messages: localMessagesWithBoundaryFilter, imported: false, expanded: false }
     : resolveChatHistoryWithCliSessionImports({
         entry,
         provider,
@@ -406,7 +455,7 @@ export async function readChatHistoryPage(params: {
   if ((offset !== undefined || messageId) && !cliHistory.imported) {
     return readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
   }
-  if (cliHistory.imported) {
+  if (cliHistory.expanded || messageId) {
     // Reuse this request's redacted external snapshot after the full local read;
     // re-reading here would duplicate a large import and defeat cross-client singleflight.
     const completeLocalMessages = dropPreSessionStartAnnouncePairs(
@@ -435,6 +484,19 @@ export async function readChatHistoryPage(params: {
       maxChars: effectiveMaxChars,
       resolveCurrentUserProfileDisplay,
     });
+    if (!completeCliHistory.expanded && !messageId) {
+      // A tail-only merge can look expanded because older imported rows are absent
+      // from that local window. Preserve normal local pagination after the full merge
+      // proves that the import only contributes identity metadata.
+      const localPage = await readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
+      return {
+        ...localPage,
+        messages: projectCliIdentityOntoPagedMessages({
+          pagedMessages: localPage.messages,
+          completeMessages: displayMessages,
+        }),
+      };
+    }
     // Import snapshots are terminal, but a missing display anchor is not a tail request.
     if (
       messageId &&
@@ -454,6 +516,18 @@ export async function readChatHistoryPage(params: {
       },
     };
   }
+  const projectedTailMessages = cliHistory.imported
+    ? projectCliIdentityOntoPagedMessages({
+        pagedMessages: incrementalTail.projected,
+        completeMessages: cliHistory.messages,
+      })
+    : incrementalTail.projected;
+  const windowedTailMessages =
+    offset === undefined
+      ? projectedTailMessages.length > max
+        ? projectedTailMessages.slice(-max)
+        : projectedTailMessages
+      : capOffsetChatHistoryProjectedMessages(projectedTailMessages, max);
   return {
     activeLeafEntryId,
     ...(readPage.transcriptSource === "active" &&
@@ -461,9 +535,9 @@ export async function readChatHistoryPage(params: {
     !incrementalTail.projection.assistantErrorPending
       ? { deltaCursor: readPage.deltaCursor }
       : {}),
-    messages: augmentChatHistoryWithCanvasBlocks(incrementalTail.projected),
+    messages: augmentChatHistoryWithCanvasBlocks(windowedTailMessages),
     pagination: {
-      offset: 0,
+      offset: offset ?? 0,
       totalMessages: readPage.totalMessages,
       rawPageMessages: incrementalTail.rawPageMessages,
     },

@@ -1,5 +1,6 @@
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
+import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 
 const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml", "image/x-icon"]);
 const PLUGIN_ICON_RASTER_SIZE = 256;
@@ -65,20 +66,6 @@ type PluginIconAuthSource = Parameters<typeof resolveControlUiAuthCandidates>[0]
 
 function normalizeMimeType(contentType: string | null): string {
   return contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-}
-
-function gatewayIsSameOrigin(gatewayUrl: string): boolean {
-  try {
-    const url = new URL(gatewayUrl, window.location.href);
-    if (url.protocol === "ws:") {
-      url.protocol = "http:";
-    } else if (url.protocol === "wss:") {
-      url.protocol = "https:";
-    }
-    return url.origin === window.location.origin;
-  } catch {
-    return false;
-  }
 }
 
 function parseSvgNumber(value: string): number | null {
@@ -317,6 +304,8 @@ type FetchProxiedIconParams = {
   signal: AbortSignal;
 };
 
+export type PluginIconFetchContext = Omit<FetchProxiedIconParams, "signal">;
+
 function cancelUnreadResponseBody(response: Response): void {
   if (!response.bodyUsed) {
     // Cancellation is best-effort cleanup; a stalled stream must not block
@@ -329,7 +318,7 @@ async function fetchProxiedIconBlobUrl(
   params: FetchProxiedIconParams,
   routeUrl: string,
 ): Promise<string | null> {
-  if (!gatewayIsSameOrigin(params.gatewayUrl)) {
+  if (!hasSameOriginGatewayTransport(params.gatewayUrl)) {
     return null;
   }
   const authCandidates = resolveControlUiAuthCandidates(params.auth);

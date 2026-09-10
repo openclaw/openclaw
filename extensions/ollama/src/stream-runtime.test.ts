@@ -21,6 +21,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   };
 });
 
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import {
   buildOllamaChatRequest,
@@ -1691,28 +1692,6 @@ function getGuardedFetchJsonBody(
     throw new Error("Expected string request body");
   }
   return requireRecord(JSON.parse(body), "Ollama request body");
-}
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 async function createOllamaTestStream(params: {
@@ -3512,7 +3491,7 @@ describe("createOllamaStreamFn", () => {
   });
 
   it("surfaces bounded non-2xx HTTP response text as a status-prefixed error", async () => {
-    const tracked = cancelTrackedResponse(`${"Service Unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"Service Unavailable ".repeat(1024)}tail`, {
       status: 503,
       statusText: "Service Unavailable",
     });
@@ -3547,7 +3526,7 @@ describe("createOllamaStreamFn", () => {
     const configuredSecret = "stream-boundary-credential-secret";
     const retainedPrefix = configuredSecret.slice(0, -5);
     const safeMarker = "bounded stream diagnostic: ";
-    const tracked = cancelTrackedResponse(
+    const tracked = cancelTrackedTextResponse(
       `${safeMarker}${"x".repeat(8 * 1024 - safeMarker.length - retainedPrefix.length)}${configuredSecret} trailing text`,
       { status: 503, statusText: "Service Unavailable" },
     );

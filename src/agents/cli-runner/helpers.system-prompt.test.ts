@@ -1,6 +1,8 @@
+import { Type } from "typebox";
 // Verifies CLI system-prompt construction without loading the full runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
 
 vi.mock("../../tts/tts-settings.js", () => ({
@@ -13,6 +15,24 @@ describe("buildCliAgentSystemPrompt", () => {
   afterEach(() => {
     clearPluginCommands();
   });
+
+  it.each([true, false])(
+    "gates ClawHub guidance on the CLI tool schema (available=%s)",
+    (available) => {
+      const message = createStubTool("message");
+      message.parameters = Type.Object(
+        available ? { clawhub: Type.Object({ query: Type.String() }) } : {},
+      );
+      const prompt = buildCliAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        tools: [message],
+        runtimeChannel: "webchat",
+        modelDisplay: "test/model",
+      });
+
+      expect(prompt.includes("including when it is already installed")).toBe(available);
+    },
+  );
 
   it("uses config-backed sub-agent delegation mode", () => {
     const prompt = buildCliAgentSystemPrompt({

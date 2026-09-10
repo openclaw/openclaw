@@ -17,6 +17,8 @@ const ExpectedMarkedUnreadAt = Type.Optional(
 
 const SessionsPatchMutationProperties = {
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+  /** Automatic device name, separate from explicit user renames; null clears it. */
+  autoLabel: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   /** Named sidebar tint from SESSION_COLOR_IDS; null clears it. */
   color: Type.Optional(Type.Union([Type.String(), Type.Null()])),

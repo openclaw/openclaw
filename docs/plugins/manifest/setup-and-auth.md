@@ -51,6 +51,8 @@ resource is missing.
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenClaw reads this before provider runtime loads. Provider setup lists use these manifest choices, descriptor-derived setup choices, and install-catalog metadata without loading provider runtime.
 
+When a manifest choice is selected, setup resolves its `provider` and `method` in the owning installed plugin. The runtime auth method does not need to repeat `choiceId` in its wizard metadata. A different plugin or auth method cannot satisfy that declared choice. Explicit `provider-plugin:<provider>:<method>` choices retain their encoded target.
+
 | Field                  | Required | Type                                                                  | What it means                                                                                                                       |
 | ---------------------- | -------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `provider`             | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                                                 |
@@ -174,7 +176,7 @@ Supported evidence entries:
 
 | Field              | Required | Type       | What it means                                                                                                  |
 | ------------------ | -------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
-| `type`             | Yes      | `string`   | Currently `local-file-with-env`.                                                                               |
+| `type`             | Yes      | `string`   | Always `local-file-with-env`.                                                                                  |
 | `fileEnvVar`       | No       | `string`   | Env var containing an explicit credential file path.                                                           |
 | `fallbackPaths`    | No       | `string[]` | Local credential file paths checked when `fileEnvVar` is absent or empty. Supports `${HOME}` and `${APPDATA}`. |
 | `requiresAnyEnv`   | No       | `string[]` | At least one listed env var must be non-empty before the evidence is valid.                                    |

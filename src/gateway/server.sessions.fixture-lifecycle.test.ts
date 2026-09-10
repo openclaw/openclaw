@@ -9,7 +9,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { captureEnv } from "../test-utils/env.js";
-import { runGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
+import { createGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
 
 // Run the actual fixture hooks with controlled setup/teardown overlap instead
 // of waiting for the runner's 180s timeout. Consumer test bodies stay uncalled.
@@ -54,8 +54,9 @@ vi.mock("./server.js", async (importOriginal) => ({
   },
 }));
 
-const { afterEach, beforeEach, expect, test } =
+const { afterAll, afterEach, beforeEach, expect, test } =
   await vi.importActual<typeof import("vitest")>("vitest");
+const runGatewayFixtureFork = createGatewayFixtureFork(afterAll);
 await import("./server.sessions.create.test.js");
 const consumerHooks = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
 const sessions = await import("./test/server-sessions.test-helpers.js");

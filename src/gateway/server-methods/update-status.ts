@@ -12,8 +12,9 @@ import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import {
   findActiveUpdateRun,
-  getUpdateRun,
+  getUpdateRunAsync,
   listUpdateRuns,
+  listUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import {
   getUpdateAvailable,
@@ -120,16 +121,16 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     }
     respond(true, result);
   },
-  "update.runs.get": ({ params, respond }) => {
+  "update.runs.get": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUpdateRunsGetParams, "update.runs.get", respond)) {
       return;
     }
-    respond(true, { run: getUpdateRun(params.runId) ?? null });
+    respond(true, { run: (await getUpdateRunAsync(params.runId)) ?? null });
   },
-  "update.runs.list": ({ params, respond }) => {
+  "update.runs.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUpdateRunsListParams, "update.runs.list", respond)) {
       return;
     }
-    respond(true, { runs: listUpdateRuns(params) });
+    respond(true, { runs: await listUpdateRunsAsync(params) });
   },
 };

@@ -24,6 +24,12 @@ action. Behavior varies by channel.
   channels that support it.
 - Set `remove: true` to remove one specific emoji (requires non-empty
   `emoji`).
+- `clearAll: true` is a Feishu/Lark-only flag that removes every reaction the
+  bot placed on the message; it is paired with an empty `emoji`.
+- `emoji-list` is a separate `message` tool action, not a `react` parameter. It
+  reports the emoji a channel will accept. What it returns and which
+  per-channel action toggle enables it both vary by channel; see the channel
+  pages under [Channels](/channels).
 - On channels with status reactions, `trackToolCalls: true` on a reaction lets
   the runtime reuse that reacted message for the same turn's status lifecycle.
   Discord keeps the chosen reaction stable during work and signals actual
@@ -46,7 +52,7 @@ action. Behavior varies by channel.
   </Accordion>
 
   <Accordion title="Telegram">
-    - Use `emoji-list` to find allowed standard reactions and numeric custom emoji identifiers.
+    - Use `emoji-list` to find allowed standard reactions and numeric custom emoji identifiers. On Telegram, `channels.telegram.actions.reactions` gates both `react` and `emoji-list`, and `emoji-list` returns the reactions allowed in the current chat.
     - Empty `emoji` removes the bot's reactions.
     - `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
 

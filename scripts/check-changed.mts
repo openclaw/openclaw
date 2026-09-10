@@ -84,6 +84,7 @@ type TargetedOxlintCommandOptions = TargetedLintOptions & {
   neutralPathRe: RegExp;
   paths: string[];
   tsconfig: string;
+  maxPaths?: number;
 };
 
 type NpmLockPackageDirsResolver = (changedPaths: string[]) => string[];
@@ -121,6 +122,7 @@ const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
 const ROOT_TEST_TS_CONFIG = "test/tsconfig/tsconfig.test.root.json";
 const TARGETED_LINT_PATH_LIMIT = 8;
+const CORE_LINT_ARGV_BYTES = 24 * 1024;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
@@ -863,14 +865,16 @@ export function createChangedCheckPlan(
         !LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
       );
     });
-    addTargetedLint(
-      createTargetedCoreLintCommand,
-      LINTABLE_CORE_PATH_RE,
-      "lint core",
-      ["lint:core"],
-      undefined,
-      fallbackWithoutTargets,
-    );
+    const coreLint = createTargetedCoreLintCommands(result.paths, baseEnv, {
+      platform: options.platform,
+    });
+    if (coreLint) {
+      for (const command of coreLint) {
+        addCommand(command.name, command.bin, command.args, command.env);
+      }
+    } else if (fallbackWithoutTargets) {
+      addLint("lint core", ["lint:core"]);
+    }
   }
   if (lanes.ui) {
     const targets = result.paths
@@ -996,13 +1000,13 @@ export function createChangedCheckPlan(
   );
 }
 
-export function createTargetedCoreLintCommand(
+export function createTargetedCoreLintCommands(
   paths: string[],
   env: NodeJS.ProcessEnv = process.env,
-  options: TargetedLintOptions = {},
+  options: TargetedLintOptions & { platform?: NodeJS.Platform } = {},
 ) {
-  return createTargetedOxlintCommand({
-    env,
+  const command = createTargetedOxlintCommand({
+    env: createChangedCheckChildEnv(env),
     label: "core",
     lintablePathRe: LINTABLE_CORE_PATH_RE,
     neutralPathRe: CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
@@ -1010,6 +1014,44 @@ export function createTargetedCoreLintCommand(
     tsconfig: CORE_OXLINT_TS_CONFIG,
     ...options,
   });
+  return command ? batchCoreLintCommand(command, options.platform ?? process.platform) : null;
+}
+
+function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Platform) {
+  const prefix = command.args.slice(0, 3);
+  const windows = platform === "win32";
+  // POSIX uses the formatter's conservative argv budget. Keep Windows batches
+  // unchanged until the installed cmd/pnpm shim chain has its own budget.
+  const maxBytes = windows ? Infinity : CORE_LINT_ARGV_BYTES;
+  const maxPaths = windows ? TARGETED_LINT_PATH_LIMIT : Infinity;
+  const argumentBytes = (args: string[]) =>
+    args.reduce((bytes, arg) => bytes + Buffer.byteLength(arg, "utf8") + 1, 0);
+  const prefixBytes = argumentBytes([command.bin, ...prefix]);
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let bytes = prefixBytes;
+  for (const file of command.args.slice(3)) {
+    const fileBytes = argumentBytes([file]);
+    if (prefixBytes + fileBytes > maxBytes) {
+      throw new Error(`Core lint target exceeds the command-line budget: ${file}`);
+    }
+    if (batch.length === maxPaths || bytes + fileBytes > maxBytes) {
+      batches.push(batch);
+      batch = [];
+      bytes = prefixBytes;
+    }
+    batch.push(file);
+    bytes += fileBytes;
+  }
+  if (batch.length) {
+    batches.push(batch);
+  }
+  return batches.map((files) => ({
+    name: files.length === 1 ? "lint core changed file" : "lint core changed files",
+    bin: command.bin,
+    args: [...prefix, ...files],
+    env: command.env,
+  }));
 }
 
 export function createTargetedExtensionLintCommand(
@@ -1024,6 +1066,7 @@ export function createTargetedExtensionLintCommand(
     neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: EXTENSIONS_OXLINT_TS_CONFIG,
+    maxPaths: TARGETED_LINT_PATH_LIMIT,
     ...options,
   });
 }
@@ -1040,6 +1083,7 @@ export function createTargetedScriptLintCommand(
     neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: SCRIPTS_OXLINT_TS_CONFIG,
+    maxPaths: TARGETED_LINT_PATH_LIMIT,
     ...options,
   });
 }
@@ -1052,6 +1096,7 @@ function createTargetedOxlintCommand({
   neutralPathRe,
   paths,
   tsconfig,
+  maxPaths,
 }: TargetedOxlintCommandOptions) {
   if (
     paths.some(
@@ -1070,7 +1115,7 @@ function createTargetedOxlintCommand({
   const targets = paths
     .filter((changedPath) => lintablePathRe.test(changedPath))
     .toSorted((left, right) => left.localeCompare(right));
-  if (targets.length === 0 || targets.length > TARGETED_LINT_PATH_LIMIT) {
+  if (targets.length === 0 || (maxPaths !== undefined && targets.length > maxPaths)) {
     return null;
   }
   if (!targets.every((target) => fileExists(target))) {

@@ -10,7 +10,7 @@ OpenCode Go is a separate paid subscription inside [OpenCode](/providers/opencod
 It uses the same `OPENCODE_API_KEY` credential infrastructure as Zen, but a Zen
 key does not automatically include Go entitlement. Go keeps its own runtime
 provider id (`opencode-go`) so upstream per-model routing stays correct.
-OpenCode Go is bundled in the OpenClaw package for this release, so onboarding
+OpenCode Go is bundled in the OpenClaw package, so onboarding
 and configuration are sufficient; no separate plugin install is required.
 
 | Property         | Value                                              |
@@ -22,7 +22,7 @@ and configuration are sufficient; no separate plugin install is required.
 
 ## Getting started
 
-OpenCode Go is already included with OpenClaw for this release. Continue with
+OpenCode Go is already included with OpenClaw. Continue with
 interactive onboarding or pass the shared OpenCode API key directly.
 
 <Tabs>

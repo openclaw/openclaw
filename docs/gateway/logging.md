@@ -12,7 +12,7 @@ For a user-facing overview (CLI + Control UI + config), see [/logging](/logging)
 
 OpenClaw has two log surfaces:
 
-- **Console output** - what you see in the terminal / Debug UI.
+- **Console output** - what you see in the terminal.
 - **File logs** - JSON lines written by the gateway logger.
 
 At startup, the Gateway logs the resolved default agent model plus the mode defaults that affect new sessions:
@@ -210,3 +210,4 @@ This keeps file logs stable while making interactive output scannable.
 - [Logging](/logging)
 - [OpenTelemetry export](/gateway/opentelemetry)
 - [Diagnostics export](/gateway/diagnostics)
+- [`openclaw logs`](/cli/logs) — tail Gateway logs over RPC from the CLI

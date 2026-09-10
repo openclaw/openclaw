@@ -459,3 +459,9 @@ Start with the artifact identity:
 
 Prefer rerunning the failed exact lane with the same package artifact over
 rerunning the whole release umbrella.
+
+## Related
+
+- [Tests](/reference/test) - index of the testing reference, one page per reader job
+- [Testing](/help/testing) - the full testing kit: suites, live lanes, and Docker runners
+- [Release policy](/reference/RELEASING) - the release process this checklist gates

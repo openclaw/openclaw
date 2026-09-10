@@ -809,7 +809,7 @@ describe("scenario-flow-runner", () => {
     });
   });
 
-  it("loads bundled QA fixture modules through qaImport", async () => {
+  it("loads bundled QA runtime modules through qaImport", async () => {
     const result = await runScenarioFlow({
       api: {
         state: createQaBusState(),
@@ -853,8 +853,19 @@ describe("scenario-flow-runner", () => {
                 },
               },
               {
+                set: "artifacts",
+                value: { expr: 'await qaImport("./suite-artifacts.js")' },
+              },
+              {
+                set: "redaction",
+                value: { expr: 'await qaImport("./gateway-log-redaction.js")' },
+              },
+              {
                 assert: {
-                  expr: 'typeof plugin.evaluateCodexPluginLifecycle === "function"',
+                  expr:
+                    'typeof plugin.evaluateCodexPluginLifecycle === "function" && ' +
+                    'typeof artifacts.publishQaSuiteArtifactFiles === "function" && ' +
+                    'typeof redaction.redactQaGatewayDebugText === "function"',
                 },
               },
             ],

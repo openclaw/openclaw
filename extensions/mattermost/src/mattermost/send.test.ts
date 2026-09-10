@@ -15,7 +15,7 @@ const TEST_CFG = {};
 const MATTERMOST_TABLE_GOLDEN = {
   name: "keeps native Mattermost tables instead of downgrading them to code",
   input: "| A | B |\n|---|---|\n| 1 | 2 |",
-  before: "```\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```",
+  before: "```\n| A   | B   |\n| --- | --- |\n| 1   | 2   |\n```",
   after: "| A | B |\n|---|---|\n| 1 | 2 |",
 };
 const MATTERMOST_MARKDOWN_GOLDENS = [MATTERMOST_TABLE_GOLDEN];

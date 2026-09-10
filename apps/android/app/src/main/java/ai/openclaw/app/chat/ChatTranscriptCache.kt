@@ -34,6 +34,7 @@ private data class CachedMessageContent(
   val sizeBytes: Long? = null,
   val durationMs: Long? = null,
   val playback: String? = null,
+  val toolActivity: ChatToolActivity? = null,
 )
 
 @Serializable
@@ -48,6 +49,9 @@ private data class CachedMessagePayload(
   val usage: ChatMessageUsage? = null,
   val cost: ChatMessageCost? = null,
   val isSyntheticDisplay: Boolean = false,
+  val runId: String? = null,
+  val steerTargetRunId: String? = null,
+  val turnBoundary: Boolean = false,
 )
 
 /**
@@ -342,6 +346,7 @@ class RoomChatTranscriptCache internal constructor(
               sizeBytes = part.sizeBytes,
               durationMs = part.durationMs,
               playback = part.playback,
+              toolActivity = part.toolActivity,
             )
           },
         timestampMs = row.timestampMs,
@@ -357,6 +362,9 @@ class RoomChatTranscriptCache internal constructor(
         usage = payload.usage,
         cost = payload.cost,
         isSyntheticDisplay = payload.isSyntheticDisplay,
+        runId = payload.runId,
+        steerTargetRunId = payload.steerTargetRunId,
+        turnBoundary = payload.turnBoundary,
       )
     }
   }
@@ -420,6 +428,10 @@ class RoomChatTranscriptCache internal constructor(
                   CachedMessageContent(type = "text", text = part.text)
                 }
 
+                part.toolActivity != null -> {
+                  CachedMessageContent(type = part.type, toolActivity = part.toolActivity)
+                }
+
                 (isImage && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank()) ||
                   part.type == "audio" || part.type == "video" || part.type == "file" -> {
                   CachedMessageContent(
@@ -445,7 +457,7 @@ class RoomChatTranscriptCache internal constructor(
             }
           val hasPersistedMetadata =
             message.provenance != null || message.transcriptMarker != null || message.deliveryMirror != null ||
-              message.usage != null || message.cost != null
+              message.usage != null || message.cost != null || message.turnBoundary
           // An empty real call still ends the previous call’s usage snapshot.
           val isRealAssistantBoundary =
             message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant()
@@ -462,6 +474,9 @@ class RoomChatTranscriptCache internal constructor(
               usage = message.usage,
               cost = message.cost,
               isSyntheticDisplay = message.isSyntheticDisplay,
+              runId = message.runId,
+              steerTargetRunId = message.steerTargetRunId,
+              turnBoundary = message.turnBoundary,
             )
           Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)

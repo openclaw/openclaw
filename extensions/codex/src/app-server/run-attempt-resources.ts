@@ -3,6 +3,7 @@ import {
   runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -19,6 +20,7 @@ import {
   type CodexNativePreToolUseFailure,
   type CodexNativeHookRelay,
 } from "./native-hook-relay.js";
+import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
@@ -60,12 +62,14 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     trajectory: params.hostCapabilities.trajectory,
     tools: toolBridge.availableSpecs,
   });
-  const executionState: {
+  const initialResourceState: {
     sandboxExecEnvironment: CodexSandboxExecEnvironment | undefined;
     executionDisconnectError: Error | undefined;
+    releaseInferenceContext: (() => void) | undefined;
   } = {
     sandboxExecEnvironment: undefined,
     executionDisconnectError: undefined,
+    releaseInferenceContext: undefined,
   };
   const state = {
     client: undefined as unknown as CodexAppServerClient,
@@ -88,7 +92,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSharedClientLease: undefined as (() => void) | undefined,
     startupClientUnsafe: false,
     sharedCodexClientRetiredForOneShotCleanup: false,
-    ...executionState,
+    ...initialResourceState,
     codexEnvironmentSelection: undefined as CodexTurnEnvironmentParams[] | undefined,
     codexExecutionCwd: effectiveCwd,
     codexSandboxPolicy: undefined as CodexSandboxPolicy | undefined,
@@ -208,11 +212,31 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const registerNativeSubagentMonitor = (parentThreadId: string) => {
     unregisterNativeSubagentMonitor();
+    const sessionKey = params.sessionKey;
+    const storePath = params.sessionTarget?.storePath;
+    const parentSession =
+      sessionKey && storePath
+        ? getSessionEntry({
+            agentId: sessionAgentId,
+            sessionKey,
+            storePath,
+            readConsistency: "latest",
+            hydrateSkillPromptRefs: false,
+          })
+        : undefined;
     state.nativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register({
       client: state.client,
       parentThreadId,
       requesterSessionKey: params.sessionKey,
       taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+      historyOwner: createCodexNativeSubagentHistoryOwner({
+        parentThreadId,
+        sessionId: params.sessionId,
+        ...(parentSession?.sessionId === params.sessionId
+          ? { lifecycleRevision: parentSession.lifecycleRevision }
+          : {}),
+        binding: state.thread,
+      }),
       agentId: sessionAgentId,
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
       retainParentThread: (protectedThreadId) =>
@@ -230,6 +254,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     });
   };
   const releaseCurrentRoute = () => {
+    state.releaseInferenceContext?.();
+    state.releaseInferenceContext = undefined;
     state.detachRouteAbort();
     state.detachRouteAbort = () => undefined;
     state.turnRoute?.release();

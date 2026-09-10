@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { telegramPlugin } from "./channel.js";
@@ -67,14 +68,6 @@ function installTelegramRuntime() {
   } as unknown as TelegramRuntime;
   setTelegramRuntime(telegramRuntime);
   return telegramRuntime;
-}
-
-function createRuntimeEnvMock() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
 }
 
 function createTelegramConfig(
@@ -439,7 +432,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
       nextCfg: createTelegramConfig("ops", { botToken: "123456:new-token" }),
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     await expect(
@@ -462,7 +455,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
       nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     await expect(
@@ -484,7 +477,7 @@ describe("telegramPlugin gateway startup", () => {
     await telegramPlugin.lifecycle?.onAccountRemoved?.({
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     await expect(
@@ -511,7 +504,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       account,
       cfg,
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     expect(result).toEqual({ cleared: true, envToken: false, loggedOut: true });
@@ -547,7 +540,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       account: telegramPlugin.config.resolveAccount(cfg, "ops"),
       cfg,
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     expect(result).toEqual({ cleared: true, envToken: false, loggedOut: false });

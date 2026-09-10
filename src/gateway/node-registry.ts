@@ -40,6 +40,7 @@ import {
 } from "./node-command-policy.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { serializeNodeEvent } from "./node-invoke-request.js";
+import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -67,6 +68,8 @@ import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+
+export type { NodeInvokeResult } from "./node-invoke.types.js";
 
 /** Connected node session advertised over Gateway websocket. */
 export type NodeSession = {
@@ -155,14 +158,6 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   nodeId: string;
   connId: string;
   expiresAtMs: number | null;
-};
-
-/** Result payload returned from node.invoke. */
-export type NodeInvokeResult = {
-  ok: boolean;
-  payload?: unknown;
-  payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
 };
 
 /** Connectivity probe result for a registered node. */
@@ -1182,30 +1177,13 @@ export class NodeRegistry {
     this.publishActiveNodeContext();
   }
 
-  async invoke(params: {
-    nodeId: string;
-    expectedConnId?: string;
-    expectedPairingGeneration?: string;
-    command: string;
-    params?: unknown;
-    timeoutMs?: number;
-    /** Inactivity deadline reset by each ordered progress chunk. */
-    idleTimeoutMs?: number;
-    onProgress?: (chunk: string) => void;
-    signal?: AbortSignal;
-    idempotencyKey?: string;
-    sessionKey?: string;
-    /** Receives the id and armed hard deadline after a successful dispatch. */
-    onDispatchReady?: (invokeId: string, deadlineAtMs?: number) => void;
-    /** Revalidates caller authority at the registry-owned transport handoff. */
-    isDispatchAuthorized?: () => boolean;
-  }): Promise<NodeInvokeResult> {
+  async invoke(params: NodeInvokeParams): Promise<NodeInvokeResult> {
     return await invokePublicNodeRegistry(this, params);
   }
 
   /** Internal cleanup retains its owner through replies without admitting new root work. */
   invokeLifecycle(
-    params: Parameters<NodeRegistry["invoke"]>[0] & { isDispatchAuthorized: () => boolean },
+    params: NodeInvokeParams & { isDispatchAuthorized: () => boolean },
   ): Promise<NodeInvokeResult> {
     return invokeLifecycleNodeRegistry(this, params);
   }

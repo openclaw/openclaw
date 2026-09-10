@@ -104,8 +104,9 @@ bare-id links and links with an older title still resolve, and the browser repla
 the name with the current title without adding history. Titles that produce no slug
 use the bare id. A configured Control UI base path prefixes the route, for example
 `/openclaw/beam/fix-the-upload-flow-0123456789ab`. Longer prefixes through the full
-32-character Beam id also work. Update the Beam skill before updating the receiver
-so its response validator accepts named links.
+32-character Beam id also work. Named links shipped in the 2026.8.2 receiver;
+update the Beam skill before updating the receiver so its response validator
+accepts them.
 
 Uploading the same `beamId` updates the existing catalog row when its `updatedAt` is newer. Equal-timestamp uploads may refresh the same state or mark a live row completed, but cannot regress a completed row to live. Older uploads and equal-timestamp completion regressions still return the normal `200` success response, but OpenClaw ignores them. Only accepted updates refresh retention and uploader attribution.
 

@@ -52,6 +52,8 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     const hint = api.runtime.system.formatNativeDependencyHint(pkg);
     ```
 
+    `requestHeartbeatNow(...)` is tracked as `plugin-runtime-api-compat-aliases` in the [compatibility registry](/plugins/compatibility#current-compatibility-areas) with a `removeAfter` date of 2026-10-01; use `requestHeartbeat({ source, intent, reason })` in new code.
+
     `runHeartbeatOnce(...)` runs a single heartbeat cycle immediately, bypassing the normal coalesce timer. Delivery defaults to the configured operator DM (`commands.ownerAllowFrom`, then channel `allowFrom`); pass `{ heartbeat: { target: "none" } }` for an internal-only run.
 
     `runCommandWithTimeout(...)` returns captured `stdout` and `stderr`, optional
@@ -77,6 +79,13 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
   </Accordion>
   <Accordion title="api.runtime.logging">
     Logging.
+
+    Generate private transport tokens with `generateSecureToken({ bytes: 32, redact: true })`
+    from `openclaw/plugin-sdk/secure-random-runtime`. The object form requires at least
+    16 random bytes and registers the generated value for exact diagnostic redaction
+    before returning it. Existing numeric calls keep their ordinary ID behavior.
+    This grants no credential access or request authority; preserve live protocol
+    values and redact only at presentation boundaries.
 
     ```typescript
     const verbose = api.runtime.logging.shouldLogVerbose();

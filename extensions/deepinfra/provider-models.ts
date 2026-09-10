@@ -2,10 +2,7 @@ import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-r
 // Deepinfra provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import {
-  buildManifestModelProviderConfig,
-  getCachedLiveCatalogValue,
-} from "openclaw/plugin-sdk/provider-catalog-shared";
+import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -17,24 +14,18 @@ import {
 } from "./media-models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseDeepInfraPricingCatalog } from "./pricing-api.js";
+import {
+  DEEPINFRA_MODEL_CATALOG,
+  buildDeepInfraModelDefinition,
+} from "./provider-static-catalog.js";
 
 const log = createSubsystemLogger("deepinfra-models");
-
-const DEEPINFRA_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
-  providerId: "deepinfra",
-  catalog: manifest.modelCatalog.providers.deepinfra,
-});
 
 const DEEPINFRA_MODELS_URL = `${DEEPINFRA_BASE_URL}/models?sort_by=openclaw&filter=with_meta`;
 const DEEPINFRA_PRICING_URL = "https://api.deepinfra.com/models/list";
 
-const DEEPINFRA_DEFAULT_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash";
-export const DEEPINFRA_DEFAULT_MODEL_REF = `deepinfra/${DEEPINFRA_DEFAULT_MODEL_ID}`;
-
 const DEEPINFRA_DEFAULT_CONTEXT_WINDOW = 128000;
 const DEEPINFRA_DEFAULT_MAX_TOKENS = 8192;
-
-export const DEEPINFRA_MODEL_CATALOG: ModelDefinitionConfig[] = DEEPINFRA_MANIFEST_PROVIDER.models;
 
 const DISCOVERY_TIMEOUT_MS = 5000;
 const DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -282,30 +273,6 @@ function manifestFallbackCatalog(): DeepInfraDiscoveredCatalog {
 // register with these defaults; live discovery feeds the chat, image, and video catalog hooks.
 export function getDeepInfraSurfaceFallbackCatalog(): DeepInfraDiscoveredCatalog {
   return manifestFallbackCatalog();
-}
-
-// DeepInfra serves every model family over one OpenAI-compatible endpoint, so
-// core's endpoint-based attribution resolves all of them to thinkingFormat
-// "openai". DeepSeek models emit DSML tool-call markup (`<|DSML|tool_calls>`)
-// and reasoning_content that core only strips/recovers when thinkingFormat is
-// "deepseek"; without this tag the markup leaks into user channels and the tool
-// calls are lost. Declare the dialect per family like opencode-go does for Qwen
-// (extensions/opencode-go/provider-catalog.ts).
-function resolveDeepInfraThinkingFormat(modelId: string | undefined): "deepseek" | undefined {
-  const vendor = (modelId ?? "").toLowerCase().split("/")[0];
-  return vendor === "deepseek-ai" ? "deepseek" : undefined;
-}
-
-export function buildDeepInfraModelDefinition(model: ModelDefinitionConfig): ModelDefinitionConfig {
-  const thinkingFormat = model.compat?.thinkingFormat ?? resolveDeepInfraThinkingFormat(model.id);
-  return {
-    ...model,
-    compat: {
-      ...model.compat,
-      supportsUsageInStreaming: model.compat?.supportsUsageInStreaming ?? true,
-      ...(thinkingFormat ? { thinkingFormat } : {}),
-    },
-  };
 }
 
 function chatSurfaceModelToModelDefinition(

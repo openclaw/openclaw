@@ -31,7 +31,6 @@ function renderSubmissionResult(result: UpdateFailureReportSubmitResult): string
     result.message,
     ...(result.url ? [`Existing issue: ${result.url}`] : []),
     ...(result.fallbackUrl ? [`Existing prefilled issue: ${result.fallbackUrl}`] : []),
-    `Saved sanitized report: ${result.savedReportPath}`,
   ];
 }
 
@@ -41,11 +40,15 @@ export async function runInteractiveUpdateFailureAction(params: {
   env: NodeJS.ProcessEnv;
   error?: string;
   result?: UpdateRunResult;
+  rollbackCompleted?: boolean;
   runtime: Pick<RuntimeEnv, "error" | "log">;
 }): Promise<"triage" | "handled"> {
   while (true) {
     const action = await select<UpdateFailureAction>({
-      message: "Choose the next action for this failed update",
+      message: params.rollbackCompleted
+        ? "Update failed, but rollback completed successfully. Choose the next action"
+        : "Choose the next action for this failed update",
+      ...(params.rollbackCompleted ? { initialValue: "dismiss" as const } : {}),
       options: [
         { value: "triage", label: "Diagnose update failure" },
         { value: "report", label: "Report update failure" },

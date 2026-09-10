@@ -17,6 +17,7 @@ import {
   sessionMatchesExpectedTranscriptTurn,
 } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { resolveSessionWorkerPlacementContext } from "../../gateway/session-worker-placement-context.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
 import type {
@@ -221,6 +222,16 @@ export function createReplyRestartRecoveryClaimController(params: {
           }
         }
         return "duplicate-source";
+      }
+    }
+    if (recorder?.getPendingInputMessage?.() && !recorder.hasPersisted()) {
+      const placement = resolveSessionWorkerPlacementContext()
+        .workerSessionPlacementService?.getMany([sessionId])
+        .get(sessionId);
+      // A staged worker input belongs to placement admission, not local restart
+      // recovery. Its runtime writer consumes it only after setup and sync finish.
+      if (placement && placement.state !== "local") {
+        return "admitted";
       }
     }
     if (isExactRecoveryClaim) {

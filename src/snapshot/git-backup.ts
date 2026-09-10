@@ -11,6 +11,7 @@ import {
   requireGitCommand as requireGit,
   requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { spawnCommand } from "../process/exec-spawn.js";
 import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
@@ -275,6 +276,9 @@ export async function createGitBackup(params: {
   now?: Date;
   gitEnv?: NodeJS.ProcessEnv;
 }): Promise<GitBackupCreateResult> {
+  for (const database of params.databases) {
+    assertNotUpdateCapturePath(database.path, params.stateDir);
+  }
   const repositoryPath = path.resolve(params.repositoryPath);
   await initializeGitBackupRepository({
     repositoryPath,

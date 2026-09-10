@@ -41,7 +41,7 @@ vi.mock("./setup.shared.js", async (importOriginal) => {
 });
 
 vi.mock("./setup.migration-import.js", () => ({
-  detectSetupMigrationSources: vi.fn(async () => []),
+  detectSetupMigrationSources: vi.fn(async () => ({ detections: [], providerDescriptors: [] })),
   listSetupMigrationOptions: vi.fn(async () => []),
   runSetupMigrationImport: vi.fn(),
 }));

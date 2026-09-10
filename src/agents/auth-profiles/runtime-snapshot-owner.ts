@@ -92,6 +92,7 @@ export function listRuntimeLocalProfileIds(
   return Object.entries(store.profiles).flatMap(([profileId, credential]) =>
     mainStore &&
     shouldUseMainOwnerForLocalOAuthCredential({
+      profileId,
       local: credential,
       main: mainStore.profiles[profileId],
     })
@@ -313,6 +314,13 @@ export function pruneAuthProfileStoreReferences(
   keptProfileIds: Set<string>,
   keptOrderProfileIds = keptProfileIds,
 ): void {
+  if (store.runtimeCredentialSources) {
+    store.runtimeCredentialSources = Object.fromEntries(
+      Object.entries(store.runtimeCredentialSources).filter(([profileId]) =>
+        keptProfileIds.has(profileId),
+      ),
+    );
+  }
   store.order = store.order
     ? Object.fromEntries(
         Object.entries(store.order)

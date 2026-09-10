@@ -13,7 +13,7 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
 } from "./openai-responses-compaction-replay.js";
-import { stringifyRedactedEvent, stringifyRedactedPayload } from "./openai-responses-debug.js";
+import { stringifyRedactedEvent, summarizeResponsesPayload } from "./openai-responses-debug.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 import {
   processResponsesStream,
@@ -1041,8 +1041,19 @@ describe("OpenAI Responses compaction replay", () => {
     const secret = "opaque-preview-compaction";
     const value = { input: [{ type: "compaction", encrypted_content: secret }] };
 
-    expect(stringifyRedactedPayload(value)).not.toContain(secret);
-    expect(stringifyRedactedEvent(value)).not.toContain(secret);
-    expect(stringifyRedactedPayload(value)).toContain("<opaque data omitted>");
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
+    try {
+      const payload = summarizeResponsesPayload(value);
+      expect(payload).not.toContain(secret);
+      expect(stringifyRedactedEvent(value)).not.toContain(secret);
+      expect(payload).toContain("<opaque data omitted>");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
   });
 });

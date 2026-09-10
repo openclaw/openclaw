@@ -108,7 +108,7 @@ async function runDoctorHealthFlowWithResult(
 
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
     const { assertConfigWriteAllowedInCurrentMode } =
-      await import("../config/nix-mode-write-guard.js");
+      await import("../config/config-write-guard.js");
     assertConfigWriteAllowedInCurrentMode();
   }
   let maintenance: Awaited<
@@ -223,6 +223,9 @@ async function runDoctorHealthFlowWithResult(
     }
     await maintenance?.finish(ctx.cfg);
     const warnings = normalizeUpdatePostInstallDoctorWarnings([
+      ...(ctx.configResult.stateMigrationStepReceipts ?? []).flatMap((receipt) =>
+        receipt.outcome === "warning" ? receipt.warnings : [],
+      ),
       ...(ctx.postInstallDoctorResult?.warnings ?? []),
       ...(ctx.updateWarnings ?? []),
     ]);

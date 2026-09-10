@@ -140,6 +140,26 @@ describe("Tool Search flattened call arguments", () => {
       arguments: { id: "inspect_resource", args: null, input: null, command: "flattened" },
       expected: { command: "flattened" },
     },
+    ...["args", "input"].map((wrapper) => ({
+      label: `empty ${wrapper} wrapper with flattened top-level params`,
+      arguments: { id: "inspect_resource", [wrapper]: {}, command: "list", timeout_ms: 5_000 },
+      expected: { command: "list", timeout_ms: 5_000 },
+    })),
+    {
+      label: "empty args wrapper with dotted params",
+      arguments: {
+        id: "inspect_resource",
+        args: {},
+        "args.path": "projects/example.md",
+        "args.limit": 20,
+      },
+      expected: { path: "projects/example.md", limit: 20 },
+    },
+    {
+      label: "empty args wrapper without other params",
+      arguments: { id: "inspect_resource", args: {} },
+      expected: {},
+    },
     {
       label: "bare selector",
       arguments: { id: "inspect_resource" },
@@ -178,6 +198,15 @@ describe("Tool Search flattened call arguments", () => {
       parameters: Type.Object({ id: Type.String() }, { additionalProperties: false }),
       expected: { id: "record-7" },
     },
+    ...["args", "input"].map((wrapper) => ({
+      label: `empty ${wrapper} wrapper with flattened target arguments`,
+      arguments: { id: "inspect_resource", [wrapper]: {}, command: "list", timeout_ms: 5_000 },
+      parameters: Type.Object(
+        { command: Type.String(), timeout_ms: Type.Number() },
+        { additionalProperties: false },
+      ),
+      expected: { command: "list", timeout_ms: 5_000 },
+    })),
     {
       label: "redundant selectors for a strict no-argument tool",
       arguments: { id: "inspect_resource", toolId: "inspect_resource", name: "inspect_resource" },

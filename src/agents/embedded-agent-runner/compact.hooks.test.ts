@@ -2993,19 +2993,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("applies validated transcript before hooks even when it becomes empty", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
-    const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
-      originalMessages: [],
-      currentMessages: [],
-      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
-    });
-    await compactTesting.runBeforeCompactionHooks({
-      hookRunner,
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionAgentId: "main",
-      workspaceDir: TEST_WORKSPACE_DIR,
-      metrics: beforeMetrics,
-    });
+    const { sanitizeSessionHistory } = await import("./replay-history.js");
+    vi.mocked(sanitizeSessionHistory).mockResolvedValueOnce([]);
+
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+
+    expect(result.ok).toBe(true);
 
     const beforeContext = sessionHook("compact:before")?.context;
     expectRecordFields(beforeContext, {
@@ -3737,6 +3730,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("releases the prepared runtime lease when host authority expires after admission", async () => {
+    const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
+    const parent = new AsyncWorkScope();
     const admissionStarted = createDeferred();
     const releaseAdmission = createDeferred();
     const releaseLease = vi.fn();
@@ -3754,18 +3749,27 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       return { ...lease, release: releaseLease };
     }) as never);
 
-    const pending = compactEmbeddedAgentSession(wrappedCompactionArgs(), {
-      assertActive: () => {
-        if (!hostActive) {
-          throw new Error("queued compaction host authority expired");
-        }
-      },
-    });
+    const pending = parent.run(() =>
+      compactEmbeddedAgentSession(wrappedCompactionArgs(), {
+        assertActive: () => {
+          if (!hostActive) {
+            throw new Error("queued compaction host authority expired");
+          }
+        },
+      }),
+    );
     await admissionStarted.promise;
     hostActive = false;
     releaseAdmission.resolve(undefined);
 
-    await expect(pending).rejects.toThrow("queued compaction host authority expired");
+    try {
+      await expect(pending).rejects.toThrow("queued compaction host authority expired");
+    } finally {
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [parent],
+        () => parent.drain(),
+      );
+    }
     expect(releaseLease).toHaveBeenCalledTimes(1);
     expect(resolveContextEngineMock).not.toHaveBeenCalled();
   });

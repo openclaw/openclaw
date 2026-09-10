@@ -122,13 +122,18 @@ export type ModelFallbackResultClassification =
   | null
   | undefined;
 
+/** Internal fallback execution also accepts producer-owned terminal causes. */
+type ModelFallbackAttemptClassification =
+  | ModelFallbackResultClassification
+  | { stopReason: ModelFallbackChainStopReason };
+
 export type ModelFallbackResultClassifier<T> = (attempt: {
   result: T;
   provider: string;
   model: string;
   attempt: number;
   total: number;
-}) => ModelFallbackResultClassification | Promise<ModelFallbackResultClassification>;
+}) => ModelFallbackAttemptClassification | Promise<ModelFallbackAttemptClassification>;
 
 export type ModelFallbackRunResult<T> = {
   outcome: "completed" | "exhausted";
@@ -300,7 +305,7 @@ export async function runFallbackAttempt<T>(params: {
   attribution?: FailoverAttribution;
   abortSignal?: AbortSignal;
 }): Promise<
-  | { success: ModelFallbackRunResult<T> }
+  | { success: ModelFallbackRunResult<T>; stopped?: true }
   | {
       error: unknown;
       classifiedResult?: ModelFallbackClassifiedResult<T>;
@@ -337,7 +342,18 @@ export async function runFallbackAttempt<T>(params: {
     return { error: runResult.error };
   }
   if (!attemptError) {
+    const stopReason =
+      classification && "stopReason" in classification ? classification.stopReason : undefined;
+    if (stopReason && params.total > 1) {
+      logModelFallbackChainStopped({
+        reason: stopReason,
+        provider: params.provider,
+        model: params.model,
+        ...params.attribution,
+      });
+    }
     return {
+      ...(stopReason ? { stopped: true as const } : {}),
       success: {
         outcome: "completed",
         result: runResult.result,
@@ -376,10 +392,10 @@ export async function runFallbackAttempt<T>(params: {
 }
 
 function resolveResultClassificationError(
-  classification: ModelFallbackResultClassification,
+  classification: ModelFallbackAttemptClassification,
   params: { provider: string; model: string; attribution?: FailoverAttribution },
 ) {
-  if (!classification) {
+  if (!classification || "stopReason" in classification) {
     return null;
   }
   if ("error" in classification) {

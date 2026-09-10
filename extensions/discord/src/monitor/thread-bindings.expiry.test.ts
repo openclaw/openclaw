@@ -1,29 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolvePreparedThreadBindingLifecycle } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
-const sdk = vi.hoisted(() => ({ helperAvailable: true, calls: 0 }));
-vi.mock("openclaw/plugin-sdk/thread-bindings-session-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")>();
-  const resolve = (params: Parameters<typeof actual.resolveThreadBindingExpiry>[0]) => {
-    sdk.calls += 1;
-    return actual.resolveThreadBindingExpiry(params);
-  };
-  return {
-    ...actual,
-    get resolveThreadBindingExpiry() {
-      return sdk.helperAvailable ? resolve : undefined;
-    },
-  };
-});
-
-describe.each([true, false])("prepared Discord expiry (SDK helper available=%s)", (available) => {
-  beforeEach(() => {
-    sdk.helperAvailable = available;
-    sdk.calls = 0;
-  });
-
+describe("prepared Discord expiry", () => {
   it.each([
     {
       boundAt: 100,
@@ -77,6 +56,5 @@ describe.each([true, false])("prepared Discord expiry (SDK helper available=%s)"
     expect(
       resolvePreparedThreadBindingLifecycle({ record, idleTimeoutMs: idle, maxAgeMs: max }),
     ).toEqual({ idleTimeoutMs: idle, maxAgeMs: max, ...expiry });
-    expect(sdk.calls).toBe(available ? 1 : 0);
   });
 });

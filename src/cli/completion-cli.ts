@@ -28,8 +28,9 @@ import {
   type CompletionShell,
 } from "./completion-runtime.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
-import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry-core.js";
+import { getCoreCliCompletionGroups } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
+import { removeCommandGroupNames } from "./program/register-command-groups.js";
 import { getSubCliEntries, registerSubCliByNameCore } from "./program/register.subclis-core.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
@@ -207,8 +208,9 @@ export function registerCompletionCli(program: Command) {
       // Our CLI defaults to lazy registration for perf; force-register core commands here.
       const ctx = getProgramContext(program);
       if (ctx) {
-        for (const name of getCoreCliCommandNames()) {
-          await registerCoreCliByName(program, ctx, name);
+        for (const entry of getCoreCliCompletionGroups(ctx)) {
+          removeCommandGroupNames(program, entry);
+          await entry.register(program);
         }
       }
 

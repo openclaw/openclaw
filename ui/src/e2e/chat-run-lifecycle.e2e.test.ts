@@ -474,6 +474,10 @@ suite.define(() => {
       const diagnostic =
         "Provider request failed: session store unavailable. Retry after recovery.";
       if (terminalState === "error") {
+        const readMatch = { key: "agent:main:main", unread: false };
+        const readsBeforeError = (await gateway.getRequests("sessions.patch", readMatch)).length;
+        // Inspect terminal attention before the visible pane acknowledges it as read.
+        await gateway.deferNext("sessions.patch", readMatch);
         await gateway.emitGatewayEvent("chat", {
           runId,
           sessionKey: "agent:main:main",
@@ -481,6 +485,10 @@ suite.define(() => {
           errorMessage: diagnostic,
         });
         try {
+          await gateway.waitForRequest("sessions.patch", {
+            after: readsBeforeError,
+            match: readMatch,
+          });
           await currentPage.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
           await mainSession.locator('[data-session-attention="error"]').waitFor();
           expect(await mainSession.getAttribute("aria-label")).toContain(diagnostic);
@@ -489,7 +497,11 @@ suite.define(() => {
           );
           await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
         } finally {
-          await gateway.resolveDeferred("sessions.list");
+          try {
+            await gateway.resolveDeferred("sessions.patch");
+          } finally {
+            await gateway.resolveDeferred("sessions.list");
+          }
         }
         return;
       }

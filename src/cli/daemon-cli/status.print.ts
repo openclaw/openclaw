@@ -1,5 +1,7 @@
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 // Human and JSON rendering for gathered daemon status diagnostics.
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
+import { formatHostDesktopStatus } from "../../commands/status-overview-values.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -7,6 +9,7 @@ import {
 } from "../../daemon/constants.js";
 import { formatGatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
+import { formatForeignLaunchdJobs } from "../../daemon/launchd-foreign-jobs.js";
 import {
   resolveGatewayRestartLogPath,
   resolveGatewaySupervisorLogPaths,
@@ -119,23 +122,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       `${label("Gateway heap:")} ${infoText(formatGatewayHeapLimitReport(service.gatewayHeap))}`,
     );
   }
-  const hostDesktop = status.hostDesktop ?? {
-    enabled: false,
-    state: "disabled" as const,
-    port: 5900,
-  };
-  const hostDesktopValue =
-    hostDesktop.state === "disabled"
-      ? "disabled"
-      : hostDesktop.state === "managed"
-        ? hostDesktop.managedState === "running"
-          ? `managed · running · display :${hostDesktop.display} · 127.0.0.1:${hostDesktop.port} · security VncAuth`
-          : hostDesktop.managedState === "failed"
-            ? `managed · failed: ${hostDesktop.error}`
-            : hostDesktop.managedState === "unknown"
-              ? "managed · runtime state unavailable"
-              : `managed · ${hostDesktop.managedState === "not-started" ? "not started" : "starting"}`
-        : `${hostDesktop.state} · 127.0.0.1:${hostDesktop.port}${hostDesktop.security ? ` · security ${hostDesktop.security}` : ""}`;
+  const hostDesktopValue = formatHostDesktopStatus(status.hostDesktop);
   defaultRuntime.log(`${label("Host desktop:")} ${infoText(hostDesktopValue)}`);
   spacer();
 
@@ -445,9 +432,49 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  if (service.staleUpdateLaunchdJobs?.length) {
+  if (service.foreignLaunchdInspectionError) {
+    defaultRuntime.error(
+      warnText(
+        `Could not inspect foreign launchd jobs: ${sanitizeTerminalText(service.foreignLaunchdInspectionError)}`,
+      ),
+    );
+    spacer();
+  }
+  if (service.foreignLaunchdJobs?.length) {
+    const shouldWarn = service.foreignLaunchdJobs.some(
+      (job) => job.keepAlive || job.gatewayActions.length > 0,
+    );
+    if (shouldWarn) {
+      defaultRuntime.error(warnText("Foreign launchd jobs detected (macOS)."));
+      defaultRuntime.error(warnText(formatForeignLaunchdJobs(service.foreignLaunchdJobs)));
+    } else {
+      defaultRuntime.log(infoText("Other OpenClaw launchd jobs (macOS)"));
+      defaultRuntime.log(infoText(formatForeignLaunchdJobs(service.foreignLaunchdJobs)));
+    }
+    const restarts = service.forcedRestartSummary;
+    if (shouldWarn && restarts && restarts.count > 0) {
+      defaultRuntime.error(
+        warnText(
+          `${restarts.count} external forced Gateway restart(s) in the last ${Math.round(restarts.windowMs / 60_000)} minutes. Listed lifecycle jobs may be responsible; this is not proof of attribution.`,
+        ),
+      );
+    }
+    if (shouldWarn && service.foreignLaunchdJobs.some((job) => job.safeToRemove)) {
+      defaultRuntime.error(
+        warnText(
+          `Remove confirmed stray Gateway lifecycle jobs with ${formatCliCommand("openclaw doctor --fix")}.`,
+        ),
+      );
+    }
+    spacer();
+  }
+
+  const staleUpdateLaunchdJobs = service.staleUpdateLaunchdJobs?.filter(
+    (job) => !service.foreignLaunchdJobs?.some((foreign) => foreign.label === job.label),
+  );
+  if (staleUpdateLaunchdJobs?.length) {
     defaultRuntime.error(errorText("Stale OpenClaw updater launchd job(s) detected."));
-    for (const job of service.staleUpdateLaunchdJobs) {
+    for (const job of staleUpdateLaunchdJobs) {
       const exitStatus =
         job.lastExitStatus !== undefined ? `, last exit ${job.lastExitStatus}` : "";
       const pid = job.pid !== undefined ? `, pid ${job.pid}` : "";
@@ -499,8 +526,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       );
     } else if (process.platform === "darwin") {
       const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
-      defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
-      defaultRuntime.error(`${errorText("Errors:")} suppressed`);
+      // The plist points both launchd handles at this file, so startup crashes that
+      // never reached the logger land here too; do not advertise a separate stderr.
+      defaultRuntime.error(
+        `${errorText("Logs (stdout and stderr):")} ${shortenHomePath(logs.stdoutPath)}`,
+      );
     }
     defaultRuntime.error(
       `${errorText("Restart log:")} ${shortenHomePath(resolveGatewayRestartLogPath(serviceEnv))}`,

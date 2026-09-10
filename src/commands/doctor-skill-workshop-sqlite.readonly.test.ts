@@ -11,7 +11,10 @@ import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { inspectLegacySkillWorkshopMigration } from "./doctor-skill-workshop-sqlite.js";
+import {
+  inspectLegacySkillWorkshopMigration,
+  migrateLegacySkillWorkshopProposals,
+} from "./doctor-skill-workshop-sqlite.js";
 import {
   createAppliedLegacyProposal,
   seedLegacyV15ProposalRows,
@@ -39,6 +42,56 @@ async function snapshotDatabase(databasePath: string) {
 }
 
 describe("read-only Skill Workshop migration inspection", () => {
+  it("identifies remaining targets after retargeting without recommending an identical repair", async () => {
+    await withOpenClawTestState({ label: "workshop-remaining-targets" }, async (state) => {
+      const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+      const blockedWorkspace = state.path("old-workspace");
+      await fs.mkdir(path.join(blockedWorkspace, ".openclaw"), { recursive: true });
+      await fs.writeFile(path.join(blockedWorkspace, ".openclaw", "workspace-state.json"), "{}");
+      const records = [
+        { name: "eligible", workspaceDir: state.workspaceDir },
+        { name: "blocked", workspaceDir: blockedWorkspace },
+      ].map(({ name, workspaceDir }) => {
+        const record: SkillProposalRecord = createAppliedLegacyProposal({
+          id: `${name}-20260901-1234567890`,
+          title: name,
+          description: "Saved procedure",
+          content: "# Saved\n",
+          target: { skillKey: name, skillDir: path.join(workspaceDir, "skills", name) },
+        });
+        record.status = "pending";
+        delete record.appliedAt;
+        return record;
+      });
+      for (const record of records) {
+        importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+      }
+      const [eligible, blocked] = records;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const migration = await migrateLegacySkillWorkshopProposals({ config, env: state.env });
+        if (attempt === 0) {
+          expect(migration.changes.join("\n")).toContain("retargeted 1 proposal");
+        } else {
+          expect(migration.changes).toEqual([]);
+        }
+        expect(migration.warnings.join("\n")).toContain(
+          "Legacy workspace setup state requires migration",
+        );
+        const result = await runDoctorLintChecks(
+          { mode: "doctor", runtime: { log() {}, error() {}, exit() {} }, cfg: config },
+          { checks: createCoreHealthChecks(), onlyIds: ["core/doctor/skill-workshop-relocation"] },
+        );
+        expect(result.findings).toHaveLength(1);
+        const finding = result.findings[0]!;
+        expect(finding.message).toContain(blocked!.id);
+        expect(finding.message).toContain(blocked!.target.skillDir);
+        expect(finding.message).not.toContain(eligible!.id);
+        expect(finding.fixHint).not.toContain("Run `openclaw doctor --fix`");
+        expect(finding.fixHint).toContain("migration warnings");
+      }
+    });
+  });
+
   it.each([
     { roots: [], proposal: false, preserved: 0, automatic: false },
     { roots: ["eligible"], proposal: false, preserved: 0, automatic: true },
@@ -193,6 +246,7 @@ describe("read-only Skill Workshop migration inspection", () => {
           inspectLegacySkillWorkshopMigration({ config, env: state.env }),
         ).resolves.toEqual({
           externalProposalCount: 1,
+          externalProposalDetails: expect.any(Array),
           externalProposalCountsByAgent: { main: 1 },
           legacyBackupRootCount: 0,
           preservedLegacyBackupRootCount: 0,
@@ -288,6 +342,7 @@ describe("read-only Skill Workshop migration inspection", () => {
         inspectLegacySkillWorkshopMigration({ config, env: state.env }),
       ).resolves.toEqual({
         externalProposalCount: 9,
+        externalProposalDetails: expect.any(Array),
         externalProposalCountsByAgent: { main: 5, other: 2, retired: 1, unknown: 1 },
         legacyBackupRootCount: 0,
         preservedLegacyBackupRootCount: 0,

@@ -152,6 +152,12 @@ export async function createEmbeddingProvider(
         const fallbackResult = await createWithAdapter(fallbackAdapter, {
           ...options,
           provider: options.fallback,
+          // The configured model names the primary provider; the fallback serves its own.
+          model: resolveEmbeddingProviderFallbackModel(
+            options.fallback,
+            options.model,
+            options.config,
+          ),
           remote: resolveEmbeddingProviderFallbackRemote(options.remote),
         });
         return {

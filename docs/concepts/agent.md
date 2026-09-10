@@ -146,7 +146,8 @@ Model refs in config (for example `agents.defaults.model` and `agents.defaults.m
 At minimum, set:
 
 - `agents.defaults.workspace`
-- `channels.whatsapp.allowFrom` (strongly recommended)
+- A sender allowlist for every channel you enable (strongly recommended) — see
+  [Access groups](/channels/access-groups)
 
 ## Related
 
@@ -154,3 +155,4 @@ At minimum, set:
 - [Multi-agent routing](/concepts/multi-agent)
 - [Session management](/concepts/session)
 - [Group chats](/channels/group-messages)
+- [System prompt](/concepts/system-prompt)

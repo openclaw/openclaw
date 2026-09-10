@@ -31,6 +31,8 @@ const routes = [
   "agents",
   "labs",
   "model-providers",
+  "plugin-settings",
+  "skill-settings",
   "mcp",
   "memory",
   "automation",
@@ -55,8 +57,8 @@ const viewports = [
 suite.define(() => {
   for (const destination of [
     { from: "memory", route: "memory-import", title: "Import Memory", tab: "Settings" },
-    { from: "skills", route: "plugins", title: "Plugins", tab: "Installed" },
-    { from: "skills", route: "skill-workshop", title: "Skill Workshop", tab: "Workshop" },
+    { from: "skills", route: "plugins", title: "Plugins", tab: "Plugins" },
+    { from: "skills", route: "skill-workshop", title: "Skill workshop", tab: "Skill workshop" },
   ] as const) {
     it(`returns from embedded ${destination.route} through its page link and direct entry`, async () => {
       await suite.withPage(

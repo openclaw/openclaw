@@ -44,7 +44,7 @@ import {
 
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
-const IMAGE_QUALITIES = ["low", "medium", "high", "auto"] as const;
+const IMAGE_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
 const IMAGE_MODERATIONS = ["low", "auto"] as const;
 const parseImageOption = createEnumOptionParser();
 
@@ -247,7 +247,7 @@ function addImageGenerationOptions(command: Command): Command {
     .option("--background <value>", "Background hint: transparent, opaque, or auto")
     .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
     .option("--openai-moderation <value>", "OpenAI moderation hint: low or auto")
-    .option("--quality <value>", "Quality hint: low, medium, high, or auto")
+    .option("--quality <value>", "Quality hint: low, medium, high, xhigh, max, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option(

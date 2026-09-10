@@ -8,6 +8,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
+  NEW_SESSION_MODEL_CATALOG,
   SESSION_LIST_DEFAULTS,
   TARGET_REPO,
   WORKSPACE,
@@ -15,6 +16,7 @@ import {
   captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   expectPendingSessionPlacementStartupBeforeRuntime,
@@ -124,6 +126,7 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
+      models: NEW_SESSION_MODEL_CATALOG,
       operatorScopes: ["operator.admin", "operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [
@@ -137,20 +140,7 @@ suite.define(() => {
       workspaceGit: true,
       sessionKey: "agent:cloud:neutral-e2e",
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "projects.list": {
           projects: [
             {
@@ -450,6 +440,7 @@ suite.define(() => {
       expect(create.params).toMatchObject({
         agentId: "cloud",
         message: "",
+        titleSource: message,
         projectId: "openclaw",
         worktree: true,
         worktreeBaseRef: "main",

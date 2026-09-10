@@ -512,6 +512,23 @@ describe("maybeRepairGatewayServiceConfig", () => {
     },
   );
 
+  it("reports a passing vendor runtime note without rewriting the service", async () => {
+    const command = createGatewayCommand("/opt/openclaw/dist/index.js");
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+      runtimeNote: "Node 24.15.0: unsupported version, capability probe passed.",
+    });
+
+    await runRepair({ gateway: {} });
+
+    expectNoteContaining("unsupported version, capability probe passed", "Gateway runtime");
+    expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
   it("skips service audit and rewrite for a non-default install identity", async () => {
     mocks.isDefaultInstallIdentity.mockReturnValue(false);
 

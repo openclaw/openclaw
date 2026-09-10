@@ -34,7 +34,7 @@ const openAIOwner = {
 const anthropicOwner = {
   id: "anthropic",
   label: "Anthropic",
-  providerIds: ["anthropic"],
+  providerIds: ["anthropic", "claude-cli"],
   runtimeIds: ["claude-cli"],
   cliSessionKeys: ["claude-cli"],
   authProfilePrefixes: ["anthropic:", "claude-cli:"],
@@ -132,6 +132,43 @@ describe("doctor session state provider routes", () => {
     expect(result.store).toEqual(store);
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toStrictEqual([]);
+    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "legacy-only", binding: {} },
+    {
+      label: "canonical and legacy",
+      binding: {
+        cliSessionBindings: { "claude-cli": { sessionId: "Canonical-ID" } },
+        cliSessionIds: { "claude-cli": "Map-ID" },
+      },
+    },
+  ])("clears $label conversation state without leaving a migration source", async ({ binding }) => {
+    ownerState.owners = [anthropicOwner];
+    const key = "agent:main:stale-claude";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      store: { [key]: entry({ ...binding, claudeCliSessionId: "Obsolete-ID" }) },
+    });
+
+    expect(result.store[key]?.sessionId).toBe("session-1");
+    expect(result.store[key]?.claudeCliSessionId).toBeUndefined();
+    expect(result.store[key]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(result.store[key]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(result.changes.join("\n")).toContain("Cleared stale Anthropic session routing state");
+  });
+
+  it("leaves legacy conversation IDs available for migration on a configured Anthropic route", async () => {
+    ownerState.owners = [anthropicOwner];
+    const key = "agent:main:configured-claude";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } } },
+      store: { [key]: entry({ claudeCliSessionId: "Configured-MixedCase-ID" }) },
+    });
+
+    expect(result.store[key]?.claudeCliSessionId).toBe("Configured-MixedCase-ID");
+    expect(result.changes).toEqual([]);
     expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
   });
 
@@ -286,6 +323,65 @@ describe("doctor session state provider routes", () => {
     ]) {
       expect(repaired).not.toHaveProperty(key);
     }
+  });
+
+  it.each(["claude-cli/team/model", "anthropic/team/model"])(
+    "preserves an explicit provider's cached local model %s",
+    async (model) => {
+      ownerState.owners = [anthropicOwner];
+      const store = {
+        "agent:main:canonical-provider": entry({
+          providerOverride: "google",
+          modelOverride: model,
+          modelOverrideSource: "user",
+          modelProvider: "google",
+          model,
+          contextTokens: 128_000,
+          authProfileOverride: "google:chosen",
+          authProfileOverrideSource: "user",
+        }),
+      };
+
+      const result = await runDoctor({
+        cfg: { agents: { defaults: { model: "google/claude-cli/team/model" } } },
+        store,
+      });
+
+      expect(result.store).toEqual(store);
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toEqual([]);
+      expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { model: "claude-cli/team/model" },
+    { modelProvider: "anthropic", model: "team/model" },
+  ])("clears a genuinely stale owner model $modelProvider/$model", async (runtimeModel) => {
+    ownerState.owners = [anthropicOwner];
+    const sessionKey = "agent:main:stale-runtime";
+    const result = await runDoctor({
+      cfg: { agents: { defaults: { model: "google/gemini-2.5-pro" } } },
+      store: {
+        [sessionKey]: entry({
+          ...runtimeModel,
+          contextTokens: 128_000,
+          authProfileOverride: "google:chosen",
+          authProfileOverrideSource: "user",
+        }),
+      },
+    });
+
+    expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
+    expect(result.warnings.join("\n")).toContain("runtime model state");
+    expect(result.changes.join("\n")).toContain("Cleared stale Anthropic session routing state");
+    expect(result.store[sessionKey]).toEqual({
+      sessionId: "session-1",
+      updatedAt: expect.any(Number),
+      delivery: { kind: "none" },
+      authProfileOverride: "google:chosen",
+      authProfileOverrideSource: "user",
+    });
   });
 
   it("repairs a non-default SQLite row without creating a legacy store", async () => {

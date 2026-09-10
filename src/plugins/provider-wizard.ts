@@ -8,6 +8,7 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { ProviderAuthChoiceMetadata } from "./provider-auth-choices.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import { resolvePluginSetupProviderCore } from "./setup-registry.js";
 import type {
@@ -246,6 +247,10 @@ export function resolveProviderModelPickerEntries(params: {
 export function resolveProviderPluginChoiceCore(params: {
   providers: ProviderPlugin[];
   choice: string;
+  manifestChoice?: Pick<
+    ProviderAuthChoiceMetadata,
+    "pluginId" | "providerId" | "methodId" | "choiceId"
+  >;
 }): {
   provider: ProviderPlugin;
   method: ProviderAuthMethod;
@@ -269,6 +274,25 @@ export function resolveProviderPluginChoiceCore(params: {
     }
     const method = resolveMethodById(provider, methodId);
     return method ? { provider, method } : null;
+  }
+
+  // The manifest owns dispatch; runtime wizard metadata need not repeat its choice ID.
+  if (params.manifestChoice) {
+    const declared = params.manifestChoice;
+    if (declared.choiceId !== choice) {
+      return null;
+    }
+    const provider = params.providers.find(
+      (entry) =>
+        entry.pluginId === declared.pluginId &&
+        normalizeProviderId(entry.id) === normalizeProviderId(declared.providerId),
+    );
+    const methodId = normalizeOptionalLowercaseString(declared.methodId);
+    if (!provider || !methodId) {
+      return null;
+    }
+    const method = resolveMethodById(provider, methodId);
+    return method ? { provider, method, wizard: method.wizard } : null;
   }
 
   for (const provider of params.providers) {
