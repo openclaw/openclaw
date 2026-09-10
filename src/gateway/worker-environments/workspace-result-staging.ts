@@ -36,6 +36,7 @@ import {
   workspaceResultGitCommand as gitCommand,
   WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS,
 } from "./workspace-result-git.js";
+import { readCappedStagedFile } from "./workspace-staged-file-read.js";
 
 // Match managed-worktree refs/openclaw/snapshots: deleting the owning ref is
 // sufficient; unreachable objects may remain until normal Git GC.
@@ -285,7 +286,7 @@ async function stageWorkerWorkspaceResult(params: {
       throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
     }
     const content =
-      entry.type === "symlink" ? Buffer.from(entry.target) : await fs.readFile(source);
+      entry.type === "symlink" ? Buffer.from(entry.target) : await readCappedStagedFile(source);
     if (
       entry.type === "file" &&
       (content.byteLength !== entry.size ||

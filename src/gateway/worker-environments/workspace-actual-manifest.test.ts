@@ -1,4 +1,5 @@
 import { createHook } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -479,3 +480,21 @@ it.each(["inventory", "fixed limit"] as const)(
     }
   },
 );
+
+it("returns unsupported instead of reading past the requested byte limit", async () => {
+  const root = await fs.realpath(tempDirs.make("workspace-snapshot-byte-limit-"));
+  const target = path.join(root, "blob.bin");
+  await fs.writeFile(target, Buffer.alloc(8, 7));
+  await expect(
+    readWorkspaceFileSnapshotWithLimit(target, 4, root, undefined, { includeContent: true }),
+  ).resolves.toEqual({ type: "unsupported" });
+  await expect(
+    readWorkspaceFileSnapshotWithLimit(target, 8, root, undefined, { includeContent: true }),
+  ).resolves.toEqual({
+    type: "file",
+    mode: 0o644,
+    size: 8,
+    sha256: createHash("sha256").update(Buffer.alloc(8, 7)).digest("hex"),
+    content: Buffer.alloc(8, 7),
+  });
+});
