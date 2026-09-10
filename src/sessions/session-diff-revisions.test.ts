@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runGit, type GitResult } from "../agents/worktrees/git.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveSessionDiffEmptyTree } from "./session-diff-revisions.js";
+import { resolveSessionDiffBase, resolveSessionDiffEmptyTree } from "./session-diff-revisions.js";
 
 vi.mock("../agents/worktrees/git.js", () => ({ runGit: vi.fn() }));
 
@@ -68,4 +68,38 @@ describe("empty-tree preparation", () => {
       expect(runGit).toHaveBeenCalledTimes(2);
     },
   );
+});
+
+describe("branch base resolution", () => {
+  it.each(["origin/main", "origin/master"])(
+    "uses the remote-tracking %s ref when no symbolic or local default exists",
+    async (candidate) => {
+      const calls: string[][] = [];
+      const gitOut = vi.fn(async (_root: string, args: string[]) => {
+        calls.push(args);
+        if (args[0] === "symbolic-ref") return null;
+        if (args[0] === "rev-parse" && args.at(-1) === candidate) return `${candidate}-sha\n`;
+        if (args[0] === "merge-base" && args[1] === candidate) return "merge-base-sha\n";
+        return null;
+      });
+
+      await expect(
+        resolveSessionDiffBase({ branch: "feature", gitOut, root: "/repo" }),
+      ).resolves.toEqual({ base: "merge-base-sha", baseRef: candidate });
+      expect(calls).toContainEqual(["rev-parse", "--verify", "--quiet", candidate]);
+    },
+  );
+
+  it("keeps local main ahead of remote-tracking defaults", async () => {
+    const gitOut = vi.fn(async (_root: string, args: string[]) => {
+      if (args[0] === "symbolic-ref") return null;
+      if (args[0] === "rev-parse" && args.at(-1) === "main") return "main-sha\n";
+      if (args[0] === "merge-base" && args[1] === "main") return "local-base\n";
+      return null;
+    });
+
+    await expect(
+      resolveSessionDiffBase({ branch: "feature", gitOut, root: "/repo" }),
+    ).resolves.toEqual({ base: "local-base", baseRef: "main" });
+  });
 });
