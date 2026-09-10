@@ -173,9 +173,7 @@ const diagnosticChildNames = [
   "npmTelegram",
 ] as const;
 type DiagnosticStageName = (typeof diagnosticStageNames)[number];
-type NpmDiagnosticScope =
-  | { stage: "coreNpm" }
-  | { stage: "pluginNpm"; packageName: string };
+type NpmDiagnosticScope = { stage: "coreNpm" } | { stage: "pluginNpm"; packageName: string };
 type DiagnosticChildName = (typeof diagnosticChildNames)[number];
 const diagnosticId = z.string().max(20).regex(POSITIVE_INTEGER_PATTERN).nullable();
 const diagnosticSha = z.string().regex(COMMIT_SHA_PATTERN).nullable();
@@ -530,7 +528,11 @@ class PostpublishDiagnostics {
     this.packageName = undefined;
     this.data.currentStage = stage;
     this.data.stages[stage].state = "started";
-    if (!["evidence", "binding", "assets"].includes(stage)) {
+    // Collecting later observations must not erase an already observed failure.
+    if (
+      !["evidence", "binding", "assets"].includes(stage) &&
+      this.data.verification !== "failure"
+    ) {
       this.data.verification = "started";
     }
     this.save();
@@ -1084,11 +1086,14 @@ export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"):
   }
 }
 
-async function readNpmBetaFloorError(packageName: string): Promise<string | undefined> {
+async function readNpmBetaFloorError(
+  packageName: string,
+  version: string,
+): Promise<string | undefined> {
   const entries = resolveNpmJsonEntries(
     parseJson(
-      await runNpmViewWithRetry(["view", packageName, "dist-tags", "--json"]),
-      `npm view ${packageName} dist-tags`,
+      await runNpmViewWithRetry(["view", `${packageName}@${version}`, "dist-tags", "--json"]),
+      `npm view ${packageName}@${version} dist-tags`,
     ),
   );
   const tags = entries.length === 1 ? entries[0] : undefined;
@@ -1114,7 +1119,7 @@ async function readNpmBetaFloorError(packageName: string): Promise<string | unde
 
 function createNpmBetaFloorError(errors: readonly string[]): Error {
   return new Error(
-    `npm beta must be at or above latest; release verification failed:\n${errors.join("\n")}\nRun the release ledger's npm dist-tag repair, then verify again.`,
+    `npm beta must be at or above latest; release verification failed:\n${errors.join("\n")}\nFor each listed stale package, run:\nnpm dist-tag add <pkg>@<latest> beta\nUse that package's current latest version, preserve newer beta tags, then verify again.`,
   );
 }
 
@@ -1962,7 +1967,7 @@ export async function verifyBetaRelease(
     diagnostic.start("coreNpm");
     const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
     diagnostic.observeNpmPublication({ stage: "coreNpm" });
-    const coreBetaFloorError = await readNpmBetaFloorError("openclaw");
+    const coreBetaFloorError = await readNpmBetaFloorError("openclaw", args.version);
     if (coreBetaFloorError !== undefined) {
       betaFloorErrors.push({ scope: { stage: "coreNpm" }, message: coreBetaFloorError });
       diagnostic.fail(createNpmBetaFloorError([coreBetaFloorError]));
@@ -1999,7 +2004,7 @@ export async function verifyBetaRelease(
       await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
       const scope: NpmDiagnosticScope = { stage: "pluginNpm", packageName: plugin.packageName };
       diagnostic.observeNpmPublication(scope);
-      const betaFloorError = await readNpmBetaFloorError(plugin.packageName);
+      const betaFloorError = await readNpmBetaFloorError(plugin.packageName, args.version);
       if (betaFloorError !== undefined) {
         betaFloorErrors.push({ scope, message: betaFloorError });
         diagnostic.fail(createNpmBetaFloorError([betaFloorError]));

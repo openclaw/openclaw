@@ -1182,7 +1182,9 @@ When cutting a regular orchestrated stable release:
 7. If the release landed on `beta`, use the `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow to promote that stable version from `beta` to `latest`.
 8. Immediately after publishing or promoting to `latest`, manually dispatch that same release-ledger workflow to repair the beta floor. Every package's `beta` must be at least its own `latest`; preserve a newer beta. The daily scheduled repair is only a backstop, not a substitute for this release step.
 
-The release ledger owns npm dist-tag promotion and repair because those operations require `NPM_TOKEN`, while the source repo keeps OIDC-only publish. Post-publication verification reads npm dist-tags and fails when core or an official plugin in the release selection has a missing beta or a beta older than latest, listing the affected packages and observed tags. Repair the registry state and rerun verification before completing the release.
+The release ledger owns npm dist-tag promotion and repair because those operations require `NPM_TOKEN`, while the source repo keeps OIDC-only publish. Post-publication verification reads npm dist-tags through the exact release version and fails when core or an official plugin in the release selection has a missing beta or a beta older than latest, listing the affected packages and observed tags.
+
+Until the release-ledger workflow covers official plugin packages, stale plugin beta tags intentionally block verification and require manual operator repair. For each listed stale package, run `npm dist-tag add <pkg>@<latest> beta`, substituting that package's name and current `latest` version. Preserve any newer beta tag. This manual recovery is required even if the core-only ledger repair succeeds; rerun verification before completing the release.
 
 If a maintainer must fall back to local npm authentication, run any 1Password CLI (`op`) commands only inside a dedicated tmux session. Do not call `op` directly from the main agent shell; keeping it inside tmux makes prompts, alerts, and OTP handling observable and prevents repeated host alerts.
 
