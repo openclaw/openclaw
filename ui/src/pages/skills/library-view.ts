@@ -181,8 +181,12 @@ export function renderSkillLibrary(library: SkillLibraryController) {
           `
         : nothing
     }
-    ${renderLibraryEditor(library)} ${renderLibraryImport(library)}
+    ${renderSkillLibraryDialogs(library)}
   `;
+}
+
+export function renderSkillLibraryDialogs(library: SkillLibraryController) {
+  return html`${renderLibraryEditor(library)} ${renderLibraryImport(library)}`;
 }
 
 function renderLibraryEditor(library: SkillLibraryController) {

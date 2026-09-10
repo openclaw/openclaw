@@ -62,14 +62,26 @@ async function loadSkillsRouteData(
   };
 }
 
-export const page = definePage({
-  ...routePageSpec("skills"),
-  loaderDeps: (_context: ApplicationContext, location) => location.search,
-  loader: loadSkillsRouteData,
-  component: () =>
-    import("./skills-page.ts").then(() => ({
-      header: true,
-      render: (data: SkillsRouteData | undefined) =>
-        data ? html`<openclaw-skills-page .routeData=${data}></openclaw-skills-page>` : nothing,
-    })),
-});
+function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discovery" | "settings") {
+  return definePage({
+    ...routePageSpec(routeId),
+    loaderDeps: (_context: ApplicationContext, location) => location.search,
+    loader: loadSkillsRouteData,
+    component: () =>
+      import("./skills-page.ts").then(() => ({
+        header: true,
+        render: (data: SkillsRouteData | undefined) =>
+          data
+            ? html`<openclaw-skills-page
+                .routeData=${data}
+                .surface=${surface}
+              ></openclaw-skills-page>`
+            : nothing,
+      })),
+  });
+}
+
+export const pages = [
+  defineSkillsPage("skills", "discovery"),
+  defineSkillsPage("skill-settings", "settings"),
+] as const;

@@ -912,22 +912,6 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
   box-shadow: var(--focus-ring);
 }
 
-.clawhub-skill-result__button {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.clawhub-skill-result__copy {
-  display: grid;
-  min-width: 0;
-}
-
-.clawhub-skill-result__copy:first-child {
-  grid-column: 1 / -1;
-}
-
 .clawhub-skill-icon {
   width: 40px;
   height: 40px;
