@@ -68,7 +68,7 @@ type MockInteraction = {
   reply: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
-  editReply: ReturnType<typeof vi.fn>;
+  editReply: ReturnType<typeof vi.fn<(_payload?: unknown) => Promise<{ ok: boolean }>>>;
   acknowledge: ReturnType<typeof vi.fn>;
   acknowledged: boolean;
   client: object;
