@@ -61,11 +61,11 @@ Run [`openclaw doctor --fix`](/cli/doctor) to move it to `logging.audit`.
 
 The running Gateway captures `logging.audit.enabled`,
 `logging.audit.executionIdentity`, and `logging.audit.messages` at startup;
-restart it after changing any of these settings. Message coverage currently includes
+restart it after changing any of these settings. Message coverage includes
 accepted inbound messages that reach core dispatch and one terminal row per
 original logical outbound reply payload that reaches shared durable delivery.
 Plugin-local and direct-send paths that bypass those shared boundaries are not
-yet covered. The bounded background
+covered. The bounded background
 writer is best-effort, not a lossless compliance archive.
 
 ---
@@ -84,7 +84,7 @@ writer is best-effort, not a lossless compliance archive.
 }
 ```
 
-- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`.
+- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`. When `/tmp/openclaw` is unsafe or unavailable (and always on Windows), OpenClaw uses a directory under the OS temp dir instead: `openclaw-<uid>` where a numeric user id is available, and plain `openclaw` where it is not, which includes Windows. Dated log files are pruned after 24 hours.
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
 - `consoleStyle`: `"pretty"` or `"json"`. The earlier `"compact"` value is retired; [`openclaw doctor --fix`](/cli/doctor) maps it to `"pretty"`.

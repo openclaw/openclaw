@@ -49,10 +49,6 @@ read_when:
 
 ## Configuration
 
-<Note>
-The `deviceAutoApprove` examples below target beta/current-main builds. Stable `v2026.7.1` does not support this option.
-</Note>
-
 ```json5
 {
   gateway: {

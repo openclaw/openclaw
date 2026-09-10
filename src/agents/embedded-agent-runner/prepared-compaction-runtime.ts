@@ -77,7 +77,15 @@ import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
-export async function buildPreparedCompactionRuntime(prepared: DirectCompactionPreparation) {
+export type PreparedCompactionCleanup = {
+  disposeToolRuntimes: () => Promise<void>;
+  restoreSkillEnvironment: () => void;
+};
+
+export async function buildPreparedCompactionRuntime(
+  prepared: DirectCompactionPreparation,
+  onCleanupReady: (cleanup: PreparedCompactionCleanup) => void,
+) {
   const {
     params,
     runId,
@@ -137,10 +145,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     skillEnvironmentRestored = true;
     restoreSkillEnv?.();
   };
-  const dispose = async () => {
-    await disposeToolRuntimes();
-    restoreSkillEnvironment();
-  };
+  onCleanupReady({ disposeToolRuntimes, restoreSkillEnvironment });
 
   try {
     const preparedSkills = prepareEmbeddedSkills({
@@ -577,12 +582,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       buildSystemPromptText,
       resolvedMessageProvider,
       sessionAgentId,
-      disposeToolRuntimes,
-      restoreSkillEnvironment,
-      dispose,
     };
   } catch (err) {
-    await dispose();
+    restoreSkillEnvironment();
     throw err;
   }
 }

@@ -23,7 +23,7 @@ export { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 export {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
-} from "../infra/sqlite-readonly-location.js";
+} from "../infra/sqlite-snapshot-source.js";
 export {
   runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,

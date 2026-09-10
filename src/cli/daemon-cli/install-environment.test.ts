@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { mergeInstallInvocationEnv } from "./install.js";
 
 describe("mergeInstallInvocationEnv", () => {
+  it("uses only the current shell's HOMEBREW_PREFIX", () => {
+    const existingServiceEnv = { HOMEBREW_PREFIX: "/opt/homebrew" };
+    const env = mergeInstallInvocationEnv({ env: {}, existingServiceEnv, platform: "darwin" });
+    expect(env.HOMEBREW_PREFIX).toBeUndefined();
+    const current = mergeInstallInvocationEnv({
+      env: { HOMEBREW_PREFIX: "/usr/local" },
+      existingServiceEnv,
+      platform: "darwin",
+    });
+    expect(current.HOMEBREW_PREFIX).toBe("/usr/local");
+  });
+
   it("canonicalizes Windows install env keys while filtering dangerous loader env", () => {
     const env = mergeInstallInvocationEnv({
       env: {

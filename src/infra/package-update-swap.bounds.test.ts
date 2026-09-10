@@ -92,7 +92,7 @@ describe("package verification bounds", () => {
       });
       expect(result.status).toBe("committed");
       expect(transactions).toHaveLength(1);
-      expect((await transactions[0]!.rollback()).exitCode).toBe(0);
+      expect((await transactions[0]!.rollback(() => {})).exitCode).toBe(0);
       await expect(fs.readFile(manifest, "utf8")).resolves.toHaveLength(1024 * 1024);
       const finished = observations.filter((record) => record.event === "reader-settled");
       expect(finished.map((record) => record.phase)).toEqual(["baseline", "retained", "restored"]);

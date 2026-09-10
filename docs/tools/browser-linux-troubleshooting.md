@@ -107,6 +107,11 @@ systemctl --user enable --now openclaw-browser.service
 
 ### Verify the browser works
 
+These calls go to the OpenClaw browser control service, not to the Chrome CDP
+port used above. Its port is derived from `gateway.port` (default `18791` =
+gateway port + 2), so adjust the number if you moved the Gateway port. `jq` only
+pretty-prints the response; drop the pipe if you do not have it installed.
+
 ```bash
 curl -s http://127.0.0.1:18791/ | jq '{running, pid, chosenBrowser}'
 curl -s -X POST http://127.0.0.1:18791/start
@@ -128,7 +133,7 @@ On Raspberry Pi, older VPS hosts, or slow storage, use a manually launched
 browser with `attachOnly` when Chrome needs more time to expose its CDP HTTP
 endpoint or become ready than the managed-browser deadline permits.
 
-### Problem: No Chrome tabs found for profile="user"
+## Problem: No Chrome tabs found for profile="user"
 
 You are using the `user` (`existing-session` / Chrome MCP) profile and no
 tabs are open to attach to.

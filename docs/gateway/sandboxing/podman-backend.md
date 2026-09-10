@@ -6,6 +6,8 @@ read_when: "You are using Podman instead of Docker for sandboxed tool execution.
 
 Selecting the native Podman CLI as a built-in backend, the Docker settings it reuses, and its rootless user-mapping rules.
 
+This page covers Podman as the sandbox backend for agent tool execution. Running the Gateway itself in a rootless Podman container is a separate setup: see [Podman](/install/podman).
+
 ## Podman backend
 
 Use `sandbox.backend: "podman"` to select the native `podman` CLI directly. This is a built-in backend, not a plugin. It does not probe or select Docker, even when the `docker` executable is installed.

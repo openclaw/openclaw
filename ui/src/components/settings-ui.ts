@@ -189,6 +189,17 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
   `;
 }
 
+export function renderSettingsSummary(items: ReadonlyArray<{ label: string; value: number }>) {
+  return html`<dl class="settings-summary">
+    ${items.map(
+      (item) => html`<div class="settings-group settings-summary__tile">
+        <dt>${item.label}</dt>
+        <dd>${item.value}</dd>
+      </div>`,
+    )}
+  </dl>`;
+}
+
 /** A bare group surface without a section heading (rare; prefer sections). */
 export function renderSettingsGroup(
   rows: unknown,

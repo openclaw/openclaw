@@ -39,8 +39,13 @@ export const updateFailureSchema = z
             termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
             advisory: z
               .object({
-                kind: z.enum(["package-post-install-doctor", "candidate-runtime-unavailable"]),
+                kind: z.enum([
+                  "package-post-install-doctor",
+                  "candidate-runtime-unavailable",
+                  "recoverable-maintenance",
+                ]),
                 message: z.string(),
+                details: z.array(z.string()).optional(),
               })
               .optional(),
           }),

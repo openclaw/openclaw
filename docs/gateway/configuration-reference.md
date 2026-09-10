@@ -226,3 +226,4 @@ Moved to [Configuration — environment, secrets, and includes](/gateway/config-
 - [Configuration examples](/gateway/configuration-examples)
 - [Doctor](/gateway/doctor)
 - [Cloud Workers](/gateway/cloud-workers) — the feature these worker settings configure
+- [`openclaw configure`](/cli/configure) — interactive prompts that edit these settings without hand-editing the file

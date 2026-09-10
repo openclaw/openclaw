@@ -254,7 +254,7 @@ describe("structured input compiler", () => {
     expect(snapshotStructuredInput({ value: "x".repeat(65_537) })).toBeUndefined();
   });
 
-  it("builds literal HTTP(S) URL questions and rejects credentials without fetching", () => {
+  it("preserves an external URL separately from its completion question and rejects credentials", () => {
     const suffix = "a".repeat(1_500);
     const url = `https://example.com/authorize?state=${suffix}`;
     const valid = compileStructuredInputUrl({
@@ -268,7 +268,9 @@ describe("structured input compiler", () => {
     if (plan.kind !== "url") {
       throw new Error("expected URL plan");
     }
+    expect(plan.question.url).toBe(url);
     expect(plan.question.question).toContain(url);
+    expect(plan.question.options?.[0]?.label).toBe("I've completed this step");
     expect(
       compileStructuredInputUrl({
         url: "https://user:secret@example.com",

@@ -39,7 +39,7 @@ Required sandboxes with proven Gateway-profile creators use that profile as
 their isolation boundary. Different guests on the same agent receive separate
 environments and workspaces, regardless of configured scope. Sessions created
 by the same profile reuse its existing environment and workspace, including
-when the configured scope is `session`; this upgrade does not rekey those paths.
+when the configured scope is `session`; this reuse does not rekey those paths.
 Channel, unknown, and other non-profile creators instead receive a separate
 required sandbox per canonical session. A matching raw ID cannot reuse a
 profile's resources. Required sandboxing and the read-only workspace cap remain

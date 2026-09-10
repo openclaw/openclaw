@@ -83,6 +83,7 @@ const APP_ROUTE_DEFINITIONS = {
   logs: { path: "/logs" },
   "skill-workshop": { path: "/skills/workshop" },
   skills: { path: "/skills" },
+  "skill-settings": { path: "/settings/skills" },
   plugins: { path: "/plugins" },
   "plugin-settings": { path: "/settings/plugins" },
   // Automations is the product name; /cron stays as a legacy alias for

@@ -56,6 +56,7 @@ async function createRegion(
   }
   region.callbacks = {
     activatePanel: vi.fn(),
+    togglePanelExpanded: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
     reorderPanel: vi.fn(),

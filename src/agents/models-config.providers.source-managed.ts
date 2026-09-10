@@ -117,7 +117,6 @@ export function enforceSourceManagedProviderSecrets(params: {
       continue;
     }
     let nextProvider = provider;
-    let providerMutated = false;
 
     const sourceApiKeyMarker = resolveSourceManagedApiKeyMarker({
       sourceProvider,
@@ -126,7 +125,6 @@ export function enforceSourceManagedProviderSecrets(params: {
     if (sourceApiKeyMarker) {
       params.secretRefManagedProviders?.add(canonicalProviderKey);
       if (nextProvider.apiKey !== sourceApiKeyMarker) {
-        providerMutated = true;
         nextProvider = {
           ...nextProvider,
           apiKey: sourceApiKeyMarker,
@@ -138,34 +136,24 @@ export function enforceSourceManagedProviderSecrets(params: {
       sourceProvider,
       sourceConfig: params.sourceConfigForSecrets,
     });
-    if (Object.keys(sourceHeaderMarkers).length > 0) {
-      const currentHeaders = isRecord(nextProvider.headers) ? nextProvider.headers : undefined;
+    const currentHeaders = isRecord(nextProvider.headers) ? nextProvider.headers : undefined;
+    if (
+      Object.entries(sourceHeaderMarkers).some(
+        ([headerName, marker]) => currentHeaders?.[headerName] !== marker,
+      )
+    ) {
       // Merge marker headers over normalized headers so auth metadata remains managed while
       // unrelated provider headers survive normalization.
-      const nextHeaders = { ...currentHeaders };
-      let headersMutated = !currentHeaders;
-      for (const [headerName, marker] of Object.entries(sourceHeaderMarkers)) {
-        if (nextHeaders[headerName] === marker) {
-          continue;
-        }
-        headersMutated = true;
-        nextHeaders[headerName] = marker;
-      }
-      if (headersMutated) {
-        providerMutated = true;
-        nextProvider = {
-          ...nextProvider,
-          headers: nextHeaders,
-        };
-      }
+      nextProvider = {
+        ...nextProvider,
+        headers: { ...currentHeaders, ...sourceHeaderMarkers },
+      };
     }
 
-    if (!providerMutated) {
+    if (nextProvider === provider) {
       continue;
     }
-    if (!nextProviders) {
-      nextProviders = { ...providers };
-    }
+    nextProviders ??= { ...providers };
     nextProviders[providerKey] = nextProvider;
   }
 

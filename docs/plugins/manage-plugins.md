@@ -32,6 +32,10 @@ the full inventory or choose **Show all** to browse every installed plugin. Each
 card shows the plugin description. Choose a card to open its settings, where
 administrators can enable or disable it and read-only operators can inspect it.
 
+A package installed from another ClawHub registry stays manageable under
+**Installed plugins**. It does not mark a same-name package in the current
+catalog as installed.
+
 Choose a card to open `/settings/plugins/<plugin-id>`.
 That routed page uses the plugin's declared schema for configuration, explains
 effective access in plain language, and keeps raw capability declarations and
@@ -56,6 +60,8 @@ Installing, updating, or removing plugin code requires a Gateway restart.
 Enablement changes for plugins in the startup inventory can be applied without
 a restart when the plugin and current Gateway runtime support it; otherwise
 the UI tells you a restart is required.
+The install dialog waits through the Gateway reconnect before confirming completion
+and offers a retry if the restart does not complete.
 The Control UI does not install from arbitrary npm, git, or local-path sources,
 or update plugin packages. Use the CLI workflows below for those operations.
 
@@ -208,8 +214,8 @@ openclaw plugins install ./my-plugin
 openclaw plugins install --link ./my-plugin
 ```
 
-Bare package specs install from npm during the launch cutover, unless the
-name matches a bundled or official plugin id, in which case OpenClaw uses
+Bare package specs install from npm, unless the name matches a bundled or
+official plugin id, in which case OpenClaw uses
 that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
 `npm-pack:` for deterministic source selection. OpenClaw's bundled and official
 catalog packages are trusted alongside ClawHub packages. New arbitrary npm,

@@ -98,3 +98,4 @@ page that now holds the content.
 - [Security](/gateway/security) - security posture
 - [Configuration reference](/gateway/configuration-reference) - where each secrets and env setting is documented
 - [Ask user](/tools/ask-user) - asking the operator a non-secret question; never answer it with a credential, use the masked `secrets` tool for those
+- [Auth credential semantics](/auth-credential-semantics) - the canonical rules for auth profile ordering and runtime credential resolution

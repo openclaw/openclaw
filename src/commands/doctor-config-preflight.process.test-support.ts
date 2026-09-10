@@ -107,6 +107,7 @@ export function createSourceRuntime(root: string): string {
     "node-version.mjs",
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
+    "node-runtime-recovery.mjs",
     "package.json",
     "tsconfig.json",
   ]) {

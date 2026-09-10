@@ -8,7 +8,7 @@ import type {
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
+import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { fetchClawHubPluginVersionCategories } from "../infra/clawhub-plugin-catalog.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
@@ -262,6 +262,8 @@ export const listManagedPlugins = withManagedPluginCache(
     );
     const installedIconsById = new Map<string, ManagedPluginIconSource | undefined>();
     const installedClawHubPackages = new Set<string>();
+    const discoveryRegistry = resolveClawHubBaseUrl();
+    const publicDiscoveryRegistry = isDefaultClawHubBaseUrl(discoveryRegistry);
     const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
     const categoryTargetsByRegistry = new Map<
       string,
@@ -370,10 +372,14 @@ export const listManagedPlugins = withManagedPluginCache(
         plugin.packageName = record.packageName;
       }
       const recordedClawHubPackage =
-        installRecord?.source === "clawhub"
+        installRecord?.source === "clawhub" &&
+        normalizeOptionalString(installRecord.clawhubUrl) &&
+        resolveClawHubBaseUrl(installRecord.clawhubUrl) === discoveryRegistry
           ? normalizeOptionalString(installRecord.clawhubPackage)
           : undefined;
-      const discoveryClawHubPackage = clawhubPackage ?? recordedClawHubPackage;
+      // Discovery names are registry-scoped; trusted official/npm counterparts belong to the public catalog.
+      const discoveryClawHubPackage =
+        (publicDiscoveryRegistry ? clawhubPackage : undefined) ?? recordedClawHubPackage;
       if (discoveryClawHubPackage) {
         plugin.clawhubPackage = discoveryClawHubPackage;
       }

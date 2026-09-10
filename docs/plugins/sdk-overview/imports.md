@@ -53,9 +53,11 @@ maintenance only and are not recommended import paths for new third-party
 plugins.
 
 `openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` are
-also kept as deprecated compatibility facades for tracked owner usage. Do not
-copy those import paths into new plugins; use injected runtime helpers and
-generic channel SDK subpaths instead.
+also kept as deprecated compatibility facades for tracked owner usage. They have
+no published removal date; run `pnpm plugins:boundary-report` and see the
+[removal timeline](/plugins/sdk-migration/removal-timeline) for the surfaces that
+do. Do not copy those import paths into new plugins; use injected runtime helpers
+and generic channel SDK subpaths instead.
 </Warning>
 
 ## Subpath reference

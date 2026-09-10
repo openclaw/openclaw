@@ -94,7 +94,7 @@ The base-ref field suggests up to 100 local and 100 remote refs, plus the defaul
 
 Group **New session defaults** checks the agent workspace the same way as a custom folder. If verification fails, retry before saving the group defaults. A remembered cloud destination cannot block a new local draft in a plain folder; a transient Git-check failure leaves the saved destination intact for the next visit.
 
-The Place picker's **Projects** section can start the same worktree flow from a registered project ID. The Gateway resolves the recorded checkout path, so this path remains available at `operator.write`; selecting an arbitrary host folder still requires `operator.admin`.
+The Place picker's **Projects** section can start the same worktree flow from a registered project ID. The Gateway resolves the recorded checkout path, so this path remains available at [`operator.write`](/gateway/operator-scopes); selecting an arbitrary host folder still requires `operator.admin`.
 
 Agents can also call `suggest_task` when they discover confirmed follow-up work outside the current task. The Control UI and Gateway-backed TUI offer **Start in a new session**. This starts the task directly in the suggested folder without creating a worktree or requiring Git. The new session is instructed to explain the need and ask the user before creating or switching to a worktree later. Dismissing a suggestion starts nothing. Suggestions and their IDs are ephemeral and do not survive a Gateway restart.
 

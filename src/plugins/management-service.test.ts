@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
+import { joinClawHubPluginCatalog } from "./catalog-discovery.js";
 import {
   configSnapshot,
   emptyMetadataSnapshot,
@@ -130,6 +131,8 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
 }
 
 describe("plugin management service", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(() => {
     clearManagedPluginCatalogCache();
     for (const mock of Object.values(mocks)) {
@@ -307,6 +310,77 @@ describe("plugin management service", () => {
     expect(catalog.mutationAllowed).toBe(true);
   });
 
+  const privateRegistry = "https://private.example/clawhub";
+  it.each([
+    ["foreign registry", "clawhub", `${privateRegistry}/`, undefined, false],
+    ["public registry", "clawhub", "https://clawhub.ai/", undefined, true],
+    ["custom primary override", "clawhub", `${privateRegistry}/`, privateRegistry, true],
+    [
+      "custom secondary override",
+      "clawhub",
+      `${privateRegistry}/`,
+      privateRegistry,
+      true,
+      "CLAWHUB_URL",
+    ],
+    ["different custom registry", "clawhub", "https://other.example/", privateRegistry, false],
+    ["public npm counterpart", "npm", undefined, undefined, true],
+    ["public npm counterpart on custom registry", "npm", undefined, privateRegistry, false],
+    ["unproven registry", "clawhub", undefined, undefined, false],
+  ] as const)(
+    "binds remote discovery to the effective registry: %s",
+    async (
+      _label,
+      source,
+      clawhubUrl,
+      activeRegistry,
+      matches,
+      registryEnv: "OPENCLAW_CLAWHUB_URL" | "CLAWHUB_URL" = "OPENCLAW_CLAWHUB_URL",
+    ) => {
+      vi.stubEnv("OPENCLAW_CLAWHUB_URL", undefined);
+      vi.stubEnv("CLAWHUB_URL", undefined);
+      vi.stubEnv(registryEnv, activeRegistry);
+      const packageName = "@openclaw/diffs";
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: false,
+          id: "diffs",
+          origin: "global",
+          categories: ["tools"],
+          installRecord:
+            source === "clawhub"
+              ? { source, clawhubUrl, clawhubPackage: packageName, version: "1.0.0" }
+              : { source, spec: packageName, resolvedName: packageName },
+        }),
+      );
+
+      const local = await listManagedPlugins({
+        config: {},
+        env: {},
+        officialCatalog: { entries: [] },
+      });
+      const [entry] = joinClawHubPluginCatalog({
+        local,
+        remote: [
+          {
+            packageName,
+            displayName: "Remote Diffs",
+            family: "code-plugin",
+            isOfficial: true,
+            categories: ["tools"],
+          },
+        ],
+      });
+
+      expect(local.plugins[0]).toMatchObject({ id: "diffs", installed: true });
+      expect(entry?.local).toMatchObject({
+        installed: matches,
+        action: matches ? "manage" : "install",
+      });
+      expect(entry?.local.pluginId).toBe(matches ? "diffs" : undefined);
+    },
+  );
+
   it("projects package-declared categories without consulting ClawHub", async () => {
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
@@ -318,6 +392,7 @@ describe("plugin management service", () => {
         packageVersion: "1.2.3",
         installRecord: {
           source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
           clawhubPackage: "@openclaw/memory-tools",
           version: "1.2.3",
         },
@@ -348,6 +423,7 @@ describe("plugin management service", () => {
         packageVersion: "4.5.6",
         installRecord: {
           source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
           clawhubPackage: "community/memory",
           version: "4.5.6",
         },

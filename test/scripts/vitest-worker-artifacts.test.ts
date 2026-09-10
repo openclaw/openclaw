@@ -1296,7 +1296,7 @@ export default class {
              assert.equal(getFsSafeNativeConfig().mode,'auto');
              await import(pathToFileURL(process.argv[1]));
              assert.equal(getFsSafeNativeConfig().mode,'off');`,
-            path.join(initialDirectory, "dist/infra/sqlite-readonly-location.js"),
+            path.join(initialDirectory, "dist/infra/sqlite-snapshot-source.js"),
           ],
           fixture,
           {

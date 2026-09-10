@@ -320,7 +320,7 @@ export async function searchSkillsFromClawHub(params: {
   baseUrl?: string;
 }): Promise<ClawHubSkillSearchResult[]> {
   return await searchClawHubSkills({
-    query: params.query?.trim() || "*",
+    query: params.query?.trim() ?? "",
     limit: params.limit,
     baseUrl: params.baseUrl,
   });

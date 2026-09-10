@@ -207,3 +207,4 @@ Human-friendly detail and the stable reason code follow on subsequent lines in t
 
 - [Secrets management](/gateway/secrets)
 - [Auth storage](/concepts/oauth)
+- [SecretRef credential surface](/reference/secretref-credential-surface) - which credential fields accept a SecretRef instead of a raw secret value

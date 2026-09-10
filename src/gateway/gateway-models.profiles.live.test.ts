@@ -6,6 +6,7 @@ import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -53,7 +54,6 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   appendPrioritizedDynamicLiveModels,
   applyLiveProviderPluginDiscoveryCompat,

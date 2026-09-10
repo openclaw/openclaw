@@ -89,22 +89,27 @@ function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBro
 export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthProjectionParams) {
   const authProjection = createModelsListAuthProjection(params);
   const { evaluateEntry, evaluateNative, snapshot } = authProjection;
-  const view = createModelCatalogView({
-    cfg: params.cfg,
-    catalog: snapshot.entries,
-    routeVariants: snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
-  });
   let projectedCatalog: Promise<ModelCatalogEntry[]> | undefined;
   return {
     ...authProjection,
-    projectCatalog: () =>
-      (projectedCatalog ??= Promise.all(
+    projectCatalog: () => {
+      if (projectedCatalog) {
+        return projectedCatalog;
+      }
+      const view = createModelCatalogView({
+        cfg: params.cfg,
+        catalog: snapshot.entries,
+        routeVariants:
+          snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
+      });
+      return (projectedCatalog = Promise.all(
         view.logicalEntries.map(async (entry) => {
           const routeVariants = view.variantsOf(entry) ?? [entry];
           const evaluation = evaluateNative(entry, await evaluateEntry(entry, routeVariants));
           return view.project(entry, evaluation).runtimeEntry;
         }),
-      )),
+      ));
+    },
   };
 }
 

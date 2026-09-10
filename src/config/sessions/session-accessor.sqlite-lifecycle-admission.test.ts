@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
+import * as logging from "../../logging/logger.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -22,6 +24,7 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
+import { readArtifactPreparationLogs } from "./session-accessor.sqlite-diagnostics.test-support.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 
 const archiveHook = vi.hoisted(() => ({ afterMaterialize: undefined as (() => void) | undefined }));
@@ -57,6 +60,8 @@ afterEach(async () => {
   }
   await Promise.allSettled(pending.splice(0));
   archiveHook.afterMaterialize = undefined;
+  await logging.flushLogger();
+  logging.resetLogger();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -178,6 +183,51 @@ it.each(["delete", "artifact cleanup"] as const)(
     expect(loadSessionEntryReadOnly(f.scope)).toBeUndefined();
   },
 );
+
+it("reports actual cold artifact admission before the no-op planner", async () => {
+  const f = fixture();
+  const admission = observeColdAdmission(f.databaseOptions.path);
+  const logPath = path.join(path.dirname(f.scope.storePath), "admission.log");
+  vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+  logging.setLoggerOverride({ level: "warn", file: logPath });
+  let clock = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  const work = own(
+    cleanupSessionLifecycleArtifactsCore({
+      storePath: f.scope.storePath,
+      sessionKeySegmentPrefix: "unrelated-prefix-",
+      transcriptContentMarker: "unused-marker",
+      archiveRemovedEntryTranscripts: false,
+      orphanTranscriptMinAgeMs: 0,
+    }),
+  );
+  await admission.entered.promise;
+  // The real integrity child remains owned; only its admission-wait interval advances.
+  clock = 1250;
+  admission.release.resolve();
+  await expect(work).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+  expect(admission.parentChecks()).toBe(0);
+  const records = await readArtifactPreparationLogs(logPath);
+  expect(records).toHaveLength(1);
+  expect(records[0]?.message).toBe("slow SQLite session write");
+  expect(records[0]?.details.artifactPreparation).toEqual({
+    admissionMode: "async",
+    admissionMs: 1250,
+    nodeInventoryMs: 0,
+    referencePlanningMs: 0,
+    orphanPlanningMs: 0,
+    markerScanMs: 0,
+    nodeRows: 1,
+    windowRows: 1,
+    referenceIds: 1,
+    selectedEntries: 0,
+    markerWindows: 0,
+    markerRows: 0,
+    deletePlans: 0,
+    completed: true,
+  });
+  expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
+});
 
 it("rejects retired authority before evaluating a stale deletion target", async () => {
   const f = fixture();

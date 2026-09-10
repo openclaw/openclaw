@@ -20,6 +20,7 @@ import {
   controlUiBrowserOnlySharedModuleAliases,
   createControlUiPrecompressedAssetVariants,
   resolveControlUiBuildInfo,
+  resolveControlUiModulePreloadDependencies,
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
@@ -29,6 +30,7 @@ import { en } from "../i18n/locales/en.ts";
 
 const childProcessMocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
 const fsMocks = vi.hoisted(() => ({ existsSync: vi.fn(), readFileSync: vi.fn() }));
+const tsxMocks = vi.hoisted(() => ({ register: vi.fn() }));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -43,6 +45,12 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, existsSync: fsMocks.existsSync, readFileSync: fsMocks.readFileSync };
 });
 
+vi.mock("tsx/esm/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tsx/esm/api")>();
+  tsxMocks.register.mockImplementation(actual.register);
+  return { ...actual, register: tsxMocks.register };
+});
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 type ResolveIdHandler = (
   this: never,
@@ -53,6 +61,63 @@ type ResolveIdHandler = (
 
 function findStringAlias(key: string) {
   return resolveTsconfigPathAliasesForVite().find((alias) => alias.find === key);
+}
+
+function controlUiLocaleModuleHooks() {
+  const plugin = controlUiLocaleModulesPlugin();
+  const resolveHook = plugin.resolveId;
+  const resolveId = typeof resolveHook === "function" ? resolveHook : resolveHook?.handler;
+  const loadHook = plugin.load;
+  const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
+  const watchChangeHook = plugin.watchChange;
+  const watchChange =
+    typeof watchChangeHook === "function" ? watchChangeHook : watchChangeHook?.handler;
+  const buildStartHook = plugin.buildStart;
+  const buildStart =
+    typeof buildStartHook === "function" ? buildStartHook : buildStartHook?.handler;
+  if (!resolveId || !load || !watchChange || !buildStart) {
+    throw new Error("Expected locale module resolver, loader, and invalidation hooks");
+  }
+  return { buildStart, resolveId, load, watchChange };
+}
+
+async function loadControlUiLocaleModuleSource(
+  load: ReturnType<typeof controlUiLocaleModuleHooks>["load"],
+  id: string,
+  addWatchFile: (path: string) => void = vi.fn(),
+) {
+  const result = await load.call({ addWatchFile } as never, id, {} as never);
+  if (typeof result !== "string") {
+    throw new Error("Expected locale module loader to return generated source");
+  }
+  return result;
+}
+
+function dataModuleUrl(source: string): string {
+  return `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+async function executeControlUiLocaleModule(
+  locale: string,
+  baseSource: string,
+  configHintsSource: string,
+) {
+  const configHintsUrl = dataModuleUrl(configHintsSource);
+  const executableSource = baseSource.replace(
+    `virtual:openclaw-control-ui-locale-config-hints/${locale}`,
+    configHintsUrl,
+  );
+  return (await import(dataModuleUrl(executableSource))).default;
 }
 
 describe("Control UI Vite config", () => {
@@ -75,6 +140,71 @@ describe("Control UI Vite config", () => {
     expect(createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
     expect(createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
     expect(createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
+  });
+
+  it("filters only a locale target and its matching config-hint preload", () => {
+    const filename = "assets/zh-TW-Qr78St90.js";
+    const deps = [
+      filename,
+      "assets/lit-runtime-Ef56Gh78.js",
+      "assets/locale-config-hints-zh-TW-D1.js",
+      "assets/locale-config-hints-de-D2.js",
+      "assets/styles.css",
+    ];
+
+    expect(
+      resolveControlUiModulePreloadDependencies(filename, deps, {
+        hostId: "assets/control-ui-core-Ab12Cd34.js",
+        hostType: "js",
+      }),
+    ).toEqual([
+      "assets/lit-runtime-Ef56Gh78.js",
+      "assets/locale-config-hints-de-D2.js",
+      "assets/styles.css",
+    ]);
+    expect(
+      resolveControlUiModulePreloadDependencies("assets/control-ui-core-Ab12Cd34.js", deps, {
+        hostId: "assets/index-Ab12Cd34.js",
+        hostType: "js",
+      }),
+    ).toBe(deps);
+    expect(
+      resolveControlUiModulePreloadDependencies(filename, deps, {
+        hostId: "index.html",
+        hostType: "html",
+      }),
+    ).toBe(deps);
+  });
+
+  it("keeps locale targets unchanged without a matching config-hint preload", () => {
+    const filename = "assets/zh-TW-Qr78St90.js";
+    const deps = [filename, "assets/locale-config-hints-de-D2.js"];
+
+    expect(
+      resolveControlUiModulePreloadDependencies(filename, deps, {
+        hostId: "assets/control-ui-core-Ab12Cd34.js",
+        hostType: "js",
+      }),
+    ).toBe(deps);
+
+    const hintWithoutTarget = ["assets/locale-config-hints-zh-TW-D1.js"];
+    expect(
+      resolveControlUiModulePreloadDependencies(filename, hintWithoutTarget, {
+        hostId: "assets/control-ui-core-Ab12Cd34.js",
+        hostType: "js",
+      }),
+    ).toEqual([]);
+
+    const nestedTarget = [
+      "assets/nested/zh-TW-Qr78St90.js",
+      "assets/locale-config-hints-zh-TW-D1.js",
+    ];
+    expect(
+      resolveControlUiModulePreloadDependencies(nestedTarget[0]!, nestedTarget, {
+        hostId: "assets/control-ui-core-Ab12Cd34.js",
+        hostType: "js",
+      }),
+    ).toBe(nestedTarget);
   });
 
   it("embeds one canonical artifact identity from explicit build inputs", () => {
@@ -574,28 +704,35 @@ describe("Control UI Vite config", () => {
     }
   });
 
-  it("materializes lazy locale modules from their watched canonical translation memory", async () => {
-    const plugin = controlUiLocaleModulesPlugin();
-    const resolveHook = plugin.resolveId;
-    const resolveId = typeof resolveHook === "function" ? resolveHook : resolveHook?.handler;
-    const loadHook = plugin.load;
-    const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
-    if (!resolveId || !load) {
-      throw new Error("Expected locale module resolver and loader");
-    }
-    const id = "virtual:openclaw-control-ui-locale/fr";
-    const resolved = await resolveId.call({} as never, id, undefined, {} as never);
-    expect(resolved).toBe(`\0${id}`);
+  it("materializes one executable locale catalog from base and config-hint modules", async () => {
+    const { load, resolveId } = controlUiLocaleModuleHooks();
+    const baseId = "virtual:openclaw-control-ui-locale/fr";
+    const configHintsId = "virtual:openclaw-control-ui-locale-config-hints/fr";
+    const resolvedBase = await resolveId.call({} as never, baseId, undefined, {} as never);
+    const resolvedConfigHints = await resolveId.call(
+      {} as never,
+      configHintsId,
+      undefined,
+      {} as never,
+    );
+    expect(resolvedBase).toBe(`\0${baseId}`);
+    expect(resolvedConfigHints).toBe(`\0${configHintsId}`);
     expect(
-      await resolveId.call({} as never, `${id}/../../secret`, undefined, {} as never),
+      await resolveId.call({} as never, `${baseId}/../../secret`, undefined, {} as never),
     ).toBeNull();
 
     const addWatchFile = vi.fn();
-    const result = await load.call({ addWatchFile } as never, resolved as string, {} as never);
-    if (typeof result !== "string") {
-      throw new Error("Expected locale module loader to return generated source");
-    }
-    const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
+    const baseSource = await loadControlUiLocaleModuleSource(
+      load,
+      resolvedBase as string,
+      addWatchFile,
+    );
+    const configHintsSource = await loadControlUiLocaleModuleSource(
+      load,
+      resolvedConfigHints as string,
+      addWatchFile,
+    );
+    const catalog = await executeControlUiLocaleModule("fr", baseSource, configHintsSource);
     const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
     const healthText = flattenTranslations(en).get("common.health");
     if (typeof healthText !== "string") {
@@ -608,28 +745,28 @@ describe("Control UI Vite config", () => {
     );
     expect(healthEntry).toBeDefined();
     expect(catalog.common.health).toBe(healthEntry?.translated);
+    expect(catalog.configHints).toBeTypeOf("object");
     expect(catalog.activity.title).toBeTypeOf("string");
     expect(addWatchFile).toHaveBeenCalledWith(memoryPath);
     expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "src/config/schema.hints.ts"));
   });
 
   it("bootstraps only an absent locale memory from the English catalog", async () => {
-    const loadHook = controlUiLocaleModulesPlugin().load;
-    const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
-    if (!load) {
-      throw new Error("Expected locale module loader");
-    }
-    const id = "\0virtual:openclaw-control-ui-locale/fr";
+    const { load } = controlUiLocaleModuleHooks();
+    const baseId = "\0virtual:openclaw-control-ui-locale/fr";
+    const configHintsId = "\0virtual:openclaw-control-ui-locale-config-hints/fr";
     const addWatchFile = vi.fn();
 
     await fsMocks.existsSync.withImplementation(
       () => false,
       async () => {
-        const result = await load.call({ addWatchFile } as never, id, {} as never);
-        if (typeof result !== "string") {
-          throw new Error("Expected locale module loader to return generated source");
-        }
-        const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
+        const baseSource = await loadControlUiLocaleModuleSource(load, baseId, addWatchFile);
+        const configHintsSource = await loadControlUiLocaleModuleSource(
+          load,
+          configHintsId,
+          addWatchFile,
+        );
+        const catalog = await executeControlUiLocaleModule("fr", baseSource, configHintsSource);
         expect([...flattenTranslations(catalog)]).toEqual([
           ...flattenTranslations(loadControlUiSourceCatalog()),
         ]);
@@ -638,31 +775,151 @@ describe("Control UI Vite config", () => {
         );
       },
     );
+  });
 
+  it.each([
+    {
+      name: "empty",
+      memory: "",
+      expected: "Control UI fr translation memory is missing or empty",
+    },
+    { name: "malformed", memory: "{", expected: SyntaxError },
+  ])("rejects $name locale memory", async ({ memory, expected }) => {
+    const { load } = controlUiLocaleModuleHooks();
     await fsMocks.readFileSync.withImplementation(
-      () => "",
+      () => memory,
       async () => {
-        await expect(load.call({ addWatchFile } as never, id, {} as never)).rejects.toThrow(
-          "Control UI fr translation memory is missing or empty",
+        await expect(
+          loadControlUiLocaleModuleSource(load, "\0virtual:openclaw-control-ui-locale/fr", vi.fn()),
+        ).rejects.toThrow(expected);
+      },
+    );
+  });
+
+  it.each([
+    { name: "stale resolved", outcome: "resolve" as const, invalidate: true },
+    { name: "stale rejected", outcome: "reject" as const, invalidate: true },
+    { name: "current rejected", outcome: "reject" as const, invalidate: false },
+  ])("recovers a $name source-catalog generation", async ({ outcome, invalidate }) => {
+    const staleImport = deferred<{
+      loadControlUiSourceCatalog: () => ReturnType<typeof loadControlUiSourceCatalog>;
+    }>();
+    const currentCatalog = {
+      common: { health: "current health" },
+      configHints: { gateway: { auth: { token: { label: "current token" } } } },
+    };
+    const staleLoader = {
+      import: vi.fn(() => staleImport.promise),
+      unregister: vi.fn(async () => undefined),
+    };
+    const currentLoader = {
+      import: vi.fn(async () => ({
+        loadControlUiSourceCatalog: () => currentCatalog,
+      })),
+      unregister: vi.fn(async () => undefined),
+    };
+    let registrations = 0;
+
+    await fsMocks.existsSync.withImplementation(
+      () => false,
+      async () => {
+        await tsxMocks.register.withImplementation(
+          () => (registrations++ === 0 ? staleLoader : currentLoader) as never,
+          async () => {
+            const { load, watchChange } = controlUiLocaleModuleHooks();
+            let baseSourcePromise = loadControlUiLocaleModuleSource(
+              load,
+              "\0virtual:openclaw-control-ui-locale/fr",
+            );
+            await vi.waitFor(() => expect(staleLoader.import).toHaveBeenCalledOnce());
+            if (invalidate) {
+              await watchChange.call({} as never, "src/config/schema.hints.ts", {} as never);
+            }
+            if (outcome === "resolve") {
+              staleImport.resolve({
+                loadControlUiSourceCatalog: () => ({
+                  common: { health: "stale health" },
+                  configHints: { gateway: { auth: { token: { label: "stale token" } } } },
+                }),
+              });
+            } else {
+              const error = new Error("source import failed");
+              staleImport.reject(error);
+              if (!invalidate) {
+                await expect(baseSourcePromise).rejects.toBe(error);
+                baseSourcePromise = loadControlUiLocaleModuleSource(
+                  load,
+                  "\0virtual:openclaw-control-ui-locale/fr",
+                );
+              }
+            }
+            const baseSource = await baseSourcePromise;
+            const configHintsSource = await loadControlUiLocaleModuleSource(
+              load,
+              "\0virtual:openclaw-control-ui-locale-config-hints/fr",
+            );
+            await expect(
+              executeControlUiLocaleModule("fr", baseSource, configHintsSource),
+            ).resolves.toEqual(currentCatalog);
+            expect(currentLoader.import).toHaveBeenCalledOnce();
+          },
         );
       },
     );
-    await fsMocks.readFileSync.withImplementation(
-      () => "{",
+  });
+
+  it("invalidates a resolved locale generation at build start", async () => {
+    const catalogs = [
+      { common: { health: "first" }, configHints: { first: { label: "first" } } },
+      { common: { health: "second" }, configHints: { second: { label: "second" } } },
+    ];
+    let registrations = 0;
+
+    await fsMocks.existsSync.withImplementation(
+      () => false,
       async () => {
-        await expect(load.call({ addWatchFile } as never, id, {} as never)).rejects.toThrow(
-          SyntaxError,
+        await tsxMocks.register.withImplementation(
+          () =>
+            ({
+              import: vi.fn(async () => ({
+                loadControlUiSourceCatalog: () => catalogs[registrations++],
+              })),
+              unregister: vi.fn(async () => undefined),
+            }) as never,
+          async () => {
+            const { buildStart, load } = controlUiLocaleModuleHooks();
+            const firstBase = await loadControlUiLocaleModuleSource(
+              load,
+              "\0virtual:openclaw-control-ui-locale/fr",
+            );
+            const firstHints = await loadControlUiLocaleModuleSource(
+              load,
+              "\0virtual:openclaw-control-ui-locale-config-hints/fr",
+            );
+            await expect(
+              executeControlUiLocaleModule("fr", firstBase, firstHints),
+            ).resolves.toEqual(catalogs[0]);
+
+            await buildStart.call({} as never, {} as never);
+            const secondBase = await loadControlUiLocaleModuleSource(
+              load,
+              "\0virtual:openclaw-control-ui-locale/fr",
+            );
+            const secondHints = await loadControlUiLocaleModuleSource(
+              load,
+              "\0virtual:openclaw-control-ui-locale-config-hints/fr",
+            );
+            await expect(
+              executeControlUiLocaleModule("fr", secondBase, secondHints),
+            ).resolves.toEqual(catalogs[1]);
+          },
         );
       },
     );
   });
 
   it("omits stale config and Settings translations so runtime English can resolve them", async () => {
-    const loadHook = controlUiLocaleModulesPlugin().load;
-    const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
-    if (!load) {
-      throw new Error("Expected locale module loader");
-    }
+    const { load } = controlUiLocaleModuleHooks();
     const currentHintText = "Gateway Token";
     const currentHintKey = configHintTranslationKey("gateway.auth.token", "label", currentHintText);
     const staleHintText = "Old Gateway Token";
@@ -704,15 +961,15 @@ describe("Control UI Vite config", () => {
         await fsMocks.readFileSync.withImplementation(
           () => memory,
           async () => {
-            const result = await load.call(
-              { addWatchFile: vi.fn() } as never,
+            const baseSource = await loadControlUiLocaleModuleSource(
+              load,
               "\0virtual:openclaw-control-ui-locale/fr",
-              {} as never,
             );
-            if (typeof result !== "string") {
-              throw new Error("Expected locale module loader to return generated source");
-            }
-            const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
+            const configHintsSource = await loadControlUiLocaleModuleSource(
+              load,
+              "\0virtual:openclaw-control-ui-locale-config-hints/fr",
+            );
+            const catalog = await executeControlUiLocaleModule("fr", baseSource, configHintsSource);
             const flat = flattenTranslations(catalog);
             expect(flat.get("configView.chatPrefs.title")).toBe("Discussion");
             expect(flat.get(currentHintKey)).toBe("Ağ geçidi belirteci");

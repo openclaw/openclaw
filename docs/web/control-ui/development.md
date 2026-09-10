@@ -97,6 +97,24 @@ navigation outside the app is outside its control. Production connection setting
 and `pnpm ui:dev` behavior are unchanged; use that command when you intentionally
 need a real Gateway or external integration.
 
+## Talk live smoke test
+
+Maintainers can exercise the browser Talk paths end to end from the repository
+root. Replace each placeholder with a real key:
+
+```bash
+OPENAI_API_KEY=<openai-key> GEMINI_API_KEY=<gemini-key> \
+  node --import tsx scripts/dev/realtime-talk-live-smoke.ts
+```
+
+The run verifies the OpenAI backend WebSocket bridge, a synthesized PCM24
+speech-to-response audio roundtrip, OpenAI browser WebRTC SDP exchange, Google
+Live constrained-token browser setup with a JPEG frame and `describe_view`
+function roundtrip, and the Gateway relay browser adapter with fake microphone
+media. Pass `--openai-audio-cycles 3` for a short repeated OpenAI connect,
+talkback, and close soak. The command prints provider status only and does not
+log secrets.
+
 ## Debugging/testing: dev server + remote Gateway
 
 The Control UI is static files; the WebSocket target is configurable and can differ from the HTTP origin. This is handy when you want the Vite dev server locally but the Gateway runs elsewhere.

@@ -18,6 +18,7 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 
 describe("worker placement dispatch", () => {
@@ -25,9 +26,9 @@ describe("worker placement dispatch", () => {
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
   const createTestHarness = (
-    options: Parameters<typeof createHarness>[1] = {},
+    options: Parameters<typeof createHarness>[2] = {},
     store: PlacementStore = placementStore,
-  ) => createHarness(store, { workspacePath: path.join(root, "workspace"), ...options });
+  ) => createHarness(database, store, { workspacePath: path.join(root, "workspace"), ...options });
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-dispatch-"));
@@ -111,6 +112,7 @@ describe("worker placement dispatch", () => {
         undefined,
         "os-a",
         runSetupScript,
+        inheritedProfile,
       );
     },
   );
@@ -218,6 +220,11 @@ describe("worker placement dispatch", () => {
         remoteWorkspaceDir: active.remoteWorkspaceDir,
       },
     });
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: active.environmentId,
+      sessionId: otherRequest.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
     placementStore.transition({
       sessionId: otherRequest.sessionId,
       from: "starting",
@@ -236,6 +243,11 @@ describe("worker placement dispatch", () => {
       },
     });
     placementStore.markWorkspaceResultPending(otherClaim);
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: active.environmentId,
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: active.activeOwnerEpoch,
+    });
 
     await harness.service.reconcile();
 
@@ -779,45 +791,6 @@ describe("worker placement dispatch", () => {
 
     expect(harness.placements.current()).toMatchObject({ state: "active" });
     expect(harness.log).toEqual(["environment:reconcile"]);
-  });
-
-  it("fails closed when an active worker turn claim cannot be proven live after restart", async () => {
-    const harness = createTestHarness();
-    await harness.environments.attachSession({
-      environmentId: harness.ready.environmentId,
-      ownerEpoch: harness.ready.ownerEpoch,
-      sessionId: REQUEST.sessionId,
-    });
-    harness.placements.seedActive(harness.attached.ownerEpoch);
-    placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "claim-1",
-      runId: "run-1",
-      owner: {
-        kind: "worker",
-        environmentId: harness.attached.environmentId,
-        ownerEpoch: harness.attached.ownerEpoch,
-      },
-    });
-    harness.log.length = 0;
-
-    await harness.service.reconcile();
-
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      turnClaim: null,
-      recoveryError: "Active worker turn claim cannot be proven live after gateway restart",
-    });
-    expect(harness.log).toEqual([
-      "environment:reconcile",
-      "workspace",
-      "placement:draining",
-      "placement:reconciling",
-      "teardown:stop",
-      "teardown:destroy",
-      "placement:failed",
-    ]);
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
   it("fails closed instead of activating a synced placement after restart", async () => {

@@ -24,6 +24,12 @@ action. Behavior varies by channel.
   channels that support it.
 - Set `remove: true` to remove one specific emoji (requires non-empty
   `emoji`).
+- `clearAll: true` is a Feishu/Lark-only flag that removes every reaction the
+  bot placed on the message. It is paired with an empty `emoji`.
+- `emoji-list` is a separate `message` tool action, not a `react` parameter. It
+  reports the emoji a channel will accept. What it returns and which
+  per-channel action toggle enables it both vary by channel. See the channel
+  pages under [Channels](/channels).
 - On channels with status reactions, `trackToolCalls: true` on a reaction lets
   the runtime reuse that reacted message for the same turn's status lifecycle.
   Discord keeps the chosen reaction stable during work and signals actual
@@ -40,13 +46,13 @@ action. Behavior varies by channel.
 
   <Accordion title="Nextcloud Talk">
     - Adding reactions only: `emoji` is required and must be non-empty.
-    - Reaction removal is not wired to a delete call yet; `remove: true` is rejected with an explicit error instead of silently no-oping.
+    - Reaction removal is not wired to a delete call yet. `remove: true` is rejected with an explicit error instead of silently no-oping.
     - Requires the Talk bot registered with the `reaction` feature (see [Nextcloud Talk channel docs](/channels/nextcloud-talk)).
 
   </Accordion>
 
   <Accordion title="Telegram">
-    - Use `emoji-list` to find allowed standard reactions and numeric custom emoji identifiers.
+    - Use `emoji-list` to find allowed standard reactions and numeric custom emoji identifiers. On Telegram, `channels.telegram.actions.reactions` gates both `react` and `emoji-list`, and `emoji-list` returns the reactions allowed in the current chat.
     - Empty `emoji` removes the bot's reactions.
     - `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
 
@@ -55,7 +61,7 @@ action. Behavior varies by channel.
   <Accordion title="WhatsApp">
     - Empty `emoji` removes the bot reaction.
     - `remove: true` maps to empty emoji internally (still requires `emoji` in the tool call).
-    - WhatsApp has one bot reaction slot per message; sending a new reaction replaces it rather than stacking multiple emoji.
+    - WhatsApp has one bot reaction slot per message. Sending a new reaction replaces it rather than stacking multiple emoji.
 
   </Accordion>
 
@@ -74,13 +80,13 @@ action. Behavior varies by channel.
   </Accordion>
 
   <Accordion title="Signal">
-    - Inbound reaction notifications are controlled by `channels.signal.reactionNotifications`: `"off"` disables them, `"own"` (default) emits events when users react to bot messages, `"all"` emits events for all reactions, and `"allowlist"` emits events only for senders in `channels.signal.reactionAllowlist`.
+    - `channels.signal.reactionNotifications` controls inbound reaction notifications. `"off"` disables them. `"own"` (default) emits events when users react to bot messages. `"all"` emits events for all reactions. `"allowlist"` emits events only for senders in `channels.signal.reactionAllowlist`.
 
   </Accordion>
 
   <Accordion title="iMessage">
-    - Outbound reactions are iMessage tapbacks (`love`, `like`, `dislike`, `laugh`, `emphasize`, and `question`); `emoji` must map to one of these kinds to add a reaction.
-    - `remove: true` without a recognized tapback kind removes all tapback kinds; with a recognized kind it removes just that one.
+    - Outbound reactions are iMessage tapbacks (`love`, `like`, `dislike`, `laugh`, `emphasize`, and `question`). `emoji` must map to one of these kinds to add a reaction.
+    - `remove: true` without a recognized tapback kind removes all tapback kinds. With a recognized kind it removes just that one.
 
   </Accordion>
 </AccordionGroup>

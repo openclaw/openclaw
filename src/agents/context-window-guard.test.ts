@@ -113,6 +113,36 @@ describe("context-window-guard", () => {
     });
   });
 
+  it.each([false, true])("uses the exact row's context window (exact first=%s)", (exactFirst) => {
+    const models = openRouterModelConfig({
+      contextWindow: 128_000,
+    }).models.providers.openrouter.models.flatMap((model) => [
+      { ...model, id: "custom/model", contextWindow: 2_000 },
+      { ...model, id: "model", contextWindow: 128_000 },
+    ]);
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.invalid",
+            models: exactFirst ? models.toReversed() : models,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "custom",
+      modelId: "model",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({ source: "modelsConfig", tokens: 128_000 });
+    expect(evaluateContextWindowGuard({ info }).shouldBlock).toBe(false);
+  });
+
   it("matches bare provider model config ids against provider-scoped runtime model ids", () => {
     const cfg = openRouterModelConfig({ contextWindow: 1_000_000, contextTokens: 936_000 });
 

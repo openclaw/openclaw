@@ -18,6 +18,11 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import {
+  hasDanglingSkillWorkshopCollectionReviewIndex,
+  LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
+  withSqliteWritableSchema,
+} from "./openclaw-state-db-dangling-workshop-index.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import {
@@ -27,7 +32,10 @@ import {
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { OpenClawStateOwnershipError } from "./openclaw-state-ownership.js";
+import {
+  assertOpenClawStateWriteAllowed,
+  OpenClawStateOwnershipError,
+} from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
@@ -38,6 +46,96 @@ import {
 } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
+
+/**
+ * Make the known malformed index parseable, then let SQLite drop and reclaim it
+ * in the caller's transaction. A failed repair rolls both catalog edits back.
+ */
+function repairDanglingSkillWorkshopCollectionReviewIndex(database: DatabaseSync): boolean {
+  if (!hasDanglingSkillWorkshopCollectionReviewIndex(database)) {
+    return false;
+  }
+  return withSqliteWritableSchema(database, () => {
+    database
+      .prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'index' AND name = ?")
+      .run(
+        `CREATE INDEX ${LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX} ON skill_workshop_collection_reviews(create_time DESC, review_id DESC)`,
+        LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
+      );
+    // SAFETY: the pragma result is treated as unknown and validated before arithmetic.
+    const row = database.prepare("PRAGMA schema_version").get() as {
+      schema_version?: unknown;
+    };
+    const schemaVersion = typeof row.schema_version === "number" ? row.schema_version : 0;
+    database.exec(`PRAGMA schema_version = ${schemaVersion + 1}; PRAGMA writable_schema = OFF;`);
+    database.exec(`DROP INDEX ${LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX};`);
+    return true;
+  });
+}
+
+function repairDanglingSkillWorkshopCollectionReviewIndexChanges(database: DatabaseSync): string[] {
+  return repairDanglingSkillWorkshopCollectionReviewIndex(database)
+    ? ["Removed dangling legacy Skill Workshop review index"]
+    : [];
+}
+
+/** Run read-only schema admission while SQLite ignores malformed catalog rows. */
+function admitStateDatabaseWithDanglingWorkshopIndex<T>(
+  database: DatabaseSync,
+  operation: () => T,
+): T {
+  return withSqliteWritableSchema(database, operation);
+}
+
+/** Admit the schema before Doctor begins its write transaction. */
+function admitStateDatabaseForSchemaRepair(
+  database: DatabaseSync,
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const danglingWorkshopIndex = hasDanglingSkillWorkshopCollectionReviewIndex(database);
+  const admit = () => {
+    assertSupportedStateSchemaVersion(database, pathname);
+    if (danglingWorkshopIndex) {
+      assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
+    }
+  };
+  if (danglingWorkshopIndex) {
+    admitStateDatabaseWithDanglingWorkshopIndex(database, admit);
+  } else {
+    admit();
+  }
+  return danglingWorkshopIndex;
+}
+
+/** Recheck write ownership after BEGIN IMMEDIATE and before catalog mutation. */
+function assertStateDatabaseSchemaRepairWriteAllowed(
+  database: DatabaseSync,
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+  danglingWorkshopIndex: boolean,
+): void {
+  const assertAllowed = () =>
+    assertOpenClawStateWriteAllowed({ database, databasePath: pathname, env });
+  if (danglingWorkshopIndex) {
+    admitStateDatabaseWithDanglingWorkshopIndex(database, assertAllowed);
+  } else {
+    assertAllowed();
+  }
+}
+
+/** Admit Doctor repair, then return the ownership-rechecked catalog repair operation. */
+export function prepareStateDatabaseSchemaRepair(
+  database: DatabaseSync,
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): () => string[] {
+  const danglingWorkshopIndex = admitStateDatabaseForSchemaRepair(database, pathname, env);
+  return () => {
+    assertStateDatabaseSchemaRepairWriteAllowed(database, pathname, env, danglingWorkshopIndex);
+    return repairDanglingSkillWorkshopCollectionReviewIndexChanges(database);
+  };
+}
 
 const STATE_V6_ADDITIVE_TABLES = [
   // v6-v12 databases may predate this former same-version lazy table.

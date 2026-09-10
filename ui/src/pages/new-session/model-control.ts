@@ -570,8 +570,8 @@ export class NewSessionModelControl {
       this.catalog,
     );
     const thinkingDefaults = {
-      modelProvider: defaultTarget?.provider ?? sourceResult?.defaults.modelProvider ?? null,
-      model: defaultTarget?.model ?? agentDefaultModel ?? sourceResult?.defaults.model ?? null,
+      modelProvider: defaultTarget?.provider ?? null,
+      model: defaultTarget?.model ?? null,
       contextTokens: sourceResult?.defaults.contextTokens ?? null,
       agentRuntime: defaultThinkingProfile?.agentRuntime,
       thinkingLevels: defaultThinkingProfile?.thinkingLevels,

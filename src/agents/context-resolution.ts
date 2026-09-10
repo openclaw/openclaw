@@ -3,8 +3,16 @@ import {
   resolveClaudeSonnet5ModelIdentity,
   supportsClaude1MContext,
 } from "@openclaw/llm-core";
-import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeConfiguredProviderCatalogModelId,
+  stripSelfProviderModelPrefix,
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  findConfiguredProviderModel,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   lookupCachedContextTokens,
@@ -13,7 +21,6 @@ import {
   providerContextTokenCacheKey,
 } from "./context-cache.js";
 import { resolveModelExtraParamSources } from "./model-extra-params.js";
-import { normalizeProviderId } from "./model-selection.js";
 
 type ConfigModelEntry = { id?: string; contextWindow?: number; contextTokens?: number };
 type ProviderConfigEntry = {
@@ -64,31 +71,19 @@ function resolveProviderModelRef(params: {
   return provider && model ? { provider, model } : undefined;
 }
 
-function resolveConfiguredProviderModel(
+/** Preserve shipped self-prefixed context refs after exact configured-row selection. */
+export function resolveConfiguredProviderModel(
   cfg: OpenClawConfig | null | undefined,
   provider: string,
   model: string,
 ): ConfigModelEntry | undefined {
-  const providers = (cfg?.models as ModelsConfig | undefined)?.providers;
-  const requestedProvider = provider.trim();
-  const normalizedProvider = normalizeProviderId(provider);
-  const providerEntries = Object.entries(providers ?? {});
-  const providerConfig =
-    providerEntries.find(([providerId]) => providerId.trim() === requestedProvider)?.[1] ??
-    providerEntries.find(
-      ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
-    )?.[1];
-  const bareModel = stripSelfProviderModelPrefix(normalizedProvider, model);
+  const providerConfig = resolveMergedModelProviderConfig(cfg ?? undefined, provider);
+  const bareModel = stripSelfProviderModelPrefix(provider, model);
   const spellings = bareModel === model ? [model] : [model, bareModel];
   for (const spelling of spellings) {
-    const match = providerConfig?.models?.find((entry) => {
-      const entryId = entry.id?.trim();
-      return (
-        entryId === spelling ||
-        (entryId !== undefined &&
-          stripSelfProviderModelPrefix(normalizedProvider, entryId) === spelling)
-      );
-    });
+    const match = findConfiguredProviderModel(providerConfig, provider, spelling, (id) =>
+      normalizeConfiguredProviderCatalogModelId(provider, id),
+    );
     if (match) {
       return match;
     }

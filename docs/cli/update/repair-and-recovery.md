@@ -12,11 +12,14 @@ What happens when an update fails, and the subcommands that finish the job. Part
 
 ## Recover a failed update
 
-After a failed interactive update or repair, OpenClaw finishes cleanup and
-opens [Triage](/cli/triage). Triage immediately starts the first directly
-launchable coding agent on `PATH`, in this order: Claude Code, Codex, OpenCode,
-then Pi. It passes the captured update failure directly and leaves fresh Doctor
-checks and diagnostics collection to the agent, so a broken installation does
+After a failed interactive update or repair, OpenClaw finishes cleanup and offers
+**Diagnose update failure**, **Report update failure**, or **Exit**. Reporting
+previews the sanitized issue body and requires separate confirmation.
+
+Choosing **Diagnose update failure** opens [Triage](/cli/triage), which starts the
+first directly launchable coding agent on `PATH`, in this order: Claude Code,
+Codex, OpenCode, then Pi. It passes the captured update failure directly and leaves
+fresh Doctor checks and diagnostics collection to the agent, so a broken installation does
 not delay the handoff. The agent keeps its existing authentication, sandbox, and
 approval settings.
 
@@ -24,9 +27,15 @@ The agent starts in the operator's original working directory, or their OS home
 if that directory is no longer accessible. The failed installation's resolved
 state, config, and default workspace paths remain pinned for the repair.
 
-Updates using `--yes`, `--json`, or a non-interactive session (including piped
-input or output) collect diagnostics and print handoff commands without starting
-an external coding agent. The updater's earlier
+A verified rollback leaves the previous generation running. The interactive menu
+selects **Exit** by default; declining or cancelling keeps the failed update's
+nonzero exit status. After a verified rollback, `--json`, `--yes`, non-interactive,
+and managed-service handoff runs do not prompt or collect automatic diagnostics.
+
+For failures without a verified rollback, updates using `--yes`, `--json`, or a
+non-interactive session (including piped input or output) collect diagnostics
+and print handoff commands without starting an external coding agent. The updater's
+earlier
 [unattended repair slot](/install/updating#unattended-repair-on-your-own-inference)
 can still run on configured inference. With `--json`, triage output goes to stderr so stdout retains
 the original update result. Diagnostic collection failures never hide the update
@@ -58,10 +67,10 @@ succeeds.
 Dry runs and commands rejected by the initial argument, external-supervisor,
 state-store ownership, handoff identity, or immutable-config checks do not
 collect diagnostics or start an agent. Once those checks pass, failed metadata,
-schema, runtime, and managed-service checks enter triage even when installation
-is blocked. This includes an update that cannot safely stop its parent Gateway
-process. Diagnosis preserves that refusal: it does not stop the Gateway, retry
-the update, or bypass safety checks. See
+schema, runtime, and managed-service checks use the failure actions above even
+when installation is blocked. This includes an update that cannot safely stop
+its parent Gateway process. Diagnosis preserves that refusal: it does not stop the
+Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
 
 ## `update repair`
@@ -87,6 +96,14 @@ openclaw update repair --accept-capabilities
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                                                       |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                                                          |
+
+Untouched, identityless 2026.9.2-era update admissions heal automatically after
+more than 24 hours. Gateway startup, `openclaw update status`, and `openclaw status`
+retain the row as an abandoned failure with reason `legacy-driver-expired` and an
+advisory to run `openclaw update` to retry. The Control UI refreshes the Gateway's
+recovery classification before refusing a suspended config write, so an expired
+orphan does not keep settings or provider sign-in blocked. Live updates and
+pending recovery remain protected. No explicit repair is needed for this shape.
 
 `update repair` first inspects stale update history. When the installed Gateway
 generation is healthy and the only remaining problem is an inactive ledger row,

@@ -143,6 +143,7 @@ export async function writeRepairCandidate(candidate: string, configChange: bool
     "node-version.mjs",
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
+    "node-runtime-recovery.mjs",
     "package.json",
   ]) {
     await fs.copyFile(path.join(process.cwd(), file), path.join(candidate, file));

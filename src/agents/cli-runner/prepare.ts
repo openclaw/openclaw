@@ -1007,6 +1007,7 @@ async function prepareCliRunContextWithinReadFence(
     modelProviderId: params.provider,
     modelId,
     trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
     ...buildAgentHookContextChannelFields(params),
   };
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();

@@ -396,6 +396,7 @@ export function renderRecentSession(params: {
                 placementState: session.placementState,
                 placementProviderId: session.placementProviderId,
                 placementProfileId: session.placementProfileId,
+                placementMachine: session.placementMachine,
                 diskSpaceStatus: session.diskSpaceStatus,
                 workspaceConflictCount: session.workspaceConflictCount,
                 outboxAttentionCount: session.outboxAttentionCount,

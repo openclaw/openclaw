@@ -51,6 +51,60 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
 
+### Saved MCP server definitions
+
+Commands:
+
+- `openclaw mcp list [--json]`
+- `openclaw mcp show [name] [--json]`
+- `openclaw mcp status [--verbose] [--json]`
+- `openclaw mcp doctor [name] [--probe] [--json]`
+- `openclaw mcp probe [name] [--json]`
+- `openclaw mcp add <name> [flags]`
+- `openclaw mcp set <name> <json>`
+- `openclaw mcp configure <name> [flags]`
+- `openclaw mcp tools <name> [--include csv] [--exclude csv] [--clear]`
+- `openclaw mcp login <name> [--code code]`
+- `openclaw mcp logout <name>`
+- `openclaw mcp reload`
+- `openclaw mcp unset <name>`
+
+Notes:
+
+- `list` sorts server names.
+- `show` without a name prints the full configured MCP server object.
+- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
+- `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
+- `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
+- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
+- `set` expects one JSON object value on the command line.
+- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
+- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
+- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
+- `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
+- `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
+- Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
+- `unset` fails if the named server does not exist.
+
+Examples:
+
+```bash
+openclaw mcp list
+openclaw mcp show context7 --json
+openclaw mcp status --verbose
+openclaw mcp doctor --probe
+openclaw mcp probe context7 --json
+openclaw mcp add memory --command npx --arg -y --arg @modelcontextprotocol/server-memory
+openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
+openclaw mcp tools context7 --include 'resolve-library-id,get-library-docs'
+openclaw mcp set docs '{"url":"https://mcp.example.com","transport":"streamable-http"}'
+openclaw mcp configure docs --timeout 20 --connect-timeout 5 --include 'search,read_*'
+openclaw mcp configure docs --auth oauth --oauth-scope 'docs.read'
+openclaw mcp login docs
+openclaw mcp logout docs
+openclaw mcp unset context7
+```
+
 ### Codex tool approvals
 
 MCP tool approvals follow the effective Codex session permission posture unless
@@ -120,60 +174,6 @@ into specific OpenClaw agent ids. Empty, blank, or invalid agent lists are
 rejected by config validation and omitted by the runtime projection path
 instead of becoming global. OpenClaw strips the `codex` metadata before handing
 the native `mcp_servers` config to Codex.
-
-### Saved MCP server definitions
-
-Commands:
-
-- `openclaw mcp list [--json]`
-- `openclaw mcp show [name] [--json]`
-- `openclaw mcp status [--verbose] [--json]`
-- `openclaw mcp doctor [name] [--probe] [--json]`
-- `openclaw mcp probe [name] [--json]`
-- `openclaw mcp add <name> [flags]`
-- `openclaw mcp set <name> <json>`
-- `openclaw mcp configure <name> [flags]`
-- `openclaw mcp tools <name> [--include csv] [--exclude csv] [--clear]`
-- `openclaw mcp login <name> [--code code]`
-- `openclaw mcp logout <name>`
-- `openclaw mcp reload`
-- `openclaw mcp unset <name>`
-
-Notes:
-
-- `list` sorts server names.
-- `show` without a name prints the full configured MCP server object.
-- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
-- `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
-- `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
-- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
-- `set` expects one JSON object value on the command line.
-- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
-- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
-- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
-- `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
-- `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
-- Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
-- `unset` fails if the named server does not exist.
-
-Examples:
-
-```bash
-openclaw mcp list
-openclaw mcp show context7 --json
-openclaw mcp status --verbose
-openclaw mcp doctor --probe
-openclaw mcp probe context7 --json
-openclaw mcp add memory --command npx --arg -y --arg @modelcontextprotocol/server-memory
-openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
-openclaw mcp tools context7 --include 'resolve-library-id,get-library-docs'
-openclaw mcp set docs '{"url":"https://mcp.example.com","transport":"streamable-http"}'
-openclaw mcp configure docs --timeout 20 --connect-timeout 5 --include 'search,read_*'
-openclaw mcp configure docs --auth oauth --oauth-scope 'docs.read'
-openclaw mcp login docs
-openclaw mcp logout docs
-openclaw mcp unset context7
-```
 
 ### Common server recipes
 

@@ -81,6 +81,8 @@ Runtime events include:
 - `trace.metadata`
 - `context.compiled`
 - `prompt.submitted`
+- `tool.call`, with the tool identity and sanitized arguments
+- `tool.result`, with the sanitized result and execution outcome
 - `model.fallback_step`, including the source model, next model, failure reason/detail, chain position, and whether the chain advanced, succeeded, or was exhausted
 - `model.completed`
 - `trace.artifacts`

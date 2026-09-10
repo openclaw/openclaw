@@ -43,7 +43,7 @@ Kimi model IDs:
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "moonshot/kimi-k2.6" } },
+    defaults: { model: { primary: "moonshot/kimi-k3" } },
   },
   models: {
     mode: "merge",
@@ -52,7 +52,7 @@ Kimi model IDs:
         baseUrl: "https://api.moonshot.ai/v1",
         apiKey: "${MOONSHOT_API_KEY}",
         api: "openai-completions",
-        models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
+        models: [{ id: "kimi-k3", name: "Kimi K3" }],
       },
     },
   },

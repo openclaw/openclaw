@@ -2,6 +2,24 @@
 
 This directory owns Control UI-specific guidance that should not live in the repo root.
 
+## State Ownership And Async Results
+
+- The Gateway owns shared state that other clients or channels can change.
+  Renderer copies are caches; local presentation state belongs to the view. Reuse the
+  owning store or controller and Gateway contract instead of implementing session,
+  configuration, or authorization decisions again in the UI.
+- Scope cached data and in-flight requests to the actual connection, agent, and
+  session they concern. Before publishing a result, check that its owner and
+  request generation are still current. A late result from a prior context must
+  not replace newer intent or populate the newly selected context.
+- Optimistic updates retain enough state for visible recovery, then reconcile
+  with the authoritative result. An old request must not roll back a newer edit.
+  Failed writes follow the Gateway's
+  [target and outcome contract](../src/gateway/AGENTS.md#write-target-and-outcome),
+  not a fallback account or connection selected by the renderer.
+- Background updates may refresh their own scoped cache; they must not replace
+  the foreground selection or publish another context's state into its view.
+
 ## i18n Rules
 
 - Foreign-language files in `ui/src/i18n/locales/*.ts` are stable, source-owned lazy-module adapters; their translations are generated from canonical grouped memory in `ui/src/i18n/.i18n/*.tm.jsonl`.

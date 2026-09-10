@@ -2,7 +2,11 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -187,6 +191,41 @@ function createCronLayoutMethodResponses() {
 }
 
 suite.define(() => {
+  it("keeps agent identity inputs inside their fields at desktop and mobile widths", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
+      });
+      await page.goto(`${suite.server.baseUrl}settings/agents`);
+      const editor = page.locator(".agent-identity-editor");
+      await editor.waitFor();
+
+      for (const viewport of responsiveViewports) {
+        await page.setViewportSize(viewport);
+        for (const name of ["Display name", "Emoji"]) {
+          const input = editor.getByRole("textbox", { name, exact: true });
+          await input.focus();
+          await expect
+            .poll(
+              () =>
+                input.evaluate((element) => {
+                  const inputBox = element.getBoundingClientRect();
+                  const fieldBox = element.closest("label")!.getBoundingClientRect();
+                  const cardBox = element.closest(".settings-row")!.getBoundingClientRect();
+                  return (
+                    inputBox.width > 0 &&
+                    inputBox.left >= Math.max(fieldBox.left, cardBox.left) - 1 &&
+                    inputBox.right <= Math.min(fieldBox.right, cardBox.right) + 1
+                  );
+                }),
+              { message: `${name} input is contained at ${viewport.width}px` },
+            )
+            .toBe(true);
+        }
+      }
+    });
+  });
+
   it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
     const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     await suite.withPage(

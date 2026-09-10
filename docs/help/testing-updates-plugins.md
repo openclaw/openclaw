@@ -15,6 +15,17 @@ install, load, update, and uninstall plugins from every supported source.
 For the broader test runner map, see [Testing](/help/testing). For live provider
 keys and network-touching suites, see [Testing live](/help/testing-live).
 
+## On this page
+
+- [What we protect](#what-we-protect) - the guarantees these lanes exist to defend.
+- [Local proof during development](#local-proof-during-development) - the commands to run while you iterate.
+- [Docker lanes](#docker-lanes) - lane reference: what each lane runs and when.
+- [Package Acceptance](#package-acceptance) - lane reference: the acceptance matrix and its gates.
+- [Release default](#release-default) - which lanes a release candidate must clear.
+- [Legacy compatibility](#legacy-compatibility) - older package and plugin states still covered.
+- [Adding coverage](#adding-coverage) - where a new regression belongs.
+- [Failure triage](#failure-triage) - what to do when a lane goes red.
+
 ## What we protect
 
 - A package tarball is complete, has a valid `dist/postinstall-inventory.json`,
@@ -459,3 +470,9 @@ Start with the artifact identity:
 
 Prefer rerunning the failed exact lane with the same package artifact over
 rerunning the whole release umbrella.
+
+## Related
+
+- [Tests](/reference/test) - index of the testing reference, one page per reader job
+- [Testing](/help/testing) - the full testing kit: suites, live lanes, and Docker runners
+- [Release policy](/reference/RELEASING) - the release process this checklist gates

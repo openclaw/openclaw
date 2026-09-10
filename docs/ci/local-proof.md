@@ -131,11 +131,12 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 `blacksmith-testbox`. Its configured workflow hydrates provider and agent
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
-Blacksmith Testbox proof requires Crabbox 0.48.0 or newer. That release binds
-stop and reuse to exact local claims, fences cleanup against ownership changes,
-retains failed-cleanup state for recovery, and reconciles terminal state before
-dropping local ownership. Older binaries are rejected before OpenClaw acquires
-or reuses Testbox capacity.
+The wrapper uses the bundled Crabbox plugin's binary manager. OpenClaw supports
+the current Crabbox CLI contract, starting at 0.55.0. If the selected binary is
+missing or older, the plugin installs a verified current release in its own
+managed directory before provider discovery or lease work. It leaves the original
+binary untouched. Provider readiness and broker authentication still determine
+which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
@@ -272,12 +273,9 @@ The repo wrapper validates the selected Crabbox binary and provider before runni
 node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
 ```
 
-When using the sibling checkout, rebuild the ignored local binary before timing or proof work:
-
-```bash
-version="$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//')" \
-  && go build -C ../crabbox -trimpath -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}" -o bin/crabbox ./cmd/crabbox
-```
+A supported sibling or `PATH` binary can run directly. The wrapper automatically
+replaces an outdated selection with the plugin-managed binary; rebuilding the
+sibling checkout is no longer a prerequisite for proof.
 
 The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 

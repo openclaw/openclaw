@@ -46,10 +46,7 @@ import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
 import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexCommandDepsOverride } from "./command-handlers.js";
-import type {
-  CodexPluginsConfigBlock,
-  CodexPluginsManagementIO,
-} from "./command-plugins-management.js";
+import type { CodexPluginsConfigBlock, CodexPluginsManagementIO } from "./command-plugin-config.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { handleCodexConversationInboundClaim } from "./conversation-binding-hooks.js";
 import {
@@ -503,6 +500,7 @@ describe("codex command", () => {
       "/codex fast menu",
       "/codex computer-use menu",
       "/codex account",
+      "/codex plugins refresh",
       "/codex help",
     ]);
   });
@@ -514,6 +512,8 @@ describe("codex command", () => {
 
     expectResultTextContains(result, "/codex plugins enable");
     expect(buttonCommands(result)).toContain("/codex plugins list");
+    expect(buttonCommands(result)).toContain("/codex plugins refresh");
+    expectResultTextContains(result, "/codex plugins refresh");
   });
 
   it("lists Codex sub-plugins through the /codex plugins command surface", async () => {

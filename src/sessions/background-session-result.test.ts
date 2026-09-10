@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
+import { sessionMutationHandlers } from "../gateway/server-methods/sessions-mutations.js";
+import { callGatewayHandler } from "../gateway/server-methods/skills.test-helpers.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitBackgroundResultToSession } from "./background-session-result.js";
 import {
   beginSessionWorkAdmission,
@@ -125,6 +128,109 @@ describe("commitBackgroundResultToSession", () => {
     ]);
     expect(updates).toHaveLength(1);
     unsubscribe();
+  });
+
+  it("cancels a background completion's pure wait without waiting for old work release", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const target = await createTarget();
+      const admission = await beginSessionWorkAdmission({
+        scope: target.storePath,
+        identities: [target.sessionKey, target.sessionId],
+        assertAllowed: () => {},
+      });
+      const lifecycle = await import("./session-lifecycle-admission.js");
+      const releaseSpy = vi.spyOn(lifecycle, "getSessionWorkAdmissionRelease");
+      const controller = new AbortController();
+      const prepareDisplayContent = vi.fn(async () => undefined);
+      const pending: Promise<unknown>[] = [];
+      let completionOutcome:
+        | PromiseSettledResult<Awaited<ReturnType<typeof commitBackgroundResultToSession>>>
+        | undefined;
+      let sourceResponse: Awaited<ReturnType<typeof callGatewayHandler>> | undefined;
+      try {
+        const completion = commitBackgroundResultToSession({
+          agentId: "main",
+          sessionKey: target.sessionKey,
+          expectedGeneration: target.generation,
+          text: "Cancelled synthetic background result",
+          prepareDisplayContent,
+          idempotencyKey: "background-cancellation-progress",
+          provenance: {
+            kind: "cron",
+            jobId: "synthetic-cancel-job",
+            runId: "synthetic-cancel-run",
+          },
+          config: target.config,
+          signal: controller.signal,
+        });
+        pending.push(completion);
+        pending.push(
+          completion.then(
+            (value) => {
+              completionOutcome = { status: "fulfilled", value };
+            },
+            (reason: unknown) => {
+              completionOutcome = { status: "rejected", reason };
+            },
+          ),
+        );
+        await vi.waitFor(() => expect(releaseSpy).toHaveBeenCalledOnce());
+        expect(getActiveSessionLifecycleMutationCount()).toBe(1);
+        expect(prepareDisplayContent).not.toHaveBeenCalled();
+        pending.push(
+          admission.run(async () => {
+            sourceResponse = await callGatewayHandler(
+              sessionMutationHandlers,
+              "sessions.patch",
+              { key: target.sessionKey, pinned: true },
+              {
+                context: {
+                  getRuntimeConfig: () => target.config,
+                  loadGatewayModelCatalog: vi.fn(async () => []),
+                  getSessionEventSubscriberConnIds: () => new Set<string>(),
+                  broadcastToConnIds: vi.fn(),
+                  chatAbortControllers: new Map(),
+                  chatQueuedTurns: new Map(),
+                  dedupe: new Map(),
+                },
+              },
+            );
+            return sourceResponse;
+          }),
+        );
+        controller.abort();
+        await vi.waitFor(() => {
+          expect(
+            completionOutcome,
+            "cancelled background completion must settle while the unrelated old lease stays held",
+          ).toMatchObject({ status: "rejected", reason: { name: "AbortError" } });
+        });
+        await vi.waitFor(() => expect(sourceResponse).toMatchObject({ ok: true }));
+        expect(admission.isActive()).toBe(true);
+        expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+        expect(prepareDisplayContent).not.toHaveBeenCalled();
+      } finally {
+        controller.abort();
+        admission.release();
+        const settled = await Promise.allSettled(pending);
+        releaseSpy.mockRestore();
+        expect(settled.filter((result) => result.status === "rejected")).toHaveLength(1);
+        expect(completionOutcome).toMatchObject({
+          status: "rejected",
+          reason: { name: "AbortError" },
+        });
+        expect(sourceResponse).toMatchObject({ ok: true });
+        expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+        expect(
+          await loadTranscriptEvents({
+            agentId: "main",
+            sessionKey: target.sessionKey,
+            sessionId: target.sessionId,
+            storePath: target.storePath,
+          }),
+        ).toEqual([]);
+      }
+    });
   });
 
   it("keeps canonical model text separate from structured display content", async () => {

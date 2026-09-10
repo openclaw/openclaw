@@ -5,6 +5,7 @@ import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
+import { createInstallPlanFixture, nodeProbeOutput } from "./install.test-helpers.js";
 import type { createDaemonInstallActionContext } from "./shared.js";
 
 type DaemonActionResponse = Parameters<
@@ -39,30 +40,7 @@ const resolveGatewayAuthMock = vi.hoisted(() =>
 const resolveGatewayBindHostMock = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
-const createInstallPlanFixture = vi.hoisted(() => {
-  return async (params?: {
-    wrapperPath?: string;
-    env?: Record<string, string | undefined>;
-  }): Promise<{
-    programArguments: string[];
-    workingDirectory: string;
-    environment: Record<string, string | undefined>;
-    environmentValueSources?: Record<string, string | undefined>;
-  }> => {
-    const environment: Record<string, string | undefined> = {};
-    if (params?.wrapperPath || params?.env?.OPENCLAW_WRAPPER) {
-      environment.OPENCLAW_WRAPPER = params.wrapperPath ?? params.env?.OPENCLAW_WRAPPER;
-    }
-    return {
-      programArguments: params?.wrapperPath
-        ? [params.wrapperPath, "gateway", "run"]
-        : ["openclaw", "gateway", "run"],
-      workingDirectory: "/tmp",
-      environment,
-    };
-  };
-});
-const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn(createInstallPlanFixture));
+const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn<typeof createInstallPlanFixture>());
 const parsePortMock = vi.hoisted(() => vi.fn(() => null));
 const isGatewayDaemonRuntimeMock = vi.hoisted(() => vi.fn(() => true));
 const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
@@ -248,17 +226,6 @@ function mockResolvedGatewayTokenSecretRef() {
 const { runDaemonInstall } = await import("./install.js");
 const envSnapshot = captureFullEnv();
 
-function nodeProbeOutput(nodeVersion: string, sqliteVersion = "3.53.4") {
-  return {
-    stdout: JSON.stringify({
-      nodeVersion,
-      sqliteVersion,
-      sqliteProbe: { available: true, version: sqliteVersion, text: true, blob: true, json: true },
-    }),
-    stderr: "",
-  };
-}
-
 describe("runDaemonInstall", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
@@ -415,6 +382,26 @@ describe("runDaemonInstall", () => {
         warning.includes("gateway.auth.token is SecretRef-managed"),
       ),
     ).toBe(true);
+  });
+
+  it.each(["darwin", "win32"] as const)(
+    "refuses deferred activation on %s before writing configuration or service state",
+    async (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      await runDaemonInstall({ json: true, force: true, deferActivation: true });
+      expect(actionState.failed.at(-1)?.message).toContain("Deferred service load requires Linux");
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+      expect(service.isLoaded).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses an unparented deferred install before reading or writing the selected profile", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    await runDaemonInstall({ json: true, force: true, deferActivation: true });
+    expect(actionState.failed.at(-1)?.message).toContain("updater IPC channel");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
   });
 
   it("passes service environment value sources through to service install", async () => {

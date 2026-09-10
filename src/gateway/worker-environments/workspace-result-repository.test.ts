@@ -204,6 +204,12 @@ describe("repository workspace result ownership", () => {
         publishAcceptedWorkspace,
       });
     const environments: WorkerDispatchEnvironmentService = {
+      prepareProjectIntent: async () => {
+        throw new Error("unexpected local-project preparation");
+      },
+      assertPreparedIntentCurrent: vi.fn(),
+      getPreparedCandidates: () => [],
+      schedulePreparedRefill: vi.fn(),
       bindPreparedWorkspace: async () => {
         throw new Error("unexpected prepared binding");
       },
@@ -536,26 +542,6 @@ describe("repository workspace result ownership", () => {
       const owned = f.beginTurn("interrupted", !materialized);
       const destination = path.join(root, "materialized-worktree");
       if (materialized) {
-        const database = openOpenClawStateDatabase();
-        executeSqliteQuerySync(
-          database.db,
-          getNodeSqliteKysely<Pick<DB, "worker_environments">>(database.db)
-            .insertInto("worker_environments")
-            .values({
-              environment_id: owned.placement.environmentId,
-              provider_id: "fixture",
-              profile_id: "development",
-              profile_snapshot_json: "{}",
-              provision_operation_id: "repository-result-move",
-              lease_id: "repository-result-lease",
-              state: "attached",
-              owner_epoch: owned.placement.activeOwnerEpoch,
-              attached_session_ids_json: JSON.stringify([SESSION_ID]),
-              created_at_ms: 1,
-              updated_at_ms: 1,
-              state_changed_at_ms: 1,
-            }),
-        );
         placements.beginPlacementMove({
           sessionId: SESSION_ID,
           source: {
@@ -617,6 +603,12 @@ describe("repository workspace result ownership", () => {
         database: openOpenClawStateDatabase(),
       });
       const environments: WorkerDispatchEnvironmentService = {
+        prepareProjectIntent: async () => {
+          throw new Error("unexpected local-project preparation");
+        },
+        assertPreparedIntentCurrent: vi.fn(),
+        getPreparedCandidates: () => [],
+        schedulePreparedRefill: vi.fn(),
         bindPreparedWorkspace: async () => {
           throw new Error("unexpected prepared binding");
         },

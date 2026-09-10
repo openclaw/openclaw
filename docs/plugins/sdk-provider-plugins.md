@@ -11,6 +11,10 @@ read_when:
 Build a provider plugin to add a model provider (LLM) to OpenClaw: a model
 catalog, API-key auth, and dynamic model resolution.
 
+Acme AI is a fictional vendor used throughout this guide and its child pages.
+Helpers named `fetchAcme*` in the samples are placeholders for your own vendor
+API calls, not exported OpenClaw functions.
+
 <Info>
   New to OpenClaw plugins? Read [Getting Started](/plugins/building-plugins)
   first for package structure and manifest setup.
@@ -41,7 +45,7 @@ Explicitly disabled or denied migration owners cannot execute their artifacts.
 The existing bundled migration compatibility rules still apply.
 
 The login caller selects only the declared auth item. Its details must contain
-the matching `provider` and `credentialKind`; a migrated result also supplies
+the matching `provider` and `credentialKind`. A migrated result also supplies
 the saved `profileId`. The owner must honor cancellation, reread the selected
 source before persistence, and reject a changed credential. Login passes
 `configPatchMode: "none"` so import preserves model defaults and restrictions.
@@ -124,14 +128,17 @@ A failed selected import stops the operation instead of silently starting a diff
     model ids like `acme-large` before runtime hooks exist. `openclaw.compat`
     and `openclaw.build` in `package.json` are required for ClawHub
     publishing (`openclaw.compat.pluginApi` and `openclaw.build.openclawVersion`
-    are the two required fields; `minGatewayVersion` falls back to
+    are the two required fields. `minGatewayVersion` falls back to
     `openclaw.install.minHostVersion` when omitted).
+
+    The version strings in the sample manifests are placeholders. Pin them to
+    the OpenClaw release your plugin builds and tests against.
 
   </Step>
 
   <Step title="Register the provider">
     A minimal text provider needs an `id`, `label`, `auth`, and `catalog`.
-    `catalog` is the provider-owned runtime/config hook; it can call live
+    `catalog` is the provider-owned runtime/config hook. It can call live
     vendor APIs and returns `models.providers` entries.
 
     ```typescript index.ts
@@ -224,7 +231,7 @@ A failed selected import stops the operation instead of silently starting a diff
     `registerModelCatalogProvider` is the newer control-plane catalog surface
     for list/help/picker UI, covering `text`, `voice`, `image_generation`,
     `video_generation`, and `music_generation` rows. Keep vendor endpoint
-    calls and response mapping in the plugin; OpenClaw owns the shared row
+    calls and response mapping in the plugin. OpenClaw owns the shared row
     shape, source labels, and help rendering.
 
     That is a working provider. Users can now run
@@ -235,8 +242,10 @@ A failed selected import stops the operation instead of silently starting a diff
     import `findNormalizedProviderValue` and `resolveAuthProfileOrder` from
     `openclaw/plugin-sdk/provider-auth`. This keeps provider entrypoints from
     loading the full agent runtime just to select a credential. The deprecated
-    `agent-runtime` exports remain available for compatibility; use the narrower
-    `provider-auth` route in new code.
+    `agent-runtime` exports remain available for compatibility. Use the narrower
+    `provider-auth` route in new code. See the [removal
+    timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
+    that govern deprecated surfaces named on this page and its child pages.
 
     A custom interactive auth method that mints a static token or API key can
     request protected persistence on its returned profile:
@@ -321,7 +330,7 @@ A failed selected import stops the operation instead of silently starting a diff
     [Internals: Capability Ownership](/plugins/architecture#capability-ownership-model).
 
     Register the audio capabilities from [Provider voice
-    capabilities](/plugins/sdk-provider-plugins/voice-and-audio); register
+    capabilities](/plugins/sdk-provider-plugins/voice-and-audio). Register
     embeddings, generation, fetch, and search from [Provider media and
     search](/plugins/sdk-provider-plugins/media-and-search).
 

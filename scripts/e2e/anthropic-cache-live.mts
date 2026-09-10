@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Context, Message, Model, StreamFn, Tool } from "@openclaw/ai";
-import { bindsClaudeThinkingPrefix, streamAnthropic } from "@openclaw/ai/internal/anthropic";
 import { Type } from "typebox";
 import { startMockAnthropic } from "./lib/anthropic-cache/mock-provider.mts";
-import { loadAnthropicTransportStream } from "./lib/anthropic-cache/transport-loader.mts";
+import {
+  loadAnthropicProviderInternals,
+  loadAnthropicTransportStream,
+} from "./lib/anthropic-cache/transport-loader.mts";
 
 // Docker runs this with native Node so the imports resolve to the installed
 // candidate packages, without the checkout's TypeScript source aliases.
@@ -232,6 +234,7 @@ async function runLane(name: string, stream: StreamFn, apiKey: string): Promise<
   }
 }
 
+const { bindsClaudeThinkingPrefix, streamAnthropic } = await loadAnthropicProviderInternals();
 assert(!bindsClaudeThinkingPrefix(MODEL), "the live model must exercise transient runtime context");
 const apiKey = mockMode ? "synthetic-cache-probe-key" : process.env.ANTHROPIC_API_KEY;
 assert(apiKey?.trim(), "ANTHROPIC_API_KEY is required; the release cache lane cannot skip");

@@ -5,10 +5,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 
@@ -23,8 +25,8 @@ describe("doctor --fix include write ownership", () => {
   });
 
   it("writes a nested agent repair to its fragment and preserves both ancestor files", async () => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
           agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
           gateway: { mode: "local" },
@@ -55,8 +57,8 @@ describe("doctor --fix include write ownership", () => {
   });
 
   it("records the refusal and leaves the root and the included file untouched", async () => {
-    await withTempHome(async (home) => {
-      await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
           agents: { list: [{ id: "ops" }] },
           browser: { $include: "./browser.json" },

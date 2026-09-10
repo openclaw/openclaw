@@ -462,8 +462,36 @@ export async function triageCommand(
       }
       return;
     }
+    if (handoff.agent === "claude" && !automatic) {
+      const { probeClaudeSafeMode } = await import("./triage-claude.js");
+      const probe = await probeClaudeSafeMode({
+        argv: [handoff.program.command, ...handoff.program.leadingArgv],
+        env: targetEnv,
+        ...agentOptions,
+      });
+      if (!probe.ok) {
+        runtime.error(
+          `Failed to check Claude safe-mode support: ${triageCollectionError(probe.error, redaction)}`,
+        );
+        runtime.log(`Run manually: ${suggestedCommands[0]}`);
+        exitCliAfterOutput(runtime, 1);
+      }
+      if (!isCurrent()) {
+        return;
+      }
+      if (!probe.supported) {
+        runtime.error("Claude --safe-mode unavailable; update to Claude Code 2.1.169+.");
+        runtime.log(`Run without safe mode: ${suggestedCommands[0]}`);
+        exitCliAfterOutput(runtime, 1);
+      }
+    }
     runtime.log(`Starting ${handoff.agent}; use --agent <name> to select another coding agent.`);
-    const args = handoff.agent === "opencode" ? ["--prompt", prompt] : [prompt];
+    const args =
+      handoff.agent === "claude"
+        ? ["--safe-mode", prompt]
+        : handoff.agent === "opencode"
+          ? ["--prompt", prompt]
+          : [prompt];
     // Artifact I/O can outlive the admitted update attempt. Recheck its exact
     // owner immediately before handing control to a local coding agent.
     if (!isCurrent()) {

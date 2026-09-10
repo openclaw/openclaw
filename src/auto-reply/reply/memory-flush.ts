@@ -6,8 +6,8 @@ import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import {
+  findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
-  resolveMergedModelProviderModels,
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -51,10 +51,12 @@ export function resolveResponsesServerCompactionThreshold(params: {
   const normalizeModelId = (value: string) =>
     normalizeStaticProviderModelId(normalizedProvider, value).trim().toLowerCase();
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
-  const configuredModel = resolveMergedModelProviderModels({
-    models: providerConfig?.models,
+  const configuredModel = findConfiguredProviderModel(
+    providerConfig,
+    provider,
+    modelId,
     normalizeModelId,
-  }).get(normalizeModelId(modelId));
+  );
   const { defaultParams, modelParams } = resolveModelExtraParamSources({
     config: params.cfg,
     provider,

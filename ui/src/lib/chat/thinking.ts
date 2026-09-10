@@ -49,11 +49,12 @@ export function resolveThinkingProfileForSession(
   defaults: ThinkingSessionDefaults,
   catalog: readonly ModelCatalogEntry[],
 ): ThinkingProfile | undefined {
-  const { provider, model } = resolveThinkingTargetModel({ defaults, session });
+  // A partial session identity cannot borrow its missing half from defaults.
+  const target = session?.model || session?.modelProvider ? session : defaults;
   const catalogEntry = resolveThinkingCatalogEntry(
     catalog,
-    provider,
-    model,
+    target?.modelProvider ?? null,
+    target?.model ?? null,
     session?.agentRuntime?.id,
   );
   const candidates: Array<
@@ -202,16 +203,6 @@ function isOffOnlyThinkingLevels(levels: readonly GatewayThinkingLevelOption[]):
   return levels.every((level) => isOffThinkingOption(level.id || level.label));
 }
 
-function resolveThinkingTargetModel(params: {
-  defaults: ThinkingSessionDefaults;
-  session: ChatThinkingTarget | undefined;
-}): { provider: string | null; model: string | null } {
-  return {
-    provider: params.session?.modelProvider ?? params.defaults?.modelProvider ?? null,
-    model: params.session?.model ?? params.defaults?.model ?? null,
-  };
-}
-
 function resolveThinkingCatalogEntry(
   catalog: readonly ModelCatalogEntry[],
   provider: string | null,
@@ -250,10 +241,13 @@ export function resolveChatThinkingSelectState(params: {
   const defaults = params.defaults ?? params.sessionsResult?.defaults;
   const profile = resolveThinkingProfileForSession(session, defaults, params.catalog);
   const supportedLevels = profile?.thinkingLevels ?? [];
-  const levels =
-    profile?.reasoning === false && isOffOnlyThinkingLevels(supportedLevels) ? [] : supportedLevels;
+  const nonReasoningOffOnly =
+    profile?.reasoning === false &&
+    supportedLevels.length > 0 &&
+    isOffOnlyThinkingLevels(supportedLevels);
+  const levels = nonReasoningOffOnly ? [] : supportedLevels;
   const defaultLevel = profile?.thinkingDefault ?? "";
-  const effectiveOverride = levels.length === 0 && currentOverride === "off" ? "" : currentOverride;
+  const effectiveOverride = nonReasoningOffOnly && currentOverride === "off" ? "" : currentOverride;
   const options = buildThinkingOptions(levels);
   const defaultValue = normalizeThinkingOptionValue(defaultLevel);
   const inherited = {

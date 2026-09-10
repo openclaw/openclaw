@@ -416,9 +416,16 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
 export async function markUpdateRestartSentinelFailure(
   reason: string,
   env: NodeJS.ProcessEnv = process.env,
+  expectedOwner?: { runId?: string; handoffId?: string },
 ): Promise<RestartSentinel | null> {
   return await rewriteRestartSentinel((payload) => {
-    if (payload.kind !== "update") {
+    // Match within the existing atomic read/rewrite, not a racy preflight read.
+    if (
+      payload.kind !== "update" ||
+      (expectedOwner?.runId !== undefined && payload.stats?.runId !== expectedOwner.runId) ||
+      (expectedOwner?.handoffId !== undefined &&
+        payload.stats?.handoffId !== expectedOwner.handoffId)
+    ) {
       return null;
     }
     const payloadWithoutContinuation = { ...payload };

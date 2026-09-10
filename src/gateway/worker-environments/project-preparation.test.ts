@@ -8,6 +8,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import {
   createWorkerProjectPreparation,
   readWorkerProjectSetupRecipe,
+  readWorkerProjectSnapshot,
 } from "./project-preparation.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
 import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
@@ -82,6 +83,8 @@ async function fixture(setup?: string, symlink = false) {
       project: snapshot,
       namespace: "gateway",
       preparation: {
+        purpose: "session",
+        demandAtMs: 1_000,
         key: options.key ?? "a".repeat(64),
         cacheKey: options.cacheKey ?? "c".repeat(64),
         setupRecipe: await readWorkerProjectSetupRecipe(snapshot),
@@ -107,6 +110,31 @@ async function fixture(setup?: string, symlink = false) {
 }
 
 describe("project checkout preparation", () => {
+  it("derives the public repository label without changing the admitted snapshot", () => {
+    const admitted = {
+      key: "a".repeat(64),
+      baseCommit: "b".repeat(40),
+      source: {
+        kind: "repository",
+        url: "https://github.com/openclaw/prepared-fixture.git",
+        repositoryId: "R_prepared_fixture",
+        owner: {
+          agent: { agentId: "main", provenance: null },
+          identity: { source: "anonymous" },
+        },
+      },
+    };
+    const project = readWorkerProjectSnapshot(admitted)!;
+    const operation = createWorkerProjectPreparation({
+      project,
+      namespace: "gateway",
+      requireCurrent: () => {},
+    });
+    expect(operation.project.label).toBe("github.com/openclaw/prepared-fixture");
+    expect(readWorkerProjectSnapshot(project)).toEqual(admitted);
+    operation.close();
+  });
+
   it("bounds retained checkouts and abandoned staging while preserving the current project", async () => {
     const f = await fixture();
     const namespace = path.dirname(f.seed);
@@ -854,6 +882,8 @@ ${action}
       project: f.project,
       namespace: "gateway",
       preparation: {
+        purpose: "session",
+        demandAtMs: 1_000,
         key: "a".repeat(64),
         cacheKey: "c".repeat(64),
       },
@@ -911,6 +941,8 @@ ${failure === "failed recipe" ? "exit 17" : "printf '#' >> .openclaw/worktree-se
         project: f.project,
         namespace: "gateway",
         preparation: {
+          purpose: "session",
+          demandAtMs: 1_000,
           key: "a".repeat(64),
           cacheKey: "c".repeat(64),
           setupRecipe,

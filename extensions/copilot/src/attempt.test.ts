@@ -703,6 +703,7 @@ describe("runCopilotAttempt", () => {
   it("runs generic prompt and lifecycle hooks through the standard harness helpers", async () => {
     const params = makeParams({
       agentAccountId: "account-a",
+      inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
       sandboxSessionKey: "agent:agent-1:policy",
     });
     const beforePromptBuild = vi.fn(() => ({
@@ -747,6 +748,7 @@ describe("runCopilotAttempt", () => {
       expect.objectContaining({ prompt: "hello" }),
       expect.objectContaining({
         accountId: "account-a",
+        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
         runId: "run-1",
         sessionId: "session-1",
         sessionKey: params.sessionKey,

@@ -7,8 +7,8 @@ import {
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import {
+  findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
-  resolveMergedModelProviderModels,
 } from "../../config/model-provider-config.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
@@ -78,10 +78,12 @@ export async function resolveRunModelHasVision(params: {
 }): Promise<boolean> {
   const { run, provider, model } = params;
   const providerConfig = resolveMergedModelProviderConfig(run.config, provider);
-  const configured = resolveMergedModelProviderModels({
-    models: providerConfig?.models,
-    normalizeModelId: normalizeLowercaseStringOrEmpty,
-  }).get(normalizeLowercaseStringOrEmpty(model));
+  const configured = findConfiguredProviderModel(
+    providerConfig,
+    provider,
+    model,
+    normalizeLowercaseStringOrEmpty,
+  );
   if (configured?.input !== undefined) {
     return modelSupportsInput(configured, "image");
   }

@@ -15,6 +15,7 @@ async function loadSkillsRouteData(
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const agents = context.agents;
+  const selection = context.agentSelection.state;
   const client = gatewaySnapshot.client;
   if (gatewaySnapshot.phase !== "connected" || !client) {
     return {
@@ -23,6 +24,7 @@ async function loadSkillsRouteData(
       agents,
       agentsList: null,
       selectedAgentId: null,
+      selection,
       report: null,
       error: null,
       clawhubRef,
@@ -36,7 +38,8 @@ async function loadSkillsRouteData(
   try {
     const loadedAgentsList = await agents.ensureList();
     agentsList = loadedAgentsList;
-    const requestedAgentId = search.get("agent") ?? loadedAgentsList?.defaultId;
+    const requestedAgentId =
+      search.get("agent") ?? selection.selectedId ?? loadedAgentsList?.defaultId;
     selectedAgentId = loadedAgentsList?.agents.some((agent) => agent.id === requestedAgentId)
       ? (requestedAgentId ?? null)
       : null;
@@ -56,20 +59,33 @@ async function loadSkillsRouteData(
     agents,
     agentsList,
     selectedAgentId,
+    selection,
     report,
     error,
     clawhubRef,
   };
 }
 
-export const page = definePage({
-  ...routePageSpec("skills"),
-  loaderDeps: (_context: ApplicationContext, location) => location.search,
-  loader: loadSkillsRouteData,
-  component: () =>
-    import("./skills-page.ts").then(() => ({
-      header: true,
-      render: (data: SkillsRouteData | undefined) =>
-        data ? html`<openclaw-skills-page .routeData=${data}></openclaw-skills-page>` : nothing,
-    })),
-});
+function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discovery" | "settings") {
+  return definePage({
+    ...routePageSpec(routeId),
+    loaderDeps: (_context: ApplicationContext, location) => location.search,
+    loader: loadSkillsRouteData,
+    component: () =>
+      import("./skills-page.ts").then(() => ({
+        header: true,
+        render: (data: SkillsRouteData | undefined) =>
+          data
+            ? html`<openclaw-skills-page
+                .routeData=${data}
+                .surface=${surface}
+              ></openclaw-skills-page>`
+            : nothing,
+      })),
+  });
+}
+
+export const pages = [
+  defineSkillsPage("skills", "discovery"),
+  defineSkillsPage("skill-settings", "settings"),
+] as const;
