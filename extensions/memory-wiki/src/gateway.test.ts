@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import { MemoryWikiDashboardUnavailableError } from "./compiled-cache.js";
+import { deferred } from "./deferred.test-helpers.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
@@ -104,14 +105,6 @@ function readRespondError(respond: { mock: { calls: Array<Array<unknown>> } }): 
   expect(call?.[0]).toBe(false);
   expect(call?.[1]).toBeUndefined();
   return call?.[2];
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 const VAULT_BACKED_GATEWAY_CASES = [

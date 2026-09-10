@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
+import { deferred } from "./deferred.test-helpers.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 
@@ -52,14 +53,6 @@ function createConfig(
   vaultPath = path.join(os.tmpdir(), `memory-wiki-source-sync-${vaultCounter++}`),
 ) {
   return resolveMemoryWikiConfig({ vaultMode, vault: { path: vaultPath } });
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 describe("syncMemoryWikiImportedSources", () => {
@@ -165,8 +158,8 @@ describe("syncMemoryWikiImportedSources", () => {
 
   it("waits for an existing vault mutation before starting source sync", async () => {
     const config = createConfig();
-    const blockerEntered = deferred<void>();
-    const blockerGate = deferred<void>();
+    const blockerEntered = deferred();
+    const blockerGate = deferred();
     const blocker = withMemoryWikiVaultMutation(config.vault.path, async () => {
       blockerEntered.resolve(undefined);
       await blockerGate.promise;
