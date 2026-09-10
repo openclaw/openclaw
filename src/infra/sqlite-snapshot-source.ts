@@ -1,5 +1,6 @@
 // Keep source lifetime pinned while the snapshot owner consumes live or private bytes.
 import fs, { type BigIntStats } from "node:fs";
+import path from "node:path";
 import {
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
@@ -123,22 +124,44 @@ export async function withSqliteSnapshotSource<T>(
   operation: (sourcePath: string) => Promise<T>,
 ): Promise<T> {
   let prepared = await prepareSqliteSnapshotSource(pathname);
+  let outcome: { value: T } | { cause: unknown };
   try {
-    try {
-      return prepared
+    outcome = {
+      value: prepared
         ? await operation(prepared.location)
-        : await withSqliteSourceHandleAsync(pathname, () => operation(pathname));
-    } catch (error) {
-      if (prepared) {
-        throw error;
+        : await withSqliteSourceHandleAsync(pathname, () => operation(pathname)),
+    };
+  } catch (error) {
+    if (prepared) {
+      outcome = { cause: error };
+    } else {
+      try {
+        prepared = await prepareSqliteSnapshotSource(pathname);
+        if (!prepared) {
+          outcome = { cause: error };
+        } else {
+          outcome = { value: await operation(prepared.location) };
+        }
+      } catch (retryError) {
+        outcome = { cause: retryError };
       }
-      prepared = await prepareSqliteSnapshotSource(pathname);
-      if (!prepared) {
-        throw error;
-      }
-      return await operation(prepared.location);
     }
-  } finally {
-    prepared?.cleanup();
   }
+  if (prepared) {
+    if (!prepared.cleanup()) {
+      // The exit retry is best-effort, not proof that this private copy was removed.
+      const readFailure =
+        "cause" in outcome
+          ? `${outcome.cause instanceof Error ? outcome.cause.message : String(outcome.cause)}; `
+          : "";
+      throw new Error(
+        `${readFailure}SQLite snapshot cleanup failed: ${path.dirname(prepared.location)}. Check directory permissions and available storage before retrying.`,
+        "cause" in outcome ? outcome : undefined,
+      );
+    }
+  }
+  if ("cause" in outcome) {
+    throw outcome.cause;
+  }
+  return outcome.value;
 }
