@@ -463,6 +463,64 @@ describe("config form renderer", () => {
     expect(selectedLabels).toEqual(["tailnet", "openai"]);
   });
 
+  it("renders mixed scalar unions with literal branches", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        cron: {
+          type: "object",
+          properties: {
+            sessionRetention: {
+              anyOf: [{ type: "string" }, { type: "boolean", const: false }],
+              title: "Automations Session Retention",
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toEqual([]);
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { cron: { sessionRetention: "7d" } },
+        onPatch,
+      }),
+      container,
+    );
+
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input.settings-input"),
+      "session retention input",
+    );
+    expect(input.value).toBe("7d");
+    input.value = "false";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "sessionRetention"], false);
+
+    input.value = "retain";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "sessionRetention"], "retain");
+  });
+
+  it("keeps oneOf scalar unions with literal overlap in Raw mode", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        retention: {
+          oneOf: [{ type: "string" }, { type: "boolean", const: false }],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toEqual(["retention"]);
+  });
+
   it("renders map fields from additionalProperties", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");

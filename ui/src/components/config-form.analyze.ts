@@ -613,16 +613,25 @@ function normalizeUnion(
     const booleanBranch = remaining.length === 1 ? remaining[0] : undefined;
     const plainBooleanBranch =
       booleanBranch?.type === "boolean" && Object.keys(booleanBranch).length === 1;
-    if (
-      !plainBooleanBranch ||
-      literals.includes("true") ||
-      literals.includes("false") ||
-      (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
+    if (plainBooleanBranch) {
+      if (
+        literals.includes("true") ||
+        literals.includes("false") ||
+        (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
+      ) {
+        return null;
+      }
+      remaining.pop();
+      literals.unshift(true, false);
+    } else if (
+      schema.anyOf === undefined ||
+      !remaining.every((entry) => {
+        const type = schemaType(entry);
+        return Boolean(type) && RENDERABLE_UNION_TYPES.has(String(type));
+      })
     ) {
       return null;
     }
-    remaining.pop();
-    literals.unshift(true, false);
   }
 
   if (literals.length > 0 && remaining.length === 0) {
@@ -635,6 +644,18 @@ function normalizeUnion(
         anyOf: undefined,
         oneOf: undefined,
         allOf: undefined,
+      },
+      unsupportedPaths: [],
+    };
+  }
+
+  if (literals.length > 0 && remaining.length > 0) {
+    return {
+      schema: {
+        ...schema,
+        anyOf: [...remaining, ...literals.map((literal) => ({ const: literal }))],
+        oneOf: undefined,
+        nullable,
       },
       unsupportedPaths: [],
     };
