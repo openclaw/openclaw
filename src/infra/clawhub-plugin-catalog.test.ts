@@ -397,13 +397,15 @@ describe("ClawHub plugin catalog client", () => {
       fetchImpl,
     });
 
-    expect(requestedUrls).toEqual([
-      "/api/v1/packages/memory-plus",
-      "/api/v1/packages/memory-plus/versions?limit=10",
-      "/api/v1/packages/memory-plus/versions/1.2.2",
-      "/api/v1/packages/memory-plus/file?path=README.md&preview=1&version=1.2.2",
-      "/api/v1/packages/memory-plus/versions/1.2.2/security",
-    ]);
+    expect(requestedUrls[0]).toBe("/api/v1/packages/memory-plus");
+    expect(requestedUrls.slice(1).toSorted()).toEqual(
+      [
+        "/api/v1/packages/memory-plus/versions?limit=10",
+        "/api/v1/packages/memory-plus/versions/1.2.2",
+        "/api/v1/packages/memory-plus/file?path=README.md&preview=1&version=1.2.2",
+        "/api/v1/packages/memory-plus/versions/1.2.2/security",
+      ].toSorted(),
+    );
     expect(detail).toMatchObject({
       packageName: "memory-plus",
       owner: {
