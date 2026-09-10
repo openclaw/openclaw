@@ -110,6 +110,8 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.entries.*.identity.avatar": "avatars/openclaw.png",
+  "cron.enabled": "Default: On",
+  "cron.triggers.enabled": "Default: On",
 };
 
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
@@ -126,10 +128,7 @@ function isKernelOwnedChannelHintPath(path: string): boolean {
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
 function isPluginOwnedChannelHintPath(path: string): boolean {
-  if (!path.startsWith(CHANNEL_NAMESPACE_PREFIX)) {
-    return false;
-  }
-  return !isKernelOwnedChannelHintPath(path);
+  return path.startsWith(CHANNEL_NAMESPACE_PREFIX) && !isKernelOwnedChannelHintPath(path);
 }
 
 /** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */

@@ -26,6 +26,12 @@ const BUNDLED_CHANNEL_HINT_PREFIXES = [
   "channels.whatsapp",
 ] as const;
 
+describe("automation default hints", () => {
+  it.each(["cron.enabled", "cron.triggers.enabled"])("names the inherited state for %s", (path) => {
+    expect(buildBaseHints()[path]?.placeholder).toBe("Default: On");
+  });
+});
+
 describe("section docs URLs", () => {
   it("accounts for every root config section", () => {
     const sectionsWithDocsDecisions = new Set([
