@@ -40,7 +40,6 @@ import {
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   tryInstallShellCompletion,
-  type PreManagedServiceStop,
 } from "./update-command-service.js";
 import {
   deferUpdateCommandTerminalResult,
@@ -51,7 +50,10 @@ import {
 
 export type { FinishUpdateParams } from "./update-command-finish-types.js";
 
-export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
+export async function finishUpdate(
+  params: FinishUpdateParams,
+  { candidateRuntime = false } = {},
+): Promise<UpdateRunResult> {
   if (params.serviceLoadBoundary && process.platform !== "linux") {
     throw new Error("Deferred native service loading is not supported on this platform.");
   }
@@ -78,7 +80,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     });
   let rollbackAttempted = false;
   let postVerificationRepairAttempted = false;
-  let rollbackStopState: PreManagedServiceStop | undefined;
+  let rollbackStopState: FinishUpdateParams["preManagedServiceStop"];
   // Rollback can replace the suspension owner.
   const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
   const resumeWindowsAutoStart = async (result: UpdateRunResult) => {
@@ -128,15 +130,20 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   let pendingResult = params.result;
   let pendingNotify = true;
   const publishFinalResult = async (failure?: unknown): Promise<UpdateRunResult> => {
-    const settled = await resolveSettledUpdateCommandResult(params, pendingResult, failure);
+    const guard = deferredTerminal ? undefined : assertCurrent;
+    const settled = await resolveSettledUpdateCommandResult(params, pendingResult, failure, guard);
     const result = completedResult(settled.result);
     if (pendingNotify) {
+      // The sentinel commits synchronously before yielding. Refusal must stay
+      // outside its best-effort catch, and settlement needs another assertion.
+      settled.assertPublication();
       await writeControlPlaneUpdateRestartSentinelBestEffort({
         meta: params.controlPlaneUpdateSentinelMeta,
         result,
         jsonMode: Boolean(params.opts.json),
       });
     }
+    settled.assertPublication();
     return publishUpdateCommandTerminalResult(params, result, {
       rolledBack: rolledBack && !settled.settlementFailed,
       downtimeMs: pendingRestartAtMs === undefined ? completedDowntimeMs : undefined,
@@ -225,15 +232,12 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
   };
   const reportResult = async (
     initialResult: UpdateRunResult,
-    initialRecoverService = false,
+    recoverOnError = false,
     initialRestoreFailure?: { cause: unknown },
     notify = true,
   ): Promise<UpdateRunResult> => {
     assertCurrent();
-    const { result, recoverService } = await recoverFailedResult(
-      initialResult,
-      initialRecoverService,
-    );
+    const { result, recoverService } = await recoverFailedResult(initialResult, recoverOnError);
     assertCurrent();
     let restoreFailure = initialRestoreFailure;
     const finalResult = completedResult({
@@ -437,17 +441,17 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
 
     const postUpdateRoot = params.result.root ?? params.root;
     const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
-      const convergence = await convergeUpdatePlugins({ ...params, beforeDoctor });
-      if (convergence.resultWithPostUpdate.status === "error") {
-        triageAllowed = !convergence.cancelled;
-        const reported = await reportResult(convergence.resultWithPostUpdate);
+      const phase = await convergeUpdatePlugins({ ...params, beforeDoctor, candidateRuntime });
+      if (phase.resultWithPostUpdate.status === "error") {
+        triageAllowed = !phase.cancelled;
+        const reported = await reportResult(phase.resultWithPostUpdate);
         throw createFailure(
           reported,
           resolveManagedServiceUpdateFailureExitCode(reported),
-          convergence.detail,
+          phase.detail,
         );
       }
-      return convergence;
+      return phase;
     };
     // A current core may converge plugins online, parking before fresh Doctor.
     // A replaced core keeps convergence in its original stopped interval.
@@ -582,9 +586,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
               })
           : undefined,
       );
-      if (recovered.result.status === "ok") {
-        resultWithPostUpdate = recovered.result;
-      } else {
+      if (recovered.result.status !== "ok") {
         // The Gateway may have consumed its sentinel. Update only the existing
         // receipt so a failed repair cannot deliver a duplicate notification.
         await markControlPlaneUpdateRestartSentinelFailureBestEffort({
@@ -595,6 +597,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         const reported = await reportResult(recovered.result, false, undefined, false);
         throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
       }
+      resultWithPostUpdate = recovered.result;
     };
     if (!params.coreAlreadyCurrent) {
       await restart();

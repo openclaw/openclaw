@@ -20,6 +20,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -70,7 +71,7 @@ const pluginResult: PostCorePluginUpdateResult = {
   npm: { changed: false, outcomes: [] },
   integrityDrifts: [],
 };
-type Lane = LeaseScenario["lane"];
+type Lane = LeaseScenario["lane"] | "candidate-runtime";
 let state: OpenClawTestState;
 let entrypoint: string;
 
@@ -121,10 +122,19 @@ async function writeScenario(
   lane: Lane,
   scenario: Omit<LeaseScenario, "lane"> = {},
 ): Promise<void> {
-  await state.writeJson("scenario.json", { pluginUpdate: pluginResult, ...scenario, lane });
+  await state.writeJson("scenario.json", {
+    pluginUpdate: pluginResult,
+    ...scenario,
+    // Both inline paths retain fresh Doctor, but must never invoke the fixture's post-core role.
+    lane: lane === "candidate-runtime" ? "current-process" : lane,
+  });
 }
 
-async function invoke(lane: Lane, recoveryRunIds: readonly string[] = []): Promise<void> {
+async function invoke(
+  lane: Lane,
+  recoveryRunIds: readonly string[] = [],
+  startedAt = Date.now(),
+): Promise<void> {
   if (lane === "resume") {
     return resumePostCoreUpdate({
       root: state.root,
@@ -145,32 +155,37 @@ async function invoke(lane: Lane, recoveryRunIds: readonly string[] = []): Promi
       recoveryRunIds,
     );
   }
-  await finishUpdate({
-    mutationStarted: true,
-    result: {
-      status: "ok",
-      mode: "npm",
+  await finishUpdate(
+    {
+      mutationStarted: true,
+      result: {
+        status: "ok",
+        mode: "npm",
+        root: state.root,
+        before: {
+          version: lane === "fresh-process" || lane === "candidate-runtime" ? "0.9.0" : "2.0.0",
+        },
+        after: { version: "1.0.0" },
+        steps: [],
+        durationMs: 1,
+      },
       root: state.root,
-      before: { version: lane === "fresh-process" ? "0.9.0" : "2.0.0" },
-      after: { version: "1.0.0" },
-      steps: [],
-      durationMs: 1,
+      installKindChanged: false,
+      configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
+      requestedChannel: null,
+      storedChannel: "stable",
+      channel: "stable",
+      downgradeRisk: lane !== "fresh-process" && lane !== "candidate-runtime",
+      shouldRestart: false,
+      opts: { json: true, yes: true },
+      ownedManagedUpdateEnv: { ...process.env },
+      controlPlaneUpdateSentinelMeta: null,
+      preUpdatePluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
+      startedAt,
+      updateStepTimeoutMs: 15_000,
     },
-    root: state.root,
-    installKindChanged: false,
-    configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
-    requestedChannel: null,
-    storedChannel: "stable",
-    channel: "stable",
-    downgradeRisk: lane !== "fresh-process",
-    shouldRestart: false,
-    opts: { json: true, yes: true },
-    ownedManagedUpdateEnv: { ...process.env },
-    controlPlaneUpdateSentinelMeta: null,
-    preUpdatePluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
-    startedAt: Date.now(),
-    updateStepTimeoutMs: 15_000,
-  });
+    { candidateRuntime: lane === "candidate-runtime" },
+  );
 }
 
 async function invokeReportedFailure(
@@ -245,7 +260,7 @@ function expectRecoveredRun(run: UpdateRunRecord | undefined): void {
 }
 
 describe("update orchestration lifecycle ownership", () => {
-  it.each(["fresh-process", "current-process", "repair"] as const)(
+  it.each(["fresh-process", "current-process", "candidate-runtime", "repair"] as const)(
     "%s releases plugin ownership for fresh doctor without delegating Gateway activation",
     async (lane) => {
       const recovery = lane === "repair" ? seedInterruptedPostCoreRun() : undefined;
@@ -390,23 +405,31 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it.each([false, true])(
-    "resume reads the parent migration owner's committed generation (empty=%s)",
-    async (empty) => {
+  it.each(
+    (["resume", "candidate-runtime"] as const).flatMap((lane) =>
+      [false, true].map((empty) => ({ lane, empty })),
+    ),
+  )(
+    "$lane reads the parent migration owner's committed generation (empty=$empty)",
+    async ({ lane, empty }) => {
       const old = { old: { source: "path" as const } };
       await writePersistedInstalledPluginIndexInstallRecords(old);
       expect(await loadInstalledPluginIndexInstallRecords()).toEqual(old);
       const recordsPath = await state.writeJson("forwarded.json", old);
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH", recordsPath);
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS", String(Date.now()));
+      const startedAt = Date.now();
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS", String(startedAt));
       const current: Record<string, PluginInstallRecord> = empty
         ? {}
         : { current: { source: "path" } };
       await state.writeConfig({ plugins: { enabled: false }, gateway: { port: 19003 } });
-      await writePersistedInstalledPluginIndexInstallRecords(current);
-      await writeScenario("resume");
-      await invoke("resume");
-      expectSuccess("resume", false);
+      await writePersistedInstalledPluginIndexInstallRecords(current, {
+        now: () => new Date(startedAt),
+      });
+      expect((await readPersistedInstalledPluginIndex())?.generatedAtMs).toBe(startedAt);
+      await writeScenario(lane);
+      await invoke(lane, [], startedAt);
+      expectSuccess(lane, lane !== "resume");
       expect(mocks.plugins).toHaveBeenCalledWith(
         expect.objectContaining({
           configSnapshot: expect.objectContaining({
@@ -415,11 +438,26 @@ describe("update orchestration lifecycle ownership", () => {
           pluginInstallRecords: current,
         }),
       );
-      expect(await events()).toEqual([]);
+      expect(await events()).toEqual(
+        lane === "resume" ? [] : ["post-attempt", "post-acquired", "validate", "readiness"],
+      );
     },
   );
 
-  it.each(["fresh-process", "current-process", "repair"] as const)(
+  it("uses forwarded records when candidate convergence has no persisted index", async () => {
+    expect(await readPersistedInstalledPluginIndex()).toBeNull();
+    await writeScenario("candidate-runtime", { hostVersion: "1.0.0" });
+    await invoke("candidate-runtime");
+    expectSuccess("candidate-runtime");
+    expect(mocks.plugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
+      }),
+    );
+    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
+  });
+
+  it.each(["fresh-process", "current-process", "candidate-runtime", "repair"] as const)(
     "%s does not run a final doctor when no plugins changed",
     async (lane) => {
       await writeScenario(lane, { pluginUpdate: { ...pluginResult, changed: false } });
@@ -435,7 +473,7 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it.each(["fresh-process", "current-process", "repair"] as const)(
+  it.each(["fresh-process", "current-process", "candidate-runtime", "repair"] as const)(
     "%s retains strict fresh validation after releasing the lease",
     async (lane) => {
       const recovery = lane === "repair" ? seedInterruptedPostCoreRun() : undefined;
@@ -628,9 +666,11 @@ describe("update orchestration lifecycle ownership", () => {
   it.each([
     { lane: "resume", valid: true },
     { lane: "fresh-process", valid: true },
+    { lane: "candidate-runtime", valid: true },
     { lane: "repair", valid: true },
     { lane: "resume", valid: false },
     { lane: "fresh-process", valid: false },
+    { lane: "candidate-runtime", valid: false },
     { lane: "repair", valid: false },
   ] as const)(
     "$lane stamps only strictly valid downgrade config (valid=$valid)",

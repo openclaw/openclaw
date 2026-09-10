@@ -31,12 +31,16 @@ import {
   createUpdateCommandFinalizationFence,
   UpdateCommandRecoveryPendingError,
 } from "./update-command-recovery.js";
-import { UpdateCommandFailure } from "./update-command-result.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
+import { recordVerifiedUpdatePackageCleanup } from "./update-command-terminal.js";
 
 export type {
   MigratedUpdateFinalizationInput,
@@ -236,9 +240,6 @@ export async function continueMigratedUpdateInFreshProcess(
     const child = executorFence
       ? await withUpdateCommandExecutorChild(executorFence, runChild)
       : await runChild();
-    if (child.stdout) {
-      process.stdout.write(child.stdout);
-    }
     if (child.stderr) {
       process.stderr.write(child.stderr);
     }
@@ -258,6 +259,7 @@ export async function continueMigratedUpdateInFreshProcess(
         "Candidate finalization did not confirm the admitted run's terminal outcome.",
       );
     }
+    assertCurrent();
     try {
       await windowsRecovery?.complete(response.result.status === "ok");
     } catch (cause) {
@@ -268,15 +270,51 @@ export async function continueMigratedUpdateInFreshProcess(
         { cause },
       );
     }
-    const retained = await params.packageTransaction
-      ?.complete({ activationVerified: response.result.status === "ok" }, assertCurrent)
-      .catch((error: unknown) => {
-        assertCurrent();
-        defaultRuntime.error(`Update backup cleanup failed: ${String(error)}`);
+    try {
+      assertCurrent();
+      const priorStepCount = response.result.steps.length;
+      if (response.result.status === "ok") {
+        const cleanupFailure = await recordVerifiedUpdatePackageCleanup(
+          params,
+          response.result,
+          assertCurrent,
+        );
+        if (cleanupFailure) {
+          throw new UpdateCommandPendingRecoveryFailure(
+            cleanupFailure.result,
+            cleanupFailure.detail,
+            { cause: cleanupFailure },
+          );
+        }
+      } else {
+        // The candidate already committed its failure. Retention adds diagnostics,
+        // not a replacement reason or permission to reopen its migrated history.
+        const retained = await params.packageTransaction?.complete(
+          { activationVerified: false },
+          assertCurrent,
+        );
+        if (retained) {
+          response.result.steps = [...response.result.steps, retained];
+        }
+      }
+      assertCurrent();
+      for (const step of response.result.steps.slice(priorStepCount)) {
+        if (step.stderrTail) {
+          defaultRuntime.error(step.stderrTail);
+        }
+      }
+    } catch (cause) {
+      if (cause instanceof UpdateCommandPendingRecoveryFailure) {
+        throw cause;
+      }
+      throw new UpdateCommandPendingRecoveryFailure(response.result, formatErrorMessage(cause), {
+        cause,
       });
-    if (retained) {
-      response.result.steps.push(retained);
-      defaultRuntime.error(retained.stderrTail);
+    }
+    // Child output is buffered until the parent-owned package cleanup settles.
+    // Its committed history remains owned by the candidate, even on refusal.
+    if (child.stdout) {
+      process.stdout.write(child.stdout);
     }
     return {
       result: response.result,
@@ -292,11 +330,17 @@ export async function continueMigratedUpdateInFreshProcess(
     try {
       await windowsRecovery?.complete(false);
     } catch (cause) {
-      throw new AggregateError(
+      const compensationFailure = new AggregateError(
         [error, cause],
         `Candidate finalization failed (${formatErrorMessage(error)}) and Windows task autostart compensation failed (${formatErrorMessage(cause)})`,
         { cause },
       );
+      if (error instanceof UpdateCommandPendingRecoveryFailure) {
+        throw new UpdateCommandPendingRecoveryFailure(error.result, compensationFailure.message, {
+          cause: compensationFailure,
+        });
+      }
+      throw compensationFailure;
     }
     throw error;
   } finally {

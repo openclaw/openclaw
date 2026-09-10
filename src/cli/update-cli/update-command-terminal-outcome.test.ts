@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as triageUpdate from "../../commands/triage-update.js";
+import {
+  openPackageActivationJournal,
+  resolvePackageActivationAnchor,
+} from "../../infra/package-update-activation-journal.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import {
   swapStagedPackageInstall,
@@ -13,18 +19,29 @@ import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "../../infra/package-update-swap.test-support.js";
+import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
+import * as sentinel from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
+import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateStepResult } from "../../infra/update-runner.js";
+import * as triage from "../../infra/update-triage.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  captureUpdateCommandExecutorAuthority,
+  withUpdateCommandExecutor,
+} from "./update-command-executor.js";
 import {
   finishSuccessfulPackageSwitch,
+  taskRecovery,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
 import {
@@ -33,6 +50,7 @@ import {
 } from "./update-command-result.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
+import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
 // Keep the finalizer, swap/completion, executor, SQLite lease, ledger, and both
 // report consumers real. Unrelated plugin/native work has already succeeded.
@@ -619,4 +637,248 @@ describe("composed cleanup and terminal outcome", () => {
       expect(value.afterRepeat).toEqual(value.beforeRepeat);
     },
   );
+});
+
+function retainedTree(root: string) {
+  return syncFs
+    .readdirSync(root, { recursive: true })
+    .map(String)
+    .toSorted()
+    .map((name) => {
+      const file = path.join(root, name);
+      const stat = syncFs.lstatSync(file);
+      return {
+        name,
+        ino: stat.ino,
+        mode: stat.mode,
+        mtimeMs: stat.mtimeMs,
+        content: stat.isFile()
+          ? syncFs.readFileSync(file)
+          : stat.isSymbolicLink()
+            ? syncFs.readlinkSync(file)
+            : null,
+      };
+    });
+}
+
+async function journalFixture(root: string) {
+  const fixture = await createPackageSwapFixture(root);
+  const worker = path.join(
+    fixture.params.stage.packageRoot,
+    "dist",
+    runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+  );
+  await fs.mkdir(path.dirname(worker), { recursive: true });
+  // Use the actual candidate capability probe; the invocation compiler owns its closure.
+  await fs.writeFile(
+    worker,
+    `import(${JSON.stringify(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateMigratedFinalize).href)});\n`,
+  );
+  await writePackageDistInventory(fixture.params.stage.packageRoot);
+  return fixture;
+}
+
+describe.skipIf(process.platform === "win32")("journaled terminal publication", () => {
+  it.each([
+    "revoked",
+    "admission-race",
+    "direct-sentinel-revoked",
+    "deferred-sentinel-journal",
+    "healthy",
+    "live-direct",
+  ] as const)("keeps package admission and terminal ownership ordered (%s)", async (kind) => {
+    const fixture = await journalFixture(base);
+    const next =
+      kind === "admission-race" || kind === "deferred-sentinel-journal"
+        ? await journalFixture(path.join(base, "next"))
+        : null;
+    const direct = kind === "live-direct" || kind === "direct-sentinel-revoked";
+    const anchor = resolvePackageActivationAnchor(fixture.packageRoot);
+    const run: NonNullable<UpdateCommandOptions["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
+      env: { ...process.env },
+    };
+    const opts = { json: true, yes: true, run };
+    const windows = taskRecovery();
+    const runTriage = vi.fn(async () => ({ status: "cancelled" as const }));
+    vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage);
+    const writeSentinel = sentinel.writeControlPlaneUpdateRestartSentinel;
+    const sentinelWriter = vi.spyOn(sentinel, "writeControlPlaneUpdateRestartSentinel");
+    const writers = [
+      vi.spyOn(ledger, "finishUpdateRun"),
+      vi.spyOn(ledger, "recordUpdateRunPhase"),
+      vi.spyOn(ledger, "recordUpdateRunStep"),
+      sentinelWriter,
+      vi.spyOn(triageUpdate, "writeTriageUpdateFailure"),
+    ];
+    const stateRoot = path.dirname(resolveOpenClawStateSqlitePath(run.env));
+    let transaction: PackageUpdateTransaction | undefined;
+    let rollbackCalls = () => 0;
+    let admissionArmed = false;
+    let injected = false;
+    let before:
+      | { state: ReturnType<typeof retainedTree>; journal: ReturnType<typeof retainedTree> }
+      | undefined;
+    let writesBefore: number[] | undefined;
+    let historyReadsBefore: number | undefined;
+    const historyReads = vi.spyOn(ledger, "getUpdateRun");
+    const snapshot = () => {
+      before = { state: retainedTree(stateRoot), journal: retainedTree(anchor) };
+      writesBefore = writers.map((writer) => writer.mock.calls.length);
+      historyReadsBefore = historyReads.mock.calls.length;
+    };
+    const revokeOriginal = () => {
+      const authority = captureUpdateCommandExecutorAuthority(run.executorFence!);
+      const database = new DatabaseSync(authority.databasePath);
+      try {
+        database
+          .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
+          .run("replacement-owner", authority.installKey);
+      } finally {
+        database.close();
+      }
+    };
+    const publishNext = async () => {
+      if (!next) {
+        throw new Error("Second package fixture is missing");
+      }
+      await withUpdateCommandExecutor("next-update", async (executor) => {
+        const fence = await executor.enter(fixture.packageRoot);
+        const published = await swapStagedPackageInstall({
+          ...next.params,
+          installTarget: fixture.params.installTarget,
+          activation: { fence, nodeRunner: process.execPath, onPrepared: () => undefined },
+          onTransaction: () => undefined,
+        });
+        expect(published.status, published.step.stderrTail ?? undefined).toBe("committed");
+      });
+    };
+    sentinelWriter.mockImplementation(async (...args) => {
+      await writeSentinel(...args);
+      if (
+        injected ||
+        args[0].result.status !== "ok" ||
+        (kind !== "direct-sentinel-revoked" && kind !== "deferred-sentinel-journal")
+      ) {
+        return;
+      }
+      injected = true;
+      expect(await readRestartSentinelReadOnly(run.env)).toMatchObject({
+        payload: { status: "ok", stats: { runId: run.runId } },
+      });
+      if (kind === "direct-sentinel-revoked") {
+        revokeOriginal();
+      } else {
+        await publishNext();
+      }
+      // The dispatched sentinel is committed. Only subsequent publication is forbidden.
+      snapshot();
+    });
+    const rm = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+      await rm(...args);
+      if (kind !== "revoked" || injected || String(args[0]) !== transaction?.backupRoot) {
+        return;
+      }
+      injected = true;
+      revokeOriginal();
+      snapshot();
+    });
+    const readdir = fs.readdir.bind(fs);
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+      const entries = await readdir(...args);
+      if (
+        kind === "admission-race" &&
+        admissionArmed &&
+        !injected &&
+        String(args[0]) === stateRoot
+      ) {
+        injected = true;
+        await publishNext();
+        snapshot();
+      }
+      return entries;
+    });
+    const execute = () =>
+      withUpdateCommandExecutor(run.runId, async (executor) => {
+        const fence = await executor.enter(fixture.packageRoot);
+        run.executorFence = fence;
+        const published = await swapStagedPackageInstall({
+          ...fixture.params,
+          activation: { fence, nodeRunner: process.execPath, onPrepared: () => undefined },
+          onTransaction: (value) => {
+            transaction = value;
+          },
+        });
+        expect(published.status, published.step.stderrTail ?? undefined).toBe("committed");
+        expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
+        if (!transaction) {
+          throw new Error("Journaled transaction was not retained");
+        }
+        const rollback = vi.spyOn(transaction, "rollback");
+        rollbackCalls = () => rollback.mock.calls.length;
+        await withUpdateCommandRecoveryUnwind(
+          opts,
+          {
+            triageTarget: { root: fixture.packageRoot, env: run.env },
+            windowsTaskAutoStartRecovery: windows,
+          },
+          async () => {
+            await finishSuccessfulPackageSwitch(
+              { packageRoot: fixture.packageRoot, run, json: true },
+              {
+                packageTransaction: direct ? undefined : transaction,
+                shouldRestart: false,
+                installKindChanged: false,
+                downgradeRisk: false,
+                controlPlaneUpdateSentinelMeta: { runId: run.runId, note: "requested update" },
+              },
+            );
+            if (kind === "live-direct") {
+              expect(openPackageActivationJournal(anchor).read().phase).toBe(
+                "publication-complete",
+              );
+              expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("succeeded");
+              await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
+            }
+          },
+        );
+      });
+    let failure: unknown;
+    await withUpdateFailureTriage(opts, { root: fixture.packageRoot, env: run.env }, () =>
+      direct
+        ? execute()
+        : withUpdateCommandTerminalResult(run, async () => {
+            await execute();
+            admissionArmed = true;
+          }),
+    ).catch((error: unknown) => {
+      failure = error;
+    });
+    expect(rollbackCalls()).toBe(0);
+    expect(runTriage).not.toHaveBeenCalled();
+    expect(jsonOutput).toHaveLength(1);
+    if (kind !== "healthy" && kind !== "live-direct") {
+      expect(injected).toBe(true);
+      expect(before).toBeDefined();
+      expect(failure).toMatchObject({ code: 1 });
+      expect(jsonOutput[0]).toMatchObject({
+        status: "error",
+        recovery: { serviceRestartSafe: false },
+      });
+      expect(writers.map((writer) => writer.mock.calls.length)).toEqual(writesBefore);
+      expect(historyReads.mock.calls.length).toBe(historyReadsBefore);
+      expect({ state: retainedTree(stateRoot), journal: retainedTree(anchor) }).toEqual(before);
+      if (kind === "revoked" || kind === "direct-sentinel-revoked") {
+        expect(windows.restore).not.toHaveBeenCalled();
+        expect(windows.complete).not.toHaveBeenCalled();
+      }
+    } else {
+      expect(failure).toBeUndefined();
+      expect(syncFs.existsSync(anchor)).toBe(false);
+      expect(jsonOutput[0]).toMatchObject({ status: "ok" });
+      expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("succeeded");
+      expect(createManagedHandoffLeaseStore().read(fixture.packageRoot).kind).toBe("absent");
+    }
+  });
 });

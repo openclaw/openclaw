@@ -23,7 +23,10 @@ import {
   UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun } from "./update-command-run.js";
+import {
+  assertUpdatePackageActivationAdmission,
+  completeUpdateCommandRun,
+} from "./update-command-run.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
 type Publisher = (failure?: unknown) => Promise<UpdateRunResult>;
@@ -89,12 +92,17 @@ export async function withUpdateCommandTerminalResult<T>(
   return outcome.value;
 }
 
-/** Resolve diagnostic output without reusing a released mutation fence. */
+/** Settled publication has no continuation; direct finalization retains its original live fence. */
 export async function resolveSettledUpdateCommandResult(
   params: Pick<FinishUpdateParams, "opts" | "ownedManagedUpdateEnv" | "root">,
   pendingResult: UpdateRunResult,
   failure?: unknown,
-): Promise<{ result: UpdateRunResult; settlementFailed: boolean }> {
+  assertLiveCurrent?: () => void,
+): Promise<{
+  result: UpdateRunResult;
+  settlementFailed: boolean;
+  assertPublication: () => void;
+}> {
   const settlementFailed =
     failure !== undefined &&
     (!(failure instanceof UpdateCommandFailure) ||
@@ -119,14 +127,28 @@ export async function resolveSettledUpdateCommandResult(
     : failure instanceof UpdateCommandFailure
       ? failure.result
       : pendingResult;
-  // The mutation owner is now closed. This is diagnostic publication only,
-  // never authority to reopen displaced state or replace another terminal row.
+  const assertPackageAdmission = () => {
+    assertLiveCurrent?.();
+    const options = assertLiveCurrent
+      ? { continuation: params.opts.run?.executorFence }
+      : undefined;
+    for (const root of new Set([params.root, pendingResult.root, result.root])) {
+      if (root) {
+        assertUpdatePackageActivationAdmission(root, options);
+      }
+    }
+  };
   try {
+    // A settled parent cannot borrow its released fence to read retained state.
+    // The migrated child publishes before parent retirement under its live grant.
+    assertPackageAdmission();
     await assertUpdateRecoveryAdmission({
       env: params.ownedManagedUpdateEnv ?? params.opts.run?.env,
     });
+    assertPackageAdmission();
     if (params.opts.run) {
       await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
+      assertPackageAdmission();
       const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
       if (prior && prior.status !== "running" && settlementFailed) {
         throw new Error("Update history was already finalized by another owner.");
@@ -135,7 +157,7 @@ export async function resolveSettledUpdateCommandResult(
   } catch (cause) {
     throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(cause), { cause });
   }
-  return { result, settlementFailed };
+  return { result, settlementFailed, assertPublication: assertPackageAdmission };
 }
 
 /** Caller verification permits completion; only the producer can qualify a cleanup warning. */

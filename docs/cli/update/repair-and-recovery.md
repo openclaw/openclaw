@@ -73,6 +73,106 @@ its parent Gateway process. Diagnosis preserves that refusal: it does not stop t
 Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
 
+## Recover interrupted npm publication
+
+For supported npm updates, OpenClaw prepares a standalone recovery helper and
+prints its exact `status` command before replacing the installed package. The helper
+lives in a private sibling directory outside the package being replaced. Its
+commands use an external Node executable, so they do not depend on the
+`openclaw` command remaining launchable.
+
+This helper supports only ordinary npm installations on POSIX systems, with a
+real package directory and same-filesystem publication. It does not support
+`npm link`, cross-filesystem publication, Windows, pnpm, or Bun.
+
+The selected version must also support the updater's ownership-checked
+continuation without an extra CLI respawn. Older or unsupported targets use the
+existing update path without a publication journal or standalone repair helper.
+Before activation, the updater reports **Standalone package publication repair
+is unavailable for this target**. The notice also appears in the global install
+swap result step.
+
+Updates started by older updaters retain their existing continuation only when
+no package-publication recovery is pending. That compatibility does not bypass
+a pending recovery or add a helper to an update that did not prepare one.
+
+Keep the printed command and recovery files. Run `status` first. For `repair` or
+`retire`, keep the same Node and helper paths and change only the final action.
+The command forms below are placeholders:
+
+```text
+<external-node> <anchor>/recovery.mjs status
+<external-node> <anchor>/recovery.mjs repair
+<external-node> <anchor>/recovery.mjs retire
+```
+
+The helper derives its recovery location from its own file. Do not move it or
+substitute another update's helper.
+
+`status` inspects package publication, not Gateway health:
+
+- `prepared`: publication has not started. An explicit `repair` aborts this
+  untouched attempt instead of installing the candidate.
+- `publishing`: an explicit `repair` completes publication of the exact recorded
+  candidate, or aborts if the previous package and launchers are still untouched.
+  It does not select or download another version.
+- `publication-complete`: package and launcher publication finished. This does
+  **not** mean the update, Doctor, plugins, service, or Gateway are healthy.
+  After standalone repair, the previous package backup stays available until
+  explicit `retire`.
+- `retiring`: removal of retained package material is in progress. `retire`
+  resumes that removal while the helper and journal remain intact.
+- `retired`: retained package material has been removed. Final cleanup of the
+  helper, journal, and recovery directory can still be pending.
+
+A rollback already in progress refuses forward repair, so the helper cannot
+republish a rejected candidate. A completed rollback is terminal. A refusal
+means the helper could not establish the required state or authority; it is not
+permission to delete the recovery files or retry with a different database.
+
+<Warning>
+Running `repair` for a `publishing` attempt explicitly authorizes republication
+of its recorded candidate, including when the active package path is absent.
+The helper cannot tell an interrupted publication from an intentional uninstall.
+Do not run it if you intend the installation to remain removed.
+</Warning>
+
+Before `repair` or `retire`, pause external supervisors and package managers that
+could change the installation. Keep them paused until the command finishes. The
+helper does not stop them. Mutations require fresh ownership and refuse while
+the previous owner or tracked children are alive, or their termination cannot
+be verified. A pending publication blocks another mutable update; changing
+update flags does not bypass it.
+
+Preserve the original authority database and its parent directory. Recovery
+requires their original identities; a missing or replaced database or parent
+causes refusal. The helper does not create replacement authority.
+
+Recovery stores use SQLite rollback-journal mode. If another tool converts one
+to WAL mode, the helper refuses it without creating or changing its `-wal` or
+`-shm` sidecars. Preserve the database and any existing sidecars for inspection;
+do not delete them or change journaling mode to force recovery.
+
+Use `retire` only when you no longer need the retained package backup. This is
+separate from [`openclaw update cleanup`](/cli/update/repair-and-recovery#update-cleanup),
+which retires migration recovery originals. It is not a rollback command.
+Normal successful-update cleanup is unchanged.
+
+Retirement deletes the helper itself before removing its journal and directory.
+If it stops after deleting the helper, that helper cannot be run again. A
+remaining recovery directory with a missing helper or journal blocks the next
+mutable update and requires manual inspection. Preserve the remaining evidence;
+do not treat missing files as proof that cleanup finished or recreate files to
+bypass the refusal. There is no automatic resumption guarantee after helper
+deletion.
+
+This is bounded package-publication recovery, not a full-state backup or
+database rollback. It does not run Doctor, restore configuration, restart a
+service, or verify Gateway health. It provides no reboot or power-loss recovery
+guarantee. Preserve an independent
+[verified backup](/install/updating#before-updating-create-a-verified-backup)
+for full-state recovery.
+
 ## `update repair`
 
 Rerun update finalization after the core package already changed but later

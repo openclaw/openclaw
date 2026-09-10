@@ -39,6 +39,7 @@ import {
   normalizeTag,
   readPackageVersion,
   resolveGitInstallDir,
+  resolveNodeRunner,
   UpdatePreMutationError,
 } from "./shared.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
@@ -551,6 +552,17 @@ export async function executeMutableUpdate(
           packageTransaction = transaction;
         },
         onConfigSnapshot,
+        activation: opts.run?.executorFence
+          ? {
+              fence: opts.run.executorFence,
+              nodeRunner: params.packageUpdateNodeRunner ?? resolveNodeRunner(),
+              onPrepared: (command) =>
+                defaultRuntime.error(
+                  `Package publication recovery: ${command}\nKeep other package managers stopped; repair may republish a missing installation. Recovery does not restart or verify the Gateway.`,
+                ),
+              onUnavailable: (message) => defaultRuntime.error(message),
+            }
+          : undefined,
       };
       await recheckSchemas(params.packageTargetSchemaVersions);
       result = await runPackageInstallUpdate(packageUpdate);
