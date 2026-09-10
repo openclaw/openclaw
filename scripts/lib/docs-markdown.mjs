@@ -241,8 +241,13 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
   };
   const jsxComments = new Set();
   let text = new DocsSource(input, firstLine).replace(
-    /<!--[^]*?-->|\{\/\*[^]*?\*\/\}|<(pre|code|script|style|textarea)\b[^>]*>[^]*?<\/\1\s*>/g,
+    /(`+)(?:(?!\n(?:[ \t]*\r?\n|[ \t]*<(?:pre|script|style|textarea)\b))[^])*?\1|<!--[^]*?-->|\{\/\*[^]*?\*\/\}|<(pre|code|script|style|textarea)\b[^>]*>[^]*?<\/\2\s*>/g,
     (value) => {
+      // Code spans cannot cross a blank line or a raw HTML block boundary.
+      // Skip them before raw HTML matching can consume later examples.
+      if (value.startsWith("`")) {
+        return value;
+      }
       if (value.startsWith("{/*")) {
         jsxComments.add(saved.length);
       }
