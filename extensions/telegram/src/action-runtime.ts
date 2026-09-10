@@ -760,7 +760,21 @@ export async function handleTelegramAction(
       throw durableResult.error;
     }
     if (durableResult.status === "suppressed") {
-      throw new Error("Telegram sendMessage was suppressed before delivery.");
+      const cancelReason = durableResult.payloadOutcomes?.find(
+        (outcome) => outcome.status === "suppressed" && outcome.hookEffect?.cancelReason,
+      )?.hookEffect?.cancelReason;
+      return jsonResult({
+        ok: true,
+        messageId: "suppressed",
+        status: "suppressed",
+        deliveryStatus: "suppressed",
+        reason: durableResult.reason,
+        ...(cancelReason ? { cancelReason } : {}),
+        receipt: {
+          threadId: durableResult.receipt?.threadId,
+          replyToId: durableResult.receipt?.replyToId,
+        },
+      });
     }
     const result = getLastDurableTelegramActionResult(durableResult);
     notifyVisibleOutboundSuccess(to, messageThreadId);

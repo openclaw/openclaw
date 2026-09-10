@@ -1138,6 +1138,104 @@ describe("handleTelegramAction", () => {
     ]);
   });
 
+  it("returns structured suppressed result when sendMessage is cancelled by hook", async () => {
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "suppressed",
+      results: [],
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [
+        {
+          index: 0,
+          status: "suppressed",
+          reason: "cancelled_by_message_sending_hook",
+          hookEffect: {
+            cancelReason: "duplicate suppressed by hook",
+          },
+        },
+      ],
+      receipt: {
+        primaryPlatformMessageId: undefined,
+        platformMessageIds: [],
+        parts: [],
+        threadId: "77",
+        replyToId: "456",
+        sentAt: Date.now(),
+      },
+    } as never);
+
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello, Telegram!",
+        messageThreadId: 77,
+      },
+      telegramConfig(),
+      {
+        reply: {
+          replyToId: "456",
+          source: "implicit",
+          mode: "first",
+        },
+      },
+    );
+
+    const details = resultDetails(result);
+    expect(details).toStrictEqual({
+      ok: true,
+      messageId: "suppressed",
+      status: "suppressed",
+      deliveryStatus: "suppressed",
+      reason: "cancelled_by_message_sending_hook",
+      cancelReason: "duplicate suppressed by hook",
+      receipt: {
+        threadId: "77",
+        replyToId: "456",
+      },
+    });
+    expect(result.content).toStrictEqual([
+      { type: "text", text: JSON.stringify(details, null, 2) },
+    ]);
+  });
+
+  it("returns structured suppressed result when sendMessage is suppressed without cancelReason", async () => {
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "suppressed",
+      results: [],
+      reason: "no_visible_payload",
+      receipt: {
+        primaryPlatformMessageId: undefined,
+        platformMessageIds: [],
+        parts: [],
+        threadId: undefined,
+        replyToId: undefined,
+        sentAt: Date.now(),
+      },
+    } as never);
+
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "   ",
+      },
+      telegramConfig(),
+    );
+
+    const details = resultDetails(result);
+    expect(details).toStrictEqual({
+      ok: true,
+      messageId: "suppressed",
+      status: "suppressed",
+      deliveryStatus: "suppressed",
+      reason: "no_visible_payload",
+      receipt: {
+        threadId: undefined,
+        replyToId: undefined,
+      },
+    });
+  });
+
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
     const stateDir = openClawState.stateDir;
     const {
