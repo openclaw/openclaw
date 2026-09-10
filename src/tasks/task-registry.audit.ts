@@ -2,6 +2,7 @@
 import {
   compareTaskAuditFindingSortKeys,
   createEmptyTaskAuditSummary,
+  summarizeAuditFindings,
   type TaskAuditCode,
   type TaskAuditFinding,
   type TaskAuditSeverity,
@@ -198,17 +199,7 @@ function isRetainedLostTaskAuditFinding(finding: TaskAuditFinding, now = Date.no
 }
 
 export function summarizeTaskAuditFindings(findings: Iterable<TaskAuditFinding>): TaskAuditSummary {
-  const summary = createEmptyTaskAuditSummary();
-  for (const finding of findings) {
-    summary.total += 1;
-    summary.byCode[finding.code] += 1;
-    if (finding.severity === "error") {
-      summary.errors += 1;
-    } else {
-      summary.warnings += 1;
-    }
-  }
-  return summary;
+  return summarizeAuditFindings(findings, createEmptyTaskAuditSummary());
 }
 
 export function summarizeActionableTaskAuditFindings(
