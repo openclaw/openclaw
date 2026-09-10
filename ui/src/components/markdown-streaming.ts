@@ -119,6 +119,7 @@ type StreamingMarkdownCursor = {
   lastFenceOffset: number;
   lineMode: "fence" | "plain" | null;
   openFence: FenceMarker | null;
+  openMath: "$$" | "\\[" | null;
 };
 
 type StreamingMarkdownCacheEntry = {
@@ -147,11 +148,13 @@ function scanStableStreamingMarkdown(
     lastFenceOffset: 0,
     lineMode: null,
     openFence: null,
+    openMath: null,
   },
 ): { cursor: StreamingMarkdownCursor; result: StreamingMarkdownSplit } {
   let { boundary, firstListOffset, hasLinkReferenceDefinition, index, lastFenceOffset } = cursor;
   let lineMode = cursor.lineMode;
   let openFence = cursor.openFence;
+  let openMath = cursor.openMath;
   const detailsStack: DetailsFrame[] = [];
   // Completed fences cannot gain indentation ownership from later prose. Keep
   // list containers and unfinished fences intact when parsing the retained suffix.
@@ -185,6 +188,7 @@ function scanStableStreamingMarkdown(
         lastFenceOffset,
         lineMode,
         openFence,
+        openMath,
       };
       continue;
     }
@@ -195,6 +199,14 @@ function scanStableStreamingMarkdown(
       if (isFenceClose(line, openFence)) {
         openFence = null;
         lastFenceOffset = lineEnd;
+        if (detailsStack.length === 0) {
+          boundary = lineEnd;
+        }
+      }
+    } else if (openMath) {
+      const stripped = stripMarkdownContainerPrefixes(line).content;
+      if (findStreamingMathClose(stripped, openMath)) {
+        openMath = null;
         if (detailsStack.length === 0) {
           boundary = lineEnd;
         }
@@ -210,6 +222,10 @@ function scanStableStreamingMarkdown(
         lastFenceOffset = lineEnd;
       } else {
         const strippedLine = stripMarkdownContainerPrefixes(line).content;
+        const mathDelimiter = getStreamingMathOpen(strippedLine);
+        if (mathDelimiter) {
+          openMath = mathDelimiter;
+        }
         if (DISCLOSURE_LINE_CANDIDATE_RE.test(strippedLine)) {
           updateDetailsStack(
             line,
@@ -243,6 +259,7 @@ function scanStableStreamingMarkdown(
         lastFenceOffset,
         lineMode,
         openFence,
+        openMath,
       };
     }
   }
@@ -274,9 +291,24 @@ function scanStableStreamingMarkdown(
     cursor: resumeCursor,
     result: {
       boundary,
-      tailRepairStart: openFence ? null : Math.max(boundary, lastCodeEnd),
+      tailRepairStart: openFence || openMath ? null : Math.max(boundary, lastCodeEnd),
     },
   };
+}
+
+function getStreamingMathOpen(line: string): "$$" | "\\[" | null {
+  const trimmed = line.trimStart();
+  if (trimmed.startsWith("$$") && !trimmed.slice(2).includes("$$")) {
+    return "$$";
+  }
+  if (trimmed.startsWith("\\[") && !trimmed.slice(2).includes("\\]")) {
+    return "\\[";
+  }
+  return null;
+}
+
+function findStreamingMathClose(line: string, delimiter: "$$" | "\\["): boolean {
+  return line.includes(delimiter === "$$" ? "$$" : "\\]");
 }
 
 function canResumeStreamingLine(line: string, fence: FenceMarker | null): boolean {

@@ -41,6 +41,7 @@
     "dompurify": "3.4.14",
     "ghostty-web": "0.4.0",
     "highlight.js": "11.12.0",
+    "katex": "0.16.47",
     "json5": "2.2.3",
     "lit": "3.3.3",
     "markdown-it": "15.0.1",

@@ -310,6 +310,56 @@ describe("toSanitizedMarkdownHtml", () => {
     });
   });
 
+  describe("LaTeX", () => {
+    it("renders inline and display math with KaTeX", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("Inline $x^2$ and:\n\n$$\n\\frac{1}{2}\n$$"),
+      );
+
+      expect(fragment.querySelector(".katex")).not.toBeNull();
+      expect(fragment.querySelector(".katex-display")).not.toBeNull();
+      expect(fragment.textContent).toContain("x2");
+    });
+
+    it("keeps math-looking code literal", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("`$x^2$` and `\\(y\\)`"));
+
+      expect(fragment.querySelectorAll(".katex")).toHaveLength(0);
+      expect(fragment.textContent?.trim()).toBe("$x^2$ and \\(y\\)");
+    });
+
+    it("does not allow KaTeX trust commands to create links", () => {
+      const html = toSanitizedMarkdownHtml("$\\href{javascript:alert(1)}{x}$");
+
+      expect(html).not.toContain("javascript:");
+      expect(html).not.toContain("<a");
+    });
+
+    it("preserves currency prose and display-math suffixes", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("Costs rose from $5 to $10. Result: $$x^2$$ and explanation."),
+      );
+
+      expect(fragment.textContent).toContain("Costs rose from $5 to $10.");
+      expect(fragment.textContent).toContain("and explanation.");
+      expect(fragment.querySelector(".katex-display")).not.toBeNull();
+    });
+
+    it("retains accessible MathML and KaTeX geometry", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("$\\frac{1}{2}$"));
+
+      expect(fragment.querySelector("math")).not.toBeNull();
+      expect(fragment.querySelector(".katex-html[aria-hidden='true']")).not.toBeNull();
+      expect(fragment.querySelector(".strut[style]")).not.toBeNull();
+    });
+
+    it("supports math inside link labels during silent lookahead", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("[$x$](https://example.com)"));
+
+      expect(fragment.querySelector("a .katex")).not.toBeNull();
+    });
+  });
+
   describe("assistant transcript-role annotations", () => {
     it("marks parsed role headers without exposing Markdown delimiters", () => {
       const fragment = htmlFragment(
