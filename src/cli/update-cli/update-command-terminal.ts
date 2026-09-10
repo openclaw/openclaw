@@ -8,6 +8,7 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   recordUpdateResultNextAction,
   UpdateCommandFailure,
+  UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
@@ -52,6 +53,10 @@ export async function withUpdateCommandTerminalResult<T>(
     const result = await owner.publish("error" in outcome ? outcome.error : undefined);
     if ("error" in outcome) {
       const failure = outcome.error;
+      if (failure instanceof UpdateCommandPendingRecoveryFailure) {
+        // Publication does not restore authority for outer failure triage.
+        throw new UpdateCommandFinalizedRecoveryFailure(result);
+      }
       // This report has already been printed. Do not let pending-recovery triage
       // print it a second time or launch recovery using a now-released fence.
       throw new UpdateCommandFailure(

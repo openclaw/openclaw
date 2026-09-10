@@ -243,7 +243,8 @@ export function registerGenerationRecoveryTests(
           after: { version: VERSION },
           verification: { serviceRunning: true, runningVersion: VERSION },
         });
-        expect(completedStatus).toBe("rolled-back");
+        // Cleanup is pre-terminal; rollback is recorded only after completion settles.
+        expect(completedStatus).toBe("running");
         expect(record.downtimeMs).toBeGreaterThanOrEqual(0);
         expect(record.confirmedAtMs).toBeGreaterThanOrEqual(before.stoppedAtMs!);
         expect(renderUpdateRunReport(record).headline).toBe(
