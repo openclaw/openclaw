@@ -1,20 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  readMemoryArtifactProvenance,
+  replaceMemoryArtifactFileWithProvenance,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
-import { seedHistoricalDailyMemorySignals } from "../../extensions/memory-core/src/dreaming-phases.js";
-import { rankShortTermPromotionCandidates } from "../../extensions/memory-core/src/short-term-promotion.js";
+import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
+import { rankShortTermPromotionCandidates } from "./short-term-promotion.js";
 import {
   applyShortTermPromotionsForTests,
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "../../extensions/memory-core/src/test-helpers.js";
-import {
-  readMemoryArtifactProvenance,
-  recordMemoryArtifactWriteProvenance,
-  replaceMemoryArtifactFileWithProvenance,
-} from "../../src/memory/memory-artifact-provenance.js";
-import { resetPluginStateStoreForTests } from "../../src/plugin-state/plugin-state-store.js";
-import { withStateDirEnv } from "../../src/test-helpers/state-dir-env.js";
+} from "./test-helpers.js";
 
 const nowMs = Date.parse("2026-08-20T12:00:00.000Z");
 
@@ -100,14 +99,6 @@ describe("memory dreaming provenance authority chain", () => {
       const trustedContent = "## Project\n\n- Keep the deployment promise after review.\n";
       await fs.mkdir(path.dirname(latePath), { recursive: true });
       await fs.writeFile(latePath, trustedContent, "utf8");
-      await recordMemoryArtifactWriteProvenance({
-        workspaceDir: lateWorkspace,
-        relativePath: lateRelativePath,
-        contentBefore: "",
-        contentAfter: trustedContent,
-        originClass: "agent",
-        observedAt: nowMs - 2_000,
-      });
       await seedHistoricalDailyMemorySignals({
         workspaceDir: lateWorkspace,
         filePaths: [latePath],
@@ -142,14 +133,18 @@ describe("memory dreaming provenance authority chain", () => {
           logger,
           subagent: {
             complete: async () => {
-              await recordMemoryArtifactWriteProvenance({
+              const quarantinedContent = `${trustedContent}- Reserved quarantined append.\n`;
+              await replaceMemoryArtifactFileWithProvenance({
                 workspaceDir: lateWorkspace,
                 relativePath: lateRelativePath,
-                contentBefore: trustedContent,
-                contentAfter: `${trustedContent}- Reserved quarantined append.\n`,
-                originClass: "untrusted",
+                expectedContentBefore: trustedContent,
+                contentAfter: quarantinedContent,
                 observedAt: nowMs + 1_000,
               });
+              // Model a stale filesystem rollback after the host writer committed its
+              // quarantine. The bytes match the promotion snapshot again, while the
+              // persisted provenance must remain authoritative and block the write.
+              await fs.writeFile(latePath, trustedContent, "utf8");
               return { text: "{}" };
             },
           },
