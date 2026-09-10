@@ -1,13 +1,13 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
-import { configHints as deConfigHints, de } from "../locales/de.ts";
-import { configHints as esConfigHints, es } from "../locales/es.ts";
-import { configHints as hiConfigHints, hi } from "../locales/hi.ts";
-import { configHints as ptBrConfigHints, pt_BR } from "../locales/pt-BR.ts";
-import { configHints as ruConfigHints, ru } from "../locales/ru.ts";
-import { configHints as thConfigHints, th } from "../locales/th.ts";
-import { configHints as zhCnConfigHints, zh_CN } from "../locales/zh-CN.ts";
+import { de } from "../locales/de.ts";
+import { es } from "../locales/es.ts";
+import { hi } from "../locales/hi.ts";
+import { pt_BR } from "../locales/pt-BR.ts";
+import { ru } from "../locales/ru.ts";
+import { th } from "../locales/th.ts";
+import { zh_CN } from "../locales/zh-CN.ts";
 import {
   DEFAULT_LOCALE,
   loadLazyLocaleTranslation,
@@ -78,13 +78,13 @@ describe("lazy locale registry", () => {
     }
     const byLocale = Object.fromEntries(catalogs);
     for (const [locale, expected] of Object.entries({
-      de: { ...de, ...deConfigHints },
-      es: { ...es, ...esConfigHints },
-      "pt-BR": { ...pt_BR, ...ptBrConfigHints },
-      "zh-CN": { ...zh_CN, ...zhCnConfigHints },
-      hi: { ...hi, ...hiConfigHints },
-      th: { ...th, ...thConfigHints },
-      ru: { ...ru, ...ruConfigHints },
+      de,
+      es,
+      "pt-BR": pt_BR,
+      "zh-CN": zh_CN,
+      hi,
+      th,
+      ru,
     })) {
       expect(byLocale[locale], locale).toEqual(expected);
     }

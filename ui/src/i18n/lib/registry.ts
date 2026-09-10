@@ -65,10 +65,6 @@ export async function loadLazyLocaleTranslation(locale: Locale): Promise<Transla
   if (!isLazyLocale(locale)) {
     return null;
   }
-  // The wrapper module statically re-exports the base catalog and its
-  // config-hint fragment, so one dynamic import resolves only after both
-  // chunks load; a catalog missing its config hints can never become active.
   const module = await LAZY_LOCALE_REGISTRY[locale]();
-  const base = module[locale.replaceAll("-", "_")];
-  return base ? { ...base, ...module.configHints } : null;
+  return module[locale.replaceAll("-", "_")] ?? null;
 }

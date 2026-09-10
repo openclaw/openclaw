@@ -12,11 +12,6 @@ import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-con
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { TranslationMap } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 
-// Each locale is served as two virtual modules built from one materialized
-// catalog: a base module without the dominant top-level configHints subtree and
-// a fragment holding only { configHints }. The locale wrapper statically
-// re-exports both, so one dynamic import loads both chunks and the registry
-// shallow-merges the disjoint top-level maps back into the full catalog.
 const localeModulePrefix = "virtual:openclaw-control-ui-locale/";
 const localeConfigHintsModulePrefix = "virtual:openclaw-control-ui-locale-config-hints/";
 const resolvedLocaleModulePrefix = `\0${localeModulePrefix}`;
@@ -97,9 +92,8 @@ function parseResolvedLocaleModuleId(id: string): { locale: string; configHints:
 }
 
 export function controlUiLocaleModulesPlugin(): Plugin {
-  // A base module and its fragment must be emitted from the same materialized
-  // catalog so the split halves cannot drift apart within one build. The
-  // cache generation changes before any watched source or memory file is re-read.
+  // Both modules must share one materialization. Replacing the cache object
+  // fences resolved and rejected work from an invalidated build generation.
   const createCatalogCache = () => ({
     sourceCatalogLoad: null as ReturnType<typeof loadCurrentSourceCatalog> | null,
     partitionLoads: new Map<string, Promise<ControlUiLocaleCatalogPartition>>(),
@@ -171,7 +165,11 @@ export function controlUiLocaleModulesPlugin(): Plugin {
         if (activeCache !== catalogCache) {
           continue;
         }
-        return `export default ${JSON.stringify(request.configHints ? partition.configHints : partition.base)};`;
+        if (request.configHints) {
+          return `export default ${JSON.stringify(partition.configHints)};`;
+        }
+        return `import configHints from ${JSON.stringify(`${localeConfigHintsModulePrefix}${request.locale}`)};
+export default { ...${JSON.stringify(partition.base)}, ...configHints };`;
       }
     },
   };

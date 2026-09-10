@@ -37,16 +37,11 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   );
 }
 
-// Shared with the module-preload filter in vite.config.ts, which must
-// recognize hint chunks by emitted asset name alone.
 export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
-  // Locale config-hint fragments would otherwise default to their locale's
-  // basename and collide with performance accounting, which classifies
-  // `assets/<locale>-*.js` as locale catalogs bounded to one asset per locale.
   if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { gzip } from "pako";
 import type { Plugin, ResolveModulePreloadDependenciesFn, UserConfig } from "vite";
+import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
 import {
   CONTROL_UI_ASSET_MANIFEST_FILENAME,
   CONTROL_UI_ASSET_MANIFEST_VERSION,
@@ -91,12 +92,25 @@ export function createControlUiPrecompressedAssetVariants(
   ];
 }
 
-// Locale wrappers statically re-export their config-hints fragment so the
-// startup graph stays acyclic, which makes Vite preload every hint chunk from
-// the boot JS. Hints only matter once a locale is active, so drop them from JS
-// module-preload lists; HTML-injected preloads stay untouched. Preloading the
-// wrapper itself would refetch the hint chunk through its static import, so a
-// list carrying a hint chunk also drops its own filename entry.
+function escapeControlUiAssetRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+const controlUiLocaleAssetPatterns = CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => ({
+  locale,
+  base: new RegExp(`^assets/${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`, "u"),
+  configHints: new RegExp(
+    `^assets/${controlUiLocaleConfigHintsChunkPrefix}${escapeControlUiAssetRegExp(locale)}-[^/]+\\.js$`,
+    "u",
+  ),
+}));
+
+function controlUiLocaleFromAssetPath(file: string, kind: "base" | "configHints"): string | null {
+  return (
+    controlUiLocaleAssetPatterns.find(({ [kind]: pattern }) => pattern.test(file))?.locale ?? null
+  );
+}
+
 export const resolveControlUiModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
   filename,
   deps,
@@ -105,14 +119,17 @@ export const resolveControlUiModulePreloadDependencies: ResolveModulePreloadDepe
   if (context.hostType !== "js") {
     return deps;
   }
-  const isLocaleConfigHintsChunk = (dep: string) => {
-    const basename = path.posix.basename(dep);
-    return basename.startsWith(controlUiLocaleConfigHintsChunkPrefix) && basename.endsWith(".js");
-  };
-  if (!deps.some(isLocaleConfigHintsChunk)) {
+  const locale = controlUiLocaleFromAssetPath(filename, "base");
+  if (!locale) {
     return deps;
   }
-  return deps.filter((dep) => dep !== filename && !isLocaleConfigHintsChunk(dep));
+  const matchingHint = deps.find(
+    (dep) => controlUiLocaleFromAssetPath(dep, "configHints") === locale,
+  );
+  if (!matchingHint) {
+    return deps;
+  }
+  return deps.filter((dep) => dep !== filename && dep !== matchingHint);
 };
 
 function normalizeBase(input: string): string {
@@ -638,7 +655,6 @@ export default function controlUiViteConfig(
       emptyOutDir: true,
       sourcemap: true,
       modulePreload: {
-        // Keep Vite's default preload polyfill; only the dependency list is filtered.
         polyfill: true,
         resolveDependencies: resolveControlUiModulePreloadDependencies,
       },
