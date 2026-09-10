@@ -324,7 +324,11 @@ The viewer document resolves these assets relative to the viewer URL, so an opti
 
 URL resolution order: tool-call `baseUrl` (after strict validation) -> plugin `viewerBaseUrl` -> `gateway.publicOrigin` -> the existing bind-aware Gateway fallback.
 
-`baseUrl` rules: must be `http://` or `https://`; query and hash are rejected; origin plus optional base path is allowed.
+`baseUrl` rules:
+
+- The scheme must be `http://` or `https://`.
+- A `baseUrl` that carries a query string or a hash is rejected.
+- An origin plus an optional base path is allowed.
 
 ## Security model
 
