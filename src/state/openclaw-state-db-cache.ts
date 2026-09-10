@@ -297,16 +297,17 @@ function retireOpenClawStateDatabaseHandle(
   database: StateDatabaseHandle,
   options?: OpenClawStateDatabaseCloseOptions,
 ): void {
+  const { busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, ...closeOptions } = options ?? {};
   // Wait opportunistically within the budget; contended retirement must not write
   // any database or sidecar bytes while a foreign lifecycle owner holds exclusion.
   const coordinator = acquireStateDatabaseCoordinator({
     databasePath: database.path,
-    busyTimeoutMs: options?.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    busyTimeoutMs,
   });
   runWithSqliteCoordinator(coordinator, "state database retirement", () => {
     // Refused acquisition leaves both cache and physical ownership untouched.
     const wasCached = cachedDatabases.get(database.path)?.db === database.db;
-    const errors = closeOpenClawStateDatabaseHandle(database, options);
+    const errors = closeOpenClawStateDatabaseHandle(database, closeOptions);
     if (wasCached) {
       try {
         notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
