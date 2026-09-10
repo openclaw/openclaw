@@ -128,13 +128,9 @@ export function projectChatTranscript(
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     pendingInputs: props.pendingInputs,
-    workerSetupPendingRunIds: ["requested", "provisioning", "syncing", "starting"].includes(
+    workerSetupPending: ["requested", "provisioning", "syncing", "starting"].includes(
       activeSession?.placement?.state ?? "",
-    )
-      ? props.pendingInputs?.flatMap((input) =>
-          input.state === "queued" && input.runId ? [input.runId] : [],
-        )
-      : undefined,
+    ),
     workspaceSyncPendingRunIds:
       (activeSession?.placement?.state === "active" ||
         activeSession?.placement?.state === "draining") &&
