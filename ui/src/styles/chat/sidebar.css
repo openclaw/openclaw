@@ -189,8 +189,14 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region__primary[hidden],
 .sidebar-region:not(.sidebar-region--open) [data-region-header="side"],
-.sidebar-region--expanded [data-region-header="side"] {
+.sidebar-region--expanded:not(.sidebar-region--expanded-side) [data-region-header="side"],
+.sidebar-region--expanded-side .sidebar-region__header {
   display: none;
+}
+
+/* Focus the side in place; its header (including restore/close) stays reachable. */
+.sidebar-region--expanded-side {
+  grid-template-areas: "side-header" "side";
 }
 
 .sidebar-region--bottom .sidebar-column__divider {

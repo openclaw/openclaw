@@ -5502,6 +5502,7 @@ export const en: TranslationMap & {
       label: "Side panel",
       addTab: "Add side panel tab",
       expand: "Focus",
+      expandPanel: "Expand {panel}",
       restore: "Restore split",
       swap: "Swap {main} and {side}",
       layout: "Layout",

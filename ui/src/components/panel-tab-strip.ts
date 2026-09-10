@@ -17,6 +17,8 @@ export type PanelTabStripTab = {
   badge?: string | null;
   className?: string;
   closeLabel: string;
+  /** Explicit click/Enter/Space action; arrow-key selection still uses onSelect. */
+  onActivate?: () => void;
 };
 
 const reconciledTabLayouts = new WeakMap<Element, string>();
@@ -294,6 +296,21 @@ export function renderPanelTabStrip(params: {
                     )
                   : nothing
               }
+              @click=${(event: MouseEvent) => {
+                if (tab.onActivate) {
+                  event.stopPropagation();
+                  tab.onActivate();
+                }
+              }}
+              @keydown=${(event: KeyboardEvent) => {
+                if (tab.onActivate && (event.key === "Enter" || event.key === " ")) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (!event.repeat) {
+                    tab.onActivate();
+                  }
+                }
+              }}
               @auxclick=${(event: MouseEvent) => {
                 if (event.button === 1) {
                   event.preventDefault();
