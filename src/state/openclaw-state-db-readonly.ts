@@ -4,7 +4,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+} from "../infra/sqlite-readonly-location.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -94,17 +97,25 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
     ? prepareSqliteReadOnlyLocationSync(pathname)
     : undefined;
   try {
-    const db = openNodeSqliteDatabase(prepared?.location ?? pathname, { readOnly: true });
-    try {
-      db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-      assertSupportedStateSchemaVersion(db, pathname);
-      return operation({ db, path: pathname });
-    } finally {
-      clearNodeSqliteKyselyCacheForDatabase(db);
-      db.close();
-    }
+    return withOpenClawStateReadOnlyLocation(operation, pathname, prepared?.location ?? pathname);
   } finally {
     prepared?.cleanup();
+  }
+}
+
+function withOpenClawStateReadOnlyLocation<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  pathname: string,
+  location: string,
+): T {
+  const db = openNodeSqliteDatabase(location, { readOnly: true });
+  try {
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    assertSupportedStateSchemaVersion(db, pathname);
+    return operation({ db, path: pathname });
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    db.close();
   }
 }
 
@@ -146,4 +157,33 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   return withArtifactPreservingStateReads(() =>
     withExistingOpenClawStateDatabaseReadOnly(operation, options),
   );
+}
+
+/** Preserve source artifacts while allowing the caller to progress during snapshot preparation. */
+export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<T | undefined> {
+  return withArtifactPreservingStateReads(async () => {
+    const pathname = resolveReadOnlyPath(options);
+    const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+    if (reused.reused) {
+      return reused.value;
+    }
+    if (existingPathOrUndefined(pathname) === undefined) {
+      return undefined;
+    }
+    const env = options.env ?? process.env;
+    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+    const prepared = await prepareSqliteReadOnlyLocation(pathname, {
+      preserveSourceArtifacts: true,
+    });
+    try {
+      // Verification can quarantine the live path while the snapshot child is running.
+      openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+      return withOpenClawStateReadOnlyLocation(operation, pathname, prepared.location);
+    } finally {
+      prepared.cleanup();
+    }
+  });
 }

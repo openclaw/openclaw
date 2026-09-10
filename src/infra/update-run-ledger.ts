@@ -5,7 +5,10 @@ import {
   UPDATE_RUN_PHASES,
 } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+} from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -582,27 +585,56 @@ export function getUpdateRun(
   );
 }
 
+export async function getUpdateRunAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<UpdateRunRecord | undefined> {
+  return await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+    ({ db }) => (tableExists(db, "update_runs") ? readRun(db, runId) : undefined),
+    options,
+  );
+}
+
+type ListUpdateRunsInput = { limit?: number; active?: boolean };
+
+function readUpdateRuns(db: DatabaseSync, input: ListUpdateRunsInput): UpdateRunRecord[] {
+  if (!tableExists(db, "update_runs")) {
+    return [];
+  }
+  let query = getNodeSqliteKysely<LedgerDatabase>(db).selectFrom("update_runs").selectAll();
+  if (input.active) {
+    query = query.where("status", "=", "running");
+  }
+  return executeSqliteQuerySync(
+    db,
+    query
+      .orderBy("created_at_ms", "desc")
+      .orderBy("run_id", "desc")
+      .limit(Math.max(1, Math.min(100, Math.trunc(input.limit ?? 20)))),
+  ).rows.map(decodeRun);
+}
+
 export function listUpdateRuns(
-  input: { limit?: number; active?: boolean } = {},
+  input: ListUpdateRunsInput = {},
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord[] {
   return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
-      if (!tableExists(db, "update_runs")) {
-        return [];
-      }
-      let query = getNodeSqliteKysely<LedgerDatabase>(db).selectFrom("update_runs").selectAll();
-      if (input.active) {
-        query = query.where("status", "=", "running");
-      }
-      return executeSqliteQuerySync(
-        db,
-        query
-          .orderBy("created_at_ms", "desc")
-          .orderBy("run_id", "desc")
-          .limit(Math.max(1, Math.min(100, Math.trunc(input.limit ?? 20)))),
-      ).rows.map(decodeRun);
-    }, options) ?? []
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+      ({ db }) => readUpdateRuns(db, input),
+      options,
+    ) ?? []
+  );
+}
+
+export async function listUpdateRunsAsync(
+  input: ListUpdateRunsInput = {},
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<UpdateRunRecord[]> {
+  return (
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      ({ db }) => readUpdateRuns(db, input),
+      options,
+    )) ?? []
   );
 }
 

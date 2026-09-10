@@ -87,6 +87,10 @@ fields and adds optional `activeRun` and `lastRun` records. While a run is activ
 the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 `updatedAtMs`. Reconnect and read the row to recover changes missed during restart.
 
+When a history request needs a read-only snapshot, the Gateway prepares it
+asynchronously so other requests can continue. The snapshot preserves the source
+database and its sidecar files.
+
 Native service-stop observations do not advance the update's recorded phase.
 If the Control UI cannot read fresh progress, it shows the read error alongside
 the last recorded run; use **Check status** to retry without starting another update.
