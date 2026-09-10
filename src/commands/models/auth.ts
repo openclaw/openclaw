@@ -439,6 +439,7 @@ async function persistProviderAuthResult(params: {
   env?: NodeJS.ProcessEnv;
   beforePersistentEffect?: () => void | Promise<void>;
   assertCurrent?: () => void;
+  refreshAfterLogin?: ModelsAuthLoginFlowOptions["refreshAfterLogin"];
 }): Promise<ProviderAuthResult["profiles"]> {
   const defaultModel = params.result.defaultModel
     ? normalizeAgentModelRefForConfig(params.result.defaultModel)
@@ -527,7 +528,7 @@ async function persistProviderAuthResult(params: {
         if (persistedProfiles.length === 0) {
           throw error;
         }
-        throw new Error(
+        throw new ProviderCredentialsSavedError(
           `Credentials saved, but provider settings could not be applied: ${error instanceof Error ? error.message : String(error)}`,
           { cause: error },
         );
@@ -548,7 +549,11 @@ async function persistProviderAuthResult(params: {
       logConfigUpdated(params.runtime);
     }
 
-    await refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
+    if (params.refreshAfterLogin) {
+      await params.refreshAfterLogin(params.agentId);
+    } else {
+      await refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
+    }
 
     for (const profile of persistedProfiles) {
       params.runtime.log(
@@ -644,6 +649,7 @@ async function runProviderAuthMethod(params: {
   signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
   beforePersistentEffect?: () => void | Promise<void>;
+  refreshAfterLogin?: ModelsAuthLoginFlowOptions["refreshAfterLogin"];
 }): Promise<{ result: ProviderAuthResult; profiles: ProviderAuthResult["profiles"] }> {
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
@@ -704,6 +710,7 @@ async function runProviderAuthMethod(params: {
     setDefault: params.setDefault,
     env: params.env ?? process.env,
     beforePersistentEffect: params.beforePersistentEffect,
+    refreshAfterLogin: params.refreshAfterLogin,
   });
   return { result: connectionResult, profiles: persistedProfiles };
 }
@@ -1040,6 +1047,8 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
   beforePersistentEffect?: () => void | Promise<void>;
+  /** Publish a hosted login through its current Gateway instead of a separate CLI connection. */
+  refreshAfterLogin?: (agentId: string) => Promise<void>;
 };
 
 /** Resolves a requested login provider or throws with available provider details. */
@@ -1198,7 +1207,11 @@ export async function runModelsAuthLoginFlowCore(
       provider: imported.provider,
       profileId: imported.profileId,
     });
-    await refreshRunningGatewayAuthState(context.agentId, "login", opts.runtime);
+    if (opts.refreshAfterLogin) {
+      await opts.refreshAfterLogin(context.agentId);
+    } else {
+      await refreshRunningGatewayAuthState(context.agentId, "login", opts.runtime);
+    }
     if (imported.configUpdated) {
       logConfigUpdated(opts.runtime);
     }
@@ -1268,6 +1281,7 @@ export async function runModelsAuthLoginFlowCore(
     signal: opts.signal,
     openUrl: opts.openUrl,
     beforePersistentEffect: opts.beforePersistentEffect,
+    refreshAfterLogin: opts.refreshAfterLogin,
   });
   maybeLogOpenAICodexNativeSearchTip(opts.runtime, selectedProvider.id);
   return {

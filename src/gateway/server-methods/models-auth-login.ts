@@ -12,6 +12,7 @@ import {
 import { createNonExitingRuntime } from "../../runtime.js";
 import { WizardSession } from "../../wizard/session.js";
 import { bindWizardLoginOwner } from "../server-wizard-sessions.js";
+import { refreshModelAuthStateAfterMutation } from "./models-auth-refresh.js";
 import {
   createAdmittedWizardSession,
   respondSetupAdmissionBusy,
@@ -111,6 +112,8 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
               assertCurrent();
               runner.lockCancellation();
             },
+            refreshAfterLogin: (agentId) =>
+              refreshModelAuthStateAfterMutation(context, "login", agentId),
           });
           if (result.profiles.length === 0) {
             throw new Error(`${choice.choiceLabel} did not return a credential profile.`);
