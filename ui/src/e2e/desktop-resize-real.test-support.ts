@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import * as desktopFilter from "../../../src/gateway/desktop/rfb-view-only-filter.js";
@@ -15,12 +17,20 @@ import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../../src/plug
 import { runCommandWithTimeout } from "../../../src/process/exec.js";
 
 export type DesktopResizeFixture = {
+  carrier: "ssh" | "node";
   ssh: WorkerSshEndpoint;
   identityPath: string;
   desktop: WorkerDesktopEndpoint;
   fixedDesktop: WorkerDesktopEndpoint;
-  crabboxCommit: string;
-  installerSha256: string;
+  provenance:
+    | { kind: "crabbox"; commit: string; installerSha256: string }
+    | {
+        kind: "upstream-os";
+        osRelease: string;
+        packageOrigin: string;
+        packages: Array<{ name: string; version: string; sha256: string }>;
+        serverBinarySha256: string;
+      };
   controlUiRoot?: string;
 };
 
@@ -44,23 +54,20 @@ export function observeDesktopFilterPackets(signal: AbortSignal) {
   };
   const pending = new Set<Expectation>();
   const filterSpies: Array<{ mockRestore: () => void }> = [];
-  let upgrading: WebSocket | undefined;
+  const upgrading = new AsyncLocalStorage<WebSocket>();
+  const phases = new Map<WebSocket, "version" | "clientInit">();
   // Capture before spying; each invocation must retain its actual server receiver.
   // oxlint-disable-next-line typescript/unbound-method
   const upgrade: WebSocketServer["handleUpgrade"] = WebSocketServer.prototype.handleUpgrade;
   const upgradeSpy = vi.spyOn(WebSocketServer.prototype, "handleUpgrade");
   upgradeSpy.mockImplementation(function (this: WebSocketServer, request, socket, head, callback) {
     return upgrade.call(this, request, socket, head, (ws, incoming) => {
-      const previous = upgrading;
-      upgrading = ws;
       if (request.url?.startsWith("/desktop/observe?")) {
         sockets.set(request.url, ws);
       }
-      try {
-        callback(ws, incoming);
-      } finally {
-        upgrading = previous;
-      }
+      // Node preauthentication creates the filter after an await. Keep this
+      // observer's identity through that continuation and concurrent upgrades.
+      upgrading.run(ws, () => callback(ws, incoming));
     });
   });
   const createFilter = desktopFilter.createRfbClientMessageFilter;
@@ -68,7 +75,10 @@ export function observeDesktopFilterPackets(signal: AbortSignal) {
     .spyOn(desktopFilter, "createRfbClientMessageFilter")
     .mockImplementation((options) => {
       const filter = createFilter(options);
-      const socket = upgrading;
+      const socket = upgrading.getStore();
+      if (socket) {
+        phases.set(socket, options?.startPhase ?? "version");
+      }
       const original = filter.filter.bind(filter);
       filterSpies.push(
         vi.spyOn(filter, "filter").mockImplementation((bytes) => {
@@ -91,14 +101,19 @@ export function observeDesktopFilterPackets(signal: AbortSignal) {
     pending.clear();
   };
   signal.addEventListener("abort", abort, { once: true });
+  const observerSocket = (socketUrl: string) => {
+    const url = new URL(socketUrl);
+    const socket = sockets.get(`${url.pathname}${url.search}`);
+    if (!socket) {
+      throw new Error("The selected observer socket has no production upgrade identity");
+    }
+    return socket;
+  };
   return {
+    startPhase: (socketUrl: string) => phases.get(observerSocket(socketUrl)),
     expectPacket: (socketUrl: string, bytes: number[]) => {
       signal.throwIfAborted();
-      const url = new URL(socketUrl);
-      const socket = sockets.get(`${url.pathname}${url.search}`);
-      if (!socket) {
-        throw new Error("The selected observer socket has no production upgrade identity");
-      }
+      const socket = observerSocket(socketUrl);
       return new Promise<FilterResult>((resolve, reject) => {
         pending.add({ socket, bytes: Buffer.from(bytes), resolve, reject });
       });
@@ -111,28 +126,66 @@ export function observeDesktopFilterPackets(signal: AbortSignal) {
       }
       factorySpy.mockRestore();
       upgradeSpy.mockRestore();
+      upgrading.disable();
+      phases.clear();
       sockets.clear();
     },
   };
 }
 
+function hasPinnedProvenance(provenance: unknown): boolean {
+  if (!isRecord(provenance)) {
+    return false;
+  }
+  const sha256 = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+  if (provenance.kind === "crabbox") {
+    return (
+      typeof provenance.commit === "string" &&
+      /^[a-f0-9]{40}$/u.test(provenance.commit) &&
+      sha256(provenance.installerSha256)
+    );
+  }
+  return (
+    provenance.kind === "upstream-os" &&
+    typeof provenance.osRelease === "string" &&
+    provenance.osRelease.length > 0 &&
+    typeof provenance.packageOrigin === "string" &&
+    provenance.packageOrigin.length > 0 &&
+    sha256(provenance.serverBinarySha256) &&
+    Array.isArray(provenance.packages) &&
+    provenance.packages.length > 0 &&
+    provenance.packages.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.name === "string" &&
+        entry.name.length > 0 &&
+        typeof entry.version === "string" &&
+        entry.version.length > 0 &&
+        sha256(entry.sha256),
+    )
+  );
+}
+
 export async function readDesktopResizeFixture(file: string): Promise<DesktopResizeFixture> {
   const fixture = JSON.parse(await readFile(file, "utf8")) as DesktopResizeFixture;
   if (
+    !fixture ||
+    (fixture.carrier !== "ssh" && fixture.carrier !== "node") ||
     !fixture.identityPath ||
     !fixture.ssh?.hostKey ||
     !fixture.desktop?.passwordFilePath ||
     !fixture.fixedDesktop?.passwordFilePath ||
-    !/^[a-f0-9]{40}$/u.test(fixture.crabboxCommit) ||
-    !/^[a-f0-9]{64}$/u.test(fixture.installerSha256)
+    !hasPinnedProvenance(fixture.provenance)
   ) {
-    throw new Error("Desktop resize proof requires pinned SSH, VNC credentials, and source hashes");
+    throw new Error(
+      "Desktop resize proof requires a carrier, pinned SSH/VNC facts, and provenance",
+    );
   }
   return fixture;
 }
 
 /** Provisioning fixture only: no RPC, RFB, registry, or tunnel implementation is replaced. */
-export async function writeDesktopResizeProvider(root: string, identityPath: string) {
+export async function writeDesktopResizeProvider(root: string, fixture: DesktopResizeFixture) {
   const pluginDir = path.join(root, "desktop-resize-fixture");
   await mkdir(pluginDir, { recursive: true });
   await writeFile(
@@ -165,7 +218,11 @@ export async function writeDesktopResizeProvider(root: string, identityPath: str
             resolveAllocation: async () => { throw new Error("fixture is already provisioned"); },
             provision: async () => { throw new Error("fixture is already provisioned"); },
             inspect: async () => ({ status: "active", sharedHost: false }),
-            resolveSshIdentity: async () => ({ kind: "path", path: ${JSON.stringify(identityPath)} }),
+            resolveSshIdentity: async () => ${
+              fixture.carrier === "node"
+                ? '{ throw new Error("Node desktop fixture must not resolve SSH credentials"); }'
+                : `({ kind: "path", path: ${JSON.stringify(fixture.identityPath)} })`
+            },
             destroy: async () => {},
           });
         }
@@ -175,7 +232,10 @@ export async function writeDesktopResizeProvider(root: string, identityPath: str
   return pluginDir;
 }
 
-export function seedDesktopResizeSources(fixture: DesktopResizeFixture) {
+export function seedDesktopResizeSources(fixture: DesktopResizeFixture, nodeDeviceId?: string) {
+  if (fixture.carrier === "node" && !nodeDeviceId) {
+    throw new Error("Node desktop proof requires the actually admitted node device");
+  }
   const store = createWorkerEnvironmentStore();
   for (const [kind, environmentId] of Object.entries(resizeSources)) {
     const intent = store.createIntent({
@@ -190,22 +250,24 @@ export function seedDesktopResizeSources(fixture: DesktopResizeFixture) {
       from: intent.state,
       to: "provisioning",
     });
-    const bootstrapping = store.transition({
-      environmentId,
-      from: provisioning.state,
-      to: "bootstrapping",
-      patch: {
-        leaseId: `lease:${environmentId}`,
-        sshEndpoint: fixture.ssh,
-        sharedHost: false,
-        desktop: kind === "fixed" ? fixture.fixedDesktop : fixture.desktop,
-      },
-    });
+    const desktop = kind === "fixed" ? fixture.fixedDesktop : fixture.desktop;
+    const owner = { leaseId: `lease:${environmentId}`, sharedHost: false, desktop };
+    const preparing =
+      fixture.carrier === "node"
+        ? provisioning
+        : store.transition({
+            environmentId,
+            from: provisioning.state,
+            to: "bootstrapping",
+            patch: { ...owner, sshEndpoint: fixture.ssh },
+          });
     store.transition({
       environmentId,
-      from: bootstrapping.state,
+      from: preparing.state,
       to: "ready",
       patch: {
+        ...(fixture.carrier === "node" ? { ...owner, nodeDeviceId, sshEndpoint: null } : {}),
+        // Synthetic provisioning receipt, not evidence of a cloud bootstrap.
         bootstrapReceipt: {
           bundleHash: "a".repeat(64),
           openclawVersion: "2026.9.1",

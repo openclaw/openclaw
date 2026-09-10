@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,6 +9,8 @@ import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { startSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
+import { SkillLibraryWireClient } from "../../../test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -113,7 +115,7 @@ async function captureDesktopSockets(page: Page) {
 
 suite.define(() => {
   it.skipIf(!fixturePath)(
-    "matches a real XFCE display through the production observer and preserves controller ownership",
+    "matches a real XFCE display through the configured worker carrier and preserves controller ownership",
     async (context) => {
       const fixture = await readDesktopResizeFixture(fixturePath!);
       const baseUrl = suite.server.baseUrl;
@@ -135,15 +137,16 @@ suite.define(() => {
       });
       let gateway: GatewayServer | undefined;
       let guest: Awaited<ReturnType<typeof createDesktopResizeGuest>> | undefined;
+      let node: Awaited<ReturnType<typeof startSkillLibraryNodeProcess>> | undefined;
+      let admin: SkillLibraryWireClient | undefined;
+      let nodeDeviceId: string | undefined;
       const packetProbe = observeDesktopFilterPackets(context.signal);
       const samples: Array<{ stage: string; width: number; height: number }> = [];
       await suite.runScenario(context, {
         retainedState: () => state.root,
         run: async () => {
-          const pluginDir = await writeDesktopResizeProvider(
-            state.workspaceDir,
-            fixture.identityPath,
-          );
+          const pluginDir = await writeDesktopResizeProvider(state.workspaceDir, fixture);
+          const gatewayToken = randomUUID();
           const trustedProxy = {
             allowLoopback: true,
             allowUsers: ["resize-operator@example.test"],
@@ -172,7 +175,7 @@ suite.define(() => {
               entries: { "desktop-resize-fixture": { enabled: true } },
             },
             gateway: {
-              auth: { mode: "trusted-proxy", trustedProxy },
+              auth: { mode: "trusted-proxy", password: gatewayToken, trustedProxy },
               controlUi: {
                 enabled: true,
                 root: path.resolve(fixture.controlUiRoot ?? "dist/control-ui"),
@@ -188,7 +191,17 @@ suite.define(() => {
             sidecarStartup: "start",
           });
           await gateway.startupSettled;
-          seedDesktopResizeSources(fixture);
+          if (fixture.carrier === "node") {
+            const endpoint = {
+              port: gatewayPort,
+              url: `ws://127.0.0.1:${gatewayPort}`,
+              gatewayToken,
+            };
+            ({ client: admin } = await SkillLibraryWireClient.connect(endpoint));
+            node = await startSkillLibraryNodeProcess(endpoint, admin);
+            nodeDeviceId = node.nodeId;
+          }
+          seedDesktopResizeSources(fixture, nodeDeviceId);
           guest = await createDesktopResizeGuest(fixture);
           const browserContext = await suite.newBrowserContext({
             viewport: null,
@@ -220,7 +233,7 @@ suite.define(() => {
                 observations.push({
                   ok: frame.ok,
                   auth: observed?.auth ?? null,
-                  passwordPresent: Boolean(observed?.vncPassword),
+                  passwordPresent: observed ? Object.hasOwn(observed, "vncPassword") : false,
                   preauthenticated: observed?.preauthenticated === true,
                   control: observed?.control,
                   canResize: observed?.canResize,
@@ -327,6 +340,12 @@ suite.define(() => {
           }
           const initial = await guest.geometry();
           await expect.poll(() => framebuffer(canvas)).toEqual(initial);
+          if (fixture.carrier === "node") {
+            expect(observations.length).toBeGreaterThan(0);
+            expect(
+              observations.every((result) => result.ok === true && !result.passwordPresent),
+            ).toBe(true);
+          }
           const originalCanvas = await canvas.elementHandle();
           await panel.getByRole("button", { name: "Take control", exact: true }).click();
           const menu = panel.getByRole("combobox", { name: "Desktop size", exact: true });
@@ -449,6 +468,8 @@ suite.define(() => {
             return { socketUrl: sockets.at(-1)!.url, bytes: Array.from(packet) };
           });
           const resized = packetProbe.expectPacket(resizeAttempt.socketUrl, resizeAttempt.bytes);
+          const observerFilterPhase = packetProbe.startPhase(resizeAttempt.socketUrl);
+          expect(observerFilterPhase).toBe(fixture.carrier === "node" ? "clientInit" : "version");
           await observer.evaluate(({ socketUrl, bytes }) => {
             const sockets = (window as unknown as { desktopProofSockets: WebSocket[] })
               .desktopProofSockets;
@@ -536,6 +557,7 @@ suite.define(() => {
             inputAttempt.socketUrl,
             inputAttempt.bytes,
           );
+          expect(packetProbe.startPhase(inputAttempt.socketUrl)).toBe(observerFilterPhase);
           await page.evaluate(({ socketUrl, bytes }) => {
             const sockets = (window as unknown as { desktopProofSockets: WebSocket[] })
               .desktopProofSockets;
@@ -576,19 +598,66 @@ suite.define(() => {
             await sizing.selectOption("actual");
             await sizing.selectOption("fit");
           }
+          let nodeDisconnectClosedViewer = false;
+          if (node) {
+            await page.goto(
+              new URL(
+                buildControlUiFocusPath({
+                  kind: "desktop",
+                  source: resizeSources.dynamic,
+                  control: true,
+                }),
+                baseUrl,
+              ).href,
+            );
+            await expect.poll(() => framebuffer(canvas)).toEqual(await guest.geometry());
+            const socketUrl = await page.evaluate(
+              () =>
+                (window as unknown as { desktopProofSockets: WebSocket[] }).desktopProofSockets.at(
+                  -1,
+                )!.url,
+            );
+            await node.stop();
+            node = undefined;
+            await expect
+              .poll(() =>
+                page.evaluate(
+                  (url) =>
+                    (
+                      window as unknown as { desktopProofSockets: WebSocket[] }
+                    ).desktopProofSockets.find((socket) => socket.url === url)?.readyState,
+                  socketUrl,
+                ),
+              )
+              .toBe(3);
+            await panel.getByText(/^Desktop disconnected:/u).waitFor({ state: "visible" });
+            expect(
+              observations.every((result) => result.ok === true && !result.passwordPresent),
+            ).toBe(true);
+            nodeDisconnectClosedViewer = true;
+          }
           await Promise.all(assetReads);
           expect(assets.size).toBeGreaterThan(0);
           await writeFile(
             path.join(suite.artifactDir, "resize-proof.json"),
             JSON.stringify(
               {
-                crabboxCommit: fixture.crabboxCommit,
-                installerSha256: fixture.installerSha256,
+                provenance: fixture.provenance,
                 provisioning:
-                  "fixture provider and durable worker records; production Gateway observation, SSH, registry, and RFB filter",
+                  "fixture provider and durable worker records; production Gateway observation, worker carrier, registry, and RFB filter",
                 instrumentation:
                   "instrumented production-path proof: exact observer socket and complete injected packets, unchanged stateful filter results",
-                carrier: "SSH only; node ticket preauthentication is not exercised",
+                carrier: fixture.carrier,
+                node: nodeDeviceId
+                  ? {
+                      deviceId: nodeDeviceId,
+                      admission:
+                        "real device/node approval and connected paired session-host inventory",
+                      passwordAbsentFromObserve: true,
+                      disconnectClosedViewer: nodeDisconnectClosedViewer,
+                    }
+                  : null,
+                observerFilterPhase,
                 viewports: "native desktop windows; viewport-emulated mobile, not a physical phone",
                 observer: { keyboardForwardedBytes: 0, resizeForwardedBytes: 0 },
                 assets: Object.fromEntries(assets),
@@ -602,8 +671,18 @@ suite.define(() => {
         },
         close: async () => {
           try {
-            await gateway?.close({ reason: "desktop resize proof cleanup" });
-            await guest?.close();
+            const results = await Promise.allSettled([
+              node?.stop(),
+              admin?.close(),
+              gateway?.close({ reason: "desktop resize proof cleanup" }),
+              guest?.close(),
+            ]);
+            const errors = results.flatMap((result) =>
+              result.status === "rejected" ? [result.reason] : [],
+            );
+            if (errors.length > 0) {
+              throw new AggregateError(errors, "Desktop resize proof cleanup failed");
+            }
           } finally {
             packetProbe.close();
           }
