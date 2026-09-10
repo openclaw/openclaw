@@ -147,7 +147,11 @@ export function readToolSearchCallArgs(
       .map(([key, value]) => [key.slice(5), value]),
   );
   const nestedInput = params.args ?? params.input;
-  if (nestedInput != null) {
+  // Some local models emit an empty args/input wrapper while flattening the real
+  // arguments to the top level. Treat an empty wrapper as absent so the fallback
+  // below preserves those parameters instead of returning {}.
+  const nestedInputIsEmpty = isRecord(nestedInput) && Object.keys(nestedInput).length === 0;
+  if (nestedInput != null && !nestedInputIsEmpty) {
     return {
       id: readToolSearchId(params),
       input: isRecord(nestedInput) ? { ...dottedInput, ...nestedInput } : nestedInput,
