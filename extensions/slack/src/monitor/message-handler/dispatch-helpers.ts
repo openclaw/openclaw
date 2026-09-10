@@ -2,7 +2,10 @@ import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-
 import { resolveChannelProgressDraftConfig } from "openclaw/plugin-sdk/channel-outbound";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import {
+  mergePairLoopGuardConfig,
+  resolvePairLoopGuardSettings,
+} from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -34,20 +37,32 @@ export function resolveSlackBotLoopProtection(
   ) {
     return undefined;
   }
+  const config = mergePairLoopGuardConfig(
+    prepared.account.config.botLoopProtection,
+    prepared.channelConfig?.botLoopProtection,
+  );
+  const defaultsConfig = prepared.ctx.cfg.channels?.defaults?.botLoopProtection;
+  // Thread scoping rides the opt-in conversation burst budget. Resolve the
+  // EFFECTIVE setting through the same runtime resolver the guard uses, so
+  // shared defaults, account settings, channel overrides and out-of-range
+  // values are all read exactly as the guard will read them. Until an operator
+  // opts in, Slack keeps the shipped channel-wide pair budget: an upgrade must
+  // not silently split one channel's accounting across its threads.
+  const conversationBurstEnabled =
+    resolvePairLoopGuardSettings({ config, defaultsConfig, defaultEnabled: true })
+      .maxConversationBotEvents !== undefined;
   return {
     scopeId: prepared.route.accountId,
     // Slack thread timestamps are unique only within their channel.
-    conversationId: prepared.message.thread_ts
-      ? `${prepared.message.channel}:${prepared.message.thread_ts}`
-      : prepared.message.channel,
+    conversationId:
+      conversationBurstEnabled && prepared.message.thread_ts
+        ? `${prepared.message.channel}:${prepared.message.thread_ts}`
+        : prepared.message.channel,
     senderId: senderBotId,
     receiverId: receiverBotId,
     eventId: prepared.message.ts,
-    config: mergePairLoopGuardConfig(
-      prepared.account.config.botLoopProtection,
-      prepared.channelConfig?.botLoopProtection,
-    ),
-    defaultsConfig: prepared.ctx.cfg.channels?.defaults?.botLoopProtection,
+    config,
+    defaultsConfig,
     defaultEnabled: true,
     nowMs: resolveSlackMessageTimestampMs(prepared.message),
   };

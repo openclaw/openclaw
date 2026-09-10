@@ -16,8 +16,13 @@
  * deadline is validated against the slowest admission actually measured in the
  * same run, so a broken pipeline cannot read as suppression.
  *
- * Scenarios: pair budget only (new setting absent) and conversation burst
- * budget enabled. Each runs on a fresh Gateway so the guard starts empty.
+ * Scenarios, each on a fresh Gateway so the guard starts empty: pair budget
+ * only (new setting absent); conversation burst budget enabled; cross-thread
+ * upgrade compatibility (setting absent, so one channel's pair budget must
+ * still span its threads exactly as the shipped release does); and cross-thread
+ * opt-in scope (setting present, so each thread carries its own pair budget).
+ * The last two differ only by the presence of the shared default, which is the
+ * upgrade boundary an existing installation crosses.
  * No credentials, no public requests, no live state, no Vitest, no mocks.
  */
 import { spawn, type ChildProcessByStdio } from "node:child_process";
@@ -611,6 +616,9 @@ try {
   const base = Math.floor(Date.now() / 1000) - 45;
   const ts = (offset: number) => `${base + offset}.000100`;
   const thread = ts(0);
+  // A second thread in the SAME channel. Whether these two threads share one
+  // pair budget is exactly the upgrade question the compatibility scenarios ask.
+  const otherThread = ts(3);
 
   const pairOnly = await runScenario({
     label: "pair-budget-only",
@@ -715,7 +723,91 @@ try {
     ],
   });
 
-  for (const scenario of [pairOnly, burstEnabled]) {
+  // Upgrade compatibility: no burst setting anywhere, so this Gateway behaves
+  // like the shipped release. Two unique messages in one thread plus a third in
+  // another thread of the same channel must exhaust ONE pair budget of two.
+  const crossThreadUpgrade = await runScenario({
+    label: "cross-thread-upgrade-compatibility",
+    cwd,
+    rootDir,
+    maxEventsPerWindow: 2,
+    events: [
+      {
+        channel: "C_FIRST",
+        ts: ts(1),
+        threadTs: thread,
+        botId: PEER_BOT_ID,
+        marker: "xu1",
+        expectAdmitted: true,
+      },
+      {
+        channel: "C_FIRST",
+        ts: ts(6),
+        threadTs: thread,
+        botId: PEER_BOT_ID,
+        marker: "xu2",
+        expectAdmitted: true,
+      },
+      // Different thread, same channel: the shipped release suppresses this
+      // third message, so an installation that never opted in must too.
+      {
+        channel: "C_FIRST",
+        ts: ts(11),
+        threadTs: otherThread,
+        botId: PEER_BOT_ID,
+        marker: "xu3",
+        expectAdmitted: false,
+      },
+    ],
+  });
+
+  // The same traffic with the shared default present. This is the opt-in the
+  // operator asked for: each thread now carries its own pair budget, and that
+  // budget is still enforced inside the thread.
+  const crossThreadOptIn = await runScenario({
+    label: "cross-thread-opt-in-scope",
+    cwd,
+    rootDir,
+    maxEventsPerWindow: 2,
+    maxConversationBotEvents: 50,
+    events: [
+      {
+        channel: "C_FIRST",
+        ts: ts(1),
+        threadTs: thread,
+        botId: PEER_BOT_ID,
+        marker: "xo1",
+        expectAdmitted: true,
+      },
+      {
+        channel: "C_FIRST",
+        ts: ts(6),
+        threadTs: thread,
+        botId: PEER_BOT_ID,
+        marker: "xo2",
+        expectAdmitted: true,
+      },
+      {
+        channel: "C_FIRST",
+        ts: ts(11),
+        threadTs: otherThread,
+        botId: PEER_BOT_ID,
+        marker: "xo3",
+        expectAdmitted: true,
+      },
+      // The opted-in thread budget is real, not merely wider.
+      {
+        channel: "C_FIRST",
+        ts: ts(16),
+        threadTs: thread,
+        botId: PEER_BOT_ID,
+        marker: "xo4",
+        expectAdmitted: false,
+      },
+    ],
+  });
+
+  for (const scenario of [pairOnly, burstEnabled, crossThreadUpgrade, crossThreadOptIn]) {
     console.log(
       `${scenario.label}: ${scenario.observations
         .map((o) => `${o.channel}/${o.marker}=${o.admitted ? "admitted" : "suppressed"}`)
