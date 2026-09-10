@@ -129,7 +129,7 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
     expect(call.name).toBe("exec");
     const args = route === "responses" ? JSON.parse(call.arguments) : call.input;
     expect(args.command).toBe(
-      "while [ ! -f 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 0.05; done; cat 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; rm -f 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
+      "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
     );
     const results: ProgressResult[] = [{ tool: "exec", args, output: RUNNING_OUTPUT }];
     const pending = await requestProgress(route, prompt, results);
