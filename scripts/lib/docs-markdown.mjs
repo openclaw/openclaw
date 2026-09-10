@@ -119,24 +119,26 @@ class DocsSource {
   }
 }
 
-function preprocess(input) {
+function preprocess(input, restore) {
   let out = input.replace(/\r\n/g, "\n").replace(/^import\s+.+?;?\s*$/gm, "");
   out = out.replace(
     /<Mermaid\b[^>]*>([\s\S]*?)<\/Mermaid>/g,
-    (_, body) => `\n${marker("mermaidBlock", body)}\n`,
+    (_, body) => `\n${marker("mermaidBlock", restore(body))}\n`,
   );
   out = out.replace(
     /<Chart\b([^>]*)\/>/g,
-    (_, attrs) => `\n${marker("chart", JSON.stringify({ attrs, body: "" }))}\n`,
+    (_, attrs) => `\n${marker("chart", JSON.stringify({ attrs: restore(attrs), body: "" }))}\n`,
   );
   out = out.replace(
     /<Chart\b([^>]*)>([\s\S]*?)<\/Chart>/g,
-    (_, attrs, body) => `\n${marker("chart", JSON.stringify({ attrs, body }))}\n`,
+    (_, attrs, body) =>
+      `\n${marker("chart", JSON.stringify({ attrs: restore(attrs), body: restore(body) }))}\n`,
   );
   out = out.replace(/<br\s*\/?>/gi, "\n");
   return out.replace(componentTag, (tag, closing, name, attrs) => {
     let kind;
-    let value = closing ? "" : attrs;
+    // Restore literal attributes before encoding hides their placeholders.
+    let value = closing ? "" : restore(attrs);
     if (gridComponents.has(name) || knownBlocks.has(name)) {
       kind = closing ? "blockClose" : "blockOpen";
       value = gridComponents.has(name) ? cardGridClass(attrs) : knownBlocks.get(name)[0];
@@ -334,7 +336,7 @@ function prepareDocument(input, { sourceFile, root, seen = new Set() }, firstLin
       false,
     );
   }
-  text = preprocess(text);
+  text = preprocess(text, restore);
   return text.replace(placeholder, (_, index) => saved[Number(index)], false);
 }
 
