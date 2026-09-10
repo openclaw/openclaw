@@ -266,10 +266,7 @@ describe("production lint suppressions", () => {
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
         // Caller assertions retain their original thrown value, including non-Error values.
         "src/state/openclaw-agent-db-admission.ts|typescript/prefer-promise-reject-errors|1",
-        "src/system-agent/setup-inference-activate.ts|no-unsafe-finally|1",
         "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
-        // Cleanup stays in AggregateError.errors; the initiating failure remains cause for classification and remediation.
-        "src/system-agent/setup-inference-persist.ts|preserve-caught-error|2",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",

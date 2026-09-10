@@ -6,7 +6,7 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ActivateSetupInferenceDeps } from "../system-agent/setup-inference-core.js";
-import { verifySetupInferenceConfig } from "../system-agent/setup-inference-verify.js";
+import { verifySetupInferenceConfig } from "../system-agent/setup-inference-turn.js";
 import type { WizardPrompter } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -256,7 +256,7 @@ describe("offerLiveModelVerification", () => {
     mocks.verify.mockResolvedValue({
       ok: false,
       status: "format",
-      error: "tool verification failed",
+      error: "inference request failed",
     });
     mocks.repair.mockRejectedValue(new Error("repair cancelled"));
     await expect(
@@ -272,8 +272,8 @@ describe("offerLiveModelVerification", () => {
     ).rejects.toThrow("repair cancelled");
     expect(prompter.confirm).not.toHaveBeenCalled();
     expect(prompter.select).not.toHaveBeenCalled();
-    expect(mocks.verify).toHaveBeenCalledWith(expect.objectContaining({ verifyAgentTools: true }));
-    expect(persistAuthProfiles).not.toHaveBeenCalled();
+    expect(mocks.verify).toHaveBeenCalledOnce();
+    expect(persistAuthProfiles).toHaveBeenCalledOnce();
     expect(writeConfig).not.toHaveBeenCalled();
   });
 

@@ -19,7 +19,7 @@ import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import {
   loadSetupInferencePluginGeneration,
   revalidateSetupInferenceOwner,
-} from "./revalidate-inference-owner.js";
+} from "./setup-inference-turn.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 const mocks = vi.hoisted(() => ({ loadAgentRuntimePluginRegistryHandle: vi.fn() }));

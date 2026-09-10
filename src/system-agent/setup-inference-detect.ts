@@ -2,9 +2,11 @@ import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalo
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import {
@@ -14,6 +16,7 @@ import {
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import {
+  choiceMatchesCredential,
   listSetupInferenceAuthOptions,
   listSetupInferenceEnableOptions,
   listSetupInferenceInstallOptions,
@@ -31,11 +34,56 @@ import {
   resolveCandidatePresentation,
   resolveSetupInferenceWorkspace,
   toProviderAutoSetupKind,
+  toSavedAuthSetupKind,
 } from "./setup-inference-core.js";
 import {
   listSetupNativeSessionCatalogs,
   requiresSetupNativeSessionCatalogConsent,
 } from "./setup-native-session-catalogs.js";
+
+async function listSavedSetupInferenceCandidates(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  workspace: string;
+  choices: readonly ProviderAuthChoiceMetadata[];
+  deps: DetectSetupInferenceDeps;
+}): Promise<SetupInferenceCandidate[]> {
+  const { currentSavedCandidate, loadProviderAuthMethod } =
+    await import("./setup-inference-credentials.js");
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const candidates: SetupInferenceCandidate[] = [];
+  for (const [profileId, credential] of Object.entries(store.profiles)) {
+    const saved = currentSavedCandidate(agentDir, profileId, credential);
+    if (!saved && params.cfg.auth?.profiles?.[profileId]) {
+      continue;
+    }
+    const choice =
+      saved?.choice ?? params.choices.find((entry) => choiceMatchesCredential(entry, credential));
+    let modelRef = saved?.candidate.modelRef;
+    if (!modelRef && choice) {
+      const loaded = await loadProviderAuthMethod({ ...params, choice });
+      if (!("error" in loaded)) {
+        modelRef = loaded.method.starterModel;
+      }
+    }
+    if (!modelRef) {
+      continue;
+    }
+    candidates.push({
+      kind: toSavedAuthSetupKind(profileId),
+      modelRef,
+      brandId: choice?.providerId ?? credential.provider,
+      label: `Saved ${choice?.choiceLabel ?? credential.provider} sign-in`,
+      detail: "Verify this saved sign-in to use it. No new sign-in is needed.",
+      recommended: false,
+      credentials: true,
+      ...(choice?.icon ? { icon: choice.icon } : {}),
+      ...(choice?.website ? { website: choice.website } : {}),
+    });
+  }
+  return candidates;
+}
 
 function resolveConfiguredCandidateKind(
   config: Parameters<typeof resolveModelRuntimePolicy>[0]["config"],
@@ -156,9 +204,16 @@ export async function detectSetupInference(
     agentId,
   );
   const { workspace } = manual;
+  const savedCandidates = await listSavedSetupInferenceCandidates({
+    cfg,
+    agentId: targetAgentId,
+    workspace,
+    choices: authChoices,
+    deps,
+  });
   const partial: SetupInferenceDetection = {
     ...manual,
-    candidates: [],
+    candidates: savedCandidates,
     unavailableCandidates: [],
     recommendedInstalls: listRecommendedToolInstalls(),
   };
@@ -214,6 +269,7 @@ export async function detectSetupInference(
       resolveCandidatePresentation(candidate, authChoices),
     ),
   );
+  candidates.push(...savedCandidates);
   const discoveryChoices = authChoices.filter(
     (choice) =>
       choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),

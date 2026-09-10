@@ -162,11 +162,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    // Detection is read-only and may load native provider code. Keep it outside
-    // the mutation lane and off the Gateway event loop so health stays live.
-    const { detectSetupInferenceIsolated } =
-      await import("../../system-agent/setup-inference-detection.js");
-    respond(true, await detectSetupInferenceIsolated(params), undefined);
+    const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
+    respond(true, await detectSetupInference({}, params.agentId), undefined);
   },
   /** Re-run the exact current default-agent inference route without mutating setup. */
   "openclaw.setup.verify": async ({ params, respond, context }) => {

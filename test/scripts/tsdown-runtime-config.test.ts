@@ -209,7 +209,6 @@ describe("tsdown config", () => {
       "config/sessions/session-accessor.sqlite-archive.worker",
       "infra/sqlite-readonly-location.worker",
       "state/openclaw-database-verify.worker",
-      "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
       "task-registry-control.runtime",

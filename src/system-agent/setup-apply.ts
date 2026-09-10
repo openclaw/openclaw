@@ -23,15 +23,13 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
 import {
+  assertSetupTarget,
   projectDefaultInferenceRoute,
+  sameSetupConfiguredRoute,
+  sameSetupInferenceRoute,
   type DefaultInferenceRouteProjection,
 } from "./inference-route.js";
 import { requireValidSystemAgentSetupSnapshot } from "./setup-config-snapshot.js";
-import {
-  assertSetupTarget,
-  sameSetupConfiguredRoute,
-  sameSetupInferenceRoute,
-} from "./setup-inference-route-guard.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 
 /**
