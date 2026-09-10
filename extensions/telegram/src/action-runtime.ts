@@ -760,7 +760,18 @@ export async function handleTelegramAction(
       throw durableResult.error;
     }
     if (durableResult.status === "suppressed") {
-      throw new Error("Telegram sendMessage was suppressed before delivery.");
+      // Caller-facing errors may carry only the bounded suppression reason.
+      // Free-form hook diagnostics (`hookEffect.cancelReason`) stay in the
+      // durable result's internal audit trail, matching the shared delivery
+      // serializer's model-facing boundary.
+      const suppressionReason = durableResult.payloadOutcomes?.find(
+        (outcome) => outcome.status === "suppressed",
+      )?.reason;
+      throw new Error(
+        suppressionReason
+          ? `Telegram sendMessage was suppressed before delivery: ${suppressionReason}`
+          : "Telegram sendMessage was suppressed before delivery.",
+      );
     }
     const result = getLastDurableTelegramActionResult(durableResult);
     notifyVisibleOutboundSuccess(to, messageThreadId);

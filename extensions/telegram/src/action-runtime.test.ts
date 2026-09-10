@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import type { DurableMessageBatchSendResult } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
@@ -82,7 +83,7 @@ const sendDurableMessageBatch = vi.fn(
       readFile?: (filePath: string) => Promise<Buffer>;
       workspaceDir?: string;
     };
-  }) => {
+  }): Promise<DurableMessageBatchSendResult> => {
     const payload = params.payloads[0] ?? {};
     const mediaUrls = payload.mediaUrls?.length
       ? payload.mediaUrls
@@ -1136,6 +1137,40 @@ describe("handleTelegramAction", () => {
     expect(result.content).toStrictEqual([
       { type: "text", text: JSON.stringify(details, null, 2) },
     ]);
+  });
+
+  it("surfaces the bounded suppression reason and keeps hook diagnostics internal", async () => {
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "suppressed",
+      results: [],
+      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [
+        {
+          index: 0,
+          status: "suppressed",
+          reason: "cancelled_by_message_sending_hook",
+          hookEffect: { cancelReason: "dedupe" },
+        },
+      ],
+    });
+
+    // The caller-facing error carries the bounded enum reason; the hook's
+    // free-form cancelReason stays out of the model-facing boundary.
+    const error = await handleTelegramAction(
+      { action: "sendMessage", to: "@testchannel", content: "Hello, Telegram!" },
+      telegramConfig(),
+    ).then(
+      () => {
+        throw new Error("expected handleTelegramAction to reject");
+      },
+      (rejection: unknown) => rejection as Error,
+    );
+    expect(error.message).toBe(
+      "Telegram sendMessage was suppressed before delivery: cancelled_by_message_sending_hook",
+    );
+    expect(error.message).not.toContain("dedupe");
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
   });
 
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
