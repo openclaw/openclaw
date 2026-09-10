@@ -306,9 +306,10 @@ Disabling diagnostics or stopping the heartbeat disconnects it immediately.
 
 The histogram is absent until the first observation, so absence does not prove
 zero GC. Queue drops, the series cap, observation gaps and process restarts limit
-coverage. Diagnostics disable/re-enable preserves the exporter's existing
-counters; restarting the exporter resets them as usual. No extra timer, GC
-trigger, trace attribution or application payload is collected.
+coverage. Changing `diagnostics.enabled` replaces the exporter service and resets
+its metric store, including existing counters. Process restarts reset those
+metrics as usual. No extra timer, GC trigger, trace attribution or application
+payload is collected.
 
 ## Label policy
 
