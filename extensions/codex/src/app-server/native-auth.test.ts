@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { probeCodexNativeAuth } from "./native-auth.js";
@@ -110,6 +111,52 @@ describe("Codex native login discovery", () => {
       }),
     ).toBeUndefined();
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("preserves the official Node launcher and native config when probing login", async () => {
+    const launcher = createRequire(new URL("../../package.json", import.meta.url)).resolve(
+      "@openai/codex/bin/codex.js",
+    );
+    run.mockResolvedValue({
+      termination: "exit",
+      code: 0,
+      stdout: "",
+      stderr: "Logged in using ChatGPT",
+    });
+    expect(
+      await probeCodexNativeAuth({
+        pluginConfig: {
+          appServer: {
+            command: process.execPath,
+            args: [
+              launcher,
+              "-c",
+              'cli_auth_credentials_store="file"',
+              "app-server",
+              "--config",
+              'log_dir="app-server"',
+              "--listen",
+              "stdio://",
+              "--",
+            ],
+          },
+        },
+        env: {},
+      }),
+    ).toMatchObject({ mode: "oauth" });
+    expect(run).toHaveBeenCalledWith(
+      [
+        process.execPath,
+        launcher,
+        "-c",
+        'cli_auth_credentials_store="file"',
+        "--config",
+        'log_dir="app-server"',
+        "login",
+        "status",
+      ],
+      expect.any(Object),
+    );
   });
 
   it.each(["config", "env"] as const)(
