@@ -1,5 +1,7 @@
-import type { Model } from "@openclaw/llm-core";
+import { randomUUID } from "node:crypto";
+import type { Model, StreamOptions } from "@openclaw/llm-core";
 import { getAiTransportHost } from "../host.js";
+import { hasOpencodeSessionHeader, resolveOpencodeSessionHeaders } from "./session-affinity.js";
 
 export function resolveProviderTransportTurnState(
   model: Model,
@@ -29,4 +31,21 @@ export function resolveProviderTransportTurnState(
       transport: params.transport,
     },
   });
+}
+
+export function resolveProviderSimpleCompletionHeaders(
+  model: Model,
+  options?: Pick<StreamOptions, "headers" | "sessionId">,
+) {
+  const optionHeaders = resolveOpencodeSessionHeaders(model, options);
+  if (hasOpencodeSessionHeader(model, { headers: optionHeaders })) {
+    return optionHeaders;
+  }
+  const turnState = resolveProviderTransportTurnState(model, {
+    sessionId: options?.sessionId,
+    turnId: randomUUID(),
+    attempt: 1,
+    transport: "stream",
+  });
+  return { ...turnState?.headers, ...optionHeaders };
 }
