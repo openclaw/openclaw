@@ -42,6 +42,7 @@ import {
   resolveModelAliasFromPair,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
+import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
 const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
 const fallbackCandidateCache = new Map<string, ModelFallbackCandidate[]>();
@@ -358,7 +359,19 @@ function resolveFallbackCandidatesUncached(
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
-    addCandidate(primary, "configured-primary", "resolved");
+    // Primary resolution owns static normalization; refine only through its runtime hook.
+    let model = primary.model;
+    if (
+      allowPluginModelAliases &&
+      allowsPluginModelNormalization({ cfg: params.cfg, ...primary })
+    ) {
+      model =
+        normalizeProviderModelIdWithRuntime({
+          provider: primary.provider,
+          context: { provider: primary.provider, modelId: model },
+        }) ?? model;
+    }
+    addCandidate({ ...primary, model }, "configured-primary", "resolved");
   }
   return candidates;
 }
