@@ -295,7 +295,7 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
     return;
   }
   try {
-    await markControlPlaneUpdateRestartSentinelFailure(params.reason);
+    await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta);
   } catch (err) {
     const message = `Failed to mark update.run restart sentinel failed: ${String(err)}`;
     if (params.jsonMode) {

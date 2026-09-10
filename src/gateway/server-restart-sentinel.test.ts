@@ -3431,6 +3431,86 @@ describe("scheduleRestartSentinelWake", () => {
     expect(getLatestUpdateRestartSentinel()).toEqual(payload);
   });
 
+  it("delivers the producer notice to the complete original ledger route", async () => {
+    const actualSentinel = await vi.importActual<typeof import("../infra/restart-sentinel.js")>(
+      "../infra/restart-sentinel.js",
+    );
+    const { writeControlPlaneUpdateRestartSentinel } =
+      await import("../infra/update-control-plane-sentinel.js");
+    const sessionKey = "agent:ops:telegram:group:room-77";
+    const run = createUpdateRun({
+      trigger: "cli",
+      origin: {
+        sessionKey,
+        deliveryContext: {
+          channel: "telegram",
+          to: "room-77",
+          accountId: "bot",
+          threadId: "topic-7",
+        },
+      },
+    });
+    finishUpdateRun(run.runId, { status: "rolled-back", reason: "restart-unhealthy" });
+    await writeControlPlaneUpdateRestartSentinel({
+      meta: { runId: run.runId, handoffId: "original-helper" },
+      result: {
+        status: "error",
+        mode: "npm",
+        reason: "restart-unhealthy",
+        steps: [],
+        durationMs: 1,
+      },
+    });
+    mocks.readRestartSentinel.mockResolvedValue(
+      (await actualSentinel.readRestartSentinel()) as RestartSentinel,
+    );
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "room-77" });
+    await scheduleRestartSentinelWake({ deps: {} as never });
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith(sessionKey);
+    expect(mocks.resolveSystemMainSessionTarget).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "room-77",
+        accountId: "bot",
+        threadId: "topic-7",
+      }),
+    );
+    expect(getUpdateRun(run.runId)?.status).toBe("rolled-back");
+  });
+
+  it("does not wake a restored runtime from the standalone CLI producer", async () => {
+    const actualSentinel = await vi.importActual<typeof import("../infra/restart-sentinel.js")>(
+      "../infra/restart-sentinel.js",
+    );
+    const { writeControlPlaneUpdateRestartSentinel } =
+      await import("../infra/update-control-plane-sentinel.js");
+    const run = createUpdateRun({ trigger: "cli" });
+    const terminal = finishUpdateRun(run.runId, {
+      status: "rolled-back",
+      reason: "restart-unhealthy",
+    });
+    await writeControlPlaneUpdateRestartSentinel({
+      meta: { runId: run.runId, handoffId: "owned-helper" },
+      result: {
+        runId: run.runId,
+        status: "error",
+        mode: "npm",
+        reason: "restart-unhealthy",
+        steps: [],
+        durationMs: 1,
+      },
+    });
+    const notice = await actualSentinel.readRestartSentinel();
+    mocks.readRestartSentinel.mockResolvedValue(notice as RestartSentinel);
+    await scheduleRestartSentinelWake({ deps: {} as never });
+    expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    expect(notice).toBeNull();
+    expect(getUpdateRun(run.runId)).toEqual(terminal);
+  });
+
   it.each([
     { status: "failed", consumed: true },
     { status: "succeeded", consumed: true },

@@ -168,8 +168,11 @@ export function createManagedServiceManagerBoundary({
     const run = options?.ledger
       ? createUpdateRun(
           {
-            trigger: options.requester ? "chat" : "api",
-            origin: options.requester ? { requester: options.requester } : {},
+            trigger: options.requester ? "chat" : (options.trigger ?? "api"),
+            origin: {
+              ...options.origin,
+              ...(options.requester ? { requester: options.requester } : {}),
+            },
           },
           { env },
         )
@@ -599,15 +602,7 @@ export function createManagedServiceManagerBoundary({
         await expect(pathExists(commandsPath)).resolves.toBe(false);
         expect(stdout).not.toContain("committed\n");
         await expect(pathExists(updaterPath)).resolves.toBe(false);
-      } else if (options?.launchdFault === "wrong-parent") {
-        const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
-        runningHelper.stdin?.write("park\n");
-        await cancelled;
-        expect(await completion, stderr).toBe(0);
-        expect(parent.exitCode).toBeNull();
-        expect(parent.signalCode).toBeNull();
-        await expect(pathExists(updaterPath)).resolves.toBe(false);
-      } else if (options?.overdueCommit) {
+      } else if (options?.launchdFault === "wrong-parent" || options?.overdueCommit) {
         const cancelled = waitForHandoffResponse(runningHelper.stdout, "cancelled");
         runningHelper.stdin?.write("park\n");
         await cancelled;

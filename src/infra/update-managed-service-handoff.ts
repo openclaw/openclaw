@@ -110,7 +110,7 @@ function appendLog(line) {
   }
 }
 
-const { assertOpenClawStateWriteAllowed, createManagedHandoffLeaseStore, resolveImmutableSqliteFileUri, hasManagedUpdateRecoveryRecord } =
+const { assertOpenClawStateWriteAllowed, createManagedHandoffLeaseStore, resolveImmutableSqliteFileUri, hasManagedUpdateRecoveryRecord, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 const leaseStore = createManagedHandoffLeaseStore({
   databasePath: params.updateLeaseDatabasePath,
@@ -472,7 +472,8 @@ function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedR
   try {
     metaFile = JSON.parse(fs.readFileSync(params.metaPath, "utf-8"));
   } catch {}
-  const meta = metaFile && metaFile.version === 1 && metaFile.meta ? metaFile.meta : {};
+  const run = runLedger?.getUpdateRun(params.runId);
+  const meta = resolveUpdateRestartNoticeMeta(run, metaFile && metaFile.version === 1 && metaFile.meta ? metaFile.meta : {});
   const status = (reason === "managed-service-handoff-cancelled" || completedStatus === "skipped") && restored !== false
     ? "skipped" : "error";
   runOutcome = { status: status === "error" ? "failed" : "skipped", reason };
@@ -501,6 +502,9 @@ function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedR
   }
   if (status === "error") triageFailure ??= { payload: fallbackPayload, reason };
   if (triageFailure && typeof restored === "boolean") triageFailure.restored = restored;
+  // The direct child verdict, native lease and original run still own settlement.
+  // Do not synthesize a notice that an older restored runtime would turn into work.
+  if (!shouldPublishUpdateRestartNotice(run, meta)) return true;
   const db = openStateDatabase();
   if (!db) return null;
   let recorded = null;

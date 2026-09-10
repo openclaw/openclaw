@@ -7,8 +7,13 @@ import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   isPendingControlPlaneUpdateRestartSentinel,
+  markControlPlaneUpdateRestartSentinelFailure,
+  writeControlPlaneUpdateRestartSentinel,
 } from "./update-control-plane-sentinel.js";
+import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
+import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
   await withTestDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
@@ -21,6 +26,238 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
 }
 
 describe("control-plane update restart sentinel", () => {
+  it.each(["handoff", "restart", "rollback", "unsafe", "success"] as const)(
+    "does not publish a targetless CLI %s notice for a restored runtime",
+    async (phase) => {
+      await withRestartSentinelStateDir(async () => {
+        const run = createUpdateRun({ trigger: "cli" });
+        const status =
+          phase === "handoff" || phase === "restart"
+            ? "skipped"
+            : phase === "success"
+              ? "ok"
+              : "error";
+        const reason =
+          phase === "handoff"
+            ? "managed-service-handoff-started"
+            : phase === "restart"
+              ? "restart-health-pending"
+              : "restart-unhealthy";
+        if (phase === "rollback") {
+          finishUpdateRun(run.runId, { status: "rolled-back", reason });
+        }
+        const before = getUpdateRun(run.runId);
+        await writeControlPlaneUpdateRestartSentinel({
+          meta: { runId: run.runId, handoffId: "owned-handoff", root: "/owned/package" },
+          result: {
+            runId: run.runId,
+            status,
+            reason,
+            mode: "npm",
+            steps: [],
+            durationMs: 1,
+            ...(phase === "unsafe"
+              ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }
+              : {}),
+          },
+        });
+        expect(await readRestartSentinel()).toBeNull();
+        expect(getUpdateRun(run.runId)).toEqual(before);
+      });
+    },
+  );
+
+  it.each<{
+    label: string;
+    meta: UpdateRestartSentinelMeta;
+    origin?: UpdateRunRecord["origin"];
+    trigger?: "api";
+    unknown?: boolean;
+  }>([
+    { label: "session", meta: { sessionKey: "agent:ops:main" } },
+    { label: "delivery", meta: { deliveryContext: { channel: "slack", to: "room" } } },
+    { label: "thread", meta: { threadId: "thread-1" } },
+    { label: "note", meta: { note: "Explicit operator follow-up" } },
+    { label: "continuation", meta: { continuationMessage: "Resume the requested work" } },
+    { label: "recorded session", meta: {}, origin: { sessionKey: "agent:ops:main" } },
+    {
+      label: "recorded delivery",
+      meta: {},
+      origin: { deliveryContext: { channel: "slack", to: "room" } },
+    },
+    { label: "Gateway", meta: {}, trigger: "api" as const },
+    { label: "unknown run", meta: {}, unknown: true },
+  ])("retains the $label update notice", async ({ meta, origin, trigger, unknown }) => {
+    await withRestartSentinelStateDir(async () => {
+      const run = unknown ? undefined : createUpdateRun({ trigger: trigger ?? "cli", origin });
+      await writeControlPlaneUpdateRestartSentinel({
+        meta: { ...meta, runId: run?.runId },
+        result: { status: "ok", mode: "npm", steps: [], durationMs: 1 },
+      });
+      const payload = (await readRestartSentinel())?.payload;
+      expect(payload).toMatchObject({ kind: "update", status: "ok" });
+      expect(payload?.message).toBe(meta.note ?? undefined);
+      if (meta.sessionKey) {
+        expect(payload?.sessionKey).toBe(meta.sessionKey);
+      }
+      if (meta.deliveryContext) {
+        expect(payload?.deliveryContext).toEqual(meta.deliveryContext);
+      }
+      if (meta.threadId) {
+        expect(payload?.threadId).toBe(meta.threadId);
+      }
+      if (meta.continuationMessage) {
+        expect(payload?.continuation).toEqual({
+          kind: "agentTurn",
+          message: meta.continuationMessage,
+        });
+      }
+    });
+  });
+
+  it.each(["cli", "api"] as const)(
+    "keeps pending notice failure marking scoped to requested %s reporting",
+    async (trigger) => {
+      await withRestartSentinelStateDir(async () => {
+        const run = createUpdateRun({ trigger });
+        const noticeOwner = trigger === "cli" ? createUpdateRun({ trigger: "api" }) : run;
+        await writeRestartSentinel(
+          buildUpdateRestartSentinelPayload({
+            result: {
+              status: "skipped",
+              mode: "npm",
+              reason: "restart-health-pending",
+              steps: [],
+              durationMs: 1,
+            },
+            meta: { runId: noticeOwner.runId, sessionKey: "agent:ops:main" },
+          }),
+        );
+        const before = await readRestartSentinel();
+        const marked = await markControlPlaneUpdateRestartSentinelFailure("restart-unhealthy", {
+          runId: run.runId,
+        });
+        if (trigger === "cli") {
+          expect(marked).toBeNull();
+          expect(await readRestartSentinel()).toEqual(before);
+        } else {
+          expect(marked).toMatchObject({
+            status: "error",
+            stats: { runId: run.runId, reason: "restart-unhealthy" },
+          });
+          expect((await readRestartSentinel())?.payload).toEqual(marked);
+        }
+      });
+    },
+  );
+
+  it.each(["recorded", "explicit", "other-session", "other-delivery", "same-route"] as const)(
+    "carries the complete %s notice route without mixing destinations",
+    async (route) => {
+      await withRestartSentinelStateDir(async () => {
+        const origin = {
+          sessionKey: "agent:ops:telegram:group:room",
+          deliveryContext: {
+            channel: "telegram",
+            to: "room",
+            accountId: "recorded-account",
+            threadId: "recorded-thread",
+          },
+        };
+        const run = createUpdateRun({ trigger: "cli", origin });
+        const meta: UpdateRestartSentinelMeta = {
+          runId: run.runId,
+          handoffId: "owner",
+          note: "Requested note",
+          continuationMessage: "Requested continuation",
+          ...(route === "explicit"
+            ? {
+                sessionKey: "agent:other:slack:channel:room2",
+                deliveryContext: { channel: "slack", to: "room2", accountId: "explicit-account" },
+                threadId: "explicit-thread",
+              }
+            : route === "other-session"
+              ? { sessionKey: "agent:other:main" }
+              : route === "other-delivery"
+                ? {
+                    deliveryContext: {
+                      channel: "slack",
+                      to: "room2",
+                      accountId: "explicit-account",
+                    },
+                  }
+                : route === "same-route"
+                  ? { sessionKey: origin.sessionKey, deliveryContext: { channel: "telegram" } }
+                  : {}),
+        };
+        await writeControlPlaneUpdateRestartSentinel({
+          meta,
+          result: { status: "ok", mode: "npm", steps: [], durationMs: 1 },
+        });
+        const payload = (await readRestartSentinel())?.payload;
+        expect(payload?.sessionKey).toBe(meta.sessionKey ?? origin.sessionKey);
+        expect(payload?.deliveryContext).toEqual(
+          route === "other-session"
+            ? undefined
+            : route === "explicit" || route === "other-delivery"
+              ? meta.deliveryContext
+              : {
+                  channel: "telegram",
+                  to: "room",
+                  accountId: "recorded-account",
+                },
+        );
+        expect(payload?.threadId).toBe(
+          route === "other-session" || route === "other-delivery"
+            ? undefined
+            : (meta.threadId ?? "recorded-thread"),
+        );
+        expect(payload?.message).toBe(meta.note);
+        expect(payload?.continuation).toEqual({
+          kind: "agentTurn",
+          message: meta.continuationMessage,
+        });
+        expect(payload?.stats).toMatchObject({ runId: run.runId, handoffId: "owner" });
+      });
+    },
+  );
+
+  it.each(["other-run", "other-handoff", "matching"] as const)(
+    "binds a routed failure marker to the %s sentinel owner",
+    async (owner) => {
+      await withRestartSentinelStateDir(async () => {
+        const run = createUpdateRun({ trigger: "api", origin: { sessionKey: "agent:ops:main" } });
+        const other = createUpdateRun({ trigger: "api" });
+        await writeRestartSentinel(
+          buildUpdateRestartSentinelPayload({
+            result: { status: "ok", mode: "npm", steps: [], durationMs: 1 },
+            meta: {
+              runId: owner === "other-run" ? other.runId : run.runId,
+              handoffId: owner === "other-handoff" ? "successor" : "original",
+              sessionKey: "agent:ops:main",
+              continuationMessage: "Do not lose the requested continuation",
+            },
+          }),
+        );
+        const before = await readRestartSentinel();
+        const marked = await markControlPlaneUpdateRestartSentinelFailure("restart-unhealthy", {
+          runId: run.runId,
+          handoffId: "original",
+        });
+        if (owner === "matching") {
+          expect(marked).toMatchObject({
+            status: "error",
+            stats: { runId: run.runId, handoffId: "original", reason: "restart-unhealthy" },
+          });
+          expect(marked?.continuation).toBeUndefined();
+        } else {
+          expect(marked).toBeNull();
+          expect(await readRestartSentinel()).toEqual(before);
+        }
+      });
+    },
+  );
+
   it.each([undefined, "agent:main:main"])(
     "does not infer a continuation from an update's session route (%s)",
     (sessionKey) => {
