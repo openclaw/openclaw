@@ -160,6 +160,15 @@ export function mergeWindowsTaskRecoveryFailure(
   };
 }
 
+/** The restored package and its running service have both passed verification. */
+export function isVerifiedUpdateRollback(result: UpdateRunResult): boolean {
+  return (
+    result.recovery?.serviceRestartSafe === true &&
+    result.recovery.packageRollbackVerified === true &&
+    result.recovery.service === "healthy"
+  );
+}
+
 export function resolveAutomaticUpdateTriage(
   result: UpdateRunResult,
   detail: string | undefined,
@@ -174,12 +183,8 @@ export function resolveAutomaticUpdateTriage(
 ): TriageFailureContext | undefined {
   // Triage follows a failed update, never a verified rollback: the restored
   // generation is serving, and an autonomous repair turn there is unwanted.
-  const verifiedRollback =
-    result.recovery?.serviceRestartSafe === true &&
-    result.recovery.packageRollbackVerified === true &&
-    result.recovery.service === "healthy";
   const eligible =
-    !verifiedRollback &&
+    !isVerifiedUpdateRollback(result) &&
     (params.mutationStarted || result.reason === "restart-unhealthy") &&
     result.reason !== "service-revalidation-failed" &&
     !(

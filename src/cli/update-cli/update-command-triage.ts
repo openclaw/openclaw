@@ -18,6 +18,7 @@ import { resolveNodeRunner, resolveUpdateRoot, type UpdateCommandOptions } from 
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 import {
+  isVerifiedUpdateRollback,
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
   UpdateCommandPendingRecoveryFailure,
@@ -64,6 +65,17 @@ export async function withUpdateFailureTriage(
       return exitCliAfterOutput(defaultRuntime, error.exitCode);
     }
     const reportedFailure = error instanceof UpdateCommandFailure;
+    const rollbackCompleted = reportedFailure && isVerifiedUpdateRollback(error.result);
+    // A healthy restored installation needs only an explicit terminal choice,
+    // never automatic diagnostics or a second managed-helper report.
+    if (
+      rollbackCompleted &&
+      (mode !== "interactive" ||
+        target.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
+        error.result.steps.some((step) => step.termination === "signal"))
+    ) {
+      return exitCliAfterOutput(defaultRuntime, error.exitCode);
+    }
     // Post-core children return phase data; only their outer updater owns the final failure.
     if (
       (!reportedFailure || classifyUpdateOutcome(error.result) === "failed") &&
@@ -114,6 +126,7 @@ export async function withUpdateFailureTriage(
               env: opts.run?.env ?? target.env,
               ...(failure.error ? { error: failure.error } : {}),
               ...(failure.result ? { result: failure.result } : {}),
+              ...(rollbackCompleted ? { rollbackCompleted: true } : {}),
               runtime: defaultRuntime,
             });
           } catch (reportError) {

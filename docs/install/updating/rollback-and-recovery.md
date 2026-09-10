@@ -156,7 +156,12 @@ or stopped from the latest service observation, even when a running candidate di
 not pass verification. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
 Automatic triage never follows a verified rollback; it runs only when the update
-ends failed.
+ends failed. In an interactive terminal, you can choose **Diagnose update failure**,
+**Report update failure**, or **Exit**, which is selected by default. Reporting
+shows the sanitized preview and requires separate confirmation before issue
+creation. Skipping or cancelling does not start diagnosis or submit a report.
+JSON, `--yes`, non-interactive, and managed-service handoff invocations do not
+show this menu after rollback.
 
 If the config file changed after the activation Doctor pass or the databases are
 not schema-neutral, rollback is refused with
