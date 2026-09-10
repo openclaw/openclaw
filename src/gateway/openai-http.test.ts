@@ -2536,6 +2536,26 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expected: "EchoEcho",
     },
     {
+      name: "split leading newlines followed by the matching item snapshot",
+      events: [
+        { itemId: "answer-1", text: "First." },
+        { itemId: "answer-2", delta: "\n" },
+        { itemId: "answer-2", delta: "\nSecond." },
+        { itemId: "answer-2", text: "\n\nSecond." },
+      ],
+      expected: "First.\n\nSecond.",
+    },
+    {
+      name: "an empty new item followed by deltas and a matching snapshot",
+      events: [
+        { itemId: "answer-1", text: "First." },
+        { itemId: "answer-2", delta: "" },
+        { itemId: "answer-2", delta: "Second." },
+        { itemId: "answer-2", text: "Second." },
+      ],
+      expected: "First.\n\nSecond.",
+    },
+    {
       name: "text beyond the live display cap",
       events: [
         { itemId: "answer-1", text: "x".repeat(500_001), delta: "x".repeat(500_001) },

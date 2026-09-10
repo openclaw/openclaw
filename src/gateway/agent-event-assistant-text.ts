@@ -11,7 +11,12 @@ type AssistantTextInput = {
 
 export type AssistantTextSnapshot = {
   text: string;
-  scope?: { itemId: string; prefix: string };
+  scope?: {
+    itemId: string;
+    prefix: string;
+    boundaryNewlines: number;
+    separatorLength: number;
+  };
 };
 
 /** A text-bearing empty result clears output; a missing text payload does not. */
@@ -78,42 +83,47 @@ export function resolveAssistantTextInput(data: unknown): AssistantTextInput | u
   };
 }
 
-/** Paragraph separator owed between a retained item prefix and the next item's text. */
-function missingItemBoundarySeparator(previousText: string, nextText: string): string {
-  if (!previousText || !nextText) {
-    return "";
-  }
-  const trailing = previousText.slice(-2).match(/\n*$/u)?.[0].length ?? 0;
-  const leading = nextText.slice(0, 2).match(/^\n*/u)?.[0].length ?? 0;
-  return "\n".repeat(Math.max(0, 2 - trailing - leading));
-}
-
 /** Merge item snapshots without imposing a transport's display or wire limit. */
 export function mergeAssistantText(
   previous: AssistantTextSnapshot,
   input: AssistantTextInput,
   unkeyed: "live" | "append-only",
 ): AssistantTextSnapshot {
-  const scope = !input.itemId
-    ? undefined
-    : previous.scope?.itemId === input.itemId
-      ? previous.scope
-      : {
-          itemId: input.itemId,
-          // Only provisional stream replacements discard earlier items.
-          prefix: input.replace && input.replaceable ? "" : previous.text,
-        };
-  // Distinct items are separate messages; keep their paragraph boundary.
-  const startsNewItem = scope !== undefined && scope !== previous.scope;
+  let scope = previous.scope;
+  if (!input.itemId) {
+    scope = undefined;
+  } else if (scope?.itemId !== input.itemId) {
+    // Only provisional stream replacements discard earlier items.
+    const prefix = input.replace && input.replaceable ? "" : previous.text;
+    scope = {
+      itemId: input.itemId,
+      prefix,
+      boundaryNewlines: !prefix || prefix.endsWith("\n\n") ? 0 : prefix.endsWith("\n") ? 1 : 2,
+      separatorLength: 0,
+    };
+  }
   let text: string;
-  if (scope && input.text !== undefined) {
-    text = scope.prefix + missingItemBoundarySeparator(scope.prefix, input.text) + input.text;
+  if (scope) {
+    // Inserted padding is not provider text. Keep it out of later item deltas
+    // so a matching cumulative snapshot cannot retract a streamed newline.
+    const itemText =
+      input.text ??
+      (scope === previous.scope
+        ? previous.text.slice(scope.prefix.length + scope.separatorLength)
+        : "") + (input.delta ?? "");
+    const leadingNewlines = itemText.startsWith("\n\n") ? 2 : itemText.startsWith("\n") ? 1 : 0;
+    if (!scope.prefix) {
+      // Once the display cap retires the prior item, only surviving padding
+      // and the current snapshot's own newlines can retain its boundary.
+      scope.boundaryNewlines = Math.min(
+        scope.boundaryNewlines,
+        scope.separatorLength + leadingNewlines,
+      );
+    }
+    scope.separatorLength = itemText ? Math.max(0, scope.boundaryNewlines - leadingNewlines) : 0;
+    text = scope.prefix + "\n".repeat(scope.separatorLength) + itemText;
   } else if (input.text === undefined) {
-    const delta = input.delta ?? "";
-    text =
-      previous.text +
-      (startsNewItem ? missingItemBoundarySeparator(previous.text, delta) : "") +
-      delta;
+    text = previous.text + (input.delta ?? "");
   } else if (unkeyed === "append-only") {
     // Legacy HTTP snapshots recover held prefixes; non-prefix input remains
     // incremental unless its producer explicitly marks a replacement.
