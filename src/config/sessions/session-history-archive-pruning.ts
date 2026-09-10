@@ -37,8 +37,11 @@ async function withArchivePruningDatabase<T>(
   } finally {
     if (diagnostics && admission?.admissionMs !== undefined) {
       diagnostics.admissionMs = (diagnostics.admissionMs ?? 0) + admission.admissionMs;
-      const count = admission.admissionMode === "cached" ? "cachedAdmissions" : "asyncAdmissions";
-      diagnostics[count] = (diagnostics[count] ?? 0) + 1;
+      if (admission.admissionMode === "cached") {
+        diagnostics.cachedAdmissions = (diagnostics.cachedAdmissions ?? 0) + 1;
+      } else if (admission.admissionMode === "async") {
+        diagnostics.asyncAdmissions = (diagnostics.asyncAdmissions ?? 0) + 1;
+      }
     }
   }
 }

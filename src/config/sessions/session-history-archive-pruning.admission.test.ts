@@ -77,6 +77,61 @@ function own<T>(promise: Promise<T>): Promise<T> {
   return promise;
 }
 
+function observePruningFailures() {
+  const warnings: unknown[] = [];
+  const getChildLogger = logging.getChildLogger;
+  vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
+    const logger = getChildLogger(...args);
+    vi.spyOn(logger, "warn").mockImplementation((message, fields) => {
+      if (message === "SQLite session write failed") {
+        assert(fields && typeof fields === "object");
+        warnings.push("archivePruning" in fields ? fields.archivePruning : undefined);
+      }
+      return undefined;
+    });
+    return logger;
+  });
+  return warnings;
+}
+
+it("does not invent an admission mode when a warm database rejects a different owner", async () => {
+  const options = { agentId: "main", env: state.env };
+  const database = openOpenClawAgentDatabase(options);
+  const before = database.db.prepare("SELECT total_changes() AS changes").get();
+  const checkpoint = vi.spyOn(database.walMaintenance, "checkpoint");
+  const warnings = observePruningFailures();
+  const archivePruning = { trigger: "initial" as const };
+  const wrongOwner = { ...options, agentId: "other", path: database.path };
+  await expect(
+    runExclusiveSqliteSessionWrite(
+      wrongOwner,
+      async () =>
+        pruneAllSessionTranscriptArchivesToHighWater({
+          archiveDirectory: state.sessionsDir(),
+          databaseOptions: wrongOwner,
+          diagnostics: archivePruning,
+          highWaterBytes: 0,
+          storePath: path.join(state.sessionsDir(), "sessions.json"),
+        }),
+      "session.history.archive-prune",
+      { archivePruning },
+    ),
+  ).rejects.toThrow("already open for agent main; requested agent other");
+  expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(database);
+  expect(checkpoint).not.toHaveBeenCalled();
+  expect(database.db.prepare("SELECT total_changes() AS changes").get()).toEqual(before);
+  expect(warnings).toEqual([
+    expect.objectContaining({
+      trigger: "initial",
+      completed: false,
+      admissionMs: expect.any(Number),
+      cachedAdmissions: undefined,
+      asyncAdmissions: undefined,
+      checkpointCalls: undefined,
+    }),
+  ]);
+});
+
 const boundaries = ["drain", "presence", "row", "unpublished", "removed-file"] as const;
 
 it.each([
@@ -257,19 +312,7 @@ it.each([
     );
     await blockerEntered.promise;
     const archivePruning = { trigger: "initial" as const };
-    const warnings: unknown[] = [];
-    const getChildLogger = logging.getChildLogger;
-    vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
-      const logger = getChildLogger(...args);
-      vi.spyOn(logger, "warn").mockImplementation((message, fields) => {
-        if (message === "SQLite session write failed") {
-          assert(fields && typeof fields === "object");
-          warnings.push("archivePruning" in fields ? fields.archivePruning : undefined);
-        }
-        return undefined;
-      });
-      return logger;
-    });
+    const warnings = observePruningFailures();
     const work = own(
       runExclusiveSqliteSessionWrite(
         options,

@@ -458,6 +458,7 @@ The object aggregates observations across the pruning pass:
 - `admissionMs`, `cachedAdmissions`, and `asyncAdmissions` measure database
   acquisition and count its observed modes. Admission time ends at callback entry
   or acquisition failure and can include shared admission and integrity-check waits.
+  A refusal before mode selection adds admission time without incrementing either mode count.
 - `checkpointMs`, `checkpointMaxMs`, and `checkpointCalls` report total time,
   longest call, and calls entered. `checkpointIncomplete` counts calls returning
   false, which can mean a busy checkpoint or an error; it does not identify a lock
