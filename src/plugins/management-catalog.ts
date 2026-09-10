@@ -63,9 +63,11 @@ export function withManagedPluginCache<
   return (params) => withPluginCache(getManagedPluginCache(params.metadata), () => run(params));
 }
 
-/** Clear the process-stable hosted catalog snapshot after an explicit owner reload. */
-export function clearManagedPluginOfficialCatalogCache(): void {
-  getManagedPluginCache().officialCatalog = undefined;
+/** Clear process-stable catalog snapshots after an explicit owner reload. */
+export function clearManagedPluginCatalogCache(): void {
+  const cache = getManagedPluginCache();
+  cache.officialCatalog = undefined;
+  cache.pluginVersionCategories = undefined;
 }
 
 function mergeCatalogMetadata(
@@ -227,8 +229,8 @@ export function normalizeFeaturedAt(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0 });
 }
 
-/** Coarse manifest-derived grouping so catalog UIs can shelve a large inventory. */
-export function derivePluginCategory(
+/** Preserve the shipped coarse category projection for older catalog clients. */
+export function deriveLegacyPluginCategory(
   manifest: PluginManifestRecord | undefined,
 ): string | undefined {
   if (!manifest) {

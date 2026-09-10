@@ -30,8 +30,8 @@ function applyThemePresentation(settings: UiPreferences): void {
   const resolvedTheme = resolveTheme(settings.theme, settings.themeMode);
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
-  // Carapace CSS (openclaw/carapace) selects on [data-theme-resolved]; keep it
-  // in lockstep with data-theme-mode so its stylesheets work unmodified here.
+  // Plugin semantic styles select on [data-theme-resolved]; keep it in lockstep
+  // with data-theme-mode before their lazy stylesheet loads.
   root.dataset.themeResolved = root.dataset.themeMode;
   root.classList.toggle("wa-light", root.dataset.themeMode === "light");
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");

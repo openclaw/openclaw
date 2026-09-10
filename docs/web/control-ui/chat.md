@@ -2,6 +2,7 @@
 summary: "Composer controls, transcript rendering, side chat, and hosted embeds"
 read_when:
   - Using the composer, tool cards, or the session rail
+  - Finding and installing capabilities from chat
   - Rendering tables, Mermaid diagrams, or hosted embeds
   - Adjusting transcript layout or message width
 title: "Chat"
@@ -156,6 +157,43 @@ Chat error banners, including cloud runner failures, show short messages in full
 
   </Accordion>
 </AccordionGroup>
+
+### ClawHub recommendation cards
+
+Ask about a capability, such as “Can you install WhatsApp?”, to let the agent find
+an official plugin or skill on ClawHub. When the `message` tool is available, it
+can present up to three matching cards in the conversation.
+
+If you use the `coding` tool profile, include `"message"` in `tools.alsoAllow`
+(for example, `tools: { profile: "coding", alsoAllow: ["message"] }`). Existing
+deny rules still apply. See [Tool access configuration](/gateway/config-tools).
+
+Select a card to open its listing inside the Control UI: plugins open in
+**Plugins**, and skills open in **Skills**. A plugin's **Install** button opens
+the existing installation review; a skill's **Install** button opens its details.
+**Dismiss** dismisses the card from the current view.
+
+An installed capability shows a green checkmark and **Installed**. This means the
+plugin package or linked skill is present. A plugin may still need to be enabled,
+configured, or connected to an account before the agent can use it. The card
+checks the current installation status; select **Status unavailable · Retry** if
+that check fails.
+
+The agent requests cards through `message` with a capability query:
+
+```json
+{
+  "action": "send",
+  "clawhub": { "query": "whatsapp", "kind": "plugin" }
+}
+```
+
+`query` is required; `kind` can be `plugin` or `skill`. Omit `kind` to check plugins
+first, then skills if no official plugin matches. Omit `channel` and `target` to
+reply to the current Control UI conversation. ClawHub supplies the official
+designation, and the Gateway checks installation status; the agent cannot assign
+those badges. A search with no official match or an unavailable catalog returns
+an explanation in chat.
 
 ### Source previews and copying code
 

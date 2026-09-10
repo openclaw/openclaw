@@ -21,6 +21,13 @@ import {
   listPersistedContextEngineQuarantines,
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
+import {
+  recordContextEngineRegistrationSource,
+  resolveContextEngineFactory,
+  retainLogicalTurnContextEngineSources,
+  runContextEngineFactoryResolution,
+  type ContextEngineFactoryResources,
+} from "./registry.resources.js";
 import type {
   BootstrapResult,
   ContextEngine,
@@ -352,7 +359,9 @@ export function registerContextEngineInRegistry(
   if (existing && opts?.allowSameOwnerRefresh !== true) {
     return { ok: false, existingOwner: existing.owner };
   }
-  registry.set(id, { factory, owner: normalizedOwner, lifecycle });
+  const registration = { factory, owner: normalizedOwner, lifecycle };
+  recordContextEngineRegistrationSource(registration, pluginRegistry);
+  registry.set(id, registration);
   return { ok: true };
 }
 
@@ -561,6 +570,7 @@ async function invokeFallbackContextEngineMethod(params: {
 export type ResolveContextEngineOptions = {
   agentDir?: string;
   workspaceDir?: string;
+  onCleanupFailure?: () => void;
 };
 
 export type ResolvedContextEngineRef = Readonly<{
@@ -574,6 +584,7 @@ export type LogicalTurnContextEngineResolution = {
   configuredId: string;
   configuredFailure?: string;
   fallback: ResolvedContextEngineRef;
+  sourceResources?: ReadonlyMap<ContextEngine, readonly ContextEngineFactoryResources[]>;
 };
 
 function resolvedContextEngineRef(params: {
@@ -592,8 +603,9 @@ function resolvedContextEngineRef(params: {
 async function resolveRawContextEngineRef(
   engineId: string,
   factoryCtx: ContextEngineFactoryContext,
+  entry: ContextEngineRegistration | undefined,
+  source: ContextEngineFactoryResources | undefined,
 ): Promise<ResolvedContextEngineRef> {
-  const entry = getContextEngines().get(engineId);
   if (!entry) {
     throw new Error(
       `Context engine "${engineId}" is not registered. ` +
@@ -603,9 +615,8 @@ async function resolveRawContextEngineRef(
   const engine = await entry.factory(factoryCtx);
   const contractError = describeResolvedContextEngineContractError(engineId, engine);
   if (contractError) {
-    await Promise.resolve((engine as ContextEngine | undefined)?.dispose?.()).catch(
-      () => undefined,
-    );
+    const dispose = () => (engine as ContextEngine | undefined)?.dispose?.();
+    await Promise.resolve(source ? source.runCleanup(dispose) : dispose()).catch(() => undefined);
     throw new Error(contractError);
   }
   const projectedEngine = wrapResolvedContextEngine(engine, {
@@ -627,51 +638,75 @@ export async function resolveLogicalTurnContextEngines(
   config?: OpenClawConfig,
   options?: ResolveContextEngineOptions,
 ): Promise<LogicalTurnContextEngineResolution> {
-  const defaultEngineId = defaultSlotIdForKey("contextEngine");
-  const slotValue = config?.plugins?.slots?.contextEngine;
-  const configuredEngineId =
-    typeof slotValue === "string" && slotValue.trim() ? slotValue.trim() : defaultEngineId;
-  const factoryCtx: ContextEngineFactoryContext = {
-    config,
-    agentDir: options?.agentDir,
-    workspaceDir: options?.workspaceDir,
-  };
-  const fallback = await resolveRawContextEngineRef(defaultEngineId, factoryCtx);
-  if (configuredEngineId === defaultEngineId) {
-    return { configured: fallback, configuredId: configuredEngineId, fallback };
-  }
-  const entry = getContextEngines().get(configuredEngineId);
-  if (!entry) {
-    return {
-      configured: fallback,
-      configuredId: configuredEngineId,
-      configuredFailure: `context engine "${configuredEngineId}" is not registered`,
-      fallback,
+  return await runContextEngineFactoryResolution(async (abandon) => {
+    const defaultEngineId = defaultSlotIdForKey("contextEngine");
+    const slotValue = config?.plugins?.slots?.contextEngine;
+    const configuredEngineId =
+      typeof slotValue === "string" && slotValue.trim() ? slotValue.trim() : defaultEngineId;
+    const factoryCtx: ContextEngineFactoryContext = {
+      config,
+      agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
     };
-  }
-  if (entry.lifecycle === "readOnlyDiscovery") {
-    return {
-      configured: fallback,
-      configuredId: configuredEngineId,
-      configuredFailure: `context engine "${configuredEngineId}" is available for discovery only`,
-      fallback,
-    };
-  }
-  try {
-    const configured = await resolveRawContextEngineRef(configuredEngineId, factoryCtx);
-    return {
-      configured,
-      configuredId: configuredEngineId,
-      fallback,
-    };
-  } catch (error) {
-    return {
-      configured: fallback,
-      configuredId: configuredEngineId,
-      configuredFailure: error instanceof Error ? error.message : String(error),
-      fallback,
-    };
-  }
+    const entries = getContextEngines();
+    const fallbackEntry = entries.get(defaultEngineId);
+    const configuredEntry = entries.get(configuredEngineId);
+    const sources = retainLogicalTurnContextEngineSources(
+      fallbackEntry,
+      configuredEngineId === defaultEngineId ? undefined : configuredEntry,
+    );
+    const sourceResources = new Map<ContextEngine, ContextEngineFactoryResources[]>();
+    let fallback: ResolvedContextEngineRef;
+    try {
+      fallback = await resolveContextEngineFactory(sources.fallback, sourceResources, () =>
+        resolveRawContextEngineRef(defaultEngineId, factoryCtx, fallbackEntry, sources.fallback),
+      );
+    } catch (error) {
+      abandon(sources.fallback);
+      abandon(sources.configured);
+      throw error;
+    }
+    if (configuredEngineId === defaultEngineId) {
+      return { configured: fallback, configuredId: configuredEngineId, fallback, sourceResources };
+    }
+    if (!configuredEntry || configuredEntry.lifecycle === "readOnlyDiscovery") {
+      return {
+        configured: fallback,
+        configuredId: configuredEngineId,
+        configuredFailure: !configuredEntry
+          ? `context engine "${configuredEngineId}" is not registered`
+          : `context engine "${configuredEngineId}" is available for discovery only`,
+        fallback,
+        sourceResources,
+      };
+    }
+    try {
+      if (sources.configuredFailure) {
+        throw sources.configuredFailure.error;
+      }
+      const configured = await resolveContextEngineFactory(
+        sources.configured,
+        sourceResources,
+        () =>
+          resolveRawContextEngineRef(
+            configuredEngineId,
+            factoryCtx,
+            configuredEntry,
+            sources.configured,
+          ),
+      );
+      return { configured, configuredId: configuredEngineId, fallback, sourceResources };
+    } catch (error) {
+      abandon(sources.configured);
+      return {
+        configured: fallback,
+        configuredId: configuredEngineId,
+        configuredFailure: error instanceof Error ? error.message : String(error),
+        fallback,
+        sourceResources,
+      };
+    }
+  }, options?.onCleanupFailure);
 }
 
 /**

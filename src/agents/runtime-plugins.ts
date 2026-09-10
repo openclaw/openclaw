@@ -142,7 +142,6 @@ export type AcquiredAgentRuntimePluginRegistry =
       primaryRegistry: PluginRegistry;
       resources: NonNullable<ReturnType<typeof getPluginRegistryInspectionResources>>;
       releaseRegistry: () => Promise<void>;
-      releaseBorrowedSources: () => Promise<void>;
     };
 
 /** Prepared read-only owners reuse the load plan while owning fresh, uncached registrations. */
@@ -165,13 +164,14 @@ export async function acquireAgentRuntimePluginRegistry(
       primaryResources.attach(registry);
     }
     const donorResources = donor && getPluginRegistryInspectionResources(donor);
-    const donorClaim = donorResources?.retain();
+    if (donorResources) {
+      primaryResources.retainDependency(donorResources);
+    }
     return {
       registry,
       primaryRegistry: acquired.registry,
       resources: primaryResources,
       releaseRegistry: acquired.release,
-      releaseBorrowedSources: () => donorClaim?.release() ?? Promise.resolve(),
     };
   } catch (error) {
     try {

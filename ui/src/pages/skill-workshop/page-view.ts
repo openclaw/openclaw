@@ -13,7 +13,6 @@ import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { canCallWorkshopAdminMethod, resolveWorkshopAccess } from "./access.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
 import type { SkillWorkshopRenderContext } from "./page-types.ts";
-import { selectPluginsHubTab } from "./plugins-hub-navigation.ts";
 import {
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopInstalledSkill,
@@ -67,15 +66,19 @@ export function renderSkillWorkshopPage(
   return html`
     <section class="content--skill-workshop">
       ${renderPluginsHubHeader({
-        active: "workshop",
-        onSelect: (tab) => selectPluginsHubTab(context, tab),
+        active: "skills",
+        onSelect: (tab) => context.navigate(tab),
+        secondaryAction: {
+          label: t("pluginsPage.backToSkills"),
+          onClick: () => context.navigate("skills"),
+        },
       })}
       <wa-tab-panel
         id=${PLUGINS_HUB_PANEL_ID}
         class="sw-hub-panel"
-        name="workshop"
+        name="skills"
         active
-        aria-labelledby="plugins-tab-workshop"
+        aria-labelledby="plugins-tab-skills"
       >
         <div class="sw-workshop-toolbar">
           ${renderAgentScopeControl({

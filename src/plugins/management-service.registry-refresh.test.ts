@@ -70,7 +70,7 @@ vi.mock("./slot-selection.js", () => ({
   applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
 }));
 
-const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
 const { installManagedPlugin, setManagedPluginEnabled } = await import("./management-mutations.js");
 const { installManagedPluginSource } = await import("./management-install.js");
 const { inspectManagedPlugin, listManagedPlugins } = await import("./management-service.js");
@@ -181,7 +181,7 @@ describe("plugin management registry refresh", () => {
   });
 
   beforeEach(() => {
-    clearManagedPluginOfficialCatalogCache();
+    clearManagedPluginCatalogCache();
     vi.resetAllMocks();
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
   });

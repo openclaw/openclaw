@@ -26,6 +26,7 @@ type SchemaGroup =
   | "presence";
 
 type MessageToolSchemaBuilderOptions = {
+  includeClawHub?: boolean;
   includePresentation: boolean;
   includeDeliveryPin: boolean;
   includeBestEffort: boolean;

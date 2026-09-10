@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 // Embedded system prompt tests cover prompt assembly for provider guidance,
 // delegation mode, workspace-only safety, memory sections, and active processes.
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -65,6 +66,29 @@ describe("buildEmbeddedSystemPrompt", () => {
     // test leaves the global registry clean.
     clearMemoryPluginState();
   });
+
+  it.each(["available", "source-reply-only", "absent"] as const)(
+    "advertises ClawHub from the actual %s message tool schema",
+    (surface) => {
+      const message = createStubTool("message");
+      message.parameters = Type.Object({
+        message: Type.Optional(Type.String()),
+        ...(surface === "available" ? { clawhub: Type.Object({ query: Type.String() }) } : {}),
+      });
+      const prompt = buildEmbeddedSystemPrompt({
+        ...fixedEmbeddedPromptInputs(),
+        runtimeInfo: { ...fixedEmbeddedPromptInputs().runtimeInfo, channel: "webchat" },
+        tools: surface === "absent" ? [] : [message],
+      });
+
+      expect(prompt.includes("including when it is already installed")).toBe(
+        surface === "available",
+      );
+      expect(prompt.includes('message(action="send", clawhub={query:"capability"})')).toBe(
+        surface === "available",
+      );
+    },
+  );
 
   it("forwards provider prompt contributions into the embedded prompt", () => {
     const prompt = buildEmbeddedSystemPrompt({

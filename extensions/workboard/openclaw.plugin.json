@@ -1,5 +1,8 @@
 {
   "id": "workboard",
+  "categories": [
+    "tools"
+  ],
   "cliCommands": [
     {
       "name": "workboard",
