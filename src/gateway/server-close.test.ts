@@ -206,6 +206,7 @@ function createGatewayCloseTestDeps(
     chatRunState: createTestChatRunState(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
+    retiredFollowupRunIds: new Map(),
     restartRecoveryCandidates: new Map(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),

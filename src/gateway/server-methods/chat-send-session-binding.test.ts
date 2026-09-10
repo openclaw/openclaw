@@ -77,6 +77,7 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
       const context = {
         chatAbortControllers: new Map(),
         chatQueuedTurns: new Map(),
+        retiredFollowupRunIds: new Map(),
         chatRunState: createChatRunState(),
         dedupe: new Map(),
         agentRunSeq: new Map(),

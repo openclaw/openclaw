@@ -547,6 +547,7 @@ describe("sessions.patch personal model-account ownership", () => {
       ...context(connections),
       terminalSessions,
       chatQueuedTurns: new Map(),
+      retiredFollowupRunIds: new Map(),
       dedupe: new Map(),
     };
     const response = await patchSession(

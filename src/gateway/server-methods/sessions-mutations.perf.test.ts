@@ -108,6 +108,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
             getSessionEventSubscriberConnIds: () => new Set(),
             chatAbortControllers: new Map(),
             chatQueuedTurns: new Map(),
+            retiredFollowupRunIds: new Map(),
             dedupe: new Map(),
           } as unknown as GatewayRequestContext,
           client: humanClient(),
@@ -266,6 +267,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         getSessionEventSubscriberConnIds: () => new Set(),
         chatAbortControllers: new Map(),
         chatQueuedTurns: new Map(),
+        retiredFollowupRunIds: new Map(),
         dedupe: new Map(),
         cron: {
           list: cronList,

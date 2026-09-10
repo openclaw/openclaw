@@ -80,6 +80,7 @@ describe("gateway server active work inspectors", () => {
       cron: {},
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      retiredFollowupRunIds: new Map(),
       terminalSessions,
     } as unknown as Pick<
       GatewayRequestContext,

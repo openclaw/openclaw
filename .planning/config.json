@@ -1,0 +1,12 @@
+{
+  "response_language": "en",
+  "workflow_preferences": {
+    "auto_approve_minor_fixes": false,
+    "require_regression_tests": true,
+    "strict_types": true
+  },
+  "research": {
+    "domain_focus": "ai-assistant-systems",
+    "depth": "standard"
+  }
+}

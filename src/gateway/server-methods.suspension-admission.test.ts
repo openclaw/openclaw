@@ -256,6 +256,7 @@ describe("gateway request suspension admission", () => {
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      retiredFollowupRunIds: new Map(),
       terminalSessions: { size: 2 },
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
     const busy = dispatch({
@@ -321,6 +322,7 @@ describe("gateway request suspension admission", () => {
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      retiredFollowupRunIds: new Map(),
       terminalSessions: { size: 2 },
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
 
@@ -443,6 +445,7 @@ describe("gateway request suspension admission", () => {
         logGateway: { warn: vi.fn() },
         chatAbortControllers,
         chatQueuedTurns: new Map(),
+        retiredFollowupRunIds: new Map(),
         terminalSessions,
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
 

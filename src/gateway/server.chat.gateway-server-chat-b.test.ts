@@ -5217,6 +5217,7 @@ describe("gateway server chat", () => {
       const context = createDirectChatContext({
         loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
         chatQueuedTurns: new Map(),
+        retiredFollowupRunIds: new Map(),
         broadcast,
         getRuntimeConfig: () => ({}),
       });

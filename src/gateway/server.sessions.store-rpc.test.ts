@@ -153,6 +153,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
+    retiredFollowupRunIds: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },

@@ -420,6 +420,7 @@ describe("sessions.abort agent scope", () => {
         broadcast: vi.fn(),
         cancelRunBoundApprovals: vi.fn(),
         chatQueuedTurns: new Map(),
+        retiredFollowupRunIds: new Map(),
         chatRunState: { resolveBuffer: () => ({ text: "" }) } as never,
         dedupe: new Map(),
         getSessionEventSubscriberConnIds: () => new Set(),

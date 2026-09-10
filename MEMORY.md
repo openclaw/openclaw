@@ -1,0 +1,1 @@
+- [OpenClaw Talk/Queue Fix Initiative](.planning/PROJECT.md) — project context for the talk/queue fix work on branch fix/talk-queued-consult-empty-completion-142080

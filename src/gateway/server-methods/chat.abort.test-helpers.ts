@@ -57,6 +57,7 @@ export function createChatAbortContext(
   const context = {
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
+    retiredFollowupRunIds: new Map(),
     chatRunState,
     dedupe: new Map(),
     removeChatRun: vi

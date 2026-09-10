@@ -183,6 +183,7 @@ async function invokeSessionMutation({
       broadcastToConnIds,
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
+      retiredFollowupRunIds: new Map(),
       dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => subscribedConnIds,
       loadGatewayModelCatalog: async () => ({ providers: [] }),
