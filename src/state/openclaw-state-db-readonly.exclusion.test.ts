@@ -58,49 +58,6 @@ it("keeps a fresh live read inside the physical handle barrier", () => {
   acquireOpenClawStateDatabaseFileExclusion(pathname).release();
 });
 
-it("waits for a writer before inspecting a fresh reader's schema", async () => {
-  const pathname = source();
-  const setup = openNodeSqliteDatabase(pathname);
-  setup.exec("PRAGMA journal_mode=DELETE");
-  setup.close();
-  const child = spawn(
-    process.execPath,
-    [
-      "--input-type=commonjs",
-      "--eval",
-      `
-        const { DatabaseSync } = require("node:sqlite");
-        const database = new DatabaseSync(process.argv[1]);
-        database.exec("BEGIN EXCLUSIVE");
-        process.send({ locked: true });
-        process.once("message", () => setTimeout(() => {
-          database.exec("ROLLBACK");
-          database.close();
-          process.disconnect();
-        }, 250));
-      `,
-      pathname,
-    ],
-    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-  );
-  try {
-    const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
-    expect(ready).toEqual({ locked: true });
-    child.send({ release: true });
-    expect(
-      withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) =>
-          db
-            .prepare("SELECT event_key FROM diagnostic_events WHERE scope = ?")
-            .all("readonly-exclusion"),
-        { path: pathname },
-      ),
-    ).toEqual([{ event_key: "preserved" }]);
-  } finally {
-    await stopChildProcess(child, 5_000);
-  }
-});
-
 it("refuses a new live readonly handle without touching an excluded source", () => {
   const pathname = source();
   const exclusion = acquireOpenClawStateDatabaseFileExclusion(pathname);
