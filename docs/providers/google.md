@@ -178,7 +178,7 @@ or let it reuse `models.providers.google.apiKey` after `GEMINI_API_KEY`:
           webSearch: {
             apiKey: "AIza...", // optional if GEMINI_API_KEY or models.providers.google.apiKey is set
             baseUrl: "https://generativelanguage.googleapis.com/v1beta", // falls back to models.providers.google.baseUrl
-            model: "gemini-2.5-flash",
+            model: "gemini-3.6-flash",
           },
         },
       },
