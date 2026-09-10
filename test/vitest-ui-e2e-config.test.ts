@@ -113,6 +113,7 @@ const realGatewayFiles = [
   "chat-composer-websearch-kill-switch.real-gateway",
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
+  "chat-stop-finished-run.real-gateway",
   "chat-thinking-metadata.real-gateway",
   "chat-widget-sandbox.real-gateway",
   "command-palette-catalog.real-gateway",
@@ -533,6 +534,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
