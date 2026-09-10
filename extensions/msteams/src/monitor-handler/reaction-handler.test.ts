@@ -330,23 +330,42 @@ describe("createMSTeamsReactionHandler", () => {
       expect(enqueue).toHaveBeenCalledOnce();
     });
 
-    it("never routes a directly admitted reaction into a team-scoped session", async () => {
-      const { handler, resolveAgentRoute } = createRouteHarness();
-      // Admission classifies this conversation as direct, so it carries no team/channel gate.
+    it.each([
+      {
+        scopeMarker: "isGroup",
+        conversation: {
+          id: "19:excluded-channel@thread.tacv2",
+          conversationType: "personal",
+          isGroup: true,
+        },
+        channelData: undefined,
+      },
+      {
+        scopeMarker: "team metadata",
+        conversation: { id: "19:excluded-channel@thread.tacv2", conversationType: "personal" },
+        channelData: { team: { id: "excludedTeam" } },
+      },
+      {
+        scopeMarker: "channel metadata",
+        conversation: { id: "19:excluded-channel@thread.tacv2", conversationType: "personal" },
+        channelData: { channel: { id: "19:excluded-channel@thread.tacv2" } },
+      },
+    ])("drops a personal reaction with contradictory $scopeMarker", async (activityScope) => {
+      const { handler, enqueue, resolveAgentRoute } = createRouteHarness();
       await invokeReactionEvent(
         handler,
-        reactionFrom(
-          { id: "19:excluded-channel@thread.tacv2", conversationType: "personal", isGroup: true },
-          "excludedTeam",
-        ),
+        {
+          reactionsAdded: [{ type: "like" }],
+          from: { id: "teams-user", aadObjectId: "allowed-aad", name: "Allowed Sender" },
+          conversation: activityScope.conversation,
+          channelData: activityScope.channelData,
+          replyToId: "target-message",
+        },
         "added",
       );
 
-      expect(resolveAgentRoute).toHaveBeenCalledOnce();
-      expect(resolveAgentRoute.mock.calls[0]?.[0]).toMatchObject({
-        peer: { kind: "direct", id: "allowed-aad" },
-      });
-      expect(resolveAgentRoute.mock.calls[0]?.[0]).not.toHaveProperty("teamId");
+      expect(resolveAgentRoute).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
     });
   });
 
