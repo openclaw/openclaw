@@ -176,7 +176,7 @@ describe("openclaw launcher", () => {
       } = {},
     ) {
       const root = await makeLauncherFixture(fixtureRoots);
-      const home = path.join(root, "home with spaces");
+      const home = makeTempDir(fixtureRoots, "openclaw-launcher-home with spaces-");
       const nodePath = path.join(
         home,
         ".openclaw",
@@ -187,7 +187,6 @@ describe("openclaw launcher", () => {
         "bin",
         "node",
       );
-      await fs.mkdir(home);
       if (params.cached) {
         await fs.mkdir(path.dirname(nodePath), { recursive: true });
         await fs.symlink(process.execPath, nodePath);
