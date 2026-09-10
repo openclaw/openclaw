@@ -2,7 +2,7 @@
 
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WizardStep } from "../../api/types.ts";
+import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import {
   detected,
@@ -695,25 +695,38 @@ describe("renderModelSetup", () => {
     expect(onVerify).toHaveBeenCalledOnce();
   });
 
-  it("does not repeat the current route among detected candidates", () => {
+  it("keeps saved replacement credentials selectable without repeating the current route", () => {
+    const onActivateCandidate = vi.fn();
+    const savedCandidate: SystemAgentSetupDetectResult["candidates"][number] = {
+      kind: "saved-auth:openai:replacement",
+      brandId: "openai",
+      label: "Saved OpenAI credentials",
+      detail: "Saved for retry after a failed setup test",
+      modelRef: "openai/gpt-5",
+      recommended: false,
+      credentials: true,
+    };
     const container = mount(
       props({
+        onActivateCandidate,
         page: {
           phase: "ready",
           result: {
             ...detected,
-            configuredModel: "openai/gpt-5.6-sol",
+            configuredModel: savedCandidate.modelRef,
             setupComplete: true,
             candidates: [
               {
                 kind: "existing-model",
                 brandId: "openai",
                 label: "Current model",
-                detail: "openai/gpt-5.6-sol — already configured",
-                modelRef: "openai/gpt-5.6-sol",
+                detail: "openai/gpt-5 — already configured",
+                modelRef: savedCandidate.modelRef,
                 recommended: false,
                 credentials: true,
               },
+              { ...savedCandidate, kind: "provider-auto:openai", label: "OpenAI" },
+              savedCandidate,
               {
                 kind: "claude-cli",
                 brandId: "claude",
@@ -730,8 +743,16 @@ describe("renderModelSetup", () => {
     );
 
     expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
+    expect(container.querySelector('[data-candidate-kind="provider-auto:openai"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="claude-cli"]')).not.toBeNull();
-    expect(text(container)).toContain("Selected model OpenAI gpt-5.6-sol");
+    expect(text(container)).toContain("Selected model OpenAI gpt-5");
+    const retry = container.querySelector<HTMLButtonElement>(
+      '[data-candidate-kind="saved-auth:openai:replacement"] button',
+    );
+    expect(retry).not.toBeNull();
+    expect(retry!.disabled).toBe(false);
+    retry!.click();
+    expect(onActivateCandidate).toHaveBeenCalledExactlyOnceWith(savedCandidate);
   });
 
   it("renders connection verification progress", () => {

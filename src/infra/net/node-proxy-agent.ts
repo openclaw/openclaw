@@ -52,11 +52,9 @@ function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol
   let parsed: URL;
   try {
     parsed = new URL(withScheme);
-  } catch (error) {
-    throw new Error(
-      `Invalid proxy URL ${JSON.stringify(proxyUrl)}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
+  } catch {
+    // URL parse errors retain the input, which can contain proxy credentials.
+    throw new Error("Invalid proxy URL. Use an HTTP or HTTPS proxy URL.");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`${UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got ${parsed.protocol}`);

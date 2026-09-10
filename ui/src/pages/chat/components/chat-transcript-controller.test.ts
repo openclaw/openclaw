@@ -204,7 +204,10 @@ describe("chat transcript controller", () => {
           await vi.advanceTimersByTimeAsync(200);
         }
         session.syncMessageRows(
-          new Map([["retained", "expanded-row"]]),
+          new Map([
+            ["older", "expanded-row"],
+            ["retained", "expanded-row"],
+          ]),
           new Map([
             ["older", "expanded-row"],
             ["retained", "expanded-row"],
@@ -216,6 +219,7 @@ describe("chat transcript controller", () => {
         ]);
         expect(container.textContent).not.toContain("older");
         expect(session.activeMessageId(["retained"])).toBe("retained");
+        expect(session.activeMessageId(["older"])).toBeNull();
         container.dispatchEvent(new Event("touchend"));
         renderRows(next);
         expect(transcriptRows(container).map((row) => row.dataset.virtualRowKey)).toEqual([
@@ -223,6 +227,7 @@ describe("chat transcript controller", () => {
         ]);
         expect(container.textContent).toContain("older");
         expect(session.activeMessageId(["retained"])).toBe("retained");
+        expect(session.activeMessageId(["older"])).toBe("older");
       } finally {
         transcript.hostDisconnected();
         if (idleBeforeRelease) {

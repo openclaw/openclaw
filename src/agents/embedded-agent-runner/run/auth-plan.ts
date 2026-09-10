@@ -184,6 +184,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       authProfileStore: attemptAuthProfileStore,
       sessionAuthProfileId: preferredProfileId,
       sessionAuthProfileSource: runParams.authProfileIdSource,
+      allowAuthProfileFallback: runParams.allowAuthProfileFallback,
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,

@@ -1787,7 +1787,7 @@ src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	5
 src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	14
-src/agents/embedded-agent-subscribe.handlers.tools.start.ts	8
+src/agents/embedded-agent-subscribe.handlers.tools.start.ts	7
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-tool-media.ts	10
 src/agents/embedded-agent-tool-results.ts	16
@@ -3562,11 +3562,6 @@ src/system-agent/operations-execution-helpers.ts	1
 src/system-agent/operations-parse.ts	1
 src/system-agent/probes.ts	1
 src/system-agent/rescue-message.ts	2
-src/system-agent/setup-apply.ts	1
-src/system-agent/setup-inference-activate-persist.ts	1
-src/system-agent/setup-inference-detection.ts	3
-src/system-agent/setup-inference-persist.ts	1
-src/system-agent/setup-inference-plan-helpers.ts	1
 src/system-agent/system-agent.ts	2
 src/system-agent/verified-inference.ts	1
 src/talk/agent-consult-tool.ts	2
@@ -3837,7 +3832,7 @@ ui/src/pages/chat/components/chat-composer.ts	5
 ui/src/pages/chat/components/chat-effort-picker.ts	6
 ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
-ui/src/pages/chat/components/chat-message-bubble.ts	2
+ui/src/pages/chat/components/chat-message-bubble.ts	1
 ui/src/pages/chat/components/chat-message-confirmation.ts	2
 ui/src/pages/chat/components/chat-message-markdown.ts	1
 ui/src/pages/chat/components/chat-message-media.ts	3

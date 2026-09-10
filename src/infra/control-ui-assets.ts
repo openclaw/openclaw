@@ -1,4 +1,5 @@
 // Resolves and checks packaged Control UI assets.
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -7,7 +8,6 @@ import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import * as controlUiFsRuntime from "./control-ui-assets.fs.runtime.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 export function formatControlUiSourceCommand(root: string, action: "build" | "dev"): string {
@@ -62,7 +62,7 @@ function resolveControlUiRepoRoot(opts: {
   return (
     roots.find(
       (root): root is string =>
-        root !== null && controlUiFsRuntime.existsSync(path.join(root, "ui", "vite.config.ts")),
+        root !== null && fs.existsSync(path.join(root, "ui", "vite.config.ts")),
     ) ?? null
   );
 }
@@ -79,7 +79,7 @@ async function resolveControlUiDistIndexPath(
   const normalized = path.resolve(argv1);
   const entrypointCandidates = [normalized];
   try {
-    const realpathEntrypoint = controlUiFsRuntime.realpathSync(normalized);
+    const realpathEntrypoint = fs.realpathSync(normalized);
     if (realpathEntrypoint !== normalized) {
       entrypointCandidates.push(realpathEntrypoint);
     }
@@ -111,12 +111,12 @@ async function resolveControlUiDistIndexPath(
     for (let i = 0; i < 8; i++) {
       const pkgJsonPath = path.join(dir, "package.json");
       const indexPath = path.join(dir, "dist", "control-ui", "index.html");
-      if (controlUiFsRuntime.existsSync(pkgJsonPath)) {
+      if (fs.existsSync(pkgJsonPath)) {
         try {
-          const raw = controlUiFsRuntime.readFileSync(pkgJsonPath, "utf-8");
+          const raw = fs.readFileSync(pkgJsonPath, "utf-8");
           const parsed = JSON.parse(raw) as { name?: unknown };
           if (parsed.name === "openclaw") {
-            return controlUiFsRuntime.existsSync(indexPath) ? indexPath : null;
+            return fs.existsSync(indexPath) ? indexPath : null;
           }
           // Stop at the first package boundary to avoid resolving through unrelated ancestors.
           break;
@@ -147,12 +147,12 @@ function pathsMatchByRealpathOrResolve(left: string, right: string): boolean {
   let realLeft: string;
   let realRight: string;
   try {
-    realLeft = controlUiFsRuntime.realpathSync(left);
+    realLeft = fs.realpathSync(left);
   } catch {
     realLeft = path.resolve(left);
   }
   try {
-    realRight = controlUiFsRuntime.realpathSync(right);
+    realRight = fs.realpathSync(right);
   } catch {
     realRight = path.resolve(right);
   }
@@ -169,13 +169,13 @@ function addCandidate(candidates: Set<string>, value: string | null) {
 export function resolveControlUiRootOverrideSync(rootOverride: string): string | null {
   const resolved = path.resolve(rootOverride);
   try {
-    const stats = controlUiFsRuntime.statSync(resolved);
+    const stats = fs.statSync(resolved);
     if (stats.isFile()) {
       return path.basename(resolved) === "index.html" ? path.dirname(resolved) : null;
     }
     if (stats.isDirectory()) {
       const indexPath = path.join(resolved, "index.html");
-      return controlUiFsRuntime.existsSync(indexPath) ? resolved : null;
+      return fs.existsSync(indexPath) ? resolved : null;
     }
   } catch {
     return null;
@@ -194,7 +194,7 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
       return null;
     }
     try {
-      return path.dirname(controlUiFsRuntime.realpathSync(path.resolve(argv1)));
+      return path.dirname(fs.realpathSync(path.resolve(argv1)));
     } catch {
       return null;
     }
@@ -202,7 +202,7 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
   const execDir = (() => {
     try {
       const execPath = opts.execPath ?? process.execPath;
-      return path.dirname(controlUiFsRuntime.realpathSync(execPath));
+      return path.dirname(fs.realpathSync(execPath));
     } catch {
       return null;
     }
@@ -241,7 +241,7 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
 
   for (const dir of candidates) {
     const indexPath = path.join(dir, "index.html");
-    if (controlUiFsRuntime.existsSync(indexPath)) {
+    if (fs.existsSync(indexPath)) {
       return dir;
     }
   }
@@ -295,10 +295,10 @@ function inspectControlUiAssetHealth(
   }
   let html: string;
   try {
-    if (controlUiFsRuntime.statSync(indexPath).size > 256 * 1024) {
+    if (fs.statSync(indexPath).size > 256 * 1024) {
       return { kind: "incomplete", indexPath, missingAsset: "index.html exceeds its size limit" };
     }
-    html = controlUiFsRuntime.readFileSync(indexPath, "utf8");
+    html = fs.readFileSync(indexPath, "utf8");
   } catch {
     return { kind: "missing-index", indexPath };
   }
@@ -321,7 +321,7 @@ function inspectControlUiAssetHealth(
         missingAsset: references > 128 ? "too many startup assets" : asset,
       };
     }
-    if (!controlUiFsRuntime.existsSync(path.join(path.dirname(indexPath), asset))) {
+    if (!fs.existsSync(path.join(path.dirname(indexPath), asset))) {
       return { kind: "incomplete", indexPath, missingAsset: asset };
     }
   }
@@ -395,7 +395,7 @@ export async function ensureControlUiAssetsBuilt(
   }
 
   const uiScript = path.join(repoRoot, "scripts", "ui.js");
-  if (!controlUiFsRuntime.existsSync(uiScript)) {
+  if (!fs.existsSync(uiScript)) {
     return controlUiAssetsFailure(`Control UI assets missing but ${uiScript} is unavailable.`);
   }
 

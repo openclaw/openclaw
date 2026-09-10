@@ -39,7 +39,7 @@ type PersistProviderAuthProfileBatchParams = Omit<
   env?: NodeJS.ProcessEnv;
 };
 
-export type ProviderAuthProtectedProfilesReceipt = {
+type ProviderAuthProtectedProfilesReceipt = {
   profiles: ProviderAuthProfile[];
   commit: () => Promise<void>;
   rollback: (retainProfileIds?: ReadonlySet<string>) => Promise<void>;
@@ -302,7 +302,7 @@ async function throwAfterStageFailure(params: {
 }
 
 /** Stages protected provider credentials while retaining their per-profile writer locks. */
-export async function stageProviderAuthProfilesForPersistence(params: {
+async function stageProviderAuthProfilesForPersistence(params: {
   profiles: readonly ProviderAuthProfile[];
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

@@ -592,30 +592,31 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(events).toEqual(["stage:first", "spawn:first", "stage:second", "spawn:second"]);
   });
 
-  it("disables supervisor capture without parsing from the diagnostic stdout tail", async () => {
-    const fullText = `start-${"x".repeat(80 * 1024)}-end`;
+  it.each(["text", "json"] as const)(
+    "parses fragmented %s at the byte limit with supervisor capture disabled",
+    async (output) => {
+      const textBytes =
+        1024 * 1024 - (output === "json" ? Buffer.byteLength(JSON.stringify({ result: "" })) : 0);
+      const fullText = `start-${"x".repeat(textBytes - 10)}-end`;
+      const stdout = output === "json" ? JSON.stringify({ result: fullText }) : fullText;
 
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      input.onStdout?.(fullText);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: input.captureOutput === false ? "" : fullText,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.("");
+        for (let offset = 0; offset < stdout.length; offset += 4093) {
+          input.onStdout?.(stdout.slice(offset, offset + 4093));
+        }
+        input.onStdout?.("");
+        return createManagedRun(createSuccessfulProcessExit());
       });
-    });
 
-    const result = await executePreparedCliRun(buildPreparedCliRunContext({ output: "text" }));
-    const spawnInput = requireSupervisorSpawnInput();
+      const result = await executePreparedCliRun(buildPreparedCliRunContext({ output }));
+      const spawnInput = requireSupervisorSpawnInput();
 
-    expect(spawnInput.captureOutput).toBe(false);
-    expect(result.rawText).toBe(fullText);
-  });
+      expect(spawnInput.captureOutput).toBe(false);
+      expect(result.rawText).toBe(fullText);
+    },
+  );
 
   it("passes prepared secret input to a one-shot child", async () => {
     const context = buildPreparedCliRunContext({ output: "text", provider: "claude-cli" });
@@ -636,33 +637,35 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(requireSupervisorSpawnInput()).toEqual(expect.objectContaining({ secretInput }));
   });
 
-  it("rejects oversized successful stdout instead of parsing a truncated tail", async () => {
-    const noisyPrefix = "x".repeat(2 * 1024 * 1024);
-    const finalText = "final answer";
+  it.each(["text", "json"] as const)(
+    "rejects fragmented %s one byte over the parse limit",
+    async (output) => {
+      const textBytes =
+        1024 * 1024 +
+        1 -
+        (output === "json" ? Buffer.byteLength(JSON.stringify({ result: "" })) : 0);
+      const fullText = `start-${"x".repeat(textBytes - 10)}-end`;
+      const stdout = output === "json" ? JSON.stringify({ result: fullText }) : fullText;
 
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      input.onStdout?.(noisyPrefix);
-      input.onStdout?.(finalText);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: input.captureOutput === false ? "" : `${noisyPrefix}${finalText}`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        for (let offset = 0; offset < stdout.length; offset += 4096) {
+          input.onStdout?.(stdout.slice(offset, offset + 4096));
+        }
+        return createManagedRun(createSuccessfulProcessExit());
       });
-    });
 
-    await expect(
-      executePreparedCliRun(buildPreparedCliRunContext({ output: "text" })),
-    ).rejects.toThrow("CLI stdout exceeded");
-    const spawnInput = requireSupervisorSpawnInput();
+      await expect(
+        executePreparedCliRun(buildPreparedCliRunContext({ output })),
+      ).rejects.toMatchObject({
+        reason: "format",
+        message: "CLI stdout exceeded 1048576 bytes; refusing to parse truncated output.",
+      });
+      const spawnInput = requireSupervisorSpawnInput();
 
-    expect(spawnInput.captureOutput).toBe(false);
-  });
+      expect(spawnInput.captureOutput).toBe(false);
+    },
+  );
 
   it("parses valid oversized JSONL output incrementally", async () => {
     // JSONL agents can emit huge tool deltas; only the incremental parser sees
@@ -752,25 +755,48 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.sessionId).toBe("resume-jsonl-session");
   });
 
-  it.each(["stdout", "stderr"] as const)(
-    "classifies failed %s from the retained parse buffer before other candidates",
-    async (stream) => {
+  it.each([
+    { stream: "stdout", clipped: false },
+    { stream: "stderr", clipped: false },
+    { stream: "stdout", clipped: true },
+    { stream: "stderr", clipped: true },
+  ] as const)(
+    "classifies failed $stream from the retained prefix (clipped UTF-8: $clipped)",
+    async ({ stream, clipped }) => {
       // The error classifier needs the retained parse buffer; the human-facing
       // diagnostic tail may contain only noise once stdout grows large.
-      const errorPrefix = `${JSON.stringify({
-        type: "result",
-        is_error: true,
-        result: "429 rate limit exceeded",
-      })}\n`;
-      const noisyTail = "x".repeat(80 * 1024);
+      const errorPrefix = clipped
+        ? "429 rate limit exceeded: "
+        : `${JSON.stringify({
+            type: "result",
+            is_error: true,
+            result: "429 rate limit exceeded",
+          })}\n`;
+      const noisyTail = "x".repeat(
+        clipped ? 1024 * 1024 - Buffer.byteLength(errorPrefix) - 1 : 80 * 1024,
+      );
+      const expectedMessage = clipped
+        ? `${errorPrefix}${noisyTail}\uFFFD`
+        : "429 rate limit exceeded";
 
       supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
         const input = args[0] as SupervisorSpawnInput;
         const emit = stream === "stderr" ? input.onStderr : input.onStdout;
         emit?.(errorPrefix);
-        emit?.(noisyTail);
+        for (let offset = 0; offset < noisyTail.length; offset += 4093) {
+          emit?.(noisyTail.slice(offset, offset + 4093));
+        }
+        if (clipped) {
+          // Only the first byte of this code point fits in the retained prefix.
+          emit?.("🙂");
+          emit?.("discarded after the prefix");
+        }
         if (stream === "stderr") {
-          input.onStdout?.(JSON.stringify({ type: "error", message: "Credit balance is too low" }));
+          input.onStdout?.(
+            clipped
+              ? "Credit balance is too low"
+              : JSON.stringify({ type: "error", message: "Credit balance is too low" }),
+          );
         }
         return createManagedRun({
           reason: "exit",
@@ -786,7 +812,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
       await expect(
         executePreparedCliRun(buildPreparedCliRunContext({ output: "text" })),
-      ).rejects.toMatchObject({ reason: "rate_limit", status: 429 });
+      ).rejects.toMatchObject({ reason: "rate_limit", status: 429, message: expectedMessage });
     },
   );
 

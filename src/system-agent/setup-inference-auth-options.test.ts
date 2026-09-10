@@ -4,6 +4,7 @@ import {
   listSetupInferenceAuthOptions,
   listSetupInferenceInstallOptions,
 } from "./setup-inference-auth-options.js";
+import { resolveCandidatePresentation } from "./setup-inference-core.js";
 
 const metaEntry: ProviderInstallCatalogEntry = {
   pluginId: "meta",
@@ -21,6 +22,14 @@ const metaEntry: ProviderInstallCatalogEntry = {
 };
 
 describe("setup inference install options", () => {
+  it.each([
+    ["claude-cli", "claude-cli/sonnet", "claude"],
+    ["codex-cli", "openai/default", "openai"],
+    ["openai-api-key", "openai/default", "openai"],
+  ] as const)("presents the provider brand for %s", (kind, modelRef, brandId) => {
+    expect(resolveCandidatePresentation({ kind, modelRef }, [])).toEqual({ brandId });
+  });
+
   it("offers a provider-owned wizard without app-specific auth metadata", () => {
     expect(listSetupInferenceAuthOptions([metaEntry])).toEqual([
       expect.objectContaining({ id: "meta-api-key", kind: "install" }),

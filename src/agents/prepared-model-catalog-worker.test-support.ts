@@ -79,7 +79,7 @@ module.exports = { id: ${JSON.stringify(UNRELATED_PLUGIN_ID)}, register() {} };
   return pluginFile;
 }
 
-export function createJwtWithExp(exp: number, marker?: string): string {
+function createJwtWithExp(exp: number, marker?: string): string {
   const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
     "base64url",
   );
@@ -324,6 +324,7 @@ export function createCatalogFixture(
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
+    codexNativeOwner?: boolean;
     builtPluginVersion?: string;
     asyncSyntheticAuth?: boolean;
   },
@@ -340,7 +341,7 @@ export function createCatalogFixture(
   fs.writeFileSync(externalAuthPath, "A", "utf8");
   const env = {
     ...process.env,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: options?.codexNativeOwner ? undefined : "1",
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_WORKER_CATALOG_MARKER: marker,
     [EXTERNAL_AUTH_PATH_ENV]: externalAuthPath,
@@ -354,13 +355,24 @@ export function createCatalogFixture(
         model: `${PROVIDER_ID}/sqlite-model`,
         models: {
           [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
+          ...(options?.codexNativeOwner
+            ? { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } }
+            : {}),
         },
       },
     },
     plugins: {
-      allow: [PLUGIN_ID],
+      allow: options?.codexNativeOwner ? [PLUGIN_ID, "openai", "codex"] : [PLUGIN_ID],
       load: { paths: [pluginFile] },
-      entries: { [PLUGIN_ID]: { enabled: true } },
+      entries: {
+        [PLUGIN_ID]: { enabled: true },
+        ...(options?.codexNativeOwner
+          ? {
+              openai: { enabled: true },
+              codex: { enabled: true, config: { discovery: { enabled: false } } },
+            }
+          : {}),
+      },
     },
   } satisfies OpenClawConfig;
   replaceRuntimeAuthProfileStoreSnapshots([

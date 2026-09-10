@@ -22,7 +22,6 @@ import {
   persistProviderAuthProfileBatch,
   persistProviderAuthProfilesAfterLogin,
   stageProviderAuthProfileBatch,
-  stageProviderAuthProfilesForPersistence,
 } from "./provider-auth-persistence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -303,11 +302,12 @@ describe("provider auth protected persistence", () => {
         stateDir,
         agentDir,
       });
-      const staged = await stageProviderAuthProfilesForPersistence({
+      const staged = await stageProviderAuthProfileBatch({
         profiles: [protectedTokenProfile(profileId, "candidate-a")],
         config: {},
         env,
         stateDir,
+        agentDir,
       });
       const credential = staged.profiles[0]?.credential;
       if (credential?.type !== "token" || !credential.tokenRef) {
@@ -343,11 +343,12 @@ describe("provider auth protected persistence", () => {
         allowedHosts: ["api.example.test"],
       });
 
-      const successor = await stageProviderAuthProfilesForPersistence({
+      const successor = await stageProviderAuthProfileBatch({
         profiles: [protectedTokenProfile(profileId, "candidate-b")],
         config: {},
         env,
         stateDir,
+        agentDir,
       });
       await successor.commit();
       expect(
@@ -420,7 +421,7 @@ describe("provider auth protected persistence", () => {
 
     let failure: unknown;
     try {
-      await stageProviderAuthProfilesForPersistence({
+      await stageProviderAuthProfileBatch({
         profiles: [
           protectedTokenProfile("openai:first", "candidate-a"),
           protectedTokenProfile("openai:second", "candidate-b"),

@@ -485,10 +485,3 @@ export async function buildPreparedModelCatalogSnapshot(
 export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
   return modelCatalogEntrySupportsInput(entry, "image");
 }
-
-/**
- * Check if a model supports native document/PDF input based on its catalog entry.
- */
-export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
-  return modelCatalogEntrySupportsInput(entry, "document");
-}

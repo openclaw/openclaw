@@ -153,5 +153,6 @@ Keep the superseded entry next to its replacement so the current directive is un
 ## Related
 
 - [Memory overview](/concepts/memory)
+- [Memory architecture](/concepts/memory-architecture)
 - [Standing intents](/concepts/standing-intents)
 - [Agent workspace](/concepts/agent-workspace)

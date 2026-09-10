@@ -322,6 +322,7 @@ openclaw memory index --force   # Rebuild the index
 
 ## Further reading
 
+- [Memory architecture](/concepts/memory-architecture): the storage, indexing, and retrieval layers behind every memory feature.
 - [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
 - [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
 - [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.

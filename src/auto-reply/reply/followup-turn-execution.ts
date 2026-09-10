@@ -357,6 +357,13 @@ export async function executeFollowupTurn(params: {
     try {
       const execute = () =>
         executeAgentTurn({
+          completionSource:
+            turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&
+            turn.queued.queuedFollowupReplyDisposition.deliver.ownsCompletion?.(
+              turn.queued.originatingChannel,
+            ) === true
+              ? "reply-dispatch"
+              : undefined,
           commandBody: turn.queued.prompt,
           transcriptCommandBody: turn.queued.transcriptPrompt,
           followupRun: turn.queued,

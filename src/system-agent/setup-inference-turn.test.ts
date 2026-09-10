@@ -3,11 +3,11 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { refreshPluginRegistryForPreparedConfig } from "../plugins/registry-refresh.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
@@ -18,16 +18,26 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import {
   loadSetupInferencePluginGeneration,
-  revalidateSetupInferenceOwner,
-} from "./revalidate-inference-owner.js";
-import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
+  revalidateStableSetupInferenceOwner,
+} from "./setup-inference-turn.js";
+import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({ loadAgentRuntimePluginRegistryHandle: vi.fn() }));
 vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
 }));
 
-function embeddedRoute(agentHarnessRuntimeOverride: string): SystemAgentConfiguredRoute {
+function embeddedRoute(): SystemAgentConfiguredRoute {
+  const config: OpenClawConfig = {
+    agents: {
+      entries: { main: { default: true, agentDir: "/tmp/openclaw-agent" } },
+      defaults: {
+        model: "openai/gpt-5.6-sol",
+        models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+        workspace: "/tmp/openclaw-workspace",
+      },
+    },
+  };
   return {
     runner: "embedded",
     provider: "openai",
@@ -35,19 +45,13 @@ function embeddedRoute(agentHarnessRuntimeOverride: string): SystemAgentConfigur
     modelLabel: "openai/gpt-5.6-sol",
     agentId: "main",
     agentDir: "/tmp/openclaw-agent",
-    agentHarnessRuntimeOverride,
-    sourceConfig: {},
-    runConfig: {
-      agents: {
-        defaults: {
-          workspace: "/tmp/openclaw-workspace",
-        },
-      },
-    },
+    agentHarnessRuntimeOverride: "codex",
+    sourceConfig: config,
+    runConfig: config,
   };
 }
 
-describe("revalidateSetupInferenceOwner", () => {
+describe("setup inference plugin ownership", () => {
   it("loads newly installed package facts after the install lease cached their absence", async () => {
     await withOpenClawTestState(
       { label: "setup-plugin-generation", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
@@ -74,11 +78,6 @@ describe("revalidateSetupInferenceOwner", () => {
             configSchema: { type: "object" },
           });
           await state.writeText("plugin/index.js", 'throw new Error("metadata must not execute");');
-          await refreshPluginRegistryForPreparedConfig({
-            config,
-            workspaceDir: state.workspaceDir,
-            reason: "source-changed",
-          });
           mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(
             createEmptyPluginRegistry(),
           );
@@ -98,9 +97,9 @@ describe("revalidateSetupInferenceOwner", () => {
     "retains the probing registry artifact preference (%s)",
     async (preferBuiltPluginArtifacts) => {
       const order: string[] = [];
-      const binding = {} as SystemAgentVerifiedInferenceBinding;
       const pluginRegistry = createEmptyPluginRegistry();
-      const route = embeddedRoute("auto");
+      const route = embeddedRoute();
+      const { binding } = await createSystemAgentVerifiedInferenceTestFixture(route.sourceConfig);
       const metadataSnapshot = createPluginMetadataSnapshot({
         config: route.runConfig,
         manifestRegistry: makeRegistry([]),
@@ -134,12 +133,13 @@ describe("revalidateSetupInferenceOwner", () => {
 
       await withPluginRuntimeRegistryScope(probingRegistry, async () => {
         await expect(
-          revalidateSetupInferenceOwner({
+          revalidateStableSetupInferenceOwner({
             route,
             auth: {
               agentHarnessId: "codex",
               runtimeOwnerKind: "plugin-harness",
             },
+            stagedOwnerPluginArtifacts: binding,
             deps: {
               createSystemAgentVerifiedInferenceBinding,
               resolvePluginMetadataSnapshot: resolveMetadataSnapshot,
@@ -168,14 +168,35 @@ describe("revalidateSetupInferenceOwner", () => {
     },
   );
 
-  it("does not reload the built-in OpenClaw harness", async () => {
-    const binding = {} as SystemAgentVerifiedInferenceBinding;
+  it("does not load plugins for a direct custom provider using the built-in OpenClaw harness", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        entries: { main: { default: true, agentDir: "/tmp/openclaw-agent" } },
+        defaults: {
+          model: "fixture/direct-model",
+          models: { "fixture/direct-model": { agentRuntime: { id: "openclaw" } } },
+          workspace: "/tmp/openclaw-workspace",
+        },
+      },
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            baseUrl: "https://provider.example/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    const { binding } = await createSystemAgentVerifiedInferenceTestFixture(config);
+    expect(binding.ownerPluginIds).toEqual([]);
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
 
     await expect(
-      revalidateSetupInferenceOwner({
-        route: embeddedRoute("auto"),
-        auth: { agentHarnessId: "openclaw", authFingerprint: "auth" },
+      revalidateStableSetupInferenceOwner({
+        route: binding.execution,
+        auth: binding.auth,
+        stagedOwnerPluginArtifacts: binding,
         deps: {
           createSystemAgentVerifiedInferenceBinding: vi.fn(async () => binding),
         },

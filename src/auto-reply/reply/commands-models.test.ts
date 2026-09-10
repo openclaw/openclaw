@@ -30,6 +30,7 @@ const modelProviderAuthMocks = vi.hoisted(() => {
   const state = {
     authenticatedProviders: new Set(["anthropic", "google", "openai"]),
     createProviderAuthChecker: vi.fn(),
+    runtimeChoices: new Map<string, string[] | undefined>(),
     selectedRoute: undefined as
       | {
           api: "openai-responses" | "openai-chatgpt-responses";
@@ -96,6 +97,32 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
   clearCurrentProviderAuthState: () => undefined,
 }));
 
+vi.mock("../../agents/model-catalog-decisions.js", () => ({
+  createModelCatalogDecisions: (
+    params: import("../../agents/model-catalog-decisions.js").ModelCatalogDecisionParams,
+  ) => {
+    const checker = modelProviderAuthMocks.createProviderAuthChecker({
+      ...params,
+      allowPreparedRuntimeAuth: true,
+      allowPluginSyntheticAuth: false,
+      discoverExternalCliAuth: false,
+    });
+    return {
+      snapshot: params.snapshot,
+      authStore: params.preparedAuthStore,
+      evaluateEntry: (entry: ModelCatalogEntry, variants: ModelCatalogEntry[] = [entry]) =>
+        checker.evaluateModelAuth(entry.provider, {
+          modelId: entry.id,
+          observedRoutes: variants.map(({ api, baseUrl }) => ({ api, baseUrl })),
+        }),
+      evaluateNative: (_entry: ModelCatalogEntry, host: unknown) => host,
+      runtimeChoices: async (entry: ModelCatalogEntry) =>
+        modelProviderAuthMocks.runtimeChoices.get(entry.provider + "/" + entry.id),
+      isCurrent: params.isCurrent,
+    };
+  },
+}));
+
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: (params: unknown) =>
     normalizeProviderModelIdWithRuntimeMock(params),
@@ -131,6 +158,7 @@ beforeEach(() => {
   pluginMetadataMocks.getCurrent.mockReset();
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   modelProviderAuthMocks.selectedRoute = undefined;
+  modelProviderAuthMocks.runtimeChoices.clear();
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
   setActivePluginRegistry(createModelsTestRegistry());
 });
@@ -733,137 +761,14 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toMatch(/^- google-gemini-cli \(/m);
   });
 
-  it("labels the OpenAI default runtime choice as Codex", async () => {
-    const data = await buildPreparedModelsProviderData({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
-      id: "codex",
-      label: "OpenAI Codex",
-      description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
-    });
-    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
-      id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
-    });
-  });
-
-  it("keeps custom OpenAI-compatible providers on the OpenClaw default runtime choice", async () => {
-    const data = await buildPreparedModelsProviderData({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://openai-compatible.example.test/v1",
-            models: [],
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
-      id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
-    });
-  });
-
-  it("lets exact model runtime policy override provider runtime policy in picker choices", async () => {
-    const data = await buildPreparedModelsProviderData({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
-      id: "codex",
-      label: "OpenAI Codex",
-      description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
-    });
-    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
-      id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
-    });
-  });
-
-  it("does not use another provider's first model override as that provider's default runtime choice", async () => {
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([
-      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
-      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+  it("carries model-specific choices and authoritative empty results", async () => {
+    modelProviderAuthMocks.runtimeChoices.set("openai/gpt-4.1", ["codex"]);
+    modelProviderAuthMocks.runtimeChoices.set("openai/gpt-4.1-mini", []);
+    const data = await buildPreparedModelsProviderData({});
+    expect(data.runtimeChoicesByModel?.get("openai/gpt-4.1")?.map((choice) => choice.id)).toEqual([
+      "codex",
     ]);
-
-    const data = await buildPreparedModelsProviderData({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-          models: {
-            "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
-      id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
-    });
-  });
-
-  it("honors provider wildcard runtime policy for non-default provider picker choices", async () => {
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([
-      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
-      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
-    ]);
-
-    const data = await buildPreparedModelsProviderData({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-          models: {
-            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
-      id: "claude-cli",
-      label: "Claude CLI",
-      description: "Use the Claude CLI runtime selected by the effective harness policy.",
-    });
-    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[1]).toEqual({
-      id: "openclaw",
-      label: "OpenClaw Default",
-      description: "Use the built-in OpenClaw runtime.",
-    });
+    expect(data.runtimeChoicesByModel?.get("openai/gpt-4.1-mini")).toEqual([]);
   });
 
   it("filters nested provider namespaces with the same prefix policy as enforcement", async () => {

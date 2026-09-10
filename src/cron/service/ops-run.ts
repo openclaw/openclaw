@@ -442,7 +442,7 @@ export async function enqueueRun(
             ...(opts?.commitGuard ? { commitGuard: opts.commitGuard } : {}),
           });
           if (result.ok && "ran" in result && !result.ran) {
-            if (result.reason !== "invalid-spec") {
+            if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
               const finishedAt = state.deps.nowMs();
               const job = state.store?.jobs.find((entry) => entry.id === id);
               emitCronRunFinished(

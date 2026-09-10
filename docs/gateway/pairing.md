@@ -467,5 +467,6 @@ Security notes:
 ## Related
 
 - [Channel pairing](/channels/pairing)
+- [Gateway protocol auth](/gateway/protocol/auth) — the wire contract for device identity, pairing signatures, and device tokens
 - [Nodes CLI](/cli/nodes)
 - [Devices CLI](/cli/devices)

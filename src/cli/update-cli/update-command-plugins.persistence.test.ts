@@ -56,9 +56,7 @@ describe("updater plugin commit cancellation", () => {
         };
         await expect(updatePluginsAfterCoreUpdate(params)).rejects.toBe(refusal);
         expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-        expect(await readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
-          {},
-        );
+        expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({});
       });
     },
   );

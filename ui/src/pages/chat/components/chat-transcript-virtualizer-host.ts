@@ -558,9 +558,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
   ): void {
-    this.candidateMessageRowKeysById = new Map(messageRowKeysById);
-    this.candidateMessageRowsByKey = new Map(messageRowsByKey);
-    this.prependAnchor.messageKeys = new Set(messageRowsByKey.keys());
+    // The projection hands off finished indexes and never mutates them afterward.
+    this.candidateMessageRowKeysById = messageRowKeysById;
+    this.candidateMessageRowsByKey = messageRowsByKey;
+    this.prependAnchor.messageKeys = messageRowsByKey;
   }
 
   activeMessageId(messageIds: readonly string[]): string | null {

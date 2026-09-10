@@ -1159,7 +1159,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("uses the Codex app-server account before OpenAI env labels on Codex harness status", async () => {
+  it("does not read a legacy native credential file from an SDK status render", async () => {
     registerStatusCodexHarness();
 
     await withTempHome(
@@ -1202,8 +1202,8 @@ describe("buildStatusReply subagent summary", () => {
         const normalized = normalizeTestText(text);
         expect(normalized).toContain("Model: openai/gpt-5.5");
         expect(normalized).toContain("Runtime: OpenAI Codex");
-        expect(normalized).toContain("oauth (codex-cli)");
-        expect(normalized).not.toContain("api-key (env: OPENAI_API_KEY)");
+        expect(normalized).not.toContain("oauth (codex-cli)");
+        expect(normalized).toContain("api-key (env: OPENAI_API_KEY)");
       },
       {
         env: {

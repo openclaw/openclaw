@@ -236,6 +236,7 @@ export type ChatRunState = {
     runId: string,
     options?: { final?: boolean },
   ) => { text: string; suppress: boolean };
+  flushPendingText: (runId: string) => void;
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
   recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
@@ -337,6 +338,17 @@ export function createChatRunState(): ChatRunState {
     toolEventRecipients,
     getOrCreate: store.getOrCreate,
     resolveBuffer,
+    flushPendingText: (runId) => {
+      const record = store.runs.get(runId);
+      if (!record) {
+        return;
+      }
+      const pending = Object.values(record.pendingTextFlushes ?? {});
+      clearPendingLiveTextFlushes(record);
+      for (const flush of pending) {
+        flush.flush();
+      }
+    },
     hasAbortMarker: (runId) => store.runs.get(runId)?.abortMarker !== undefined,
     deleteAbortMarker: (runId) => {
       const record = store.runs.get(runId);

@@ -278,7 +278,7 @@ Each branch is the title of an accordion below.
     - `refusing to bind gateway ... without auth` → non-loopback bind without a valid auth path (token/password, or trusted-proxy where configured).
     - `another gateway instance is already listening` or `EADDRINUSE` → port already taken.
 
-    Deep pages: [Gateway service not running](/gateway/troubleshooting#gateway-service-not-running), [Background process](/gateway/background-process), [Configuration](/gateway/configuration)
+    Deep pages: [Gateway service not running](/gateway/troubleshooting#gateway-service-not-running), [Supervision and service lifecycle](/gateway#supervision-and-service-lifecycle), [Configuration](/gateway/configuration)
 
   </Accordion>
 

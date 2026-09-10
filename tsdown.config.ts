@@ -417,8 +417,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     ...runtimeProcessBuildEntries,
     ...runtimeProcessDeclarationEntries,
-    "system-agent/setup-inference-detection.worker":
-      "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",

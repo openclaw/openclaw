@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { Duplex } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -8,6 +9,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import type { ServiceChildAnchorMessage } from "./service-child-protocol.js";
 
 describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
@@ -24,16 +26,22 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
     "startup-error",
     "legacy-host",
     "unsupported-capability",
+    "forced-matching",
+    "forced-missing",
+    "forced-control-lost",
+    "forced-legacy-host",
   ] as const)(
     "retires gracefully only after the closing receipt is acknowledged (%s)",
     async (acknowledgement) => {
+      const forced = acknowledgement.startsWith("forced-");
+      const legacy = acknowledgement === "legacy-host" || acknowledgement === "forced-legacy-host";
       const generation = randomUUID();
       const child = spawn(
         process.execPath,
         resolveRuntimeWorkerArgv(
           resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor),
         ),
-        { detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "ipc"] },
+        { detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe", "ipc"] },
       );
       const exited = createDeferredCore<{
         code: number | null;
@@ -49,6 +57,20 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
       const messages: ServiceChildAnchorMessage[] = [];
       let prearmedSequence: number | undefined;
       let outboundSequence = 0;
+      const lineage = child.stdio[4];
+      if (!(lineage instanceof Duplex)) {
+        child.kill("SIGKILL");
+        throw new Error("Expected the host-owned lineage pipe");
+      }
+      lineage.once("end", () => {
+        if (!control.destroyed && !legacy) {
+          control.write(
+            `${JSON.stringify({ type: "lineage-closed", generation, sequence: ++outboundSequence })}\n`,
+          );
+        }
+      });
+      lineage.resume();
+      let forcedCancellationAt = 0;
       const startupFailure = acknowledgement === "pre-armed" || acknowledgement === "startup-error";
       let pending = "";
       let stderr = "";
@@ -73,6 +95,12 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
           const message = JSON.parse(pending.slice(0, newline)) as ServiceChildAnchorMessage;
           pending = pending.slice(newline + 1);
           messages.push(message);
+          if (message.type === "ready" && forced) {
+            forcedCancellationAt = performance.now();
+            control.write(
+              `${JSON.stringify({ type: "cancel", generation, sequence: ++outboundSequence, signal: "SIGKILL" })}\n`,
+            );
+          }
           if (message.type === "startup-error") {
             if (acknowledgement === "pre-armed") {
               // Both frames share the ordered control channel: the early ACK must
@@ -87,12 +115,13 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
           if (message.type !== "closing") {
             continue;
           }
-          if (acknowledgement === "control-lost") {
+          if (acknowledgement === "control-lost" || acknowledgement === "forced-control-lost") {
             control.destroy();
           } else if (acknowledgement === "relay-lost") {
             child.disconnect();
           } else if (
             acknowledgement !== "missing" &&
+            acknowledgement !== "forced-missing" &&
             acknowledgement !== "pre-armed" &&
             acknowledgement !== "legacy-host"
           ) {
@@ -113,15 +142,21 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
           type: "start",
           generation,
           command: startupFailure ? `/openclaw-missing-command-${generation}` : process.execPath,
-          args: ["-e", ""],
+          args: ["-e", forced ? "setInterval(() => {}, 1000)" : ""],
           env: {},
           stdinMode: "pipe-closed",
           controlFd: 3,
+          ...(legacy ? {} : { lineageFd: 4 }),
           ...(acknowledgement === "legacy-host"
             ? {}
             : { acknowledgeClosing: acknowledgement !== "unsupported-capability" }),
         });
         const result = await exited.promise;
+        if (acknowledgement === "forced-legacy-host") {
+          expect(result, stderr).toEqual({ code: null, signal: "SIGKILL" });
+          expect(messages.some((message) => message.type === "closing")).toBe(false);
+          return;
+        }
         if (acknowledgement === "unsupported-capability") {
           expect(result, stderr).toEqual({ code: 1, signal: null });
           expect(messages).toEqual([]);
@@ -130,9 +165,11 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
         expect(messages, stderr).toEqual(
           expect.arrayContaining([
             expect.objectContaining(
-              startupFailure
-                ? { type: "startup-error", generation }
-                : { type: "root-result", generation, code: 0, signal: null },
+              forced
+                ? { type: "ready", generation }
+                : startupFailure
+                  ? { type: "startup-error", generation }
+                  : { type: "root-result", generation, code: 0, signal: null },
             ),
             expect.objectContaining({ type: "closing", generation }),
           ]),
@@ -141,6 +178,15 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
           expect(messages.find((message) => message.type === "closing")?.sequence).toBe(
             prearmedSequence,
           );
+        }
+        if (forced) {
+          expect(result, stderr).toEqual({ code: null, signal: "SIGKILL" });
+          if (acknowledgement === "forced-missing") {
+            expect(performance.now() - forcedCancellationAt).toBeGreaterThanOrEqual(
+              GRACEFUL_CANCEL_TIMEOUT_MS,
+            );
+          }
+          return;
         }
         if (
           acknowledgement === "matching" ||
@@ -158,6 +204,7 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
         child.kill("SIGKILL");
         await exited.promise;
         control.destroy();
+        lineage.destroy();
       }
     },
   );

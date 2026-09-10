@@ -148,7 +148,7 @@ They complement each other -- pruning keeps tool output lean between compaction 
 ## Further reading
 
 - [Compaction](/concepts/compaction): summarization-based context reduction
-- [Gateway Configuration](/gateway/configuration): all pruning config knobs (`contextPruning.*`)
+- [`agents.defaults.contextPruning`](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.contextpruning): all pruning config knobs (`contextPruning.*`)
 
 ## Related
 

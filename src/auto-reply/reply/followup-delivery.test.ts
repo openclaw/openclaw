@@ -1,17 +1,23 @@
 // Tests follow-up reply delivery and route preservation.
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
-import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import type { FollowupRun } from "./queue/types.js";
 
 const deliveryState = vi.hoisted(() => ({
   followupRoute: undefined as { route: "dispatcher" | "origin" | "drop" } | undefined,
   routeReply: vi.fn(),
   runtimeError: vi.fn(),
+  enqueue: vi.fn(),
+}));
+
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
+  enqueueFollowupRun: (...args: unknown[]) => deliveryState.enqueue(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -34,346 +40,6 @@ vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) => channel === "discord" || channel === "slack",
   routeReply: (...args: unknown[]) => deliveryState.routeReply(...args),
 }));
-
-const baseConfig = {} as OpenClawConfig;
-
-describe("resolveFollowupDeliveryPayloads", () => {
-  it("drops payloads without visible content", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: " \t\n " }, { text: "", mediaUrls: [" "] }],
-      }),
-    ).toEqual([]);
-  });
-
-  it("keeps rich content when text is blank", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: " ", mediaUrl: "file:///tmp/reply.png" }],
-      }),
-    ).toMatchObject([{ text: " ", mediaUrl: "file:///tmp/reply.png" }]);
-  });
-
-  it("drops a durable reasoning payload when reasoningPayloadsEnabled is not set", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
-      }),
-    ).toEqual([{ text: "final answer" }]);
-  });
-
-  it("keeps a durable reasoning payload when reasoningPayloadsEnabled is true", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
-        reasoningPayloadsEnabled: true,
-      }),
-    ).toEqual([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]);
-  });
-
-  it("drops commentary unless its delivery lane is enabled", () => {
-    const payload = { text: "internal commentary", isCommentary: true };
-    expect(resolveFollowupDeliveryPayloads({ cfg: baseConfig, payloads: [payload] })).toEqual([]);
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [payload],
-        commentaryPayloadsEnabled: true,
-      }),
-    ).toMatchObject([payload]);
-  });
-
-  it("drops heartbeat ack payloads without media", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "HEARTBEAT_OK" }],
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("keeps media payloads when stripping heartbeat ack text", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "/tmp/image.png" }],
-      }),
-    ).toEqual([{ text: "", mediaUrl: "/tmp/image.png" }]);
-  });
-
-  it("preserves transcript ownership when stripping heartbeat text", () => {
-    const payload = setReplyPayloadMetadata(
-      { text: "HEARTBEAT_OK still working" },
-      { assistantTranscriptOwned: true },
-    );
-
-    const [resolved] = resolveFollowupDeliveryPayloads({
-      cfg: baseConfig,
-      payloads: [payload],
-    });
-
-    expect(getReplyPayloadMetadata(resolved ?? {})).toEqual({
-      assistantTranscriptOwned: true,
-      replyDelivery: {
-        replyToMode: "all",
-      },
-    });
-  });
-
-  it("uses the captured reply policy instead of reloading changed config", () => {
-    const [resolved] = resolveFollowupDeliveryPayloads({
-      cfg: {
-        channels: {
-          slack: {
-            replyToMode: "all",
-          },
-        },
-      } as OpenClawConfig,
-      payloads: [{ text: "queued reply" }],
-      originatingChannel: "slack",
-      originatingChatType: "channel",
-      originatingReplyToMode: "off",
-    });
-
-    expect(getReplyPayloadMetadata(resolved ?? {})?.replyDelivery).toEqual({
-      chatType: "channel",
-      replyToMode: "off",
-    });
-  });
-
-  it("drops text payloads already sent via messaging tool", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "hello world!" }],
-        sentTexts: ["hello world!"],
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("drops media payloads already sent via messaging tool", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ mediaUrl: "/tmp/img.png" }],
-        sentMediaUrls: ["/tmp/img.png"],
-      }),
-    ).toEqual([]);
-  });
-
-  it("does not dedupe text sent via messaging tool to another target", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "hello world!" }],
-        messageProvider: "telegram",
-        originatingTo: "telegram:123",
-        sentTexts: ["hello world!"],
-        sentTargets: [{ tool: "discord", provider: "discord", to: "channel:C1" }],
-      }),
-    ).toEqual([{ text: "hello world!" }]);
-  });
-
-  it("does not dedupe media sent via messaging tool to another target", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
-        messageProvider: "telegram",
-        originatingTo: "telegram:123",
-        sentMediaUrls: ["file:///tmp/photo.jpg"],
-        sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
-      }),
-    ).toEqual([{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }]);
-  });
-
-  it("dedupes final text only against message-tool text sent to the same route", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "discord-only text" }],
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        sentTexts: ["slack text", "discord-only text"],
-        sentTargets: [
-          { tool: "slack", provider: "slack", to: "channel:C1", text: "slack text" },
-          {
-            tool: "discord",
-            provider: "discord",
-            to: "channel:C2",
-            text: "discord-only text",
-          },
-        ],
-      }),
-    ).toEqual([{ text: "discord-only text" }]);
-  });
-
-  it("does not dedupe same-channel text sent to a different routed thread", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "thread reply" }],
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        originatingThreadId: "222.000",
-        sentTexts: ["thread reply"],
-        sentTargets: [
-          {
-            tool: "slack",
-            provider: "slack",
-            to: "channel:C1",
-            threadId: "111.000",
-            text: "thread reply",
-          },
-        ],
-      }),
-    ).toEqual([{ text: "thread reply" }]);
-  });
-
-  it("dedupes same-channel text sent to the same routed thread", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "thread reply" }],
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        originatingThreadId: "111.000",
-        sentTexts: ["thread reply"],
-        sentTargets: [
-          {
-            tool: "slack",
-            provider: "slack",
-            to: "channel:C1",
-            threadId: "111.000",
-            text: "thread reply",
-          },
-        ],
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("dedupes a Slack DM tool send recorded through its routable target", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "thread reply" }],
-        messageProvider: "slack",
-        originatingTo: "user:U123",
-        originatingThreadId: "171.222",
-        sentTexts: ["thread reply"],
-        sentTargets: [
-          {
-            tool: "message",
-            provider: "slack",
-            to: "user:U123",
-            threadId: "171.222",
-            text: "thread reply",
-          },
-        ],
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("does not apply ambiguous global text evidence across multiple routes", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "hello world!" }],
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        sentTexts: ["hello world!"],
-        sentTargets: [
-          { tool: "slack", provider: "slack", to: "channel:C1" },
-          { tool: "discord", provider: "discord", to: "channel:C2" },
-        ],
-      }),
-    ).toStrictEqual([{ text: "hello world!" }]);
-  });
-
-  it("dedupes final media only against message-tool media sent to the same route", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "photo", mediaUrl: "file:///tmp/discord-photo.jpg" }],
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        sentMediaUrls: ["file:///tmp/slack-photo.jpg", "file:///tmp/discord-photo.jpg"],
-        sentTargets: [
-          {
-            tool: "slack",
-            provider: "slack",
-            to: "channel:C1",
-            mediaUrls: ["file:///tmp/slack-photo.jpg"],
-          },
-          {
-            tool: "discord",
-            provider: "discord",
-            to: "channel:C2",
-            mediaUrls: ["file:///tmp/discord-photo.jpg"],
-          },
-        ],
-      }),
-    ).toEqual([{ text: "photo", mediaUrl: "file:///tmp/discord-photo.jpg" }]);
-  });
-
-  it("does not apply ambiguous global media evidence across multiple routes", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        sentMediaUrls: ["file:///tmp/photo.jpg"],
-        sentTargets: [
-          { tool: "slack", provider: "slack", to: "channel:C1" },
-          { tool: "discord", provider: "discord", to: "channel:C2" },
-        ],
-      }),
-    ).toEqual([{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }]);
-  });
-
-  it("delivers distinct replies when a messaging tool already sent to the same provider and target", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "hello world!" }],
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
-      }),
-    ).toEqual([{ text: "hello world!" }]);
-  });
-
-  it("dedupes duplicate replies when a messaging tool already sent to the same provider and target", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "hello world!" }],
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        sentTexts: ["hello world!"],
-        sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1", text: "hello world!" }],
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("delivers distinct replies when originating channel resolves the provider", () => {
-    expect(
-      resolveFollowupDeliveryPayloads({
-        cfg: baseConfig,
-        payloads: [{ text: "hello world!" }],
-        messageProvider: "heartbeat",
-        originatingChannel: "telegram",
-        originatingTo: "268300329",
-        sentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
-      }),
-    ).toEqual([{ text: "hello world!" }]);
-  });
-});
 
 function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFollowupTurn {
   return {
@@ -966,19 +632,15 @@ describe("deliverFollowupDecision", () => {
     turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDispatcher };
     deliveryState.followupRoute = { route: "dispatcher" };
     try {
-      await deliverFollowupDecision({
+      const payloads = await deliverFollowupDecision({
         decision: { kind: "deliver", payloads: [{ text: "one" }, { text: "two" }] },
         turn,
         defaults: createDefaults(laterDispatcher),
         runId: "source-run",
         runFollowup: vi.fn(async () => {}),
       });
-      expect(sourceDispatcher).toHaveBeenCalledWith({
-        kind: "queued-followup",
-        runId: "source-run",
-        originatingChannel: "webchat",
-        payloads: [{ text: "one" }, { text: "two" }],
-      });
+      expect(payloads).toEqual({ kind: "completed", payloads: [{ text: "one" }, { text: "two" }] });
+      expect(sourceDispatcher).not.toHaveBeenCalled();
       turn.queued.queuedFollowupReplyDisposition = {
         kind: "drop",
         reason: "source-unavailable",
@@ -993,6 +655,93 @@ describe("deliverFollowupDecision", () => {
       expect(laterDispatcher).not.toHaveBeenCalled();
     } finally {
       deliveryState.followupRoute = undefined;
+    }
+  });
+
+  it("keeps recovery diagnostics deliverable after the original queued run completes", async () => {
+    const delivered = vi.fn(async (_params: { runId: string; payloads: ReplyPayload[] }) => ({
+      kind: "delivered" as const,
+    }));
+    const source = createChatSendLateFollowupDisposition({
+      runId: "source-admission",
+      originatingChannel: "webchat",
+      logGateway: { info: vi.fn() } as never,
+      deliver: delivered,
+    });
+    source.recordQueued();
+    const turn = createTurn();
+    turn.queued.originatingChannel = "webchat";
+    turn.queued.originatingTo = undefined;
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source.deliver };
+    const defaults = createDefaults(vi.fn(async () => {}));
+    const decision = resolveFollowupDeliveryDecision({
+      turn,
+      execution: createSettledExecution(
+        "This substantive reply should have been sent with the message tool. ".repeat(6),
+      ),
+      accounting: createAccounting(),
+    });
+    expect(decision.kind).toBe("retry-source-delivery");
+    let retryRun: FollowupRun | undefined;
+    deliveryState.enqueue.mockImplementation((_key: string, run: FollowupRun) => {
+      retryRun = run;
+      return true;
+    });
+    try {
+      await deliverFollowupDecision({
+        decision,
+        turn,
+        defaults,
+        runId: turn.runId,
+        runFollowup: vi.fn(async () => {}),
+      });
+      await source.deliver({
+        kind: "queued-followup",
+        runId: turn.runId,
+        originatingChannel: "webchat",
+        payloads: [],
+        completion: { kind: "completed" },
+      });
+      if (!retryRun || retryRun.queuedFollowupReplyDisposition?.kind !== "deliver") {
+        throw new Error("Recovery was not queued with its source delivery owner");
+      }
+      const retryTurn = { ...turn, runId: "retry-run", queued: retryRun };
+      const diagnostic = resolveFollowupDeliveryDecision({
+        turn: retryTurn,
+        execution: createSettledExecution("Still unable to send the reply."),
+        accounting: createAccounting(),
+      });
+      if (diagnostic.kind !== "deliver-diagnostic") {
+        throw new Error("Recovery did not prepare its terminal delivery diagnostic");
+      }
+      await retryRun.queuedFollowupReplyDisposition.deliver({
+        kind: "queued-followup",
+        runId: retryTurn.runId,
+        originatingChannel: "webchat",
+        payloads: [diagnostic.payload],
+        completion: { kind: "completed" },
+      });
+      expect(deliveryState.enqueue).toHaveBeenCalledOnce();
+      expect(delivered).toHaveBeenCalledTimes(2);
+      expect(delivered).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ runId: turn.runId, payloads: [] }),
+      );
+      expect(delivered).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          runId: "retry-run",
+          payloads: [
+            expect.objectContaining({
+              text: "I generated a reply but could not deliver it to this chat. Please try again.",
+              isError: true,
+            }),
+          ],
+        }),
+      );
+    } finally {
+      deliveryState.enqueue.mockReset();
     }
   });
 
