@@ -157,6 +157,7 @@ async function prepareResolvedImageRuntime(
       params.agentDir,
       params.cfg,
       {
+        modelIdSource: "selected",
         authStorage,
         modelRegistry,
         skipAgentDiscovery: true,

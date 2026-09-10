@@ -340,6 +340,7 @@ async function prepareSimpleCompletionModelCore(
           model: initialModel,
           resolveModel: ({ config, authProfileId, authProfileMode }) =>
             modelResolver(initialModel.provider, initialModel.id, params.agentDir, config, {
+              modelIdSource: "selected",
               ...(params.agentId ? { agentId: params.agentId } : {}),
               skipAgentDiscovery: true,
               allowBundledStaticCatalogFallback: true,

@@ -629,6 +629,7 @@ async function runIsolatedCompletionOwned(
                 metadataSnapshot: lease.snapshot.metadataSnapshot,
                 resolveModel: ({ config: modelConfig, authProfileId, authProfileMode }) =>
                   resolveModelAsync(runtimeModel.provider, runtimeModel.id, agentDir, modelConfig, {
+                    modelIdSource: "selected",
                     preparedModelRuntime: lease.snapshot,
                     workspaceDir,
                     authProfileId,
