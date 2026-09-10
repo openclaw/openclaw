@@ -15,7 +15,14 @@ import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js
 export async function clearCodexBindingAfterInvalidImagePayload(
   bindingStore: CodexAppServerBindingStore,
   identity: CodexAppServerBindingIdentity,
-  fields: { phase: string; threadId?: string; turnId?: string; error?: string },
+  fields: {
+    phase: string;
+    threadId?: string;
+    clientId?: string;
+    turnId?: string;
+    error?: string;
+  },
+  assertCurrent: () => void,
   expected?: EmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"],
 ): Promise<void> {
   const currentBinding = bindingStore.read(identity);
@@ -23,7 +30,17 @@ export async function clearCodexBindingAfterInvalidImagePayload(
   if (!expectedThreadId) {
     return;
   }
-  if (currentBinding && currentBinding.threadId !== expectedThreadId) {
+  if (!fields.clientId) {
+    embeddedAgentLog.warn(
+      "codex app-server image payload error detected without a physical client owner; preserving binding",
+      fields,
+    );
+    return;
+  }
+  if (
+    currentBinding &&
+    (currentBinding.threadId !== expectedThreadId || currentBinding.clientId !== fields.clientId)
+  ) {
     embeddedAgentLog.warn(
       "codex app-server image payload error detected for unbound thread; preserving thread binding",
       { ...fields, boundThreadId: currentBinding.threadId },
@@ -41,7 +58,15 @@ export async function clearCodexBindingAfterInvalidImagePayload(
     "codex app-server image payload error detected; clearing thread binding",
     fields,
   );
-  await bindingStore.mutate(identity, { kind: "clear", threadId: expectedThreadId });
+  await bindingStore.mutate(
+    identity,
+    {
+      kind: "clear",
+      threadId: expectedThreadId,
+      clientId: fields.clientId,
+    },
+    assertCurrent,
+  );
 }
 
 export function isNonEmptyString(value: unknown): value is string {

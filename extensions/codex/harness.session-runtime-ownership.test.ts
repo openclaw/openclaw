@@ -109,13 +109,23 @@ describe("Codex session runtime ownership", () => {
     "respects expected native ownership during image cleanup (%s)",
     async (expected) => {
       const fixture = createOwnershipFixture();
-      const binding = { ...observedBinding, preserveNativeModel: true as const };
+      const binding = {
+        ...observedBinding,
+        clientId: "test-client",
+        preserveNativeModel: true as const,
+      };
       await fixture.bindingStore.mutate(identity, { kind: "set", binding });
 
       await clearCodexBindingAfterInvalidImagePayload(
         fixture.bindingStore,
         identity,
-        { phase: "turn_completed", threadId: binding.threadId, error: "synthetic invalid image" },
+        {
+          phase: "turn_completed",
+          threadId: binding.threadId,
+          clientId: binding.clientId,
+          error: "synthetic invalid image",
+        },
+        () => undefined,
         expected ? { model: "native", auth: "host" } : undefined,
       );
 

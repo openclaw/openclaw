@@ -193,9 +193,11 @@ export async function finalizeCodexAttempt(
         {
           phase: "turn_completed",
           threadId: resourceState.thread.threadId,
+          ...(resourceState.thread.clientId ? { clientId: resourceState.thread.clientId } : {}),
           turnId: activeTurnId,
           error: enrichedPromptErrorMessage,
         },
+        connection.assertCurrent,
         params.expectedSessionRuntimeOwnership,
       );
     }
@@ -216,10 +218,17 @@ export async function finalizeCodexAttempt(
           error: enrichedPromptErrorMessage,
         },
       );
-      await bindingStore.mutate(bindingIdentity, {
-        kind: "clear",
-        threadId: resourceState.thread.threadId,
-      });
+      if (resourceState.thread.clientId) {
+        await bindingStore.mutate(
+          bindingIdentity,
+          {
+            kind: "clear",
+            threadId: resourceState.thread.threadId,
+            clientId: resourceState.thread.clientId,
+          },
+          connection.assertCurrent,
+        );
+      }
     }
     const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
       client: resourceState.client,
@@ -614,10 +623,17 @@ export async function finalizeCodexAttempt(
         if (resourceState.thread.connectionScope === "supervision") {
           throw error;
         }
-        if (canClearBindingForRecovery("clearing native coverage after a completed turn")) {
+        if (
+          resourceState.thread.clientId &&
+          canClearBindingForRecovery("clearing native coverage after a completed turn")
+        ) {
           const cleared = await bindingStore.mutate(
             bindingIdentity,
-            { kind: "clear", threadId: resourceState.thread.threadId },
+            {
+              kind: "clear",
+              threadId: resourceState.thread.threadId,
+              clientId: resourceState.thread.clientId,
+            },
             connection.assertCurrent,
           );
           if (!cleared) {

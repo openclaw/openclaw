@@ -145,10 +145,17 @@ export async function cleanupCodexAttempt(
     // must retain their own subscriptions instead of evicting one another.
     const bindingReleased =
       isIncognitoSessionKey(params.sessionKey) && !retainLiveThread
-        ? await bindingStore.mutate(bindingIdentity, {
-            kind: "clear",
-            threadId: resourceState.thread.threadId,
-          })
+        ? resourceState.thread.clientId
+          ? await bindingStore.mutate(
+              bindingIdentity,
+              {
+                kind: "clear",
+                threadId: resourceState.thread.threadId,
+                clientId: resourceState.thread.clientId,
+              },
+              connection.assertCurrent,
+            )
+          : false
         : true;
     // Only explicitly retained live threads may skip the next thread/resume.
     if (!retainLiveThread) {

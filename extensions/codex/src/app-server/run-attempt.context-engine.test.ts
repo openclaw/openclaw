@@ -36,8 +36,11 @@ import {
 } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import * as sharedClientModule from "./shared-client.js";
+import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 
@@ -1557,7 +1560,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
   });
 
-  it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
+  it("releases startup resources when stale authority rejects overflow recovery", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
@@ -1587,6 +1590,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       }),
     );
     const contextEngine = createContextEngine({ assemble, compact });
+    const releaseLease = vi.spyOn(sharedClientModule, "releaseLeasedSharedCodexAppServerClient");
+    const bindingStore = {
+      ...testCodexAppServerBindingStore,
+      mutate: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+        const mutation = args[1];
+        if (mutation.kind === "clear" && mutation.threadId === "thread-old") {
+          throw new Error("Codex session generation is no longer current: session-1");
+        }
+        return await testCodexAppServerBindingStore.mutate(...args);
+      }),
+    };
     const harness = createStartedThreadHarness(
       async (method, requestParams) => {
         if (method === "thread/resume") {
@@ -1614,8 +1628,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
 
-    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
-      "Codex ran out of room in the model's context window",
+    await expect(runCodexAppServerAttempt(params, { bindingStore })).rejects.toThrow(
+      "Codex session generation is no longer current: session-1",
     );
 
     expect(compact).not.toHaveBeenCalled();
@@ -1630,6 +1644,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     ]);
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-new");
+    const replacementRoute = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-old",
+    });
+    replacementRoute.release();
+    expect(releaseLease).toHaveBeenCalledWith(harness.client);
   });
 
   it.each([false, true])(

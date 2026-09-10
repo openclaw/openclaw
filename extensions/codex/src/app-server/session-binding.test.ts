@@ -321,6 +321,96 @@ describe("Codex app-server binding store", () => {
     expect(store.read(identity)).toMatchObject({ threadId: "thread-new" });
   });
 
+  it("clears only the exact physical client owner", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-clear-cas" };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-shared", clientId: "client-new", cwd: "/repo" },
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "clear",
+        threadId: "thread-shared",
+        clientId: "client-old",
+      }),
+    ).resolves.toBe(false);
+    expect(store.read(identity)).toMatchObject({
+      threadId: "thread-shared",
+      clientId: "client-new",
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "clear",
+        threadId: "thread-shared",
+        clientId: "client-new",
+      }),
+    ).resolves.toBe(true);
+    expect(store.read(identity)).toBeUndefined();
+  });
+
+  it("persists exact-client cleanup ownership across a SQLite store reopen", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-binding-client-owner-"));
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-client-owner",
+    };
+    const openStore = () =>
+      createCodexAppServerBindingStore(
+        createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+          namespace: "client-owner-reopen",
+          maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+          env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        }),
+      );
+    try {
+      const fresh = openStore();
+      await fresh.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-shared", clientId: "client-new", cwd: "/repo" },
+      });
+      await expect(
+        fresh.mutate(identity, {
+          kind: "clear",
+          threadId: "thread-shared",
+          clientId: "client-old",
+        }),
+      ).resolves.toBe(false);
+      expect(fresh.read(identity)).toMatchObject({ clientId: "client-new" });
+
+      resetPluginStateStoreForTests();
+      const resumed = openStore();
+      expect(resumed.read(identity)).toMatchObject({
+        threadId: "thread-shared",
+        clientId: "client-new",
+      });
+      await expect(
+        resumed.mutate(identity, {
+          kind: "clear",
+          threadId: "thread-shared",
+          clientId: "client-old",
+        }),
+      ).resolves.toBe(false);
+      expect(resumed.read(identity)).toMatchObject({ clientId: "client-new" });
+      await expect(
+        resumed.mutate(identity, {
+          kind: "clear",
+          threadId: "thread-shared",
+          clientId: "client-new",
+        }),
+      ).resolves.toBe(true);
+      expect(resumed.read(identity)).toBeUndefined();
+    } finally {
+      resetPluginStateStoreForTests();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects same-thread and supervision ownership through replacement CAS", async () => {
     const { state } = createStateStore();
     const store = createCodexAppServerBindingStore(state);
