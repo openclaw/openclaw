@@ -26,9 +26,9 @@ export function createSessionEventRefreshCoordinator({
     deadline = 0;
   };
 
-  const start = (resume = false) => {
+  const start = () => {
     // A queued owner may have started its real request after this timer was armed.
-    if (!resume && active && Date.now() < nextAllowed) {
+    if (active && Date.now() < nextAllowed) {
       timer = setTimeout(start, nextAllowed - Date.now());
       return;
     }
@@ -79,7 +79,8 @@ export function createSessionEventRefreshCoordinator({
       active = next;
       if (next) {
         if (queued) {
-          start(true);
+          nextAllowed = 0;
+          start();
         }
         return;
       }
