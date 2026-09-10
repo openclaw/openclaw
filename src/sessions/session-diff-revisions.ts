@@ -45,6 +45,22 @@ export async function resolveSessionDiffBase(params: {
         }
       }
     }
+    // Remote-tracking default branches exist even when origin/HEAD and local
+    // main/master are absent (issue #144205).
+    for (const candidate of ["origin/main", "origin/master"]) {
+      const verified = await params.gitOut(params.root, [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        candidate,
+      ]);
+      if (verified?.trim()) {
+        const mergeBase = await params.gitOut(params.root, ["merge-base", candidate, "HEAD"]);
+        if (mergeBase?.trim()) {
+          return { base: mergeBase.trim(), baseRef: candidate };
+        }
+      }
+    }
   }
   return { base: "HEAD", baseRef: "HEAD" };
 }
