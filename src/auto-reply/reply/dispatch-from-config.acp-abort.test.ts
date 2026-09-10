@@ -1078,9 +1078,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
   ] as const)(
     "records $abort before an abort-insensitive resolver settles",
     async ({ abort, expected }) => {
-      const resolverStarted = createDeferred<void>();
-      const releaseResolver = createDeferred<void>();
-      const resolverFinished = createDeferred<void>();
+      const resolverStarted = createDeferred();
+      const releaseResolver = createDeferred();
+      const resolverFinished = createDeferred();
       const runState: ReplyOperationRunState = {};
       const dispatcher = createDispatcher();
       const ctx = buildTestCtx({
