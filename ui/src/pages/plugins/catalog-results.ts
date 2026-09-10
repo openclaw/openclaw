@@ -53,9 +53,8 @@ export type PluginCatalogResultsProps = {
   onPreviousPage: () => void;
   onNextPage: () => void;
   onRetry: () => void;
+  onRetryGrouped: () => void;
   onRetryCategories: () => void;
-  onRetryFeatured: () => void;
-  onRetryTrending: () => void;
 };
 
 const SECTION_SIZE = 8;
@@ -369,8 +368,6 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
       title: t("pluginsPage.featuredTitle"),
       items: props.featured,
       loading: props.featuredLoading,
-      error: props.featuredError,
-      onRetry: props.onRetryFeatured,
       onViewAll: () => props.onIntentChange("featured"),
       props,
     })}
@@ -379,8 +376,6 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
       title: t("pluginsPage.intentTrending"),
       items: props.trending,
       loading: props.trendingLoading,
-      error: props.trendingError,
-      onRetry: props.onRetryTrending,
       onViewAll: () => props.onIntentChange("trending"),
       props,
     })}
@@ -409,6 +404,12 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
 export function renderPluginCatalogResults(props: PluginCatalogResultsProps): TemplateResult {
   const hasQuery = Boolean(props.query.trim());
   const grouped = !hasQuery && props.intent === "all" && props.category === null;
+  const partialErrors = [
+    props.remoteError,
+    ...(grouped ? [props.featuredError, props.trendingError] : []),
+  ].filter(
+    (error, index, errors): error is string => Boolean(error) && errors.indexOf(error) === index,
+  );
   return html`<section class="plugin-catalog-results" aria-label=${t("pluginsPage.exploreTitle")}>
     <label class="plugin-catalog-search">
       <span aria-hidden="true">${icons.search}</span>
@@ -454,9 +455,16 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): Te
         : renderCategoryChips(props)
     }
     ${
-      props.remoteError
+      partialErrors.length > 0
         ? html`<div class="callout warning oc-banner" role="status">
-            ${formatUiExternalText(props.remoteError)}
+            <span>${partialErrors.map((error) => formatUiExternalText(error)).join(" ")}</span>
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
+              @click=${grouped ? props.onRetryGrouped : props.onRetry}
+            >
+              ${t("pluginsPage.tryAgain")}
+            </button>
           </div>`
         : nothing
     }

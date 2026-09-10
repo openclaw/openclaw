@@ -121,6 +121,7 @@ export class PluginDiscoveryController {
           : initialState,
       onComplete: (result) => {
         this.featured = result.items.slice(0, CATALOG_SECTION_SIZE);
+        this.featuredError = result.remoteError ?? null;
         this.rememberEntries(result.items);
         this.gateway.onEntriesChanged?.();
       },
@@ -141,6 +142,7 @@ export class PluginDiscoveryController {
           : initialState,
       onComplete: (result) => {
         this.trending = result.items.slice(0, CATALOG_SECTION_SIZE);
+        this.trendingError = result.remoteError ?? null;
         this.rememberEntries(result.items);
         this.gateway.onEntriesChanged?.();
       },
@@ -212,8 +214,12 @@ export class PluginDiscoveryController {
     let cursor = params.cursor;
     let remoteError: string | undefined;
     let shouldFetch = params.overflow === undefined || Boolean(cursor);
+    const requestedCursors = new Set<string>();
 
     while (available.length < CATALOG_PAGE_SIZE && shouldFetch) {
+      if (cursor) {
+        requestedCursors.add(cursor);
+      }
       const page = await params.client.request<PluginDiscoveryResult>(
         "plugins.catalog.browse",
         {
@@ -229,7 +235,8 @@ export class PluginDiscoveryController {
       remoteError = page.remoteError;
       available.push(...page.items);
       cursor = page.nextCursor;
-      shouldFetch = !params.query && Boolean(cursor);
+      shouldFetch =
+        !params.query && cursor !== undefined && !remoteError && !requestedCursors.has(cursor);
     }
 
     const groupedOverview =

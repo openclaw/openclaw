@@ -99,7 +99,9 @@ class PluginsPage extends OpenClawLightDomElement {
       this.pageNotice = null;
     },
     invalidateRequests: (change) =>
-      this.invalidateRequests(change.snapshot.phase !== "connected" || !change.snapshot.client),
+      this.invalidateRequests(
+        change.identityChanged || change.snapshot.phase !== "connected" || !change.snapshot.client,
+      ),
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
   });
   private readonly discovery = new PluginDiscoveryController(this, {
@@ -145,6 +147,7 @@ class PluginsPage extends OpenClawLightDomElement {
     getRuntimeConfig: () => this.context.runtimeConfig,
     getConsentController: () => this.consentController,
     getOwner: () => gatewayPresentationScope(this.context.gateway),
+    getBootId: () => this.gateway.snapshot?.hello?.server?.bootId,
     isConnected: () => this.gateway.connected,
     canMutate: () => this.canMutate(),
     canEditConfig: () => this.canEditConfig(),
@@ -156,7 +159,6 @@ class PluginsPage extends OpenClawLightDomElement {
       }
       await scope.client.request("gateway.restart.request", { reason });
     },
-    requestUpdate: () => this.requestUpdate(),
     onManage: (pluginId) => {
       this.context.navigate("plugin-settings", {
         pathname: pathForPluginSettings(pluginId, this.context.basePath),
@@ -172,10 +174,7 @@ class PluginsPage extends OpenClawLightDomElement {
       client ? client.request<PluginListResult>("plugins.list", {}, { signal }) : initialState,
     onComplete: (result) => {
       this.replaceResult(result);
-      const routePluginId =
-        this.surface === "settings"
-          ? pluginSettingsIdFromPath(this.routeData?.location.pathname ?? "", this.context.basePath)
-          : null;
+      const routePluginId = this.surface === "settings" ? this.activeRoutePluginId : null;
       if (routePluginId && routePluginId !== this.detail?.pluginId) {
         void this.showDetails(routePluginId);
       }
@@ -200,7 +199,12 @@ class PluginsPage extends OpenClawLightDomElement {
         this.requestUpdate();
         if (completedSave && this.pluginConfigEditPending) {
           this.pluginConfigEditPending = false;
-          void this.refreshCatalog();
+          const detailPluginId = this.detail?.pluginId;
+          void this.refreshCatalog().then(() => {
+            if (detailPluginId && this.detail?.pluginId === detailPluginId) {
+              void this.showDetails(detailPluginId);
+            }
+          });
         }
       });
     },
@@ -308,10 +312,7 @@ class PluginsPage extends OpenClawLightDomElement {
     if (shouldRefreshAfterChange) {
       void this.refreshCatalog().then(() => this.installWizardController.resume());
       if (this.surface === "discovery") {
-        const catalogId = pluginCatalogIdFromPath(
-          this.routeData?.location.pathname ?? "",
-          this.context.basePath,
-        );
+        const catalogId = this.activeRoutePluginId;
         if (catalogId) {
           void this.showCatalogDetail(catalogId);
         } else {
@@ -332,14 +333,8 @@ class PluginsPage extends OpenClawLightDomElement {
       return;
     }
     this.routeDataConsumed = true;
-    const detailPluginId =
-      this.surface === "settings"
-        ? pluginSettingsIdFromPath(data.location.pathname, this.context.basePath)
-        : null;
-    const catalogId =
-      this.surface === "discovery"
-        ? pluginCatalogIdFromPath(data.location.pathname, this.context.basePath)
-        : null;
+    const detailPluginId = this.surface === "settings" ? this.activeRoutePluginId : null;
+    const catalogId = this.surface === "discovery" ? this.activeRoutePluginId : null;
     // Route location is UI state, not Gateway data. Apply it even when the
     // catalog snapshot is stale so deep links do not fall back to Installed.
     if (this.surface === "settings" && !detailPluginId) {
@@ -394,6 +389,13 @@ class PluginsPage extends OpenClawLightDomElement {
     );
   }
 
+  private get activeRoutePluginId(): string | null {
+    const pathname = this.routeData?.location.pathname ?? "";
+    return this.surface === "settings"
+      ? pluginSettingsIdFromPath(pathname, this.context.basePath)
+      : pluginCatalogIdFromPath(pathname, this.context.basePath);
+  }
+
   private ensureInitialData() {
     // The route owns initial loading; a warm page module can render before its data arrives.
     if (
@@ -408,10 +410,7 @@ class PluginsPage extends OpenClawLightDomElement {
       void this.refreshCatalog();
     }
     if (this.surface === "discovery") {
-      const catalogId = pluginCatalogIdFromPath(
-        this.routeData?.location.pathname ?? "",
-        this.context.basePath,
-      );
+      const catalogId = this.activeRoutePluginId;
       if (catalogId) {
         if (catalogId !== this.catalogDetail?.id) {
           void this.showCatalogDetail(catalogId);
@@ -621,10 +620,7 @@ class PluginsPage extends OpenClawLightDomElement {
               .filter(Boolean)
               .join("\n"),
           };
-          const routePluginId = pluginSettingsIdFromPath(
-            this.routeData?.location.pathname ?? "",
-            this.context.basePath,
-          );
+          const routePluginId = this.activeRoutePluginId;
           if (routePluginId === pluginId) {
             this.detail = null;
             this.context.replace("plugin-settings", {
@@ -702,9 +698,12 @@ class PluginsPage extends OpenClawLightDomElement {
           this.pluginConfigEditPending = false;
           void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
         },
-        retryConfig: () => {
-          void this.context.runtimeConfig.retry();
+        retryConfigRead: () => {
+          void this.context.runtimeConfig.refresh();
           void this.context.runtimeConfig.refreshSchema();
+        },
+        retryConfigWrite: () => {
+          void this.context.runtimeConfig.retry();
         },
         closeSettingsDetail: (parentRoute) => {
           this.detail = null;

@@ -325,20 +325,10 @@ describe("PluginsPage lifecycle confirmation", () => {
   });
 
   it("does not dispatch a queued configuration save after the wizard closes", async () => {
-    const { client } = createClient(async () => createResult());
+    const { client, request } = createClient(async () => createResult());
     const gateway = createGateway(client);
-    const config = createRuntimeConfigHarness(
-      vi.fn(async () => undefined),
-      { connected: true, configFormDirty: true, lastError: null },
-      () => client,
-    );
-    const queued = deferred<void>();
-    const release = deferred<void>();
-    config.runtimeConfig.save.mockImplementation(async (options) => {
-      queued.resolve();
-      await release.promise;
-      return options?.canDispatch?.() ?? true;
-    });
+    const { harness: config, queued, release } = createQueuedRuntimeConfig(client);
+    config.runtimeConfig.state.connected = true;
     const { page } = await mountPage(
       createContext(gateway.gateway, undefined, undefined, config),
       createPluginsRouteData(gateway.gateway),
@@ -348,16 +338,62 @@ describe("PluginsPage lifecycle confirmation", () => {
       ...page.installWizard!,
       pluginId: "community-thing",
       stage: "configuring",
+      configDraft: {
+        pluginId: "community-thing",
+        baseline: {},
+        value: { token: "secret" },
+      },
     };
 
     const save = page.installWizardController.saveConfiguration();
-    await queued.promise;
+    await queued;
     page.installWizardController.close();
     release.resolve();
     await save;
 
-    expect(config.runtimeConfig.save).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalledWith("config.set", expect.anything());
     expect(page.installWizard).toBeNull();
+  });
+
+  it("preserves the configuration draft after a failed save retry", async () => {
+    const { client } = createClient(async () => createResult());
+    const gateway = createGateway(client);
+    const config = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      { connected: true, configFormDirty: false, lastError: "write unavailable" },
+      () => client,
+    );
+    vi.mocked(config.runtimeConfig.runExternalMutation).mockResolvedValue({
+      ok: false,
+      reason: "error",
+      error: "write unavailable",
+    });
+    const { page } = await mountPage(
+      createContext(gateway.gateway, undefined, undefined, config),
+      createPluginsRouteData(gateway.gateway),
+    );
+    page.installWizardController.open(createWizardDetail());
+    const configDraft = {
+      pluginId: "community-thing",
+      baseline: {},
+      value: { token: "secret" },
+    };
+    page.installWizard = {
+      ...page.installWizard!,
+      pluginId: "community-thing",
+      stage: "configuring",
+      configDraft,
+    };
+
+    await page.installWizardController.saveConfiguration();
+    expect(page.installWizard?.stage).toBe("error");
+    page.installWizardController.retry();
+
+    expect(page.installWizard).toMatchObject({
+      stage: "configuring",
+      configDraft,
+      error: undefined,
+    });
   });
 
   it("reconfirms an install-policy retry after a same-client reconnect", async () => {

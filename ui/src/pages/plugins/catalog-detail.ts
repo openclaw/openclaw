@@ -200,7 +200,10 @@ function renderTabPanel(
 function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogDetailProps) {
   const { plugin, detail } = result;
   const authorHandle = detail.author?.handle ?? plugin.catalog.author;
-  const packageUrl = clawHubPackageUrl(detail.packageName, authorHandle);
+  const packageUrl =
+    detail.origin === "clawhub" || plugin.catalog.publishedToClawHub === true
+      ? clawHubPackageUrl(detail.packageName, authorHandle)
+      : undefined;
   const packageIcon = plugin.catalog.imageUrl ? props.iconUrls[plugin.catalog.imageUrl] : undefined;
   const publisherIcon = detail.author?.imageUrl
     ? props.iconUrls[detail.author.imageUrl]

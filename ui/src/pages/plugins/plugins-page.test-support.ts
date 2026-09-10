@@ -49,6 +49,12 @@ type TestPluginsPage = HTMLElement & {
   loading: boolean;
   busy: Record<string, boolean>;
   messages: Record<string, PluginRowMessage>;
+  detail: {
+    pluginId: string;
+    inspection: PluginsInspectResult | null;
+    error: string | null;
+  } | null;
+  pluginConfigEditPending: boolean;
   applyMutationResult: (result: PluginMutationResult) => void;
   consentController: Pick<PluginsConsentController, "install" | "updateEnabled">;
   installWizard: PluginInstallWizardState | null;

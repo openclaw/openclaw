@@ -73,7 +73,8 @@ type SharedProps = {
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigRemove: (path: Array<string | number>) => void;
   onConfigReload: () => void;
-  onConfigRetry: () => void;
+  onConfigReadRetry: () => void;
+  onConfigWriteRetry: () => void;
   onRefresh: () => void;
 };
 
@@ -236,7 +237,7 @@ function renderAdvanced(props: InventoryProps): TemplateResult {
   }
   if (!props.advancedSchema || !props.configValue) {
     return props.configError
-      ? renderRetryError(props.configError, props.onConfigRetry)
+      ? renderRetryError(props.configError, props.onConfigReadRetry)
       : props.configSchemaLoading || !props.configValue
         ? renderSettingsLoadingSkeleton({ rows: 4, carapace: true })
         : renderSettingsEmpty(t("pluginsPage.schemaUnavailable"), { carapace: true });
@@ -253,7 +254,7 @@ function renderAdvanced(props: InventoryProps): TemplateResult {
       onPatch: props.onConfigPatch,
       onRemove: props.onConfigRemove,
     })}
-    ${props.configError ? renderRetryError(props.configError, props.onConfigRetry) : nothing}
+    ${props.configError ? renderRetryError(props.configError, props.onConfigWriteRetry) : nothing}
   `;
 }
 
@@ -323,7 +324,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
 function renderConfiguration(props: DetailProps, plugin: PluginCatalogItem): TemplateResult {
   if (!props.configValue || !props.configSchema) {
     if (props.configError) {
-      return renderRetryError(props.configError, props.onConfigRetry);
+      return renderRetryError(props.configError, props.onConfigReadRetry);
     }
     return renderSettingsLoadingSkeleton({ rows: 3, carapace: true });
   }
@@ -340,7 +341,7 @@ function renderConfiguration(props: DetailProps, plugin: PluginCatalogItem): Tem
       onPatch: props.onConfigPatch,
       onRemove: props.onConfigRemove,
     })}
-    ${props.configError ? renderRetryError(props.configError, props.onConfigRetry) : nothing}
+    ${props.configError ? renderRetryError(props.configError, props.onConfigWriteRetry) : nothing}
   `;
 }
 
@@ -413,7 +414,7 @@ function renderInstalledAdvanced(props: DetailProps): TemplateResult {
         })
       : nothing
   }
-  ${props.configError ? renderRetryError(props.configError, props.onConfigRetry) : nothing}
+  ${props.configError ? renderRetryError(props.configError, props.onConfigWriteRetry) : nothing}
   ${renderPluginDeclaredCapabilities(props.inspection.declared)}
   ${renderPluginGrants(props.inspection.grants, props.inspection.plugin.origin)}`;
 }

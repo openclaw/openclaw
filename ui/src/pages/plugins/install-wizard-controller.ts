@@ -1,10 +1,17 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { serializeConfigForm } from "../../lib/config-form-utils.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/plugins/index.ts";
 import {
+  buildPluginConfigurationSet,
+  createPluginConfigurationDraft,
+  hasPluginConfigurationChanges,
   installedPluginForWizard,
   installedPluginWizardStage,
   installRequestForDiscoveryDetail,
+  patchPluginConfigurationDraft,
+  removePluginConfigurationDraftValue,
   type PluginInstallWizardState,
 } from "./install-wizard-model.ts";
 import { pluginRowKey } from "./plugin-row-message.ts";
@@ -19,12 +26,12 @@ type InstallWizardControllerHost = {
   getRuntimeConfig: () => ApplicationContext["runtimeConfig"];
   getConsentController: () => PluginsConsentController;
   getOwner: () => object;
+  getBootId: () => string | undefined;
   isConnected: () => boolean;
   canMutate: () => boolean;
   canEditConfig: () => boolean;
   refreshCatalog: () => Promise<void>;
   requestRestart: (reason: string) => Promise<void>;
-  requestUpdate: () => void;
   onManage: (pluginId: string) => void;
 };
 
@@ -32,6 +39,7 @@ export class InstallWizardController {
   private reconnectTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private attempt = 0;
   private owner: object | null = null;
+  private restartRequirement: { bootId: string } | null = null;
 
   constructor(private readonly host: InstallWizardControllerHost) {}
 
@@ -73,6 +81,7 @@ export class InstallWizardController {
     this.clearReconnectTimeout();
     this.attempt += 1;
     this.owner = this.host.getOwner();
+    this.restartRequirement = null;
     this.host.setState({
       catalogId: result.plugin.id,
       detail: result,
@@ -169,6 +178,9 @@ export class InstallWizardController {
     ) {
       return;
     }
+    if (!this.consumeCompletedRestart()) {
+      return;
+    }
     this.clearReconnectTimeout();
     const plugin = installedPluginForWizard(this.host.getCatalog(), state);
     if (!plugin) {
@@ -193,7 +205,14 @@ export class InstallWizardController {
       if (!this.isCurrent(attempt, state.catalogId)) {
         return;
       }
-      this.host.requestUpdate();
+      const current = this.host.getState();
+      if (!current || !this.isCurrent(attempt, state.catalogId)) {
+        return;
+      }
+      this.host.setState({
+        ...current,
+        configDraft: createPluginConfigurationDraft(runtimeConfig.state.configForm, plugin.id),
+      });
     } else if (stage === "enabling") {
       this.enable(plugin.id);
     }
@@ -201,7 +220,12 @@ export class InstallWizardController {
 
   async saveConfiguration(): Promise<void> {
     const state = this.host.getState();
-    if (!state?.pluginId || state.stage !== "configuring" || !this.host.canEditConfig()) {
+    if (
+      !state?.pluginId ||
+      !state.configDraft ||
+      state.stage !== "configuring" ||
+      !this.host.canEditConfig()
+    ) {
       return;
     }
     const attempt = this.attempt;
@@ -209,13 +233,29 @@ export class InstallWizardController {
       return;
     }
     const runtimeConfig = this.host.getRuntimeConfig();
-    if (
-      !(await runtimeConfig.save({ canDispatch: () => this.isCurrent(attempt, state.catalogId) }))
-    ) {
+    const { pluginId, configDraft } = state;
+    const mutation = hasPluginConfigurationChanges(configDraft)
+      ? await runtimeConfig.runExternalMutation(
+          (client) => {
+            const snapshot = runtimeConfig.state.configSnapshot;
+            const config = resolveEditableSnapshotConfig(snapshot);
+            if (!config || !snapshot?.hash) {
+              throw new Error(t("pluginsPage.installWizard.configSaveFailed"));
+            }
+            return client.request("config.set", {
+              raw: serializeConfigForm(buildPluginConfigurationSet(config, configDraft)),
+              baseHash: snapshot.hash,
+            });
+          },
+          { canDispatch: () => this.isCurrent(attempt, state.catalogId) },
+        )
+      : null;
+    const saved = mutation === null || mutation.ok;
+    if (!saved) {
       this.fail(
         attempt,
         state.catalogId,
-        runtimeConfig.state.lastError ?? t("pluginsPage.installWizard.configSaveFailed"),
+        mutation?.error ?? t("pluginsPage.installWizard.configSaveFailed"),
       );
       return;
     }
@@ -226,20 +266,26 @@ export class InstallWizardController {
     if (!this.isCurrent(attempt, state.catalogId)) {
       return;
     }
-    this.enable(state.pluginId);
+    this.enable(pluginId);
   }
 
   patchConfiguration(path: Array<string | number>, value: unknown): void {
     const state = this.host.getState();
-    if (state && this.isCurrent(this.attempt, state.catalogId)) {
-      this.host.getRuntimeConfig().patchForm(path, value);
+    if (state?.configDraft && this.isCurrent(this.attempt, state.catalogId)) {
+      this.host.setState({
+        ...state,
+        configDraft: patchPluginConfigurationDraft(state.configDraft, path, value),
+      });
     }
   }
 
   removeConfiguration(path: Array<string | number>): void {
     const state = this.host.getState();
-    if (state && this.isCurrent(this.attempt, state.catalogId)) {
-      this.host.getRuntimeConfig().removeFormValue(path);
+    if (state?.configDraft && this.isCurrent(this.attempt, state.catalogId)) {
+      this.host.setState({
+        ...state,
+        configDraft: removePluginConfigurationDraftValue(state.configDraft, path),
+      });
     }
   }
 
@@ -254,13 +300,22 @@ export class InstallWizardController {
       this.host.setState({
         ...state,
         pluginId: undefined,
+        configDraft: undefined,
         stage: "review",
         error: undefined,
       });
       return;
     }
+    if (state.pluginId && state.configDraft) {
+      this.host.setState({ ...state, stage: "configuring", error: undefined });
+      return;
+    }
     if (state.pluginId) {
       this.host.setState({ ...state, stage: "reconnecting", error: undefined });
+      if (this.restartRequirement && !this.consumeCompletedRestart()) {
+        void this.restart(this.attempt, state.catalogId);
+        return;
+      }
       this.armReconnectTimeout(this.attempt, state.catalogId);
       void this.host.refreshCatalog().then(() => this.resume());
       return;
@@ -318,7 +373,13 @@ export class InstallWizardController {
       return;
     }
     const key = pluginRowKey(pluginId);
-    this.host.setState({ ...state, pluginId, stage: "enabling", error: undefined });
+    this.host.setState({
+      ...state,
+      pluginId,
+      configDraft: undefined,
+      stage: "enabling",
+      error: undefined,
+    });
     void this.host.getConsentController().updateEnabled(
       pluginId,
       true,
@@ -369,11 +430,22 @@ export class InstallWizardController {
   private retireAttempt(): void {
     this.attempt += 1;
     this.owner = null;
+    this.restartRequirement = null;
   }
 
   private async restart(attempt: number, catalogId: string): Promise<void> {
     if (!this.isCurrent(attempt, catalogId)) {
       return;
+    }
+    if (!this.restartRequirement) {
+      const bootId = this.host.getBootId()?.trim();
+      if (!bootId) {
+        this.fail(attempt, catalogId, t("pluginsPage.installWizard.restartFailed"));
+        return;
+      }
+      // Restart scheduling is only acceptance. The next hello must prove that a
+      // different Gateway process loaded the new plugin inventory.
+      this.restartRequirement = { bootId };
     }
     try {
       await this.host.requestRestart(t("pluginsPage.installWizard.restartReason"));
@@ -388,5 +460,17 @@ export class InstallWizardController {
     if (this.isCurrent(attempt, catalogId)) {
       this.armReconnectTimeout(attempt, catalogId);
     }
+  }
+
+  private consumeCompletedRestart(): boolean {
+    if (!this.restartRequirement) {
+      return true;
+    }
+    const bootId = this.host.getBootId()?.trim();
+    if (!bootId || bootId === this.restartRequirement.bootId) {
+      return false;
+    }
+    this.restartRequirement = null;
+    return true;
   }
 }

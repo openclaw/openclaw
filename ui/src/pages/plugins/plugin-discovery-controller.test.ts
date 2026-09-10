@@ -127,3 +127,74 @@ it("publishes visible entry changes on fetched and cached page transitions", asy
   expect(controller.result?.items).toHaveLength(100);
   expect(onEntriesChanged).toHaveBeenCalledTimes(3);
 });
+
+it("retains a failed page cursor for explicit retry without auto-following it", async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => entry(index));
+  const recoveredPage = [entry(100)];
+  const { controller, request } = setup([
+    { items: firstPage, nextCursor: "page-2" },
+    {
+      items: [],
+      nextCursor: "page-2",
+      remoteError: "ClawHub is unavailable; local plugins remain available.",
+    },
+    { items: recoveredPage },
+  ]);
+
+  await controller.refresh();
+  await controller.nextPage();
+
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(controller.remoteError).toBe("ClawHub is unavailable; local plugins remain available.");
+  expect(controller.canGoNext).toBe(true);
+  expect(controller.result?.items).toHaveLength(100);
+
+  await controller.nextPage();
+
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(controller.result?.items.map((item) => item.id)).toEqual(["plugin-100"]);
+});
+
+it("retains a repeated page cursor for explicit retry instead of auto-following it", async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => entry(index));
+  const { controller, request } = setup([
+    { items: firstPage, nextCursor: "page-2" },
+    { items: [], nextCursor: "page-2" },
+    { items: [entry(100)] },
+  ]);
+
+  await controller.refresh();
+  await controller.nextPage();
+
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(controller.canGoNext).toBe(true);
+  expect(controller.result?.items).toHaveLength(100);
+
+  await controller.nextPage();
+
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(controller.result?.items.map((item) => item.id)).toEqual(["plugin-100"]);
+});
+
+it("surfaces partial ClawHub failures on the Featured shelf", async () => {
+  const { controller } = setup([
+    { items: [], remoteError: "ClawHub is unavailable; local plugins remain available." },
+  ]);
+
+  await controller.refreshFeatured();
+
+  expect(controller.featuredError).toBe("ClawHub is unavailable; local plugins remain available.");
+});
+
+it("clears cached catalog attribution when discovery ownership changes", async () => {
+  const attributed = entry(1);
+  attributed.local.pluginId = "local-plugin";
+  attributed.catalog.author = "first-gateway";
+  const { controller } = setup([{ items: [attributed] }]);
+  await controller.refresh();
+  expect(controller.attributions.get("local-plugin")?.author).toBe("first-gateway");
+
+  controller.invalidate();
+
+  expect(controller.attributions.size).toBe(0);
+});

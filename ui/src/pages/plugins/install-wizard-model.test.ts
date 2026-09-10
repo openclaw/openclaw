@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { PluginCatalogItem, PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import {
+  buildPluginConfigurationSet,
+  createPluginConfigurationDraft,
+  hasPluginConfigurationChanges,
   installedPluginForWizard,
   installRequestForDiscoveryDetail,
   installedPluginWizardStage,
+  patchPluginConfigurationDraft,
+  removePluginConfigurationDraftValue,
 } from "./install-wizard-model.ts";
 
 function detail(overrides: Partial<PluginDiscoveryDetailResult> = {}): PluginDiscoveryDetailResult {
@@ -106,5 +111,81 @@ describe("plugin install wizard model", () => {
         },
       ),
     ).toBe(plugin);
+  });
+
+  it("removes an unset value without mutating the loaded config", () => {
+    const config = {
+      plugins: {
+        entries: {
+          matrix: {
+            config: { homeserver: "https://matrix.example", accessToken: "secret" },
+          },
+        },
+      },
+    };
+    const draft = removePluginConfigurationDraftValue(
+      createPluginConfigurationDraft(config, "matrix"),
+      ["plugins", "entries", "matrix", "config", "accessToken"],
+    );
+
+    expect(hasPluginConfigurationChanges(createPluginConfigurationDraft(config, "matrix"))).toBe(
+      false,
+    );
+    expect(hasPluginConfigurationChanges(draft)).toBe(true);
+    expect(buildPluginConfigurationSet(config, draft)).toEqual({
+      plugins: {
+        entries: {
+          matrix: { config: { homeserver: "https://matrix.example" } },
+        },
+      },
+    });
+    expect(config.plugins.entries.matrix.config.accessToken).toBe("secret");
+  });
+
+  it("replaces changed plugin config arrays without changing siblings", () => {
+    const config = {
+      plugins: {
+        entries: {
+          matrix: { config: { rooms: ["engineering", "support"], untouched: ["alerts"] } },
+        },
+      },
+    };
+    const draft = patchPluginConfigurationDraft(
+      createPluginConfigurationDraft(config, "matrix"),
+      ["plugins", "entries", "matrix", "config", "rooms"],
+      ["engineering"],
+    );
+
+    const current = structuredClone(config);
+    current.plugins.entries.matrix.config.untouched.push("concurrent");
+    expect(buildPluginConfigurationSet(current, draft)).toEqual({
+      plugins: {
+        entries: {
+          matrix: { config: { rooms: ["engineering"], untouched: ["alerts", "concurrent"] } },
+        },
+      },
+    });
+  });
+
+  it("preserves an explicit nullable plugin configuration value", () => {
+    const config = {
+      plugins: {
+        entries: {
+          matrix: { config: { mode: "auto", untouched: true } },
+        },
+      },
+    };
+    const draft = patchPluginConfigurationDraft(
+      createPluginConfigurationDraft(config, "matrix"),
+      ["plugins", "entries", "matrix", "config", "mode"],
+      null,
+    );
+    expect(buildPluginConfigurationSet(config, draft)).toMatchObject({
+      plugins: {
+        entries: {
+          matrix: { config: { mode: null, untouched: true } },
+        },
+      },
+    });
   });
 });

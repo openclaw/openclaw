@@ -585,6 +585,29 @@ describe("plugin management Gateway handlers", () => {
           "ClawHub is unavailable: service unavailable. Installed plugins remain available.",
       },
     });
+    const [item] = (result.response as { items: Array<{ catalog: object }> }).items;
+    expect(item?.catalog).not.toHaveProperty("publishedToClawHub");
+  });
+
+  it("preserves a failed browse cursor so the same page remains retryable", async () => {
+    catalogMocks.browse.mockRejectedValue(new Error("service unavailable"));
+    managementMocks.list.mockResolvedValue({
+      plugins: [],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+
+    const result = await callHandler("plugins.catalog.browse", {
+      intent: "all",
+      cursor: "page-two",
+    });
+
+    expect(result.response).toMatchObject({
+      items: [],
+      nextCursor: "page-two",
+      remoteError:
+        "ClawHub is unavailable: service unavailable. Installed plugins remain available.",
+    });
   });
 
   it("keeps ClawHub search results when bundled publication verification fails", async () => {
@@ -726,27 +749,39 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("resolves local-only discovery details without contacting ClawHub", async () => {
+  it("resolves and inspects an uninstalled official discovery candidate locally", async () => {
     const localOnly = {
       id: "workboard",
       name: "Workboard",
       packageName: "@openclaw/workboard",
       description: "Local work coordination.",
-      installed: true,
+      origin: "official" as const,
+      installed: false,
       enabled: false,
-      state: "needs-setup" as const,
+      state: "not-installed" as const,
       categories: ["tools"],
       category: "tools",
+      install: { source: "official" as const, pluginId: "workboard" },
     };
     managementMocks.list.mockResolvedValue({
-      plugins: [localOnly],
+      plugins: [
+        localOnly,
+        {
+          id: "other-plugin",
+          packageName: "workboard",
+          name: "Alias collision",
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        },
+      ],
       diagnostics: [],
       mutationAllowed: true,
     });
     managementMocks.inspect.mockResolvedValue({
       ok: true,
       plugin: localOnly,
-      source: { kind: "bundled" },
+      source: { kind: "official-catalog" },
       declared: {
         channels: [],
         providers: [],
@@ -768,14 +803,22 @@ describe("plugin management Gateway handlers", () => {
     });
 
     const result = await callHandler("plugins.catalog.get", {
-      id: "local_QG9wZW5jbGF3L3dvcmtib2FyZA",
+      id: "local_d29ya2JvYXJk",
     });
 
     expect(catalogMocks.detail).not.toHaveBeenCalled();
+    expect(managementMocks.inspect).toHaveBeenCalledWith({
+      config: {},
+      pluginId: "workboard",
+    });
     expect(result.response).toMatchObject({
       plugin: {
         catalog: { name: "Workboard", categories: ["tools"] },
-        local: { state: "needs-setup", action: "manage" },
+        local: {
+          state: "not-installed",
+          action: "install",
+          install: { source: "official", pluginId: "workboard" },
+        },
       },
       detail: {
         origin: "local",

@@ -49,9 +49,7 @@ function indexClawHubPlugins(
 ): Map<string, PluginCatalogEntry> {
   const index = new Map<string, PluginCatalogEntry>();
   for (const plugin of plugins) {
-    const packageName =
-      plugin.clawhubPackage ??
-      (plugin.install?.source === "clawhub" ? plugin.install.packageName : undefined);
+    const packageName = localClawHubIdentity(plugin);
     const identity = normalizedAlias(packageName);
     if (identity) {
       index.set(identity, plugin);
@@ -216,7 +214,9 @@ export function joinClawHubPluginCatalog(params: {
         .some((value) => value.includes(query));
     })
     .toSorted((left, right) => left.name.localeCompare(right.name))
-    .map((plugin) => projectLocalDiscoveryEntry(plugin, params.local.mutationAllowed));
+    .map((plugin) =>
+      projectLocalDiscoveryEntry(plugin, params.local.mutationAllowed, params.includeBundledOnly),
+    );
   return [...localOnly, ...remote];
 }
 
@@ -224,24 +224,32 @@ function localDiscoveryCategories(plugin: PluginCatalogEntry): string[] {
   return plugin.categories ?? (plugin.category ? [plugin.category] : []);
 }
 
-function localDiscoveryIdentity(plugin: PluginCatalogEntry): string {
-  return plugin.clawhubPackage ?? plugin.packageName ?? plugin.id;
+function localClawHubIdentity(plugin: PluginCatalogEntry): string | undefined {
+  return (
+    plugin.clawhubPackage ??
+    (plugin.install?.source === "clawhub" ? plugin.install.packageName : undefined)
+  );
 }
 
 function projectLocalDiscoveryEntry(
   plugin: PluginCatalogEntry,
   mutationAllowed: boolean,
+  publicationVerified = false,
 ): PluginDiscoveryEntry {
+  const clawhubIdentity = localClawHubIdentity(plugin);
+  const publishedToClawHub = clawhubIdentity ? true : publicationVerified ? false : undefined;
   const packageName = plugin.clawhubPackage ?? plugin.packageName;
   return {
-    id: encodeLocalPluginDiscoveryId(localDiscoveryIdentity(plugin)),
+    id: clawhubIdentity
+      ? encodePluginDiscoveryId(clawhubIdentity)
+      : encodeLocalPluginDiscoveryId(plugin.id),
     catalog: {
       name: plugin.name,
       ...(packageName ? { packageName } : {}),
       ...(plugin.description ? { summary: plugin.description } : {}),
       official: false,
       categories: localDiscoveryCategories(plugin),
-      publishedToClawHub: Boolean(plugin.clawhubPackage),
+      ...(publishedToClawHub !== undefined ? { publishedToClawHub } : {}),
       ...(plugin.version ? { latestVersion: plugin.version } : {}),
     },
     local: projectLocalFacts(plugin, mutationAllowed, false),
@@ -251,8 +259,11 @@ function projectLocalDiscoveryEntry(
 export function findLocalPluginByIdentity(
   local: PluginsListResult,
   identity: string,
+  origin: "clawhub" | "local" = "clawhub",
 ): PluginCatalogEntry | undefined {
-  return indexLocalPlugins(local.plugins).get(normalizedAlias(identity) ?? "");
+  return origin === "local"
+    ? local.plugins.find((plugin) => plugin.id === identity)
+    : indexLocalPlugins(local.plugins).get(normalizedAlias(identity) ?? "");
 }
 
 export function joinLocalPluginDetail(params: {

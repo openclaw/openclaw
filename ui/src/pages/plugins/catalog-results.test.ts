@@ -72,9 +72,8 @@ function baseProps(overrides: Partial<PluginCatalogResultsProps> = {}): PluginCa
     onPreviousPage: vi.fn(),
     onNextPage: vi.fn(),
     onRetry: vi.fn(),
+    onRetryGrouped: vi.fn(),
     onRetryCategories: vi.fn(),
-    onRetryFeatured: vi.fn(),
-    onRetryTrending: vi.fn(),
     ...overrides,
   };
 }
@@ -122,6 +121,25 @@ describe("renderPluginCatalogResults", () => {
     expect(
       container.querySelectorAll(".plugin-catalog-grid--results .plugin-catalog-card"),
     ).toHaveLength(1);
+  });
+
+  it("keeps a partial ClawHub failure retryable", () => {
+    const onRetryGrouped = vi.fn();
+    const container = mount(
+      baseProps({
+        remoteError: "ClawHub is unavailable; local plugins remain available.",
+        featuredError: "ClawHub is unavailable; local plugins remain available.",
+        trendingError: "ClawHub is unavailable; local plugins remain available.",
+        onRetryGrouped,
+      }),
+    );
+
+    const warnings = container.querySelectorAll<HTMLElement>(".callout.warning");
+    expect(warnings).toHaveLength(1);
+    const warning = warnings.item(0);
+    expect(warning?.textContent).toContain("ClawHub is unavailable");
+    warning?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onRetryGrouped).toHaveBeenCalledOnce();
   });
 
   it.each<{

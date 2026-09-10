@@ -163,6 +163,7 @@ describe("plugin discovery identity and local join", () => {
         packageName: bundledOnly.packageName,
         categories: ["tools", "web"],
         official: false,
+        publishedToClawHub: false,
       },
       local: {
         present: true,
@@ -172,7 +173,7 @@ describe("plugin discovery identity and local join", () => {
     });
     expect(resolvePluginDiscoveryIdentity(tools[0]?.id ?? "")).toEqual({
       origin: "local",
-      identity: "@openclaw/calendar-local",
+      identity: "calendar-local",
     });
   });
 
@@ -327,7 +328,7 @@ describe("plugin discovery identity and local join", () => {
       local: { pluginId: "memory-plus", installed: true, state: "disabled" },
     });
     expect(resolvePluginDiscoveryIdentity(items[0]?.id ?? "")).toEqual({
-      origin: "local",
+      origin: "clawhub",
       identity: remote.packageName,
     });
   });

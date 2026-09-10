@@ -69,7 +69,8 @@ type PluginsPageViewActions = {
   patchConfig: (path: Array<string | number>, value: unknown) => void;
   removeConfig: (path: Array<string | number>) => void;
   reloadConfig: () => void;
-  retryConfig: () => void;
+  retryConfigRead: () => void;
+  retryConfigWrite: () => void;
   closeSettingsDetail: (parentRoute: "plugins" | "plugin-settings") => void;
   retrySettingsDetail: (pluginId: string) => void;
   selectInstalledDetailTab: (tab: InstalledPluginDetailTab) => void;
@@ -150,7 +151,8 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     onConfigPatch: actions.patchConfig,
     onConfigRemove: actions.removeConfig,
     onConfigReload: actions.reloadConfig,
-    onConfigRetry: actions.retryConfig,
+    onConfigReadRetry: actions.retryConfigRead,
+    onConfigWriteRetry: actions.retryConfigWrite,
     onRefresh: actions.refreshCatalog,
   };
 
@@ -239,9 +241,14 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                         onPreviousPage: () => void discovery.previousPage(),
                         onNextPage: () => void discovery.nextPage(),
                         onRetry: () => void discovery.refresh(),
+                        onRetryGrouped: () => {
+                          void Promise.all([
+                            discovery.refresh(),
+                            discovery.refreshFeatured(),
+                            discovery.refreshTrending(),
+                          ]);
+                        },
                         onRetryCategories: () => void discovery.refreshCategories(),
-                        onRetryFeatured: () => void discovery.refreshFeatured(),
-                        onRetryTrending: () => void discovery.refreshTrending(),
                       }),
                       { wide: true, carapace: true },
                     )
@@ -284,7 +291,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
             busy: Object.values(model.busy).some(Boolean),
             configSchema: installWizardConfigSchema,
             configSchemaLoading: configState.configSchemaLoading,
-            configValue: configState.configForm,
+            configValue: installWizard.configDraft?.value ?? null,
             configHints: configState.configUiHints,
             configUnsupportedPaths: configAnalysis.unsupportedPaths,
             configBusy: configState.configLoading || configState.configSaving,

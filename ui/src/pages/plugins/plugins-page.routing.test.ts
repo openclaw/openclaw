@@ -196,7 +196,7 @@ describe("PluginsPage routing", () => {
     });
   });
 
-  it("retries configuration without discarding the pending draft", async () => {
+  it("retries a failed configuration write without discarding the pending draft", async () => {
     const result = createResult();
     const { client } = createClient(async (method) =>
       method === "plugins.inspect" ? createInspectResult() : result,
@@ -209,6 +209,24 @@ describe("PluginsPage routing", () => {
         configFormDirty: true,
         lastError: "Save failed",
         configForm: { plugins: { entries: { workboard: { config: { token: "pending" } } } } },
+        configUiHints: {},
+        configSchema: {
+          type: "object",
+          properties: {
+            plugins: {
+              type: "object",
+              properties: {
+                entries: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "object",
+                    properties: { config: { type: "object" } },
+                  },
+                },
+              },
+            },
+          },
+        },
       } as never,
       () => client,
     );
@@ -221,13 +239,87 @@ describe("PluginsPage routing", () => {
     const { page } = await mountPage(context, routeData);
     await switchToSettingsSurface(page, routeData);
 
-    const retry = page.querySelector<HTMLButtonElement>(".plugins-settings-error button");
+    const retry = Array.from(page.querySelectorAll<HTMLElement>(".plugins-settings-error"))
+      .find((element) => element.textContent?.includes("Save failed"))
+      ?.querySelector<HTMLButtonElement>("button");
     expect(retry?.textContent?.trim()).toBe("Try again");
     retry?.click();
 
     expect(runtimeConfig.runtimeConfig.retry).toHaveBeenCalledOnce();
-    expect(runtimeConfig.runtimeConfig.refreshSchema).toHaveBeenCalledOnce();
+    expect(runtimeConfig.runtimeConfig.refreshSchema).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("retries missing configuration reads without dispatching a write", async () => {
+    const result = createResult();
+    const { client } = createClient(async (method) =>
+      method === "plugins.inspect" ? createInspectResult() : result,
+    );
+    const harness = createGateway(client);
+    const refresh = vi.fn(async () => undefined);
+    const runtimeConfig = createRuntimeConfigHarness(
+      refresh,
+      {
+        configFormDirty: false,
+        lastError: "Configuration load failed",
+        configForm: null,
+      } as never,
+      () => client,
+    );
+    const context = createContext(harness.gateway, refresh, undefined, runtimeConfig);
+    const routeData = createPluginsRouteData(
+      harness.gateway,
+      result,
+      createPluginsRouteLocation("/settings/plugins/workboard"),
+    );
+    const { page } = await mountPage(context, routeData);
+    await switchToSettingsSurface(page, routeData);
+
+    page.querySelector<HTMLButtonElement>(".plugins-settings-error button")?.click();
+
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(runtimeConfig.runtimeConfig.refreshSchema).toHaveBeenCalledOnce();
+    expect(runtimeConfig.runtimeConfig.retry).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the selected inspection after configuration autosave", async () => {
+    const result = createResult();
+    let inspectionCount = 0;
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.inspect") {
+        inspectionCount += 1;
+        return createInspectResult({ reviewToken: `review-token-${inspectionCount}` });
+      }
+      return result;
+    });
+    const harness = createGateway(client);
+    const runtimeConfig = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      {
+        configFormDirty: true,
+        lastError: null,
+        configAutoSaveStatus: "saving",
+      } as never,
+      () => client,
+    );
+    const context = createContext(harness.gateway, undefined, undefined, runtimeConfig);
+    const routeData = createPluginsRouteData(
+      harness.gateway,
+      result,
+      createPluginsRouteLocation("/settings/plugins/workboard"),
+    );
+    const { page } = await mountPage(context, routeData);
+    await switchToSettingsSurface(page, routeData);
+    await vi.waitFor(() => expect(page.detail?.inspection?.reviewToken).toBe("review-token-1"));
+
+    page.pluginConfigEditPending = true;
+    (
+      runtimeConfig.runtimeConfig.state as never as { configAutoSaveStatus: string }
+    ).configAutoSaveStatus = "saved";
+    runtimeConfig.notify();
+
+    await vi.waitFor(() => expect(page.detail?.inspection?.reviewToken).toBe("review-token-2"));
+    expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(2);
   });
 
   it("keeps the installed detail mounted during a background catalog refresh", async () => {

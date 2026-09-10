@@ -18,8 +18,8 @@ import {
 } from "../../infra/clawhub-plugin-catalog.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  findLocalPluginByIdentity,
   encodePluginDiscoveryId,
+  findLocalPluginByIdentity,
   joinClawHubPluginCatalog,
   joinClawHubPluginDetail,
   joinLocalPluginDetail,
@@ -242,6 +242,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
               query: params.query,
               cursor: params.cursor,
             }),
+            ...(params.cursor ? { nextCursor: params.cursor } : {}),
             remoteError: [
               publicationError,
               `ClawHub is unavailable: ${formatErrorMessage(error)}.${
@@ -310,7 +311,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     }
     try {
       const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
-      const localPlugin = findLocalPluginByIdentity(local, identity.identity);
+      const localPlugin = findLocalPluginByIdentity(local, identity.identity, identity.origin);
       if (identity.origin === "local") {
         if (!localPlugin) {
           respond(
@@ -320,10 +321,15 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const inspection = localPlugin.installed
+        const inspectionPluginId = localPlugin.installed
+          ? localPlugin.id
+          : localPlugin.install?.source === "official"
+            ? localPlugin.install.pluginId
+            : undefined;
+        const inspection = inspectionPluginId
           ? await inspectManagedPlugin({
               config: context.getRuntimeConfig(),
-              pluginId: localPlugin.id,
+              pluginId: inspectionPluginId,
             })
           : undefined;
         respond(true, joinLocalPluginDetail({ plugin: localPlugin, local, inspection }), undefined);

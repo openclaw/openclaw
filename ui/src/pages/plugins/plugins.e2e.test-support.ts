@@ -332,6 +332,11 @@ const matrixConfigSchema = {
                     properties: {
                       homeserver: { type: "string", title: "Homeserver" },
                       accessToken: { type: "string", title: "Access token" },
+                      mode: {
+                        type: ["string", "null"],
+                        enum: ["auto", null],
+                        title: "Mode",
+                      },
                     },
                     required: ["homeserver", "accessToken"],
                   },

@@ -8,7 +8,6 @@ import { t } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import type { PluginInstallWizardStage, PluginInstallWizardState } from "./install-wizard-model.ts";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.ts";
-import { pluginEntryValue } from "./settings-model.ts";
 
 type PluginInstallWizardProps = {
   state: PluginInstallWizardState;
@@ -142,13 +141,12 @@ function renderConfiguration(props: PluginInstallWizardProps): TemplateResult {
       }
     </p>`;
   }
-  const pluginEntry = pluginEntryValue(props.configValue, pluginId);
   return html`
     <p class="plugin-install-wizard__status">${t("pluginsPage.installWizard.configureBody")}</p>
     <div class="plugin-install-wizard__config">
       ${renderNode({
         schema: props.configSchema,
-        value: pluginEntry.config ?? {},
+        value: props.configValue,
         path: ["plugins", "entries", pluginId, "config"],
         hints: props.configHints,
         unsupported: new Set(props.configUnsupportedPaths),
