@@ -66,8 +66,12 @@ async function fixture() {
     acceptance: [{ kind: "receipts", criterionId: "pass", profiles: ["check"] }],
   });
   const profile = contract.profiles[0];
-  if (profile.kind !== "command") {
+  if (profile?.kind !== "command") {
     throw new Error("Expected command fixture");
+  }
+  const oracleInput = profile.readOnlyPaths[0];
+  if (!oracleInput) {
+    throw new Error("Expected oracle fixture");
   }
   const allocationId = randomUUID();
   const reservedRoot = path.join(root, allocationId);
@@ -75,6 +79,7 @@ async function fixture() {
   return {
     contract,
     profile,
+    oracleInput,
     allocationId,
     reservedRoot,
     parentMountNamespace: "mnt:[1]",
@@ -114,11 +119,9 @@ describe.skipIf(process.platform !== "linux")("bounded command custodian file bo
     const params = await fixture();
     const prepared = await prepareSupervisedCommandWorkspace(params);
     await fs.writeFile(params.profile.executable, "changed executable");
-    await fs.writeFile(params.profile.readOnlyPaths[0].path, "changed oracle");
+    await fs.writeFile(params.oracleInput.path, "changed oracle");
     const executable = prepared.bindMounts.find((entry) => entry.target === "/runtime/command")!;
-    const oracle = prepared.bindMounts.find(
-      (entry) => entry.target === params.profile.readOnlyPaths[0].path,
-    )!;
+    const oracle = prepared.bindMounts.find((entry) => entry.target === params.oracleInput.path)!;
     expect(await fs.readFile(executable.source, "utf8")).toBe("accepted executable");
     expect(await fs.readFile(oracle.source, "utf8")).toBe("accepted oracle");
     expect(executable.writable).toBe(false);
@@ -151,7 +154,7 @@ describe.skipIf(process.platform !== "linux")("bounded command custodian file bo
     "rejects an oracle %s violation before returning launch ingredients",
     async (violation) => {
       const params = await fixture();
-      const oracle = params.profile.readOnlyPaths[0].path;
+      const oracle = params.oracleInput.path;
       if (violation === "digest") {
         await fs.writeFile(oracle, "replaced");
       } else if (violation === "hardlink") {

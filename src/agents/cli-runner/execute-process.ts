@@ -114,6 +114,7 @@ export async function executeCliProcess(params: {
 
   const streamingParser = hasJsonlOutput
     ? createCliJsonlStreamingParser({
+        captureTerminalResultText: runParams.outputJsonSchema !== undefined,
         backend: params.backend,
         providerId: context.backendResolved.id,
         parseJsonlEvent: context.backendResolved.parseJsonlEvent,

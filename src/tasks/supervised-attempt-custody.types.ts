@@ -3,11 +3,11 @@ import { z } from "zod";
 const timestamp = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const uuid = z.uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
-export const AttemptProcessSchema = z.strictObject({
+const AttemptProcessSchema = z.strictObject({
   pid: z.number().int().positive(),
   startTime: timestamp,
 });
-export const AttemptLimitsSchema = z.strictObject({
+const AttemptLimitsSchema = z.strictObject({
   memoryBytes: z.number().int().positive(),
   tasks: z.number().int().positive(),
 });

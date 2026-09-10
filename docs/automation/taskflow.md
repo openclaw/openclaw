@@ -200,6 +200,13 @@ omits its goal, a bounded, tool-free first attempt must define it or ask for inp
 Accepted criteria cannot be silently lowered. Partial success requires a nonempty,
 preaccepted subset; model goal inference cannot grant that permission.
 
+Claude CLI attempts and reviews request native schema-constrained terminal output.
+The adapter validates that output independently and does not substitute conversational
+prose if it is missing or malformed. Native output submission does not enable file,
+shell, or other action tools. Existing attempt deadlines, resource limits, and
+supervisor recovery budgets still apply; schema-valid output alone cannot authorize
+success or lower the accepted criteria.
+
 ### Start a supervised task
 
 Use a dedicated configured agent with an explicit per-model `agentRuntime.id` of
@@ -461,6 +468,11 @@ and recursive population observation. Unknown launch/bind windows retain their
 reservation; the cleanup worker does not kill a process by guessed unit name or
 reuse an uncertain launch. Legacy dispatched reviewers without scope evidence
 cannot acquire that evidence retroactively.
+
+Supervised Codex reviews require a local native process, including Platform
+API-key routes. They do not substitute the host's direct completion transport.
+Prepared keys use an isolated agent home; custom endpoints or request headers
+that the native route cannot reproduce are rejected before startup.
 
 Cleanup also examines terminal episodes and earlier operation generations. A
 bootstrap reservation can be retired only when exact evidence proves it never

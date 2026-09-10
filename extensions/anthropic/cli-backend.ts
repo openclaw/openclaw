@@ -258,11 +258,15 @@ export function buildAnthropicCliBackend(
           authCredential?: ClaudeCliAuthCredential;
           isolatedCompletionPrompt?: string;
           isolatedCompletionSystemPrompt?: string;
+          isolatedCompletionOutputJsonSchema?: Record<string, unknown>;
         };
         const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
+        // Schema-requesting isolated calls need native initialization and result validation;
+        // ordinary side questions retain the existing per-process execution path.
         const cliExecution =
-          !isolatedCompletion && context.executionMode === "agent"
+          (!isolatedCompletion && context.executionMode === "agent") ||
+          (isolatedCompletion && credentialContext.isolatedCompletionOutputJsonSchema !== undefined)
             ? {
                 async *execute(executionContext: CliBackendExecuteContext) {
                   const { executeClaudeCli } = await import("./cli.runtime.js");

@@ -215,6 +215,7 @@ export function sanitizePublicAgentCommandIngressOpts(
   return withoutAgentCommandExecutionIdentitySpawnFacts({
     ...opts,
     senderIsOwner: false,
+    outputJsonSchema: undefined,
     mainRestartRecoveryOwnerLease: undefined,
     mainRestartRecoveryAdmitted: undefined,
     mainRestartRecoveryAttempt: undefined,

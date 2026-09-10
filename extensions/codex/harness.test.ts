@@ -126,41 +126,55 @@ describe("Codex agent harness supports()", () => {
     expect(runHostPreparedIsolatedCompletion).toHaveBeenCalledTimes(legacyCallCount);
   });
 
-  it("keeps V2 host authorization on the prepared direct transport", async () => {
-    const nativeCallCount = runCodexIsolatedCompletion.mock.calls.length;
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "done" }],
-      stopReason: "stop",
-    };
-    runHostPreparedIsolatedCompletion.mockResolvedValueOnce({ assistant });
-    const websocketHarness = createCodexAppServerAgentHarness({
-      bindingStore: testCodexAppServerBindingStore,
-      pluginConfig: {
-        appServer: { transport: "websocket", url: "ws://127.0.0.1:4501" },
-      },
-    });
-    const hostModel = {
-      provider: "openai",
-      id: "gpt-test",
-      api: "openai-responses",
-    };
-    const hostAuth = { apiKey: "secret", source: "profile:test", mode: "api-key" };
-    const params = {
-      authorization: {
-        owner: "host",
-        model: hostModel,
-        auth: hostAuth,
-      },
-      ...isolatedTask,
-    } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletionV2>>[0];
+  it.each([false, true])(
+    "routes V2 host authorization with owned process required: %s",
+    async (owned) => {
+      const nativeCallCount = runCodexIsolatedCompletion.mock.calls.length;
+      const assistant = {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        stopReason: "stop",
+      };
+      runHostPreparedIsolatedCompletion.mockResolvedValueOnce({ assistant });
+      const websocketHarness = createCodexAppServerAgentHarness({
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: {
+          appServer: { transport: "websocket", url: "ws://127.0.0.1:4501" },
+        },
+      });
+      const hostModel = {
+        provider: "openai",
+        id: "gpt-test",
+        api: "openai-responses",
+      };
+      const hostAuth = { apiKey: "secret", source: "profile:test", mode: "api-key" };
+      const params = {
+        authorization: {
+          owner: "host",
+          model: hostModel,
+          auth: hostAuth,
+        },
+        ...isolatedTask,
+        ...(owned ? { ownedLocalProcessRequired: true as const } : {}),
+      } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletionV2>>[0];
 
-    await expect(websocketHarness.runIsolatedCompletionV2?.(params)).resolves.toEqual({
-      assistant,
-    });
-    expect(runHostPreparedIsolatedCompletion).toHaveBeenLastCalledWith(params);
-    expect(runCodexIsolatedCompletion).toHaveBeenCalledTimes(nativeCallCount);
-  });
+      runCodexIsolatedCompletion.mockResolvedValueOnce({ assistant });
+      const directCount = runHostPreparedIsolatedCompletion.mock.calls.length;
+      await expect(websocketHarness.runIsolatedCompletionV2?.(params)).resolves.toEqual({
+        assistant,
+      });
+      if (owned) {
+        expect(runHostPreparedIsolatedCompletion).toHaveBeenCalledTimes(directCount);
+        expect(runCodexIsolatedCompletion).toHaveBeenLastCalledWith(
+          params,
+          expect.objectContaining({ pluginConfig: expect.any(Object) }),
+        );
+      } else {
+        expect(runHostPreparedIsolatedCompletion).toHaveBeenLastCalledWith(params);
+        expect(runCodexIsolatedCompletion).toHaveBeenCalledTimes(nativeCallCount);
+      }
+    },
+  );
 
   it("supports the canonical codex virtual provider", () => {
     expect(harness.supports({ provider: "codex", requestedRuntime: "codex" })).toEqual({
@@ -624,7 +638,7 @@ describe("Codex agent harness reset()", () => {
         cwd: "/repo",
         connectionScope: "supervision",
         supervisionSourceThreadId: "thread-source",
-        model: "gpt-5.5",
+        model: "supervision-fixture-model",
         modelProvider: "openai",
         preserveNativeModel: true,
         conversationSourceTransferComplete: true,

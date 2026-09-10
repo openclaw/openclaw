@@ -1577,6 +1577,9 @@ async function prepareCliRunContextWithinReadFence(
           isolatedCompletionModelId: normalizedModel,
           isolatedCompletionPrompt: params.prompt,
           isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
+          ...(params.outputJsonSchema
+            ? { isolatedCompletionOutputJsonSchema: params.outputJsonSchema }
+            : {}),
         }
       : prepareExecutionContext;
     try {
@@ -1596,6 +1599,7 @@ async function prepareCliRunContextWithinReadFence(
             isolatedCompletionModelId?: string;
             isolatedCompletionPrompt?: string;
             isolatedCompletionSystemPrompt?: string;
+            isolatedCompletionOutputJsonSchema?: Record<string, unknown>;
           },
         )) ?? undefined;
     } catch (error) {

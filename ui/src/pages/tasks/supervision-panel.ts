@@ -280,7 +280,10 @@ export class SupervisionPanelController implements ReactiveController {
                   maxlength="4096"
                   .value=${this.input}
                   @input=${(event: Event) => {
-                    this.input = (event.target as HTMLTextAreaElement).value;
+                    if (!(event.target instanceof HTMLTextAreaElement)) {
+                      return;
+                    }
+                    this.input = event.target.value;
                     this.host.requestUpdate();
                   }}
                 ></textarea>
@@ -303,7 +306,10 @@ export class SupervisionPanelController implements ReactiveController {
                           max="1440"
                           .value=${String(this.minutes)}
                           @input=${(e: Event) => {
-                            this.minutes = Number((e.target as HTMLInputElement).value);
+                            if (!(e.target instanceof HTMLInputElement)) {
+                              return;
+                            }
+                            this.minutes = Number(e.target.value);
                             this.host.requestUpdate();
                           }}
                       /></label>
@@ -315,7 +321,10 @@ export class SupervisionPanelController implements ReactiveController {
                           max="100"
                           .value=${String(this.attempts)}
                           @input=${(e: Event) => {
-                            this.attempts = Number((e.target as HTMLInputElement).value);
+                            if (!(e.target instanceof HTMLInputElement)) {
+                              return;
+                            }
+                            this.attempts = Number(e.target.value);
                             this.host.requestUpdate();
                           }}
                       /></label>
@@ -327,7 +336,10 @@ export class SupervisionPanelController implements ReactiveController {
                           max="3600"
                           .value=${String(this.attemptSeconds)}
                           @input=${(e: Event) => {
-                            this.attemptSeconds = Number((e.target as HTMLInputElement).value);
+                            if (!(e.target instanceof HTMLInputElement)) {
+                              return;
+                            }
+                            this.attemptSeconds = Number(e.target.value);
                             this.host.requestUpdate();
                           }}
                       /></label>
@@ -431,8 +443,11 @@ ${new TextDecoder().decode(this.fileBytes.subarray(0, 65536))}</pre>
               .value=${this.sessionKey}
               ?disabled=${!this.gateway.connected}
               @change=${(event: Event) => {
+                if (!(event.target instanceof HTMLSelectElement)) {
+                  return;
+                }
                 this.reset();
-                this.sessionKey = (event.target as HTMLSelectElement).value;
+                this.sessionKey = event.target.value;
                 void this.refresh();
                 this.host.requestUpdate();
               }}

@@ -93,7 +93,11 @@ it("freezes the accepted author and committer despite conflicting ambient identi
     contract,
     profile,
     options,
-    identity: { source: "system-detected", account: { accountId: 1, login: "synthetic" }, env },
+    identity: {
+      source: "system-detected",
+      account: { accountId: 1, login: "synthetic", avatarUrl: null },
+      env,
+    },
     execution: {
       executionId,
       operationId: randomUUID(),

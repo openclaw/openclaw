@@ -65,6 +65,8 @@ type RunIsolatedCompletionParams = {
   /** Concrete owner already resolved by the caller, when available. */
   agentHarnessRuntimeOverride?: string;
   systemPrompt: string;
+  /** Host-requested terminal JSON schema; supported native CLI owners enforce it. */
+  outputJsonSchema?: Record<string, unknown>;
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
@@ -207,6 +209,7 @@ async function runCliIsolatedCompletion(params: {
           config,
           prompt: params.request.prompt,
           extraSystemPrompt: params.request.systemPrompt,
+          outputJsonSchema: params.request.outputJsonSchema,
           timeoutMs: params.request.timeoutMs,
           runId: sessionId,
           provider: params.provider,
@@ -251,11 +254,19 @@ async function runCliIsolatedCompletion(params: {
             "Isolated CLI completion returned non-text output; result rejected.",
           );
         }
-        const text = payloads
-          .filter((payload) => !payload.isReasoning && typeof payload.text === "string")
-          .map((payload) => payload.text ?? "")
-          .join("\n")
-          .trim();
+        if (params.request.outputJsonSchema && !result.meta?.cliTerminalResultText) {
+          throw new IsolatedCompletionError(
+            "output-rejected",
+            "Isolated CLI completion returned no structured terminal output.",
+          );
+        }
+        const text = params.request.outputJsonSchema
+          ? (result.meta?.cliTerminalResultText ?? "")
+          : payloads
+              .filter((payload) => !payload.isReasoning && typeof payload.text === "string")
+              .map((payload) => payload.text ?? "")
+              .join("\n")
+              .trim();
         const backend = resolveCliBackendConfig(params.provider, params.request.config, {
           agentId: params.agentId,
         });

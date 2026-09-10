@@ -37,7 +37,7 @@ export function encodeSupervisedOperationRequest(value: unknown): {
   return { request, json, hash: createHash("sha256").update(json).digest("hex") };
 }
 
-export const SupervisedOperationOutcomeSchema = z.strictObject({
+const SupervisedOperationOutcomeSchema = z.strictObject({
   status: z.enum(["succeeded", "failed", "cancelled", "input_required"]),
   summary: z.string().min(1).max(4096),
   // Digests and bounded observations, not authority reconstructed from stdout.

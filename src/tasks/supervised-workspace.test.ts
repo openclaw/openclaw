@@ -73,6 +73,7 @@ it("refuses an oversized directory while enumerating rather than materializing e
       yielded += 1;
       yield entry;
     }
+    return undefined;
   });
   const opendir = vi.spyOn(fs, "opendir").mockResolvedValue(directory);
   try {

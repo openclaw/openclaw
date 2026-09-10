@@ -90,6 +90,7 @@ it("requires actual CLI execution evidence, not an echoed provider name", async 
     payloads: [{ mediaUrl: null, text: JSON.stringify(decision) }],
     meta: {
       durationMs: 1,
+      cliTerminalResultText: JSON.stringify({ decision }),
       executionTrace: {
         runner: "cli",
         winnerProvider: "claude-cli",
@@ -103,6 +104,13 @@ it("requires actual CLI execution evidence, not an echoed provider name", async 
   await expect(runSupervisedAgentAttempt(current, context())).resolves.toEqual(decision);
   expect(mocks.command.mock.calls[1]![0]).toMatchObject({
     extraSystemPrompt: expect.stringContaining("machine-consumed state transition"),
+    outputJsonSchema: expect.objectContaining({
+      type: "object",
+      properties: { decision: expect.objectContaining({ oneOf: expect.any(Array) }) },
+      required: ["decision"],
+      additionalProperties: false,
+      $schema: "http://json-schema.org/draft-07/schema#",
+    }),
     toolsAllow: [],
     cleanupCliLiveSessionOnRunEnd: true,
     cleanupBundleMcpOnRunEnd: true,
@@ -152,7 +160,7 @@ it("rejects stale source ownership after an otherwise successful Codex response"
 
 it("uses the CLI-owned terminal result while retaining strict decision parsing", async () => {
   const current = task("claude-cli", "anthropic/fixture");
-  const final = JSON.stringify(decision);
+  const final = JSON.stringify({ decision });
   const cliResult = (terminal: string) => ({
     payloads: [{ mediaUrl: null, text: `Earlier tool commentary.\n${final}` }],
     meta: {
@@ -172,6 +180,10 @@ it("uses the CLI-owned terminal result while retaining strict decision parsing",
   mocks.command.mockResolvedValue(cliResult(final));
   await expect(runSupervisedAgentAttempt(current, context())).resolves.toEqual(decision);
   mocks.command.mockResolvedValue(cliResult(`The result is ready.\n${final}`));
+  await expect(runSupervisedAgentAttempt(current, context())).rejects.toThrow(SyntaxError);
+  mocks.command.mockResolvedValue(cliResult(JSON.stringify({ decision, unexpected: true })));
+  await expect(runSupervisedAgentAttempt(current, context())).rejects.toThrow(SyntaxError);
+  mocks.command.mockResolvedValue(cliResult(JSON.stringify(decision)));
   await expect(runSupervisedAgentAttempt(current, context())).rejects.toThrow(SyntaxError);
   mocks.command.mockResolvedValue(cliResult(""));
   await expect(runSupervisedAgentAttempt(current, context())).rejects.toThrow(SyntaxError);

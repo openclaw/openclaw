@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { withOwnedRuntimeProcess } from "../infra/owned-runtime-process-context.js";
@@ -22,7 +22,12 @@ import {
 import { parseSupervisedOperationOutcome } from "./supervised-operation.types.js";
 import { assertSupervisedProcessScopeMember } from "./supervised-process-resources.js";
 import { readSupervisedReviewContext } from "./supervised-review-context.js";
+import { writeSupervisedReviewOutcome } from "./supervised-review-output.js";
 import { SUPERVISED_REVIEW_LIMITS, SUPERVISED_REVIEW_STORAGE } from "./supervised-review-policy.js";
+import {
+  readSupervisedRuntimeDiagnostic,
+  supervisedRuntimeFailureDiagnostic,
+} from "./supervised-runtime-diagnostic.js";
 import {
   prepareSupervisedRuntimeWorkspace,
   supervisedRuntimeWorkspacePayloadPrefix,
@@ -167,7 +172,6 @@ async function runNamespace() {
   const roots = new Set([
     path.dirname(databasePath!),
     path.dirname(resolveAgentDir(config, context.profile.agentId)),
-    path.dirname(resolveDefaultAgentDir(config)),
   ]);
   const nativeRoot = resolveSupervisedNativeRuntimeRoot(context.profile.runtime);
   if (nativeRoot) {
@@ -226,17 +230,20 @@ async function runNamespace() {
     assertCurrent,
   });
   if (result.exitCode !== 0 || result.timedOut) {
+    const diagnostic = readSupervisedRuntimeDiagnostic(result.stderr);
+    if (diagnostic) {
+      process.stderr.write(`${diagnostic}\n`);
+    }
     throw new Error("Review payload failed");
   }
   assertCurrent();
   return parseSupervisedOperationOutcome(JSON.parse(result.stdout));
 }
 try {
-  process.stdout.write(
-    JSON.stringify(mode === "--payload" ? await runPayload() : await runNamespace()),
-  );
-} catch {
+  await writeSupervisedReviewOutcome(mode === "--payload" ? runPayload : runNamespace);
+} catch (error) {
   // No provider exception, model raw text or protected environment on control stderr.
+  process.stderr.write(`${supervisedRuntimeFailureDiagnostic(error)}\n`);
   process.exitCode = 1;
 } finally {
   clearInterval(heartbeat);

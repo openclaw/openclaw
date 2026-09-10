@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeWorkerProcessIdentity } from "../node-host/node-worker-process-identity.js";
@@ -17,10 +18,7 @@ import {
   reserveSupervisedAttemptResources,
   revokeSupervisedAttemptResources,
 } from "./supervised-attempt-custody.js";
-import {
-  assertSupervisedAttemptCleanupCurrent,
-  claimSupervisedAttemptCleanup,
-} from "./supervised-attempt-recovery.js";
+import { sweepSupervisedAttemptResources } from "./supervised-attempt-recovery.js";
 import {
   cancelSupervisedTask,
   claimSupervisedTask,
@@ -35,6 +33,7 @@ const kernel = vi.hoisted(() => ({
   closed: vi.fn(),
   absent: vi.fn(),
   member: vi.fn(),
+  terminate: vi.fn<(_identity: unknown, assertCurrent: () => void) => Promise<void>>(),
 }));
 // Real SQLite and task ownership; kernel observations alone are simulated.
 // These tests make no claim that a systemd scope was actually created.
@@ -50,7 +49,7 @@ vi.mock("./supervised-process-resources.js", async (importOriginal) => ({
   isSupervisedProcessScopeClosed: kernel.closed,
   isSealedSupervisedProcessScopeAbsent: kernel.absent,
   assertSupervisedProcessScopeMember: kernel.member,
-  terminateSupervisedProcessScope: vi.fn(),
+  terminateSupervisedProcessScope: kernel.terminate,
 }));
 const dirs = createTempDirTracker();
 const limits = { memoryBytes: 2 * 1024 ** 3, tasks: 128 };
@@ -90,6 +89,7 @@ beforeEach(() => {
   kernel.closed.mockReset().mockResolvedValue(false);
   kernel.absent.mockReset().mockResolvedValue(true);
   kernel.member.mockReset();
+  kernel.terminate.mockReset();
   kernel.inspect.mockReset().mockImplementation(async ({ resourceId, limits: boundLimits }) => ({
     resourceId,
     scopeName: `openclaw-task-${resourceId}.scope`,
@@ -206,30 +206,79 @@ describe("attempt resource custody", () => {
       getSupervisedAttemptResources(f.plan.resourceId, f.options)?.launcher_joined_at_ms,
     ).toBeNull();
   });
-  it("never grants cleanup against a current authorized attempt", () => {
+  it("never grants cleanup against a current authorized attempt", async () => {
     const f = fixture();
-    expect(claimSupervisedAttemptCleanup(f.plan.resourceId, "owner", f.options)).toBeNull();
+    const onError = vi.fn();
+    await sweepSupervisedAttemptResources({
+      supervisorId: "owner",
+      options: f.options,
+      assertCleanupCurrent: () => {},
+      onError,
+    });
+    expect(kernel.terminate).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(getSupervisedAttemptResources(f.plan.resourceId, f.options)).toMatchObject({
+      state: "planned",
+      revoked_at_ms: null,
+      cleanup_owner: null,
+    });
   });
-  it("fences an expired cleanup claim after replacement even with the same owner", () => {
+  it("fences expired cleanup during termination without releasing its replacement", async () => {
     const f = fixture();
+    beginSupervisedAttemptLaunch(f.plan.resourceId, f.options);
+    await bindSupervisedAttemptResources(f.plan.resourceId, f.options);
     revokeSupervisedAttemptResources(f.plan.resourceId, f.options);
-    const first = claimSupervisedAttemptCleanup(f.plan.resourceId, "owner", f.options);
-    if (!first) {
-      throw new Error("Cleanup claim missing");
+    const firstEntered = createDeferred<() => void>();
+    const secondEntered = createDeferred<() => void>();
+    const releaseFirst = createDeferred();
+    const releaseSecond = createDeferred();
+    kernel.terminate
+      .mockImplementationOnce(async (_identity, assertCurrent) => {
+        firstEntered.resolve(assertCurrent);
+        await releaseFirst.promise;
+        assertCurrent();
+      })
+      .mockImplementationOnce(async (_identity, assertCurrent) => {
+        secondEntered.resolve(assertCurrent);
+        await releaseSecond.promise;
+        assertCurrent();
+      });
+    const firstError = vi.fn();
+    const secondError = vi.fn();
+    const sweep = (onError: (error: unknown) => void) =>
+      sweepSupervisedAttemptResources({
+        supervisorId: "owner",
+        options: f.options,
+        assertCleanupCurrent: () => {},
+        onError,
+      });
+    const first = sweep(firstError);
+    let second: ReturnType<typeof sweep> | undefined;
+    try {
+      const firstGuard = await firstEntered.promise;
+      vi.setSystemTime(Date.now() + 30_001);
+      heartbeatTaskSupervisor("owner", Date.now(), 60_000, f.options);
+      second = sweep(secondError);
+      const secondGuard = await secondEntered.promise;
+      expect(firstGuard).toThrow(/no longer current/);
+      expect(secondGuard).not.toThrow();
+      releaseFirst.resolve();
+      await first;
+      expect(firstError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Attempt cleanup lease no longer current",
+        }),
+      );
+      // The stale sweep's finally must not release its successor's lease.
+      expect(secondGuard).not.toThrow();
+      releaseSecond.resolve();
+      await second;
+      expect(secondError).not.toHaveBeenCalled();
+    } finally {
+      releaseFirst.resolve();
+      releaseSecond.resolve();
+      await Promise.all([first, second]);
     }
-    vi.setSystemTime(Date.now() + 30_001);
-    heartbeatTaskSupervisor("owner", Date.now(), 60_000, f.options);
-    const second = claimSupervisedAttemptCleanup(f.plan.resourceId, "owner", f.options);
-    if (!second) {
-      throw new Error("Replacement cleanup claim missing");
-    }
-    expect(first.owner.nonce).not.toBe(second.owner.nonce);
-    expect(() => assertSupervisedAttemptCleanupCurrent(first, f.options)).toThrow(
-      /no longer current/,
-    );
-    expect(assertSupervisedAttemptCleanupCurrent(second, f.options).resource_id).toBe(
-      f.plan.resourceId,
-    );
   });
 });
 

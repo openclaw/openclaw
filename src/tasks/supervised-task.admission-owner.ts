@@ -1,7 +1,9 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-const state = resolveGlobalSingleton(Symbol.for("openclaw.supervisedTaskAdmissionOwner"), () => ({
-  ensure: undefined as (() => Promise<string | undefined>) | undefined,
-}));
+type AdmissionOwnerState = { ensure: (() => Promise<string | undefined>) | undefined };
+const state = resolveGlobalSingleton<AdmissionOwnerState>(
+  Symbol.for("openclaw.supervisedTaskAdmissionOwner"),
+  () => ({ ensure: undefined }),
+);
 export function registerSupervisedTaskAdmissionOwner(ensure: () => Promise<string | undefined>) {
   state.ensure = ensure;
   return () => {

@@ -25,7 +25,7 @@ import {
 const MIB = 1024 * 1024;
 /** This separate tmpfs is charged to the SAME operation memory cgroup. The
  * memory budget must include these 384 MiB, the working cap, and process overhead. */
-export const SUPERVISED_COMMAND_INPUT_BYTES = 384 * MIB;
+const SUPERVISED_COMMAND_INPUT_BYTES = 384 * MIB;
 const INPUT_INODES = 128;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 type Command = Extract<SupervisedWorkflowProfile, { kind: "command" }>;

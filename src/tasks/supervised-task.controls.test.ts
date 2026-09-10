@@ -19,9 +19,8 @@ import { verifySupervisedWorkflowAcceptance } from "./supervised-workflow.accept
 import { writeSupervisedWorkflow } from "./supervised-workflow.persistence.js";
 import { encodeSupervisedWorkflowContract } from "./supervised-workflow.types.js";
 import {
-  acceptSupervisedAttemptWorkspace,
   getSupervisedWorkspaceHead,
-  prepareSupervisedAttemptWorkspace,
+  ensureSupervisedAttemptSource,
 } from "./supervised-workspace-versions.js";
 const dirs = createTempDirTracker();
 beforeEach(() => {
@@ -88,8 +87,7 @@ async function fixture(largeRecord = false) {
     reserveSupervisedDispatch(claimSupervisedTask("work", "native", 1000, options)!, 1000, options);
   const attempt = claim();
   const guard = () => assertSupervisedAttemptCurrent(attempt, 1000, options);
-  const draft = await prepareSupervisedAttemptWorkspace(attempt, contract, options, guard);
-  await acceptSupervisedAttemptWorkspace(attempt, contract, draft, options, guard);
+  await ensureSupervisedAttemptSource(attempt, contract, options, guard);
   const authority = {
     actorId: "operator-session",
     assertCurrent: vi.fn(),
@@ -208,7 +206,7 @@ it("accepts an operator receipt only for the exact retained artifact and preserv
   expect(done.endpoint?.acceptedBy).toBe("supervisor");
   expect(done.endpoint?.evidence[0]?.observation).toContain("Operator accepted exact artifact");
 });
-it("operator approval cannot waive an automated criterion or follow a changed artifact", async () => {
+it("operator approval cannot waive an automated criterion or name a different artifact", async () => {
   const f = await fixture();
   const head = getSupervisedWorkspaceHead("work", 1, f.options)!;
   expect(() =>
@@ -217,28 +215,6 @@ it("operator approval cannot waive an automated criterion or follow a changed ar
   expect(() =>
     f.control({ kind: "approve", sourceHash: "f".repeat(64), criterionIds: ["reviewed"] }),
   ).toThrow(/exact retained/);
-  f.control(
-    { kind: "approve", sourceHash: head.source_hash, criterionIds: ["reviewed"] },
-    "approve-original",
-  );
-  const guard = () => assertSupervisedAttemptCurrent(f.attempt, 1000, f.options);
-  const changed = await prepareSupervisedAttemptWorkspace(f.attempt, f.contract, f.options, guard);
-  await fs.writeFile(`${changed.workspace}/answer.txt`, "changed\n");
-  await acceptSupervisedAttemptWorkspace(f.attempt, f.contract, changed, f.options, guard);
-  expect(
-    await verifySupervisedWorkflowAcceptance(
-      f.attempt,
-      {
-        kind: "succeeded",
-        summary: "done",
-        evidence: [
-          { criterionId: "reviewed", observation: "claimed" },
-          { criterionId: "correct", observation: "claimed" },
-        ],
-      },
-      f.options,
-    ),
-  ).toMatchObject({ kind: "rejected", operatorRequired: true });
 });
 
 it.each(["steer", "resume"] as const)(

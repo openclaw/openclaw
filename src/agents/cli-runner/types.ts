@@ -312,6 +312,8 @@ export type RunCliAgentParams = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+  /** Host-requested terminal JSON schema; supported native CLI owners enforce it. */
+  outputJsonSchema?: Record<string, unknown>;
 };
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */

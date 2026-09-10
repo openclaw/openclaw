@@ -546,6 +546,7 @@ export async function executePluginOwnedProcess(params: {
       prompt: params.prompt,
       ...(params.promptContext ? { promptContext: params.promptContext } : {}),
       modelId: params.context.normalizedModel,
+      outputJsonSchema: run.outputJsonSchema,
       systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       useResume: params.useResume,

@@ -280,6 +280,20 @@ authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Paired-node execution and
 manual compaction continue through the existing host-managed process path.
 
+Internal callers can supply `outputJsonSchema` for schema-constrained terminal
+output. The bundled Claude transport sends the draft-7 schema through native
+initialization and validates the returned `structured_output` object before
+projecting it as terminal result text (at most 64 KiB). It never extracts JSON
+from conversational text. The exact native `StructuredOutput` submission is
+permitted only for a current schema-requesting turn with valid input; it grants
+no action tools. Requested schema changes invalidate warm-process reuse. Host
+schema requests override configured `--json-schema` arguments for that run;
+runs without a host schema retain their ordinary argument and output behavior.
+The provider requires an object root without top-level union keywords. Supervised
+decisions keep their full union under a strict `decision` property; the task owner
+validates and unwraps that envelope. The collector retains explicitly requested
+terminal text even when it matches conversational display text.
+
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot

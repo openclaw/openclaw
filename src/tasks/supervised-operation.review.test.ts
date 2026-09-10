@@ -80,6 +80,15 @@ it.each(["valid", "invalid_json", "invalid_shape", "oversized_receipt"] as const
       assertCurrent: () => {},
       reserveDispatch: vi.fn(),
     });
+    expect(infer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputJsonSchema: expect.objectContaining({
+          type: "object",
+          $schema: "http://json-schema.org/draft-07/schema#",
+          required: ["accepted", "summary", "findings"],
+        }),
+      }),
+    );
     expect(parseSupervisedOperationOutcome(outcome)).toEqual(outcome);
     expect(outcome.status).toBe(kind === "valid" ? "succeeded" : "failed");
     expect(outcome.facts.sourceHash).toBe(outcome.facts.resultHash);

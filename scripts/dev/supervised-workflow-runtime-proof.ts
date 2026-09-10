@@ -175,7 +175,7 @@ async function runCoordinator(manifestPath: string) {
             if (decision.kind === "committed-attempt-candidate") {
               const committed = getSupervisedTask(task.flowId, dbOptions)!;
               const operation = listSupervisedOperations(dbOptions, task.flowId, task.episode).find(
-                (item) => item.admissionRevision === task.revision + 1,
+                (item) => item.admissionRevision === task.revision,
               );
               assert.equal(committed.revision, task.revision + 1);
               send({

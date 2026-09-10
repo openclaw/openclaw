@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
@@ -165,7 +165,6 @@ async function runNamespace() {
   const roots = new Set([
     path.dirname(databasePath!),
     path.dirname(resolveAgentDir(config, context!.task.agentId)),
-    path.dirname(resolveDefaultAgentDir(config)),
   ]);
   // Keep native runtime auth at its existing owner/path. These stores have
   // separate retention policies; the working tmpfs is not an all-host-disk quota.

@@ -40,7 +40,7 @@ type PreparedCurrentRunDelivery = {
   targetMode: ChannelOutboundTargetMode;
 };
 
-export async function prepareCurrentRunDelivery(params: {
+async function prepareCurrentRunDelivery(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
   agentId: string;

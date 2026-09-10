@@ -3,33 +3,33 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { agentCommandFromSystem } from "../agents/agent-command.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { prepareAttemptCandidateFixture } from "./supervised-attempt-candidate.test-support.js";
+import { candidateKernel } from "./supervised-attempt-kernel.test-support.js";
 import { listSupervisedOperations } from "./supervised-operation.store.js";
 import { runSupervisedAgentPayload } from "./supervised-task.agent.js";
 import { getSupervisedWorkflowContract } from "./supervised-workflow.store.js";
-import { releaseSupervisedWorkspaceOwner } from "./supervised-workspace-retention.js";
-import {
-  prepareSupervisedAttemptWorkspace,
-  acceptSupervisedAttemptWorkspace,
-  resolveSupervisedWorkflowWorkspace,
-} from "./supervised-workspace-versions.js";
-// Composed producer/recovery test. Kernel custody and candidate transactions
-// have separate suites; this host adapter joins its mocked file writer locally.
+import { resolveSupervisedWorkflowWorkspace } from "./supervised-workspace-versions.js";
+// Compose the producer with real candidate settlement; only kernel facts and
+// the runtime writer are simulated. The worker must consume the host marker.
 const runSupervisedAgentAttempt = async (
   task: Parameters<typeof runSupervisedAgentPayload>[0],
   context: Parameters<typeof runSupervisedAgentPayload>[1],
 ) => {
   const options = context.options ?? {};
   const contract = getSupervisedWorkflowContract(task.flowId, task.episode, options)!.contract;
-  const draft = await prepareSupervisedAttemptWorkspace(
+  const draft = await prepareAttemptCandidateFixture(
     task,
     contract,
     options,
     context.assertCurrent,
   );
-  const decision = await runSupervisedAgentPayload(task, context, draft.workspace);
-  await acceptSupervisedAttemptWorkspace(task, contract, draft, options, context.assertCurrent);
-  releaseSupervisedWorkspaceOwner("attempt", task.attempt!.id, Date.now(), options);
-  return decision;
+  try {
+    const decision = await runSupervisedAgentPayload(task, context, draft.workspace);
+    await draft.stage(decision);
+  } finally {
+    expect(await draft.close()).toBe(true);
+  }
+  return draft.accept();
 };
 import { createSupervisedTask, getSupervisedTask } from "./supervised-task.store.js";
 import { startSupervisedTaskWorker } from "./supervised-task.worker.js";
@@ -49,10 +49,16 @@ vi.mock("./supervised-operation.dispatcher.js", () => ({
   startSupervisedOperationDispatcher: () => ({ stop: () => {} }),
 }));
 
+vi.mock("./supervised-process-resources.js", async (importOriginal) => {
+  const { mockAttemptKernel } = await import("./supervised-attempt-kernel.test-support.js");
+  return mockAttemptKernel(importOriginal);
+});
 const dirs = createTempDirTracker();
 let worker: ReturnType<typeof startSupervisedTaskWorker> | undefined;
 beforeEach(() => {
   command.mockReset();
+  candidateKernel.closed.mockReset().mockResolvedValue(true);
+  candidateKernel.member.mockReset();
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1000);
 });
@@ -94,7 +100,7 @@ it.each([false, true])(
       kind: "operation",
       operation: { key: "review-answer", kind: "review", profile: "review", input: {} },
     };
-    const rejected = `Both modules are written.\n\n\`\`\`json\n${JSON.stringify(operation)}\n\`\`\``;
+    const rejected = `Both modules are written.\n\n\`\`\`json\n${JSON.stringify({ decision: operation })}\n\`\`\``;
     const inputBytes: string[] = [];
     command.mockImplementation(async (params) => {
       const draft = params.workspaceDir!;
@@ -103,7 +109,8 @@ it.each([false, true])(
         `${draft}/answer.txt`,
         inputBytes.length === 1 ? "rejected draft" : "valid repair",
       );
-      const terminal = repeated || inputBytes.length === 1 ? rejected : JSON.stringify(operation);
+      const terminal =
+        repeated || inputBytes.length === 1 ? rejected : JSON.stringify({ decision: operation });
       return {
         payloads: [{ mediaUrl: null, text: `Earlier tool commentary.\n${terminal}` }],
         meta: {
@@ -158,10 +165,12 @@ it.each([false, true])(
     expect(await fs.readFile(`${accepted.workspace}/answer.txt`, "utf8")).toBe("accepted input");
     vi.setSystemTime(recovery.dueAt);
     await vi.waitFor(
-      () =>
+      () => {
+        expect(errors).toHaveLength(repeated ? 2 : 1);
         expect(getSupervisedTask("format", options)?.phase).toBe(
           repeated ? "input_required" : "waiting",
-        ),
+        );
+      },
       { timeout: 5000 },
     );
     expect(command).toHaveBeenCalledTimes(2);

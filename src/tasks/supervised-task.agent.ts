@@ -1,10 +1,11 @@
+import { z } from "zod";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { withOwnedRuntimeProcess } from "../infra/owned-runtime-process-context.js";
 import { listSupervisedOperations } from "./supervised-operation.store.js";
 import { SupervisedAgentResultError } from "./supervised-runtime-diagnostic.js";
 import { parseSupervisedDecision } from "./supervised-task.decision.js";
-import type { SupervisedTask } from "./supervised-task.types.js";
+import { SupervisedDecisionEnvelopeSchema, type SupervisedTask } from "./supervised-task.types.js";
 import type { SupervisedAttemptRunner } from "./supervised-task.worker.js";
 import { getSupervisedWorkflowContract } from "./supervised-workflow.store.js";
 
@@ -121,7 +122,21 @@ async function runSupervisedAgentAdapter(
             ]
           : []),
       ].join("\n"),
-      extraSystemPrompt: buildAttemptContract(task, Boolean(workflow)),
+      extraSystemPrompt: [
+        buildAttemptContract(task, Boolean(workflow)),
+        ...(task.runtime === "claude-cli"
+          ? [
+              'Submit the final logical decision through native StructuredOutput inside {"decision": <decision object>}. Do not return it as conversational prose.',
+            ]
+          : []),
+      ].join("\n"),
+      ...(task.runtime === "claude-cli"
+        ? {
+            outputJsonSchema: z.toJSONSchema(SupervisedDecisionEnvelopeSchema, {
+              target: "draft-7",
+            }),
+          }
+        : {}),
       workspaceDir: scopedWorkspace,
       cwd: scopedWorkspace,
       toolWorkspaceOnly: true,
@@ -204,9 +219,13 @@ async function runSupervisedAgentAdapter(
     );
   }
   const output =
-    (task.runtime === "claude-cli" ? meta.cliTerminalResultText : undefined) ??
-    meta.finalAssistantRawText ??
-    result.payloads.map((payload) => payload.text ?? "").join("\n");
-  const decision = parseSupervisedDecision(output);
+    task.runtime === "claude-cli"
+      ? (meta.cliTerminalResultText ?? "")
+      : (meta.finalAssistantRawText ??
+        result.payloads.map((payload) => payload.text ?? "").join("\n"));
+  const decision = parseSupervisedDecision(
+    output,
+    task.runtime === "claude-cli" ? "native-envelope" : "decision",
+  );
   return decision;
 }

@@ -10,7 +10,6 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { appendSupervisedFaultNotificationInTransaction } from "./supervised-task.source.js";
 import type { SupervisedTask } from "./supervised-task.types.js";
 import {
-  readSupervisedWorkflow,
   writeSupervisedWorkflow,
   type SupervisedWorkflowDatabaseOptions as Options,
 } from "./supervised-workflow.persistence.js";
@@ -173,26 +172,6 @@ export function quarantineSupervisedTaskInTransaction(
   if (recorded.numAffectedRows === 1n) {
     appendSupervisedFaultNotificationInTransaction(db, flowId, episode, row.revision, now);
   }
-}
-
-export function listSupervisedTaskFaults(options: Options = {}) {
-  return (
-    readSupervisedWorkflow(
-      (db) =>
-        tableExists(db, "task_flow_recovery")
-          ? executeSqliteQuerySync(
-              db,
-              sql(db)
-                .selectFrom("task_flow_recovery")
-                .select(["flow_id", "episode", "fault_json", "updated_at_ms"])
-                .where("fault_json", "is not", null)
-                .orderBy("updated_at_ms")
-                .limit(128),
-            ).rows
-          : [],
-      options,
-    ) ?? []
-  );
 }
 
 /** Filter quarantined records before applying capacity/page limits. Otherwise

@@ -75,7 +75,7 @@ async function fixture(active = true) {
   testState.agentsConfig = {
     entries: { main: { taskSupervision: { enabled: true, policyFile } } },
   };
-  testState.agentConfig = { model: { primary: "openai/gpt-5.5" } };
+  testState.agentConfig = { model: { primary: "openai/supervision-fixture-model" } };
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
   const scope = {
@@ -105,7 +105,7 @@ async function fixture(active = true) {
       fingerprint: () => "fixture-authority",
       project: () => "fixture-authority",
     });
-    operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-5.5" });
+    operation.bindToolAuthorityRoute({ provider: "openai", model: "supervision-fixture-model" });
     operation.attachBackend({
       kind: "embedded",
       runId: "existing-model-run",

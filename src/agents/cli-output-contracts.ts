@@ -123,6 +123,8 @@ export type CliToolResultDelta = {
 };
 
 export type CliJsonlStreamingParserOptions = {
+  /** Structured consumers need the terminal field even when it matches display text. */
+  captureTerminalResultText?: boolean;
   backend: CliBackendConfig;
   providerId: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;

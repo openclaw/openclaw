@@ -30,7 +30,10 @@ export function migrateSupervisedAttemptAllocationsV18(
   const canonical = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + ") STRICT;".length);
   const row = db
     .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
-    .get(TABLE) as { sql: string };
+    .get(TABLE);
+  if (typeof row?.sql !== "string") {
+    throw new Error("Attempt allocation schema is unavailable; preserve for reconciliation");
+  }
   if (normalize(row.sql) === normalize(canonical)) {
     return false;
   }
@@ -45,12 +48,16 @@ export function migrateSupervisedAttemptAllocationsV18(
     .prepare(
       "SELECT type, name, sql FROM sqlite_schema WHERE tbl_name = ? AND sql IS NOT NULL AND type != 'table'",
     )
-    .all(TABLE) as Array<{ type: string; name: string; sql: string }>;
+    .all(TABLE);
+  const indexes: string[] = [];
   const allowed = new Set([
     "idx_task_flow_workspace_allocations_owner",
     "idx_task_flow_workspace_allocations_retention",
   ]);
   for (const object of objects) {
+    if (typeof object.name !== "string" || typeof object.sql !== "string") {
+      throw new Error("Attempt allocation has unsupported attached objects");
+    }
     const indexStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
       `CREATE INDEX IF NOT EXISTS ${object.name}\n`,
     );
@@ -63,13 +70,14 @@ export function migrateSupervisedAttemptAllocationsV18(
     ) {
       throw new Error("Attempt allocation has unsupported attached objects");
     }
+    indexes.push(object.sql);
   }
   db.exec(canonical.replace(`CREATE TABLE IF NOT EXISTS ${TABLE}`, `CREATE TABLE ${TEMP}`));
   db.exec(
     `INSERT INTO ${TEMP} SELECT * FROM ${TABLE}; DROP TABLE ${TABLE}; ALTER TABLE ${TEMP} RENAME TO ${TABLE};`,
   );
-  for (const object of objects) {
-    db.exec(object.sql);
+  for (const sql of indexes) {
+    db.exec(sql);
   }
   return true;
 }

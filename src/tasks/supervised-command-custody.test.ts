@@ -21,7 +21,6 @@ import {
   type SupervisedCommandScopeIdentity,
 } from "./supervised-command-resources.js";
 import {
-  MAX_SUPERVISED_OPERATION_PROCESSES,
   observeSupervisedOperationProcess,
   reconcileSupervisedOperationCapacity,
 } from "./supervised-operation.capacity.js";
@@ -355,9 +354,8 @@ describe("durable command resource custody", () => {
     (state) => {
       const root = dirs.make("openclaw-command-resource-capacity-");
       const launcher = requireNodeWorkerProcessIdentity(process.pid);
-      const items = Array.from({ length: MAX_SUPERVISED_OPERATION_PROCESSES + 1 }, (_, index) =>
-        admitted(root, `task-${index}`),
-      );
+      // Eight occupied slots must block the ninth operation until exact closure.
+      const items = Array.from({ length: 9 }, (_, index) => admitted(root, `task-${index}`));
       const executions = items.slice(0, -1).map((item) => {
         const execution = claimSupervisedOperation(
           item.operation.operationId,

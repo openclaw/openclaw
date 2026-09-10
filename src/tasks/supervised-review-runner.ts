@@ -26,6 +26,7 @@ import {
 } from "./supervised-operation.types.js";
 import { readSupervisedReviewContext } from "./supervised-review-context.js";
 import { SUPERVISED_REVIEW_LIMITS } from "./supervised-review-policy.js";
+import { readSupervisedRuntimeDiagnostic } from "./supervised-runtime-diagnostic.js";
 import type { SupervisedWorkflowDatabaseOptions } from "./supervised-workflow.persistence.js";
 import {
   createSupervisedWorkspaceDirectory,
@@ -111,7 +112,10 @@ export async function runScopedSupervisedReview(params: {
     await awaitSupervisedCommandScopeClosed(resources.identity);
     recordSupervisedCommandResourcesClosed(resources.identity, Date.now(), options);
     if (result.exitCode !== 0 || result.timedOut) {
-      throw new Error("Scoped review did not complete cleanly");
+      const diagnostic = readSupervisedRuntimeDiagnostic(result.stderr);
+      throw new Error(
+        `Scoped review did not complete cleanly${diagnostic ? ` (${diagnostic})` : ""}`,
+      );
     }
     const outcome = parseSupervisedOperationOutcome(JSON.parse(result.stdout));
     assertCurrent();

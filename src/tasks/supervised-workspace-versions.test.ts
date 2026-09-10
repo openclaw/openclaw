@@ -4,6 +4,8 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { prepareAttemptCandidateFixture } from "./supervised-attempt-candidate.test-support.js";
+import { candidateKernel } from "./supervised-attempt-kernel.test-support.js";
 import { quarantineSupervisedTask } from "./supervised-task.recovery.js";
 import {
   assertSupervisedAttemptCurrent,
@@ -15,26 +17,29 @@ import {
   heartbeatTaskSupervisor,
   reconcileSupervisedTasks,
   reserveSupervisedDispatch,
-  settleSupervisedDecision,
   stopTaskSupervisor,
 } from "./supervised-task.store.js";
 import { readSupervisedWorkflow } from "./supervised-workflow.persistence.js";
 import { encodeSupervisedWorkflowContract } from "./supervised-workflow.types.js";
 import {
   reserveSupervisedWorkspace,
-  releaseSupervisedWorkspaceOwner,
   retireSupervisedWorkspaces,
 } from "./supervised-workspace-retention.js";
 import {
-  acceptSupervisedAttemptWorkspace,
-  prepareSupervisedAttemptWorkspace,
+  ensureSupervisedAttemptSource,
   resolveSupervisedWorkflowWorkspace,
 } from "./supervised-workspace-versions.js";
 
+vi.mock("./supervised-process-resources.js", async (importOriginal) => {
+  const { mockAttemptKernel } = await import("./supervised-attempt-kernel.test-support.js");
+  return mockAttemptKernel(importOriginal);
+});
 const dirs = createTempDirTracker();
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1000);
+  candidateKernel.closed.mockReset().mockResolvedValue(true);
+  candidateKernel.member.mockReset();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -87,14 +92,11 @@ it("accepts a frozen copy, not the runtime's still-writable draft or the input w
   const f = await fixture();
   const attempt = f.claim("one");
   const assertCurrent = () => assertSupervisedAttemptCurrent(attempt, Date.now(), f.options);
-  const draft = await prepareSupervisedAttemptWorkspace(
-    attempt,
-    f.contract,
-    f.options,
-    assertCurrent,
-  );
+  const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, assertCurrent);
   await fs.writeFile(`${draft.workspace}/answer.txt`, "accepted\n");
-  await acceptSupervisedAttemptWorkspace(attempt, f.contract, draft, f.options, assertCurrent);
+  await draft.stage({ kind: "continue", next: "Inspect" });
+  expect(await draft.close()).toBe(true);
+  await draft.accept();
   await fs.writeFile(`${draft.workspace}/answer.txt`, "late mutation\n");
   const accepted = resolveSupervisedWorkflowWorkspace(f.contract, "work", 1, f.options);
   expect(await fs.readFile(`${accepted.workspace}/answer.txt`, "utf8")).toBe("accepted\n");
@@ -105,9 +107,11 @@ it("recovers a lost coordinator from the accepted artifact while stale draft wri
   const f = await fixture();
   const first = f.claim("one");
   const oldGuard = () => assertSupervisedAttemptCurrent(first, Date.now(), f.options);
-  const oldDraft = await prepareSupervisedAttemptWorkspace(first, f.contract, f.options, oldGuard);
+  const oldDraft = await prepareAttemptCandidateFixture(first, f.contract, f.options, oldGuard);
   await fs.writeFile(`${oldDraft.workspace}/answer.txt`, "unaccepted\n");
+  await oldDraft.stage({ kind: "continue", next: "Unaccepted candidate" });
   stopTaskSupervisor("one", 1000, f.options);
+  expect(await oldDraft.close()).toBe(true);
   reconcileSupervisedTasks(1000, f.options);
   expect(getSupervisedTask("work", f.options)).toMatchObject({
     phase: "ready",
@@ -118,14 +122,14 @@ it("recovers a lost coordinator from the accepted artifact while stale draft wri
   heartbeatTaskSupervisor("two", 2000, 10_000, f.options);
   const second = f.claim("two");
   const guard = () => assertSupervisedAttemptCurrent(second, Date.now(), f.options);
-  const fresh = await prepareSupervisedAttemptWorkspace(second, f.contract, f.options, guard);
+  const fresh = await prepareAttemptCandidateFixture(second, f.contract, f.options, guard);
   expect(await fs.readFile(`${fresh.workspace}/answer.txt`, "utf8")).toBe("initial\n");
   await fs.writeFile(`${fresh.workspace}/answer.txt`, "repaired\n");
   await fs.writeFile(`${oldDraft.workspace}/answer.txt`, "stale write after takeover\n");
-  await expect(
-    acceptSupervisedAttemptWorkspace(first, f.contract, oldDraft, f.options, oldGuard),
-  ).rejects.toThrow(/no longer/);
-  await acceptSupervisedAttemptWorkspace(second, f.contract, fresh, f.options, guard);
+  await expect(oldDraft.accept()).rejects.toThrow(/no longer/);
+  await fresh.stage({ kind: "continue", next: "Inspect repaired output" });
+  expect(await fresh.close()).toBe(true);
+  await fresh.accept();
   const accepted = resolveSupervisedWorkflowWorkspace(f.contract, "work", 1, f.options);
   expect(await fs.readFile(`${accepted.workspace}/answer.txt`, "utf8")).toBe("repaired\n");
 });
@@ -154,7 +158,7 @@ it("reserves capacity before IO, including drafts that never became accepted ver
     reserveSupervisedWorkspace({ kind: "attempt", task: attempt }, "draft", Date.now(), f.options);
   }
   await expect(
-    prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, () =>
+    ensureSupervisedAttemptSource(attempt, f.contract, f.options, () =>
       assertSupervisedAttemptCurrent(attempt, Date.now(), f.options),
     ),
   ).rejects.toThrow(/capacity exhausted/);
@@ -165,18 +169,18 @@ it("reserves capacity before IO, including drafts that never became accepted ver
 it("does not confuse an expired SQL owner with physical extinction of a writable draft", async () => {
   const f = await fixture();
   const attempt = f.claim("one");
-  const draft = await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, () =>
+  const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, () =>
     assertSupervisedAttemptCurrent(attempt, Date.now(), f.options),
   );
   cancelSupervisedTask("work", 1000, f.options);
   vi.setSystemTime(expired);
   await retireSupervisedWorkspaces(expired, f.options);
-  // The accepted read-only version may retire; the actual live process still
-  // owns its draft even after cancellation and thirty days without a lease.
+  // A live resource holds both accepted history and the draft despite SQL
+  // cancellation and thirty days without a lease.
   await fs.writeFile(`${draft.workspace}/answer.txt`, "late but isolated");
   expect(await fs.readFile(`${draft.workspace}/answer.txt`, "utf8")).toBe("late but isolated");
-  releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, expired, f.options);
-  expect(await retireSupervisedWorkspaces(expired, f.options)).toBe(0);
+  expect(await draft.close()).toBe(true);
+  expect(await retireSupervisedWorkspaces(expired, f.options)).toBe(1);
   expect(await retireSupervisedWorkspaces(expired * 2, f.options)).toBe(1);
   await expect(fs.stat(draft.workspace)).rejects.toMatchObject({ code: "ENOENT" });
   expect(getSupervisedTask("work", f.options)?.phase).toBe("cancelled");
@@ -185,7 +189,7 @@ it("does not confuse an expired SQL owner with physical extinction of a writable
 it("keeps input-required evidence across reopen and never sweeps unowned directories", async () => {
   const f = await fixture();
   const attempt = f.claim("one");
-  const draft = await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, () =>
+  const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, () =>
     assertSupervisedAttemptCurrent(attempt, Date.now(), f.options),
   );
   // Exhaust recovery before recording the uncertainty endpoint.
@@ -200,7 +204,7 @@ it("keeps input-required evidence across reopen and never sweeps unowned directo
     );
   }
   expect(getSupervisedTask("work", f.options)?.phase).toBe("input_required");
-  releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, 9000, f.options);
+  expect(await draft.close()).toBe(true);
   const outside = `${f.root}/taskflow-workspaces/unowned`;
   await fs.mkdir(outside);
   await fs.writeFile(`${outside}/keep`, "operator");
@@ -213,10 +217,10 @@ it("keeps input-required evidence across reopen and never sweeps unowned directo
 it("retires only owned terminal artifacts and keeps receipt tombstones after reopening", async () => {
   const f = await fixture();
   const attempt = f.claim("one");
-  await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, () =>
+  const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, () =>
     assertSupervisedAttemptCurrent(attempt, Date.now(), f.options),
   );
-  releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, 1000, f.options);
+  expect(await draft.close()).toBe(true);
   cancelSupervisedTask("work", 1000, f.options);
   closeOpenClawStateDatabaseForTest();
   expect(await retireSupervisedWorkspaces(expired, f.options)).toBe(2);
@@ -242,10 +246,10 @@ it("retires only owned terminal artifacts and keeps receipt tombstones after reo
 it("starts retention at the terminal observation, not at an old artifact's creation", async () => {
   const f = await fixture();
   const attempt = f.claim("one");
-  const draft = await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, () =>
+  const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, () =>
     assertSupervisedAttemptCurrent(attempt, Date.now(), f.options),
   );
-  releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, 1000, f.options);
+  expect(await draft.close()).toBe(true);
   vi.setSystemTime(expired);
   cancelSupervisedTask("work", expired, f.options);
   expect(await retireSupervisedWorkspaces(expired, f.options)).toBe(0);
@@ -257,20 +261,21 @@ it("retires accepted scratch only after its writer joins, including after SQLite
   const f = await fixture();
   const attempt = f.claim("one");
   const guard = () => assertSupervisedAttemptCurrent(attempt, Date.now(), f.options);
-  const draft = await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, guard);
+  const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, guard);
   await fs.writeFile(`${draft.workspace}/answer.txt`, "accepted\n");
-  await acceptSupervisedAttemptWorkspace(attempt, f.contract, draft, f.options, guard);
-  const accepted = resolveSupervisedWorkflowWorkspace(f.contract, "work", 1, f.options);
-  // An accepted immutable copy does not establish extinction of the draft writer.
+  await draft.stage({ kind: "continue", next: "Inspect" });
+  await expect(draft.accept()).rejects.toThrow(/physical resource closure/);
   expect(await retireSupervisedWorkspaces(Date.now(), f.options)).toBe(0);
   await fs.writeFile(`${draft.workspace}/answer.txt`, "writer not yet joined\n");
-  releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, Date.now(), f.options);
+  expect(await draft.close()).toBe(true);
+  await draft.accept();
+  const accepted = resolveSupervisedWorkflowWorkspace(f.contract, "work", 1, f.options);
   closeOpenClawStateDatabaseForTest();
   expect(await retireSupervisedWorkspaces(Date.now(), f.options)).toBe(1);
   await expect(fs.stat(draft.workspace)).rejects.toMatchObject({ code: "ENOENT" });
   expect(await fs.readFile(`${accepted.workspace}/answer.txt`, "utf8")).toBe("accepted\n");
   expect(await fs.readFile(`${f.workspace}/answer.txt`, "utf8")).toBe("initial\n");
-  expect(getSupervisedTask("work", f.options)?.phase).toBe("running");
+  expect(getSupervisedTask("work", f.options)?.phase).toBe("ready");
   expect(await retireSupervisedWorkspaces(Date.now(), f.options)).toBe(0);
 });
 
@@ -280,14 +285,14 @@ it("continues nine accepted attempts without exhausting scratch capacity or losi
   for (let index = 0; index < 9; index += 1) {
     const attempt = f.claim("one");
     const guard = () => assertSupervisedAttemptCurrent(attempt, Date.now(), f.options);
-    const draft = await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, guard);
+    const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, guard);
     await fs.writeFile(`${draft.workspace}/answer.txt`, `accepted ${index}\n`);
-    await acceptSupervisedAttemptWorkspace(attempt, f.contract, draft, f.options, guard);
+    await draft.stage({ kind: "continue", next: "Refine" });
+    expect(await draft.close()).toBe(true);
+    await draft.accept();
     acceptedPaths.push(
       resolveSupervisedWorkflowWorkspace(f.contract, "work", 1, f.options).workspace,
     );
-    releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, Date.now(), f.options);
-    settleSupervisedDecision(attempt, { kind: "continue", next: "Refine" }, Date.now(), f.options);
     await retireSupervisedWorkspaces(Date.now(), f.options);
     closeOpenClawStateDatabaseForTest();
   }
@@ -314,19 +319,15 @@ it("retains accepted scratch when the joined attempt ends input-required", async
   const f = await fixture();
   const attempt = f.claim("one");
   const guard = () => assertSupervisedAttemptCurrent(attempt, Date.now(), f.options);
-  const draft = await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, guard);
-  await acceptSupervisedAttemptWorkspace(attempt, f.contract, draft, f.options, guard);
-  releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, Date.now(), f.options);
-  settleSupervisedDecision(
-    attempt,
-    {
-      kind: "input_required",
-      reason: "Need operator evidence",
-      question: "Which result is correct?",
-    },
-    Date.now(),
-    f.options,
-  );
+  const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, guard);
+  await draft.stage({
+    kind: "input_required",
+    reason: "Need operator evidence",
+    question: "Which result is correct?",
+  });
+  expect(await draft.close()).toBe(true);
+  await draft.accept();
+  expect(getSupervisedTask("work", f.options)?.phase).toBe("input_required");
   closeOpenClawStateDatabaseForTest();
   expect(await retireSupervisedWorkspaces(Date.now(), f.options)).toBe(0);
   expect(await retireSupervisedWorkspaces(expired, f.options)).toBe(0);
@@ -336,38 +337,24 @@ it("retains accepted scratch when the joined attempt ends input-required", async
 it("keeps joined but unaccepted scratch as evidence in an active workflow", async () => {
   const f = await fixture();
   const attempt = f.claim("one");
-  const draft = await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, () =>
+  const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, () =>
     assertSupervisedAttemptCurrent(attempt, Date.now(), f.options),
   );
   await fs.writeFile(`${draft.workspace}/answer.txt`, "not accepted\n");
-  releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, Date.now(), f.options);
+  expect(await draft.close()).toBe(true);
   closeOpenClawStateDatabaseForTest();
   expect(await retireSupervisedWorkspaces(Date.now(), f.options)).toBe(0);
   expect(await fs.readFile(`${draft.workspace}/answer.txt`, "utf8")).toBe("not accepted\n");
-});
-
-it("records an input-required scratch hold before the endpoint is settled", async () => {
-  const f = await fixture();
-  const attempt = f.claim("one");
-  const guard = () => assertSupervisedAttemptCurrent(attempt, Date.now(), f.options);
-  const draft = await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, guard);
-  await acceptSupervisedAttemptWorkspace(attempt, f.contract, draft, f.options, guard, {
-    retainScratch: true,
-  });
-  releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, Date.now(), f.options);
-  closeOpenClawStateDatabaseForTest();
-  expect(getSupervisedTask("work", f.options)?.phase).toBe("running");
-  expect(await retireSupervisedWorkspaces(Date.now(), f.options)).toBe(0);
-  expect(await fs.readFile(`${draft.workspace}/answer.txt`, "utf8")).toBe("initial\n");
 });
 
 it("does not discard accepted and joined scratch after the flow is quarantined", async () => {
   const f = await fixture();
   const attempt = f.claim("one");
   const guard = () => assertSupervisedAttemptCurrent(attempt, Date.now(), f.options);
-  const draft = await prepareSupervisedAttemptWorkspace(attempt, f.contract, f.options, guard);
-  await acceptSupervisedAttemptWorkspace(attempt, f.contract, draft, f.options, guard);
-  releaseSupervisedWorkspaceOwner("attempt", attempt.attempt!.id, Date.now(), f.options);
+  const draft = await prepareAttemptCandidateFixture(attempt, f.contract, f.options, guard);
+  await draft.stage({ kind: "continue", next: "Inspect" });
+  expect(await draft.close()).toBe(true);
+  await draft.accept();
   quarantineSupervisedTask("work", 1, Date.now(), f.options);
   closeOpenClawStateDatabaseForTest();
   expect(await retireSupervisedWorkspaces(Date.now(), f.options)).toBe(0);
@@ -382,7 +369,7 @@ it("rejects an aliased artifact root before creating any external directory", as
   await fs.symlink(outside, `${f.root}/taskflow-workspaces`);
   const task = f.claim("one");
   await expect(
-    prepareSupervisedAttemptWorkspace(task, f.contract, f.options, () =>
+    ensureSupervisedAttemptSource(task, f.contract, f.options, () =>
       assertSupervisedAttemptCurrent(task, Date.now(), f.options),
     ),
   ).rejects.toThrow();

@@ -49,6 +49,11 @@ export const SupervisedDecisionSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 export type SupervisedDecision = z.infer<typeof SupervisedDecisionSchema>;
+// Native tool schemas forbid top-level unions; retain the full decision union
+// and host refinements under one closed envelope instead of flattening it.
+export const SupervisedDecisionEnvelopeSchema = z.strictObject({
+  decision: SupervisedDecisionSchema,
+});
 
 export const SupervisedPolicySchema = z.strictObject({
   deadlineAt: timestamp,

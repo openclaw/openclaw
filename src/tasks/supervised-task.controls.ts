@@ -38,7 +38,6 @@ export const SupervisedTaskControlSchema = z.strictObject({
   inputId: id,
   action: Action,
 });
-export type SupervisedTaskControl = z.infer<typeof SupervisedTaskControlSchema>;
 
 // The durable receipt is an acknowledgement, not a copy of the up-to-64-KiB
 // task. It remains bounded by the existing 8-KiB input record contract.

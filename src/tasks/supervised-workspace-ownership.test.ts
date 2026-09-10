@@ -25,7 +25,8 @@ import { getSupervisedWorkflowContract } from "./supervised-workflow.store.js";
 import { encodeSupervisedWorkflowContract } from "./supervised-workflow.types.js";
 import {
   getSupervisedWorkspaceHead,
-  prepareSupervisedAttemptWorkspace,
+  ensureSupervisedAttemptSource,
+  supervisedWorkspaceVersionPath,
   prepareSupervisedOperationWorkspace,
 } from "./supervised-workspace-versions.js";
 
@@ -150,7 +151,7 @@ it.each([
     }
     let prepare: Promise<unknown>;
     if (owner === "attempt") {
-      prepare = prepareSupervisedAttemptWorkspace(task, contract, f.options, () => {
+      prepare = ensureSupervisedAttemptSource(task, contract, f.options, () => {
         assertSupervisedAttemptCurrent(task, Date.now(), f.options);
         afterCopy();
       });
@@ -256,7 +257,7 @@ it("resumes from the accepted private head after the original input root disappe
   f.admit("first");
   const first = f.claim("first");
   const contract = getSupervisedWorkflowContract("first", 1, f.options)!.contract;
-  await prepareSupervisedAttemptWorkspace(first, contract, f.options, () =>
+  await ensureSupervisedAttemptSource(first, contract, f.options, () =>
     assertSupervisedAttemptCurrent(first, Date.now(), f.options),
   );
   settleSupervisedDecision(
@@ -278,10 +279,15 @@ it("resumes from the accepted private head after the original input root disappe
     1005,
     f.options,
   );
-  const draft = await prepareSupervisedAttemptWorkspace(next, contract, f.options, () =>
+  const draft = await ensureSupervisedAttemptSource(next, contract, f.options, () =>
     assertSupervisedAttemptCurrent(next, Date.now(), f.options),
   );
-  expect(fs.readFileSync(path.join(draft.workspace, "answer.txt"), "utf8")).toBe("accepted input");
+  expect(
+    fs.readFileSync(
+      path.join(supervisedWorkspaceVersionPath(draft.version_id, f.options), "answer.txt"),
+      "utf8",
+    ),
+  ).toBe("accepted input");
   expect(fs.existsSync(f.workspace)).toBe(false);
 });
 

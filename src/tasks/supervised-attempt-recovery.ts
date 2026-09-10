@@ -51,7 +51,7 @@ function assertCleanupSupervisor(
 
 /** Separate, nonrenewing cleanup custody. Claims are terminal-inclusive and
  * never authorize payload or candidate publication. A new nonce fences ABA. */
-export function claimSupervisedAttemptCleanup(
+function claimSupervisedAttemptCleanup(
   resourceId: string,
   supervisorId: string,
   options: Options = {},
@@ -97,7 +97,7 @@ export function claimSupervisedAttemptCleanup(
   }, options);
 }
 
-export function assertSupervisedAttemptCleanupCurrent(claim: CleanupClaim, options: Options = {}) {
+function assertSupervisedAttemptCleanupCurrent(claim: CleanupClaim, options: Options = {}) {
   const current = readSupervisedWorkflow((db) => {
     const resource = readAttemptResourceInTransaction(db, claim.resourceId);
     const now = Date.now();

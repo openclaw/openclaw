@@ -306,7 +306,7 @@ describe("prepareCodexAttemptConnection", () => {
           managedLocalIdentity: false,
           ownedLocalProcessRequired: true,
         }),
-      });
+      } satisfies typeof params.hostCapabilities);
       if (placement === "sandbox") {
         params.sandbox = createSandboxContext({});
       }

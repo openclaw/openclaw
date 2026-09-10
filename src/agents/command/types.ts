@@ -199,6 +199,8 @@ export type AgentCommandOpts = {
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+  /** Host-requested terminal JSON schema; supported native CLI owners enforce it. */
+  outputJsonSchema?: Record<string, unknown>;
   /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
   allowGatewaySubagentBinding?: boolean;
   /** Opaque foreground fence transferred by Gateway after atomic session admission. */
@@ -248,6 +250,7 @@ export type AgentCommandOpts = {
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   | "senderIsOwner"
+  | "outputJsonSchema"
   | "allowModelOverride"
   | "mainRestartRecoveryOwnerLease"
   | "mainRestartRecoveryAdmitted"

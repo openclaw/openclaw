@@ -250,6 +250,8 @@ export type CliBackendExecuteContext = {
   promptContext?: CliBackendPromptContext;
   modelId: string;
   systemPrompt: string;
+  /** Host-requested terminal JSON schema; supported native CLI owners enforce it. */
+  outputJsonSchema?: Record<string, unknown>;
   sessionId?: string;
   useResume: boolean;
   abortSignal?: AbortSignal;

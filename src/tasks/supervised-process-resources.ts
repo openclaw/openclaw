@@ -10,8 +10,6 @@ import {
 import { runCommandBuffered } from "../process/exec.js";
 
 export type SupervisedProcessResourceLimits = { memoryBytes: number; tasks: number };
-export const DEFAULT_SUPERVISED_PROCESS_RESOURCE_LIMITS: SupervisedProcessResourceLimits =
-  Object.freeze({ memoryBytes: 1024 * 1024 * 1024, tasks: 128 });
 
 /** Persist this binding before releasing the custodian's payload start gate.
  * The execution ID must be host-generated, durably reserved and NEVER reused,
@@ -146,8 +144,59 @@ async function readScope(scopeName: string): Promise<Record<string, string>> {
  * transport is proven extinct. Without BOTH caller-owned facts, an absent unit
  * could still arrive later; this observation alone never authorizes replay. */
 export async function isSealedSupervisedProcessScopeAbsent(resourceId: string): Promise<boolean> {
-  const scope = await readScope(supervisedProcessScopeName(resourceId));
-  return scope.LoadState === "not-found" && scope.InvocationID === "" && scope.ControlGroup === "";
+  const scopeName = supervisedProcessScopeName(resourceId);
+  const scope = await readScope(scopeName);
+  if (scope.LoadState === "not-found" && scope.InvocationID === "" && scope.ControlGroup === "") {
+    return true;
+  }
+  // A bootstrap cancelled between `systemd-run` and scope binding can leave the
+  // --collect unit loaded but never populated. That unit holds no kernel
+  // processes, so the sealed plan's physical capacity is already free; without
+  // this case the reservation is unreleasable and permanently consumes a slot.
+  // Emptiness is NOT a live-process leak and never licenses signalling.
+  if (scope.LoadState !== "loaded") {
+    return false;
+  }
+  const invocationId = scope.InvocationID;
+  const controlGroup = scope.ControlGroup;
+  if (typeof invocationId !== "string" || !/^[0-9a-f]{32}$/.test(invocationId)) {
+    throw new Error("Process scope is not an active, identified invocation");
+  }
+  if (typeof controlGroup !== "string") {
+    throw new Error("Process scope control group is unavailable");
+  }
+  validateControlGroup(controlGroup, scopeName);
+  const pinned = openCgroup(controlGroup);
+  try {
+    if (readRecursivePopulation(`/proc/self/fd/${pinned.fd}`)) {
+      return false;
+    }
+    // Emptiness is evidence about THIS invocation only. Revalidate the manager
+    // while the inode stays pinned, so a same-named replacement unit arriving
+    // between the two observations cannot be read as the sealed one's absence.
+    const current = await readScope(scopeName);
+    if (
+      current.LoadState !== "loaded" ||
+      current.InvocationID !== invocationId ||
+      current.ControlGroup !== controlGroup
+    ) {
+      throw new Error("Process scope invocation or cgroup changed; cleanup remains unknown");
+    }
+    const recheck = openCgroup(controlGroup);
+    try {
+      if (
+        recheck.stat.dev.toString() !== pinned.stat.dev.toString() ||
+        recheck.stat.ino.toString() !== pinned.stat.ino.toString()
+      ) {
+        throw new Error("Process cgroup kernel identity changed; cleanup remains unknown");
+      }
+      return !readRecursivePopulation(`/proc/self/fd/${recheck.fd}`);
+    } finally {
+      fs.closeSync(recheck.fd);
+    }
+  } finally {
+    fs.closeSync(pinned.fd);
+  }
 }
 
 function validateControlGroup(controlGroup: string, scopeName: string): void {
@@ -167,12 +216,10 @@ function validateControlGroup(controlGroup: string, scopeName: string): void {
   }
 }
 
-function withCgroup<T>(
-  controlGroup: string,
-  inspect: (root: string, stat: fs.BigIntStats) => T,
-): T {
-  // Pin the actual kernel directory through all limit/events reads. A pathname
-  // replacement must not turn a previously checked identity into a different one.
+/** Pin the actual kernel directory through all limit/events reads. A pathname
+ * replacement must not turn a previously checked identity into a different one.
+ * The caller owns the returned descriptor and must always close it. */
+function openCgroup(controlGroup: string): { fd: number; stat: fs.BigIntStats } {
   const fd = fs.openSync(
     `/sys/fs/cgroup${controlGroup}`,
     fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW,
@@ -182,10 +229,34 @@ function withCgroup<T>(
     if (!stat.isDirectory()) {
       throw new Error("Process cgroup is not a kernel directory");
     }
+    return { fd, stat };
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+function withCgroup<T>(
+  controlGroup: string,
+  inspect: (root: string, stat: fs.BigIntStats) => T,
+): T {
+  const { fd, stat } = openCgroup(controlGroup);
+  try {
     return inspect(`/proc/self/fd/${fd}`, stat);
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/** Recursive population of the pinned cgroup. Partial or unparseable evidence
+ * is an error, never an inferred emptiness. */
+function readRecursivePopulation(root: string): boolean {
+  const events = fs.readFileSync(`${root}/cgroup.events`, "utf8");
+  const matches = [...events.matchAll(/^populated ([01])$/gm)];
+  if (matches.length !== 1 || !matches[0]) {
+    throw new Error("Process cgroup recursive population unavailable");
+  }
+  return matches[0][1] === "1";
 }
 
 function assertCustodian(custodian: NodeWorkerProcessIdentity, controlGroup: string): void {
@@ -348,12 +419,7 @@ export async function isSupervisedProcessScopeClosed(
   try {
     populated = withCgroup(identity.controlGroup, (root, stat) => {
       assertCgroupIdentity(stat, identity);
-      const events = fs.readFileSync(`${root}/cgroup.events`, "utf8");
-      const matches = [...events.matchAll(/^populated ([01])$/gm)];
-      if (matches.length !== 1 || !matches[0]) {
-        throw new Error("Process cgroup recursive population unavailable");
-      }
-      return matches[0][1] === "1";
+      return readRecursivePopulation(root);
     });
   } catch (error) {
     if (!isMissingPathError(error)) {

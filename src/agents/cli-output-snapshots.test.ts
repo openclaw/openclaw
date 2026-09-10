@@ -266,3 +266,16 @@ it("retains the terminal result separately from tool-split conversational text",
   expect(result?.text).toContain(final);
   expect(result).toHaveProperty("terminalResultText", final);
 });
+
+it("captures an explicitly requested terminal result even when display text is identical", () => {
+  const final = JSON.stringify({ decision: { kind: "failed", reason: "fixture" } });
+  const parser = createCliJsonlStreamingParser({
+    backend: BACKEND,
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    captureTerminalResultText: true,
+  });
+  parser.push(joinJsonlFrames({ type: "result", subtype: "success", result: final }));
+  parser.finish();
+  expect(parser.getOutput()).toMatchObject({ text: final, terminalResultText: final });
+});

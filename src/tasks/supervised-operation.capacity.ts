@@ -25,7 +25,7 @@ import {
 } from "./supervised-workflow.persistence.js";
 
 const sql = (db: DatabaseSync) => getNodeSqliteKysely<DB>(db);
-export const MAX_SUPERVISED_OPERATION_PROCESSES = 8;
+const MAX_SUPERVISED_OPERATION_PROCESSES = 8;
 
 /** Physical capacity is independent of task authority, execution leases and receipts.
  * Reserve in the same transaction as the execution, before creating a process. */

@@ -451,6 +451,27 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
+  it.each([true, false])(
+    "uses only the structured terminal result for a schema request (present: %s)",
+    async (present) => {
+      mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+      mocks.runCliAgent.mockResolvedValue({
+        payloads: [{ text: "Conversational commentary is not the verdict" }],
+        ...(present ? { meta: { cliTerminalResultText: '{"answer":42}' } } : {}),
+      });
+      const outputJsonSchema = { type: "object", properties: { answer: { type: "integer" } } };
+      const pending = runIsolatedCompletion({ ...isolatedRequest(), outputJsonSchema });
+      if (present) {
+        await expect(pending).resolves.toMatchObject({ text: '{"answer":42}' });
+      } else {
+        await expect(pending).rejects.toMatchObject({ code: "output-rejected" });
+      }
+      expect(mocks.runCliAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ outputJsonSchema, disableTools: true }),
+      );
+    },
+  );
+
   it.each([undefined, { input: 8, output: 3, cacheRead: 2, total: 13 }])(
     "routes CLI owners through one empty-tool run with reported usage %j",
     async (usage) => {

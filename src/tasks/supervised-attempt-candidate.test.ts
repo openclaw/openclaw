@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { requireNodeWorkerProcessIdentity } from "../node-host/node-worker-process-identity.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -22,6 +21,7 @@ import {
   reserveSupervisedAttemptResources,
   revokeSupervisedAttemptResources,
 } from "./supervised-attempt-custody.js";
+import { candidateKernel } from "./supervised-attempt-kernel.test-support.js";
 import { listSupervisedOperations } from "./supervised-operation.store.js";
 import { controlSupervisedTask } from "./supervised-task.controls.js";
 import {
@@ -38,48 +38,10 @@ import { readSupervisedWorkflow } from "./supervised-workflow.persistence.js";
 import { encodeSupervisedWorkflowContract } from "./supervised-workflow.types.js";
 import {
   getSupervisedWorkspaceHead,
-  prepareSupervisedAttemptWorkspace,
+  ensureSupervisedAttemptSource,
   supervisedWorkspaceVersionPath,
 } from "./supervised-workspace-versions.js";
-
-const controls = vi.hoisted(() => ({
-  member: vi.fn(),
-  closed: vi.fn(),
-  verify: vi.fn<() => Promise<void>>(),
-}));
-// Only kernel facts are simulated. All task/resource/candidate transactions,
-// artifact reads/copies, operation authorization and acceptance verification are real.
-// This suite proves SQL composition, not physical namespace or process extinction.
-vi.mock("./supervised-process-resources.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./supervised-process-resources.js")>()),
-  supervisedProcessScopeName: (id: string) => `openclaw-task-${id}.scope`,
-  readSupervisedProcessHostIdentity: () => ({
-    hostId: "a".repeat(64),
-    bootId: "e1b0a23e-26d8-4ee6-ac6c-e67a10cc5c99",
-  }),
-  validateSupervisedProcessResourceLimits: () => {},
-  inspectSupervisedProcessScope: async ({
-    resourceId,
-    limits,
-  }: {
-    resourceId: string;
-    limits: { memoryBytes: number; tasks: number };
-  }) => ({
-    resourceId,
-    scopeName: `openclaw-task-${resourceId}.scope`,
-    invocationId: "b".repeat(32),
-    controlGroup: `/fixture/${resourceId}`,
-    hostId: "a".repeat(64),
-    bootId: "e1b0a23e-26d8-4ee6-ac6c-e67a10cc5c99",
-    custodian: requireNodeWorkerProcessIdentity(process.pid),
-    cgroupDevice: "25",
-    cgroupInode: "100",
-    limits,
-  }),
-  isSupervisedProcessScopeClosed: controls.closed,
-  isSealedSupervisedProcessScopeAbsent: async () => true,
-  assertSupervisedProcessScopeMember: controls.member,
-}));
+const controls = vi.hoisted(() => ({ verify: vi.fn<() => Promise<void>>() }));
 vi.mock("./supervised-workflow.acceptance.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./supervised-workflow.acceptance.js")>();
   return {
@@ -92,6 +54,10 @@ vi.mock("./supervised-workflow.acceptance.js", async (importOriginal) => {
     },
   };
 });
+vi.mock("./supervised-process-resources.js", async (importOriginal) => {
+  const { mockAttemptKernel } = await import("./supervised-attempt-kernel.test-support.js");
+  return mockAttemptKernel(importOriginal);
+});
 const dirs = createTempDirTracker();
 const success = {
   kind: "succeeded",
@@ -101,8 +67,8 @@ const success = {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1000);
-  controls.closed.mockReset().mockResolvedValue(true);
-  controls.member.mockReset();
+  candidateKernel.closed.mockReset().mockResolvedValue(true);
+  candidateKernel.member.mockReset();
   controls.verify.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -178,7 +144,7 @@ async function fixture(
   }
   const expected = reserveSupervisedDispatch(claimed, 1000, options);
   if (workflow) {
-    await prepareSupervisedAttemptWorkspace(expected, workflow, options, () =>
+    await ensureSupervisedAttemptSource(expected, workflow, options, () =>
       assertSupervisedAttemptCurrent(expected, Date.now(), options),
     );
   }
@@ -263,7 +229,8 @@ it("replays concurrent acceptance inside the transaction, not after stale source
     acceptSupervisedAttemptCandidate(f.expected, f.plan.resourceId, f.options),
     acceptSupervisedAttemptCandidate(f.expected, f.plan.resourceId, f.options),
   ]);
-  const [first, second] = results.map((result) => disposition(result, f));
+  const first = disposition(results[0], f);
+  const second = disposition(results[1], f);
   expect(first).toEqual(second);
   expect(first.endpoint?.kind).toBe("succeeded");
   expect(first.revision).toBe(f.expected.revision + 1);
@@ -362,7 +329,7 @@ it("does not accept a staged decision without seal or a sealed candidate without
 });
 it("requires actual scope membership even for the exact custodian PID", async () => {
   const f = await fixture();
-  controls.member.mockImplementationOnce(() => {
+  candidateKernel.member.mockImplementationOnce(() => {
     throw new Error("Custodian left its scope");
   });
   await expect(stageSupervisedAttemptCandidate(f.plan.resourceId, f.options)).rejects.toThrow(

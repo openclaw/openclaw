@@ -18,6 +18,7 @@ import {
   reserveSupervisedDispatch,
   settleSupervisedDecision,
 } from "./supervised-task.store.js";
+import type { SupervisedDecision } from "./supervised-task.types.js";
 import { verifySupervisedWorkflowAcceptance } from "./supervised-workflow.acceptance.js";
 import { encodeSupervisedWorkflowContract } from "./supervised-workflow.types.js";
 import { captureSupervisedWorkspace } from "./supervised-workspace.js";
@@ -42,7 +43,7 @@ const claimedSuccess = {
   kind: "succeeded",
   summary: "The model says it worked",
   evidence: [{ criterionId: "correct", observation: "Trust me" }],
-} as const;
+} satisfies SupervisedDecision;
 async function fixture(kind: "artifact" | "receipts" | "operator" | "json" = "artifact") {
   const root = dirs.make("openclaw-workflow-acceptance-");
   const workspace = `${root}/work`;

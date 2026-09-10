@@ -35,6 +35,12 @@ export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext)
     const raw = context.args[index]!;
     const equals = raw.indexOf("=");
     const flag = equals < 0 ? raw : raw.slice(0, equals);
+    if (flag === "--json-schema" && context.outputJsonSchema) {
+      if (equals < 0 && context.args[++index] === undefined) {
+        throw new Error("Claude CLI cannot replace --json-schema without its value.");
+      }
+      continue;
+    }
     if (PROTOCOL_FLAGS.has(flag)) {
       continue;
     }

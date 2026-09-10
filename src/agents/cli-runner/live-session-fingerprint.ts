@@ -78,6 +78,7 @@ export function buildCliLiveSessionFingerprint(params: {
       model: context.normalizedModel,
       // A warm process fixes its prompt at initialization; changed bytes require restart.
       systemPromptHash: sha256Hex(context.systemPrompt),
+      outputJsonSchema: context.params.outputJsonSchema,
       authProfileIdHash: context.effectiveAuthProfileId
         ? sha256Hex(context.effectiveAuthProfileId)
         : undefined,

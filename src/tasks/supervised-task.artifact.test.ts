@@ -12,7 +12,7 @@ import {
 } from "./supervised-task.store.js";
 import { encodeSupervisedWorkflowContract } from "./supervised-workflow.types.js";
 import {
-  prepareSupervisedAttemptWorkspace,
+  ensureSupervisedAttemptSource,
   getSupervisedWorkspaceHead,
   supervisedWorkspaceVersionPath,
 } from "./supervised-workspace-versions.js";
@@ -68,7 +68,7 @@ async function fixture() {
     1000,
     options,
   );
-  await prepareSupervisedAttemptWorkspace(task, contract, options, () =>
+  await ensureSupervisedAttemptSource(task, contract, options, () =>
     assertSupervisedAttemptCurrent(task, 1000, options),
   );
   const head = getSupervisedWorkspaceHead("work", 1, options)!;

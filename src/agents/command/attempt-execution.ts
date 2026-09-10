@@ -1168,6 +1168,7 @@ export function runAgentAttempt(params: {
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
             oneShotCliRun: params.opts.oneShotCliRun,
+            outputJsonSchema: params.opts.outputJsonSchema,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,

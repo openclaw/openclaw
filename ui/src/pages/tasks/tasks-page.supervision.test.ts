@@ -55,7 +55,7 @@ describe("supervised task controls", () => {
       ts: 1,
       path: "",
       count: 1,
-      defaults: {},
+      defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [
         {
           key: "agent:main:main",

@@ -45,6 +45,15 @@ afterEach(() => {
 });
 
 describe("plugin-owned CLI native tool policy", () => {
+  it("carries the requested terminal schema to the admitted plugin execution", async () => {
+    const { context } = await createExecution();
+    const schema = { type: "object", properties: { answer: { type: "integer" } } };
+    context.params.outputJsonSchema = schema;
+    await runPlugin(context, async function* (execution) {
+      expect(execution.outputJsonSchema).toEqual(schema);
+      yield SUCCESS_RESULT;
+    });
+  });
   it("denies native tools when caller authority expires during policy or before a retained call", async () => {
     const { context } = await createExecution({ nativeTools: ["WebFetch"] });
     let callerCurrent = true;

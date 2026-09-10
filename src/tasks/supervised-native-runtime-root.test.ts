@@ -15,11 +15,19 @@ vi.mock("node:os", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:os")>()),
   homedir: () => path.join(fixture.root, "home"),
 }));
-vi.mock("../agents/agent-scope-config.js", () => ({
-  resolveAgentDir: () => path.join(fixture.root, "agents", "selected", "agent"),
-  resolveDefaultAgentDir: () => path.join(fixture.root, "agents", "default", "agent"),
+// Real owner resolution: an explicit task/reviewer must not need an ambient
+// system agent, nor acquire another configured agent's writable directory.
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => ({
+    agents: {
+      ownership: "explicit",
+      entries: {
+        selected: { agentDir: path.join(fixture.root, "agents", "selected", "agent") },
+        other: { agentDir: path.join(fixture.root, "agents", "other", "agent") },
+      },
+    },
+  }),
 }));
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../config/paths.js", () => ({
   resolveConfigPath: () => path.join(fixture.root, "absent-config.json"),
 }));
@@ -157,14 +165,11 @@ describe.skipIf(!process.getuid)("native state roots at payload dispatch", () =>
           }
           expect(fixture.prefix).toHaveBeenCalledTimes(1);
           const roots = fixture.prefix.mock.calls[0]![0].writableRuntimePaths;
-          const nonNativeRoots = new Set([
+          expect(roots).toEqual([
             path.dirname(database),
             path.join(fixture.root, "agents", "selected"),
-            path.join(fixture.root, "agents", "default"),
+            ...(testCase.expected ? [path.join(fixture.root, testCase.expected)] : []),
           ]);
-          expect(roots.filter((root) => !nonNativeRoots.has(root))).toEqual(
-            testCase.expected ? [path.join(fixture.root, testCase.expected)] : [],
-          );
           if (testCase.codex === "missing-codex") {
             await expect(fs.access(path.join(fixture.root, "missing-codex"))).rejects.toMatchObject(
               {

@@ -6,6 +6,25 @@ import {
   supervisedRuntimeFailureDiagnostic,
 } from "./supervised-runtime-diagnostic.js";
 
+it("retains bounded terminal stops ahead of generic failover classification", () => {
+  const failure = new FailoverError("private provider detail", {
+    reason: "unknown",
+    code: "cli_max_turns",
+  });
+  expect(supervisedRuntimeFailureDiagnostic(failure)).toBe(
+    "supervised-runtime:terminal:cli_max_turns",
+  );
+  expect(
+    supervisedRuntimeFailureDiagnostic({
+      name: "IsolatedCompletionError",
+      code: "output-rejected",
+    }),
+  ).toBe("supervised-runtime:isolated:output-rejected");
+  expect(
+    supervisedRuntimeFailureDiagnostic({ name: "IsolatedCompletionError", code: "private" }),
+  ).toBe("supervised-runtime:unknown:unclassified");
+});
+
 it("preserves typed cause while dropping arbitrary provider fields at the control pipe", () => {
   const failure = new FailoverError("SYNTHETIC_PRIVATE_MESSAGE", {
     reason: "timeout",

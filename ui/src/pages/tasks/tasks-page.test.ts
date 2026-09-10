@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { TaskStatus, TaskSummary } from "../../lib/tasks/task-summary.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {

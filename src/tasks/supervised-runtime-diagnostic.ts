@@ -73,6 +73,13 @@ const abortObservations = [
   "no_known_banner",
 ] as const;
 const diagnostics = new Set([
+  "supervised-runtime:terminal:cli_max_turns",
+  "supervised-runtime:terminal:cli_turn_stopped",
+  "supervised-runtime:terminal:cli_synthetic_no_response",
+  "supervised-runtime:isolated:output-rejected",
+  "supervised-runtime:isolated:runtime-unavailable",
+  "supervised-runtime:isolated:input-rejected",
+  "supervised-runtime:isolated:unsupported",
   "supervised-runtime:cli:initialize",
   "supervised-runtime:cli:protocol",
   "supervised-runtime:cli:exit:other",
@@ -152,6 +159,18 @@ export function supervisedRuntimeFailureDiagnostic(error: unknown): string {
     }
     seen.add(current);
     try {
+      const code = Object.getOwnPropertyDescriptor(current, "code")?.value;
+      const terminal = `supervised-runtime:terminal:${code}`;
+      const isolated = `supervised-runtime:isolated:${code}`;
+      if (isFailoverError(current) && diagnostics.has(terminal)) {
+        return terminal;
+      }
+      if (
+        Object.getOwnPropertyDescriptor(current, "name")?.value === "IsolatedCompletionError" &&
+        diagnostics.has(isolated)
+      ) {
+        return isolated;
+      }
       // SDK and source may have distinct module identities. Validate only fixed
       // own-data metadata; this diagnostic is never a retry or authority signal.
       if (Object.getOwnPropertyDescriptor(current, "cliBackendTransportError")?.value === "v1") {

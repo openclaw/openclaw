@@ -13,6 +13,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import { validateClaudeStructuredOutput } from "./cli-structured-output.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
@@ -75,15 +76,21 @@ async function authorizeTool(
   const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
   const abortSignal = AbortSignal.any([signal, turn.controller.signal]);
   try {
-    const decision =
-      toolName === "AskUserQuestion"
-        ? await turn.userInput.authorize({ input, signal: abortSignal, toolUseId })
-        : await turn.context.requestToolPermission({
-            toolName,
-            toolInput: input,
-            toolCallId: toolUseId,
-            abortSignal,
-          });
+    let decision: CliBackendToolPermissionResult;
+    if (toolName === "StructuredOutput" && turn.context.outputJsonSchema) {
+      validateClaudeStructuredOutput(turn.context.outputJsonSchema, input);
+      decision = { behavior: "allow", updatedInput: input };
+    } else {
+      decision =
+        toolName === "AskUserQuestion"
+          ? await turn.userInput.authorize({ input, signal: abortSignal, toolUseId })
+          : await turn.context.requestToolPermission({
+              toolName,
+              toolInput: input,
+              toolCallId: toolUseId,
+              abortSignal,
+            });
+    }
     // An operator decision can outlive its turn. Revalidate immediately before granting it.
     if (activeTurn(session) !== turn || abortSignal.aborted) {
       return { behavior: "deny", message: "The OpenClaw run is no longer active." };
@@ -221,7 +228,25 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         task.task_id.length > 0,
     );
   }
-  if (!turn.events.write(message)) {
+  let projectedMessage = message;
+  if (
+    message.type === "result" &&
+    message.subtype === "success" &&
+    message.is_error !== true &&
+    turn.context.outputJsonSchema &&
+    !session.hasBackgroundTasks
+  ) {
+    turn.context.assertCurrent?.();
+    turn.context.abortSignal?.throwIfAborted();
+    projectedMessage = {
+      ...message,
+      result: validateClaudeStructuredOutput(
+        turn.context.outputJsonSchema,
+        message.structured_output,
+      ),
+    };
+  }
+  if (!turn.events.write(projectedMessage)) {
     await once(turn.events, "drain", { signal: turn.controller.signal });
   }
   if (message.type === "result") {
@@ -302,6 +327,7 @@ export async function* executeClaudeCli(
         currentContext: () => session.currentTurn?.context,
         initialize: {
           appendSystemPrompt: context.systemPrompt,
+          ...(context.outputJsonSchema ? { jsonSchema: context.outputJsonSchema } : {}),
           excludeDynamicSections,
           hooks: {
             UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],

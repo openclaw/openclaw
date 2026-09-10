@@ -315,6 +315,7 @@ describe.skipIf(process.platform !== "linux")("supervised command resource owner
 
   it("observes sealed-plan absence only from exact collected-unit metadata", async () => {
     await expect(isSealedSupervisedCommandScopeAbsent(executionId)).resolves.toBe(false);
+    host.open.mockClear();
     host.run.mockResolvedValue(
       response({ LoadState: "not-found", InvocationID: "", ControlGroup: "" }),
     );
@@ -330,6 +331,88 @@ describe.skipIf(process.platform !== "linux")("supervised command resource owner
     expect(host.run.mock.calls.some(([argv]) => argv.includes("kill"))).toBe(false);
     expect(host.open).not.toHaveBeenCalled();
   });
+
+  it("observes an empty retained unit only with stable manager and pinned kernel identity", async () => {
+    files["/proc/self/fd/10/cgroup.events"] = "populated 0\nfrozen 0\n";
+    files["/proc/self/fd/11/cgroup.events"] = "populated 0\nfrozen 0\n";
+    host.open.mockReturnValueOnce(10).mockReturnValueOnce(11);
+    host.run.mockResolvedValueOnce(response()).mockImplementationOnce(async () => {
+      // Keep the first inode pinned across the asynchronous manager recheck.
+      expect(host.close).not.toHaveBeenCalled();
+      return response();
+    });
+    await expect(isSealedSupervisedCommandScopeAbsent(executionId)).resolves.toBe(true);
+    expect(host.run).toHaveBeenCalledTimes(2);
+    expect(host.close.mock.calls).toEqual([[11], [10]]);
+    expect(host.run.mock.calls.every(([argv]) => argv.includes("show"))).toBe(true);
+  });
+
+  it("does not release a retained unit when descendants arrive during revalidation", async () => {
+    files["/proc/self/fd/10/cgroup.events"] = "populated 0\n";
+    files["/proc/self/fd/11/cgroup.events"] = "populated 1\n";
+    host.open.mockReturnValueOnce(10).mockReturnValueOnce(11);
+    await expect(isSealedSupervisedCommandScopeAbsent(executionId)).resolves.toBe(false);
+    expect(host.run).toHaveBeenCalledTimes(2);
+  });
+
+  it.each<Record<string, string>>([
+    { InvocationID: "b".repeat(32) },
+    { ControlGroup: controlGroup.replace("app.slice", "background.slice") },
+    { LoadState: "not-found", InvocationID: "", ControlGroup: "" },
+  ])("rejects retained-unit replacement during manager revalidation: %j", async (changed) => {
+    files["/proc/self/fd/10/cgroup.events"] = "populated 0\n";
+    host.run.mockResolvedValueOnce(response()).mockResolvedValueOnce(response(changed));
+    await expect(isSealedSupervisedCommandScopeAbsent(executionId)).rejects.toThrow();
+    expect(host.close).toHaveBeenCalledWith(10);
+  });
+
+  it.each(["device", "inode"])("rejects a replaced retained cgroup %s", async (changed) => {
+    files["/proc/self/fd/10/cgroup.events"] = "populated 0\n";
+    files["/proc/self/fd/11/cgroup.events"] = "populated 0\n";
+    host.open.mockReturnValueOnce(10).mockReturnValueOnce(11);
+    host.stat
+      .mockReturnValueOnce({ dev: 29n, ino: 1203n, isDirectory: () => true })
+      .mockReturnValueOnce({
+        dev: changed === "device" ? 30n : 29n,
+        ino: changed === "inode" ? 1204n : 1203n,
+        isDirectory: () => true,
+      });
+    await expect(isSealedSupervisedCommandScopeAbsent(executionId)).rejects.toThrow();
+    expect(host.close.mock.calls).toEqual([[11], [10]]);
+  });
+
+  it.each<Record<string, string>>([
+    { InvocationID: "invalid" },
+    { ControlGroup: `/foreign/${scopeName}` },
+    { ControlGroup: controlGroup.replace(scopeName, "other.scope") },
+  ])("rejects malformed retained-unit identity before a kernel read: %j", async (invalid) => {
+    host.run.mockResolvedValue(response(invalid));
+    await expect(isSealedSupervisedCommandScopeAbsent(executionId)).rejects.toThrow();
+    expect(host.open).not.toHaveBeenCalled();
+  });
+
+  it.each(["InvocationID", "ControlGroup"])("rejects a missing %s observation", async (field) => {
+    const observed = response();
+    observed.stdout = Buffer.from(
+      observed.stdout
+        .toString()
+        .split("\n")
+        .filter((line) => !line.startsWith(`${field}=`))
+        .join("\n"),
+    );
+    host.run.mockResolvedValue(observed);
+    await expect(isSealedSupervisedCommandScopeAbsent(executionId)).rejects.toThrow();
+    expect(host.open).not.toHaveBeenCalled();
+  });
+
+  it.each(["frozen 0\n", "populated 0\npopulated 1\n", "populated unknown\n"])(
+    "rejects incomplete recursive population evidence %j",
+    async (events) => {
+      files["/proc/self/fd/10/cgroup.events"] = events;
+      await expect(isSealedSupervisedCommandScopeAbsent(executionId)).rejects.toThrow();
+      expect(host.close).toHaveBeenCalledWith(10);
+    },
+  );
 
   it("does not signal after cleanup authority is revoked during inspection", async () => {
     let current = true;

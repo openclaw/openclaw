@@ -209,72 +209,13 @@ export async function ensureSupervisedAttemptSource(
   return head;
 }
 
-export async function prepareSupervisedAttemptWorkspace(
-  task: SupervisedTask,
-  contract: SupervisedWorkflowContract,
-  options: Options,
-  assertCurrent: () => void,
-) {
-  const head = await ensureSupervisedAttemptSource(task, contract, options, assertCurrent);
-  const version = reserveSupervisedWorkspace(
-    { kind: "attempt", task },
-    "draft",
-    Date.now(),
-    options,
-  );
-  const workspace = supervisedWorkspaceVersionPath(version, options);
-  await cloneSupervisedWorkspaceSnapshot(
-    { ...contract, workspace: supervisedWorkspaceVersionPath(head.version_id, options) },
-    workspace,
-    false,
-  );
-  assertCurrent();
-  return { workspace, baseVersion: head.version_id };
-}
-
-function scratchAllocation(workspace: string, options: Options, command: boolean) {
-  const root =
-    command && path.basename(workspace) === "export" ? path.dirname(workspace) : workspace;
+function scratchAllocation(workspace: string, options: Options) {
+  const root = path.basename(workspace) === "export" ? path.dirname(workspace) : workspace;
   const allocationId = path.basename(root);
   if (supervisedWorkspaceVersionPath(allocationId, options) !== root) {
     throw new Error("Accepted source is not an owned scratch workspace");
   }
   return allocationId;
-}
-
-export async function acceptSupervisedAttemptWorkspace(
-  task: SupervisedTask,
-  contract: SupervisedWorkflowContract,
-  draft: { workspace: string; baseVersion: string },
-  options: Options,
-  assertCurrent: () => void,
-  disposition: { retainScratch?: boolean } = {},
-) {
-  const frozen = await freezeSupervisedWorkspace(
-    { kind: "attempt", task },
-    { ...contract, workspace: draft.workspace },
-    options,
-  );
-  assertCurrent();
-  writeSupervisedWorkflow((db) => {
-    assertSupervisedAttemptInTransaction(db, task, Date.now());
-    commitSupervisedWorkspaceVersionInTransaction(db, {
-      flowId: task.flowId,
-      episode: task.episode,
-      expectedVersion: draft.baseVersion,
-      version: frozen.version,
-      snapshot: frozen.snapshot,
-      now: Date.now(),
-    });
-    if (!disposition.retainScratch) {
-      markSupervisedWorkspaceDiscardableInTransaction(
-        db,
-        frozen.version,
-        scratchAllocation(draft.workspace, options, false),
-        Date.now(),
-      );
-    }
-  }, options);
 }
 
 export async function prepareSupervisedOperationWorkspace(
@@ -370,7 +311,7 @@ export async function acceptSupervisedOperationWorkspace(
       markSupervisedWorkspaceDiscardableInTransaction(
         db,
         frozen.version,
-        scratchAllocation(prepared.contract.workspace, options, true),
+        scratchAllocation(prepared.contract.workspace, options),
         Date.now(),
       );
     }
