@@ -2,6 +2,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createMemorySearchDeadlineControl,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+} from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
@@ -371,6 +375,87 @@ describe("openai-compatible generic embedding provider", () => {
       undefined,
     );
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("pauses the caller deadline around managed local-service acquisition only", async () => {
+    const server = await startEmbeddingServer();
+    const release = vi.fn();
+    const events: string[] = [];
+    const acquireLocalService = vi.fn(async () => {
+      events.push("acquire");
+      return { release };
+    });
+    const options = createOptions({
+      config: {
+        models: {
+          providers: {
+            "gpu-spark": {
+              api: "openai-completions",
+              baseUrl: server.baseUrl,
+              localService: { command: process.execPath },
+              models: [],
+            },
+          },
+        },
+      } as EmbeddingProviderCreateOptions["config"],
+      provider: "gpu-spark",
+      model: "gpu-spark/nomic-embed-text",
+    }) as EmbeddingProviderCreateOptions & {
+      acquireLocalService: typeof acquireLocalService;
+    };
+    options.acquireLocalService = acquireLocalService;
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    const control = createMemorySearchDeadlineControl();
+    control.subscribe((action) => events.push(action));
+    const caller = new AbortController();
+    await expect(
+      provider.embed("hello", {
+        signal: caller.signal,
+        [MEMORY_SEARCH_DEADLINE_CONTROL]: control,
+      }),
+    ).resolves.toEqual([0.1, 0.2, 0.3]);
+
+    expect(events).toEqual(["pause", "acquire", "resume"]);
+    // Caller cancellation still flows into acquisition unchanged.
+    expect(acquireLocalService).toHaveBeenCalledWith(expect.anything(), caller.signal);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("resumes the caller deadline when local-service acquisition fails", async () => {
+    const server = await startEmbeddingServer();
+    const events: string[] = [];
+    const failure = new Error("local service did not become ready");
+    const acquireLocalService = vi.fn(async () => {
+      throw failure;
+    });
+    const options = createOptions({
+      config: {
+        models: {
+          providers: {
+            "gpu-spark": {
+              api: "openai-completions",
+              baseUrl: server.baseUrl,
+              localService: { command: process.execPath },
+              models: [],
+            },
+          },
+        },
+      } as EmbeddingProviderCreateOptions["config"],
+      provider: "gpu-spark",
+      model: "gpu-spark/nomic-embed-text",
+    }) as EmbeddingProviderCreateOptions & {
+      acquireLocalService: typeof acquireLocalService;
+    };
+    options.acquireLocalService = acquireLocalService;
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    const control = createMemorySearchDeadlineControl();
+    control.subscribe((action) => events.push(action));
+    await expect(
+      provider.embed("hello", { [MEMORY_SEARCH_DEADLINE_CONTROL]: control }),
+    ).rejects.toBe(failure);
+    expect(events).toEqual(["pause", "resume"]);
   });
 
   it("does not lease a configured local service for a remote endpoint override", async () => {

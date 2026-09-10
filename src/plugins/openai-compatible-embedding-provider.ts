@@ -4,6 +4,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
+import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemorySearchDeadlineControl,
+} from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
@@ -313,6 +317,7 @@ async function postEmbeddingRequest(params: {
   input: string[];
   signal?: AbortSignal;
   inputType?: EmbeddingProviderCallOptions["inputType"];
+  deadlineControl?: MemorySearchDeadlineControl;
 }): Promise<number[][]> {
   const { client, input } = params;
   const inputType = resolveRequestInputType(client, params.inputType);
@@ -322,10 +327,25 @@ async function postEmbeddingRequest(params: {
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
-  const localServiceLease =
-    client.localServiceTarget && client.acquireLocalService
-      ? await client.acquireLocalService(client.localServiceTarget, params.signal)
-      : undefined;
+  // Managed local-service readiness is owned and bounded by
+  // localService.readyTimeoutMs, not by the caller's search/embedding budget:
+  // pausing lets a cold service finish starting, while caller cancellation
+  // still aborts the wait immediately through params.signal. Only the
+  // acquisition is exempt; the embedding request itself stays on the clock.
+  let localServiceLease: Awaited<
+    ReturnType<NonNullable<OpenAICompatibleEmbeddingClient["acquireLocalService"]>>
+  >;
+  if (client.localServiceTarget && client.acquireLocalService) {
+    params.deadlineControl?.report("pause");
+    try {
+      localServiceLease = await client.acquireLocalService(
+        client.localServiceTarget,
+        params.signal,
+      );
+    } finally {
+      params.deadlineControl?.report("resume");
+    }
+  }
   try {
     return await withRemoteHttpResponse({
       url: client.endpointUrl,
@@ -438,6 +458,7 @@ async function createOpenAICompatibleEmbeddingProvider(
       input: inputs.map(embeddingInputToText),
       signal: callOptions?.signal,
       inputType: callOptions?.inputType,
+      deadlineControl: callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL],
     });
   };
   return {

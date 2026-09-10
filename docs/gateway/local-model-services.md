@@ -78,15 +78,15 @@ Set `timeoutSeconds` on the provider entry (not `localService`) so slow cold sta
 
 ## Fields
 
-| Field            | Required | Description                                                                                                                          |
-| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `command`        | yes      | Absolute executable path. No shell PATH lookup.                                                                                      |
-| `args`           | no       | Process arguments. No shell expansion, pipes, globbing, or quoting.                                                                  |
-| `cwd`            | no       | Working directory for the process.                                                                                                   |
-| `env`            | no       | Environment variables merged over the OpenClaw process environment.                                                                  |
-| `healthUrl`      | no       | Readiness URL. Defaults to `baseUrl` with `/models` appended (`http://127.0.0.1:8000/v1` becomes `http://127.0.0.1:8000/v1/models`). |
-| `readyTimeoutMs` | no       | Startup readiness deadline. Default: `120000`.                                                                                       |
-| `idleStopMs`     | no       | Idle shutdown delay for an OpenClaw-started process. `0` or omitted keeps it alive until OpenClaw exits.                             |
+| Field            | Required | Description                                                                                                                                                                                               |
+| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`        | yes      | Absolute executable path. No shell PATH lookup.                                                                                                                                                           |
+| `args`           | no       | Process arguments. No shell expansion, pipes, globbing, or quoting.                                                                                                                                       |
+| `cwd`            | no       | Working directory for the process.                                                                                                                                                                        |
+| `env`            | no       | Environment variables merged over the OpenClaw process environment.                                                                                                                                       |
+| `healthUrl`      | no       | Readiness URL. Defaults to `baseUrl` with `/models` appended (`http://127.0.0.1:8000/v1` becomes `http://127.0.0.1:8000/v1/models`).                                                                      |
+| `readyTimeoutMs` | no       | Startup readiness deadline. Default: `120000`. During `memory_search`, a managed service cold start consumes this budget rather than the tool's search deadline, which resumes once the service is ready. |
+| `idleStopMs`     | no       | Idle shutdown delay for an OpenClaw-started process. `0` or omitted keeps it alive until OpenClaw exits.                                                                                                  |
 
 ## llmman example
 
