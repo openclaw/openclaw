@@ -45,6 +45,7 @@ export function resolveCliExecutionAuthProfileId(params: {
 }): string | undefined {
   const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
   const selectedAuthProfileId = params.selected?.authProfileId?.trim();
+  const selectedAuthProfileIdSource = params.selected?.authProfileIdSource ?? "auto";
   const store = loadStore(params.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
@@ -66,7 +67,7 @@ export function resolveCliExecutionAuthProfileId(params: {
     // owner. Automatic selection must not replace the CLI's native identity.
     if (
       credential &&
-      params.selected?.authProfileIdSource !== "auto" &&
+      selectedAuthProfileIdSource !== "auto" &&
       (params.cliExecutionProvider === CLAUDE_CLI_PROVIDER_ID ||
         (params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
           credential.type === "api_key")) &&
@@ -79,7 +80,7 @@ export function resolveCliExecutionAuthProfileId(params: {
     ) {
       return selectedAuthProfileId;
     }
-    if (params.selected?.authProfileIdSource !== "auto") {
+    if (selectedAuthProfileIdSource !== "auto") {
       if (!credential) {
         throw new CliExecutionAuthProfileError(
           `No credentials found for profile "${selectedAuthProfileId}".`,

@@ -1,5 +1,11 @@
 // Auth profile propagation tests cover isolated agent auth profile forwarding.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { AuthProfileFailurePolicy } from "../agents/embedded-agent-runner/run/auth-profile-failure-policy.types.js";
 import {
   makeIsolatedAgentJobFixture,
@@ -168,5 +174,110 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
       authProfileId: "claude-cli:manual",
     });
+  });
+
+  it("executes cron auth through the prepared CLI backend boundary", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    const { prepareCliRunContext } = await import("../agents/cli-runner/prepare.js");
+    const { executePreparedCliRun } = await import("../agents/cli-runner/execute.js");
+    const agentDir = "/tmp/agent-dir";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "anthropic:managed": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "test-cron-key",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "cron-auth-fixture",
+          pluginId: "anthropic",
+          modelProvider: "anthropic",
+          authEpochMode: "profile-only",
+          prepareExecution: async (context) => ({
+            env: { OPENCLAW_CRON_AUTH_PROOF: context.authProfileId ?? "native" },
+          }),
+          config: {
+            command: process.execPath,
+            args: ["-e", "process.stdout.write(process.env.OPENCLAW_CRON_AUTH_PROOF ?? '')"],
+            output: "text",
+            input: "arg",
+            sessionMode: "none",
+          },
+        },
+      ],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+    runCliAgentMock.mockImplementation(async () => ({
+      payloads: [{ text: "cron auth proof" }],
+      meta: { agentMeta: {} },
+    }));
+    resolveCliExecutionAuthProfileIdMock.mockReturnValue("anthropic:managed");
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+    });
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "anthropic:managed",
+      source: "user",
+      routeRequirement: "api-key",
+    });
+    mockRunCronFallbackPassthrough();
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        cfg: {},
+        job: makeIsolatedAgentJobFixture({
+          delivery: { mode: "none" },
+          payload: { kind: "agentTurn", message: "cron auth proof" },
+        }),
+        message: "cron auth proof",
+        sessionKey: "cron:job-proof",
+        lane: "cron",
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    const cliParams = runCliAgentMock.mock.calls[0]?.[0];
+    if (!cliParams) {
+      throw new Error("Expected cron to invoke the CLI backend");
+    }
+    expect(cliParams).toMatchObject({ authProfileId: "anthropic:managed" });
+    const preparedRunAdmission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef(cliParams.runId),
+      facts: {
+        runId: cliParams.runId,
+        agentId: cliParams.agentId ?? "default",
+        ingress: { kind: "schedule", boundary: "cron.test", state: "present" },
+      },
+    });
+    const prepared = await prepareCliRunContext({
+      ...cliParams,
+      preparedRunAdmission,
+      assertCurrent: undefined,
+      contextEngineLogicalTurnLease: undefined,
+      userTurnTranscriptRecorder: undefined,
+      provider: "cron-auth-fixture",
+      authProfileId: "anthropic:managed",
+      workspaceDir: process.cwd(),
+      cwd: process.cwd(),
+      rootedExecution: undefined,
+      executionRoot: undefined,
+    });
+    try {
+      const output = await executePreparedCliRun(prepared);
+      expect(output.text).toBe("anthropic:managed");
+    } finally {
+      await prepared.preparedBackend.cleanup?.();
+      preparedRunAdmission.close();
+    }
   });
 });

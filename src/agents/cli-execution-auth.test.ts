@@ -242,6 +242,25 @@ describe("resolveCliExecutionAuthProfileId", () => {
     ).toBeUndefined();
   });
 
+  it("treats missing selection provenance as automatic for canonical profiles", () => {
+    mocks.profiles["anthropic:default"] = {
+      type: "api_key",
+      provider: "anthropic",
+      key: "test-anthropic-key",
+    };
+    mocks.order.push("anthropic:default");
+
+    expect(
+      resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "anthropic",
+        config: {},
+        agentDir: "/tmp/unused-agent",
+        selected: { authProfileId: "anthropic:default" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not carry an automatic cross-provider profile into Claude CLI fallback", () => {
     mocks.profiles["openai:default"] = {
       type: "api_key",
