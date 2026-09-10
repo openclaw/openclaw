@@ -103,6 +103,39 @@ describe("docker sandbox backend manager", () => {
     );
   });
 
+  it("forwards core-owned provisioning mounts to container creation", async () => {
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+    const internalMounts = [
+      { hostPath: "/trusted/repo", containerPath: "/trusted/repo", readOnly: false },
+    ];
+
+    await createDockerSandboxBackend({
+      sessionKey: "agent:poly:msteams:channel-1",
+      scopeKey: "worktree-provisioning:test",
+      workspaceDir: "/tmp/customer/workspace",
+      agentWorkspaceDir: "/tmp/customer/workspace",
+      cfg: resolveSandboxConfigForAgent(createConfig(), "poly"),
+      internalMounts,
+    });
+
+    expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
+      expect.objectContaining({ internalMounts }),
+    );
+  });
+
+  it("removes an exact runtime when its filesystem grants are disposed", async () => {
+    const backend = await createDockerExecBackend();
+    dockerMocks.execContainer.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+
+    await backend.disposeRuntime?.();
+
+    expect(dockerMocks.execContainer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "docker" }),
+      ["rm", "-f", "sandbox-container"],
+      { allowFailure: true },
+    );
+  });
+
   it("binds Podman provisioning and later execs to the resolved target", async () => {
     dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-podman");
     const podmanTarget = {
@@ -194,6 +227,98 @@ describe("docker sandbox backend manager", () => {
 
     expect(fs.existsSync(envFile!)).toBe(false);
     await expect(backend.finalizeExec?.(finalization)).resolves.toBeUndefined();
+  });
+
+  it("delivers shell-command credentials privately and reaps the container process on abort", async () => {
+    const backend = await createDockerExecBackend();
+    const controller = new AbortController();
+    let stagedEnvironment = "";
+    let finishExecution:
+      | ((value: { stdout: Buffer; stderr: Buffer; code: number }) => void)
+      | undefined;
+    dockerMocks.execContainerRaw.mockImplementationOnce(
+      (_engine, args: string[]) =>
+        new Promise((resolve) => {
+          const envFile = args[args.indexOf("--env-file") + 1];
+          stagedEnvironment = fs.readFileSync(envFile!, "utf8");
+          finishExecution = resolve;
+        }),
+    );
+    dockerMocks.execContainerRaw.mockImplementationOnce(async () => {
+      finishExecution?.({ stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 143 });
+      return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+    });
+
+    const running = backend.runShellCommand({
+      script: "exec git fetch origin",
+      env: { GIT_AUTH_TOKEN: "configured-secret" },
+      signal: controller.signal,
+      terminateOnAbort: true,
+      allowFailure: true,
+    });
+    await vi.waitFor(() => expect(dockerMocks.execContainerRaw).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await expect(running).rejects.toThrow();
+
+    const executionArgs = dockerMocks.execContainerRaw.mock.calls[0]?.[1] as string[];
+    expect(executionArgs.join(" ")).not.toContain("configured-secret");
+    expect(executionArgs).toContain("--env-file");
+    expect(stagedEnvironment).toContain("GIT_AUTH_TOKEN=configured-secret\n");
+    expect(executionArgs.join(" ")).toContain('[ ! -e "$cancel" ]');
+    const envFile = executionArgs[executionArgs.indexOf("--env-file") + 1]!;
+    expect(fs.existsSync(envFile)).toBe(false);
+    const terminationArgs = dockerMocks.execContainerRaw.mock.calls[1]?.[1] as string[];
+    expect(terminationArgs.join(" ")).toContain("kill -TERM");
+    expect(terminationArgs.join(" ")).toContain("kill -KILL");
+    expect(terminationArgs.join(" ")).toContain(': > "$cancel"');
+  });
+
+  it("does not launch a terminating shell command when cancellation already happened", async () => {
+    const backend = await createDockerExecBackend();
+    dockerMocks.execContainerRaw.mockClear();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      backend.runShellCommand({
+        script: "exec git fetch origin",
+        signal: controller.signal,
+        terminateOnAbort: true,
+      }),
+    ).rejects.toThrow();
+    expect(dockerMocks.execContainerRaw).not.toHaveBeenCalled();
+  });
+
+  it("fences a delayed container start before canceling the client", async () => {
+    const backend = await createDockerExecBackend();
+    const controller = new AbortController();
+    dockerMocks.execContainerRaw.mockImplementationOnce(
+      (_engine, _args, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("client canceled")), {
+            once: true,
+          });
+        }),
+    );
+    dockerMocks.execContainerRaw.mockResolvedValueOnce({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    });
+
+    const running = backend.runShellCommand({
+      script: "exec git fetch origin",
+      signal: controller.signal,
+      terminateOnAbort: true,
+    });
+    await vi.waitFor(() => expect(dockerMocks.execContainerRaw).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await expect(running).rejects.toThrow();
+
+    const executionArgs = dockerMocks.execContainerRaw.mock.calls[0]?.[1] as string[];
+    const terminationArgs = dockerMocks.execContainerRaw.mock.calls[1]?.[1] as string[];
+    expect(executionArgs.join(" ")).toContain('[ ! -e "$cancel" ]');
+    expect(terminationArgs.join(" ")).toContain(': > "$cancel"');
   });
 
   it.each([

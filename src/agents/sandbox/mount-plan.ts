@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../../infra/path-guards.js";
+import type { SandboxBackendInternalMount } from "./backend.types.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { execContainer, type SandboxContainerEngine } from "./container-engine.js";
 import {
@@ -32,6 +33,7 @@ export async function prepareSandboxMountPlan(params: {
   workdir: string;
   workspaceAccess: SandboxWorkspaceAccess;
   binds?: readonly string[];
+  internalMounts?: readonly SandboxBackendInternalMount[];
 }): Promise<SandboxMountPlan> {
   const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts(params);
   const managed = resolveWorkspaceMounts({ ...params, readOnlyWorkspaceSkillMounts });
@@ -41,8 +43,12 @@ export async function prepareSandboxMountPlan(params: {
     params.agentWorkspaceDir,
     params.skillsWorkspaceDir ??
       resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir),
+    ...(params.internalMounts ?? []).map((mount) => mount.hostPath),
   ];
   const protectedTargets = resolveProtectedSkillMountContainerPaths(readOnlyWorkspaceSkillMounts);
+  for (const mount of params.internalMounts ?? []) {
+    protectedTargets.add(normalizeMountContainerPath(mount.containerPath));
+  }
   const custom = filterBindsConflictingWithProtectedMounts(params.binds, protectedTargets);
   const overriddenTargets = new Set(
     custom.flatMap((bind) => {
@@ -53,6 +59,9 @@ export async function prepareSandboxMountPlan(params: {
   const targets = [
     ...overriddenTargets,
     ...managed.map((mount) => normalizeMountContainerPath(mount.containerPath)),
+    ...(params.internalMounts ?? []).map((mount) =>
+      normalizeMountContainerPath(mount.containerPath),
+    ),
   ];
   const binds = new Map<string, string>();
   for (const mount of managed) {
@@ -60,6 +69,27 @@ export async function prepareSandboxMountPlan(params: {
     if (overriddenTargets.has(target)) {
       continue;
     }
+    const translated = namespace
+      ? translateSandboxMountSources({
+          source: mount.hostPath,
+          containerPath: target,
+          allowedRoots,
+          mounts: namespace,
+          readOnly: mount.readOnly,
+          shadowedTargets: targets.filter(
+            (other) => other !== target && isPathInside(target, other),
+          ),
+        })
+      : [{ ...mount, containerPath: target }];
+    for (const projected of translated) {
+      binds.set(
+        projected.containerPath,
+        `${projected.hostPath}:${projected.containerPath}:${projected.readOnly ? "ro,z" : "z"}`,
+      );
+    }
+  }
+  for (const mount of params.internalMounts ?? []) {
+    const target = normalizeMountContainerPath(mount.containerPath);
     const translated = namespace
       ? translateSandboxMountSources({
           source: mount.hostPath,

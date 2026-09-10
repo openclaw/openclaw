@@ -3,7 +3,9 @@
  *
  * Creates/reuses Docker containers and exposes backend-neutral exec and shell-command handles.
  */
+import { randomUUID } from "node:crypto";
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
+import { toErrorObject } from "../../infra/errors.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -24,7 +26,7 @@ import {
   type SandboxContainerEngineTarget,
   validateSandboxContainerEngineTarget,
 } from "./docker.js";
-import type { SandboxRegistryEntry } from "./registry.js";
+import { removeRegistryEntry, type SandboxRegistryEntry } from "./registry.js";
 
 type ContainerExecFinalizeToken = () => Promise<void>;
 
@@ -96,6 +98,7 @@ async function createContainerSandboxBackend(
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     cfg: params.cfg,
+    internalMounts: params.internalMounts,
     ...(params.requireCurrentConfig !== undefined
       ? { requireCurrentConfig: params.requireCurrentConfig }
       : {}),
@@ -185,6 +188,21 @@ function createContainerSandboxBackendHandle(params: {
         ...command,
       });
     },
+    async disposeRuntime() {
+      await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
+      const result = await execContainer(params.engine, ["rm", "-f", params.containerName], {
+        allowFailure: true,
+      });
+      if (result.code !== 0) {
+        const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
+        if (!/No such (container|object)|does not exist/iu.test(detail)) {
+          throw new Error(
+            `Failed to dispose ${params.engine.displayName} sandbox runtime ${params.containerName}: ${detail}`,
+          );
+        }
+      }
+      await removeRegistryEntry(params.containerName);
+    },
   };
 }
 
@@ -196,23 +214,110 @@ async function runContainerSandboxShellCommand(
   } & SandboxBackendCommandParams,
 ) {
   await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
+  const envFile = params.env ? await createContainerEnvFile(params.env) : undefined;
+  const controlPath = params.terminateOnAbort
+    ? `/tmp/openclaw-command-${randomUUID()}.pid`
+    : undefined;
+  const cancelPath = controlPath ? `${controlPath}.cancel` : undefined;
+  const wrapper = controlPath
+    ? 'control="$1"; cancel="$2"; script="$3"; shift 3; [ ! -e "$cancel" ] || exit 130; setsid sh -c \'control="$1"; cancel="$2"; script="$3"; shift 3; echo "$$" > "$control"; [ ! -e "$cancel" ] || exit 130; exec sh -c "$script" openclaw-sandbox-fs "$@"\' openclaw-sandbox-group "$control" "$cancel" "$script" "$@"; code=$?; rm -f -- "$control" "$cancel"; exit "$code"'
+    : params.script;
   const dockerArgs = [
     "exec",
     "-i",
+    ...(envFile ? ["--env-file", envFile.path] : []),
     params.containerName,
     "sh",
     "-c",
-    params.script,
+    wrapper,
     "openclaw-sandbox-fs",
   ];
+  if (controlPath) {
+    dockerArgs.push(controlPath, cancelPath!, params.script);
+  }
   if (params.args?.length) {
     dockerArgs.push(...params.args);
   }
-  return execContainerRaw(params.engine, dockerArgs, {
-    input: params.stdin,
-    allowFailure: params.allowFailure,
-    signal: params.signal,
-  });
+  try {
+    if (!controlPath || !params.signal) {
+      return await execContainerRaw(params.engine, dockerArgs, {
+        input: params.stdin,
+        allowFailure: params.allowFailure,
+        signal: params.signal,
+      });
+    }
+    params.signal.throwIfAborted();
+    const clientAbort = new AbortController();
+    const execution = execContainerRaw(params.engine, dockerArgs, {
+      input: params.stdin,
+      allowFailure: params.allowFailure,
+      signal: clientAbort.signal,
+    });
+    const aborted = new Promise<"aborted">((resolve) => {
+      if (params.signal?.aborted) {
+        resolve("aborted");
+      } else {
+        params.signal?.addEventListener("abort", () => resolve("aborted"), { once: true });
+      }
+    });
+    const outcome = await Promise.race([
+      execution.then((result) => ({ result })),
+      aborted.then(() => ({ aborted: true as const })),
+    ]);
+    if ("result" in outcome) {
+      return outcome.result;
+    }
+    let terminationError: unknown;
+    try {
+      await terminateContainerCommand({
+        engine: params.engine,
+        containerName: params.containerName,
+        controlPath,
+        cancelPath: cancelPath!,
+      });
+    } catch (error) {
+      terminationError = error;
+    }
+    if (!terminationError) {
+      clientAbort.abort();
+    }
+    await execution.catch(() => undefined);
+    if (terminationError) {
+      throw toErrorObject(terminationError, "Failed to terminate sandbox command");
+    }
+    throw params.signal.reason instanceof Error ? params.signal.reason : new Error("Aborted");
+  } finally {
+    await envFile?.cleanup();
+  }
+}
+
+async function terminateContainerCommand(params: {
+  engine: SandboxContainerEngine;
+  containerName: string;
+  controlPath: string;
+  cancelPath: string;
+}): Promise<void> {
+  const script =
+    'control="$1"; cancel="$2"; : > "$cancel"; i=0; while [ ! -s "$control" ] && [ "$i" -lt 50 ]; do sleep 0.02; i=$((i + 1)); done; [ -s "$control" ] || exit 0; pid=$(cat "$control"); kill -TERM -- "-$pid" 2>/dev/null || true; i=0; while kill -0 -- "-$pid" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.02; i=$((i + 1)); done; kill -KILL -- "-$pid" 2>/dev/null || true; while kill -0 -- "-$pid" 2>/dev/null; do sleep 0.02; done';
+  const result = await execContainerRaw(
+    params.engine,
+    [
+      "exec",
+      params.containerName,
+      "sh",
+      "-c",
+      script,
+      "openclaw-sandbox-kill",
+      params.controlPath,
+      params.cancelPath,
+    ],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `Failed to terminate sandbox command process group (exit ${result.code}): ${result.stderr.toString("utf8").trim()}`,
+    );
+  }
 }
 
 export function runDockerSandboxShellCommand(

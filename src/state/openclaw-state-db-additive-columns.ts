@@ -29,6 +29,7 @@ const lazyColumns = [
   ["worker_session_placement_moves", "target_machine_class", "TEXT", true],
   ["worker_session_placement_moves", "target_os", "TEXT", true],
   ["worktrees", "run_end_cleanup_json", "TEXT"],
+  ["worktrees", "sandbox_git", "INTEGER"],
   ["device_bootstrap_tokens", "setup_id", "TEXT", true],
   ["session_groups", "cwd", "TEXT", true],
   ["session_groups", "worktree", "INTEGER", true],

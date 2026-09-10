@@ -12,7 +12,6 @@ import {
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -40,6 +39,8 @@ import {
 } from "../session-utils.js";
 import {
   prepareSessionWorktree,
+  projectPreparedSessionWorktree,
+  resolveSessionWorktreeGitIsolation,
   resolveSessionWorktreeBase,
   resolveSpawnParentWorktreeSource,
   validateSessionWorktreeSelection,
@@ -54,8 +55,8 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCreatedSessionCategory } from "./session-create-category.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import {
+  resolveSessionCreateResponseState,
   resolveSessionCreateInitialTurn,
-  isFreshChatSendStarted,
 } from "./session-create-initial-turn.js";
 import {
   normalizeSessionProjectGitUrl,
@@ -421,6 +422,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       const target = resolveGatewaySessionStoreTarget({ cfg, key: targetKey, agentId });
       sessionKey = preservesUnspecifiedKey ? undefined : targetKey;
       sessionAgentId = target.agentId;
+      const worktreeGitIsolation = spawnRequesterSessionKey
+        ? resolveSessionWorktreeGitIsolation(cfg, spawnRequesterSessionKey, target.agentId)
+        : undefined;
       const inheritParentWorktree =
         !emptyWorkspace &&
         !projectRoot &&
@@ -459,7 +463,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         worktreeBaseRef &&
         !requestedProjectGitUrl &&
         !existingTargetEntry?.worktree
-          ? await resolveSessionWorktreeBase(workspace, worktreeBaseRef, signal)
+          ? await resolveSessionWorktreeBase(
+              workspace,
+              worktreeBaseRef,
+              signal,
+              worktreeGitIsolation,
+            )
           : undefined;
       if (resolvedBase && !resolvedBase.ok) {
         return respond(false, undefined, resolvedBase.error);
@@ -472,6 +481,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           name: requestedWorktreeName,
           baseRef: worktreeBaseRef,
           baseCommit,
+          ...(worktreeGitIsolation ? { sandboxGit: true as const } : {}),
           titleSource: buildDashboardSessionTitleSource({
             message: message ?? "",
             attachments,
@@ -530,6 +540,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             runSetupScript: clientScopes.includes(ADMIN_SCOPE),
             signal,
             commitGuard,
+            gitIsolation: worktreeGitIsolation,
           });
           if (prepared.ok) {
             preparedWorktree = prepared.value;
@@ -664,22 +675,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
     registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
-    const createdWorktree = preparedWorktree?.worktree
-      ? {
-          id: preparedWorktree.worktree.id,
-          path: preparedWorktree.sessionRoot,
-          branch: preparedWorktree.worktree.branch,
-        }
-      : undefined;
-    const responseEntry = sessionEntryForkedFromParent(created.entry)
-      ? { ...created.entry, forkedFromParent: true as const }
-      : created.entry;
-    const runStarted =
-      !created.resetExisting &&
-      isFreshChatSendStarted({
-        payload: runPayload,
-        cached: runMeta?.cached === true,
-      });
+    const createdWorktree = projectPreparedSessionWorktree(preparedWorktree);
+    const { responseEntry, runStarted } = resolveSessionCreateResponseState({
+      entry: created.entry,
+      resetExisting: created.resetExisting,
+      payload: runPayload,
+      cached: runMeta?.cached === true,
+    });
 
     respond(true, {
       ok: true,

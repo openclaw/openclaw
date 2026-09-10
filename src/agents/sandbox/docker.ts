@@ -7,6 +7,7 @@ import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import type { SandboxBackendInternalMount } from "./backend.types.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import {
@@ -19,6 +20,7 @@ import {
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
 import {
   prepareSandboxMountPlan,
   sandboxMountPlanMatchesContainer,
@@ -522,6 +524,7 @@ type EnsureSandboxContainerParams = {
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
   requireCurrentConfig?: boolean;
+  internalMounts?: readonly SandboxBackendInternalMount[];
 };
 
 export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
@@ -588,6 +591,7 @@ async function ensureSandboxContainerLifecycle(
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
     binds: params.cfg.docker.binds,
+    internalMounts: params.internalMounts,
   });
   const genericConfigHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
@@ -598,6 +602,9 @@ async function ensureSandboxContainerLifecycle(
     mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
     createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
     managedMounts: mountPlan.binds,
+    internalMounts: params.internalMounts?.map(
+      (mount) => `${mount.hostPath}:${mount.containerPath}:${mount.readOnly ? "ro" : "rw"}`,
+    ),
   });
   const expectedHash =
     engine.id === "podman"
@@ -646,20 +653,46 @@ async function ensureSandboxContainerLifecycle(
     }
   }
   if (!hasContainer) {
-    await createSandboxContainer({
-      engine,
-      name: containerName,
-      cfg: params.cfg.docker,
-      dockerTmpfsSource: params.cfg.dockerTmpfsSource,
-      workspaceDir: params.workspaceDir,
-      workspaceAccess: params.cfg.workspaceAccess,
-      agentWorkspaceDir: params.agentWorkspaceDir,
-      skillsWorkspaceDir: params.skillsWorkspaceDir,
-      scopeKey: params.scopeKey,
+    const recoveryEntry = {
+      containerName,
+      backendId: engine.id,
+      ...(podmanRuntimeInfo ? { backendTarget: podmanRuntimeInfo.target } : {}),
+      runtimeLabel: containerName,
+      sessionKey: params.scopeKey,
+      createdAtMs: now,
+      lastUsedAtMs: now,
+      image: params.cfg.docker.image,
+      configLabelKind: "Image" as const,
       configHash: expectedHash,
-      mountPlan,
-      podmanRuntimeInfo,
-    });
+    };
+    // Reserve the exact runtime identity before granting writable mounts. If
+    // allocation fails after this point, recovery can revoke the runtime before
+    // any competing operation proceeds.
+    await updateRegistry(recoveryEntry);
+    try {
+      await createSandboxContainer({
+        engine,
+        name: containerName,
+        cfg: params.cfg.docker,
+        dockerTmpfsSource: params.cfg.dockerTmpfsSource,
+        workspaceDir: params.workspaceDir,
+        workspaceAccess: params.cfg.workspaceAccess,
+        agentWorkspaceDir: params.agentWorkspaceDir,
+        skillsWorkspaceDir: params.skillsWorkspaceDir,
+        scopeKey: params.scopeKey,
+        configHash: expectedHash,
+        mountPlan,
+        podmanRuntimeInfo,
+      });
+      await updateRegistry(recoveryEntry);
+      return containerName;
+    } catch (creationError) {
+      await throwAfterPartialSandboxCleanup({
+        engine,
+        containerName,
+        creationError,
+      });
+    }
   } else if (!running) {
     await execContainer(engine, ["start", containerName]);
   }

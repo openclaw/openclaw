@@ -18,6 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
+import { resolveManagedWorktreeGitMount } from "../worktrees/linked-git-mount.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -287,6 +288,14 @@ async function resolveProvisionedSandboxContext(
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
+  const linkedGitMount =
+    resolvedCfg.workspaceAccess !== "none" &&
+    (resolvedCfg.backend === "docker" || resolvedCfg.backend === "podman")
+      ? await resolveManagedWorktreeGitMount({
+          workspaceDir,
+          ...(resolvedCfg.workspaceAccess === "rw" ? { writableBySessionKey: rawSessionKey } : {}),
+        })
+      : undefined;
   const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
     backendId: resolvedCfg.backend,
     scopeKey,
@@ -299,6 +308,7 @@ async function resolveProvisionedSandboxContext(
     agentWorkspaceDir,
     skillsWorkspaceDir,
     cfg: resolvedCfg,
+    ...(linkedGitMount ? { internalMounts: [linkedGitMount] } : {}),
     ...(params.requireCurrentConfig !== undefined
       ? { requireCurrentConfig: params.requireCurrentConfig }
       : {}),
