@@ -294,7 +294,7 @@ describeControlUiE2e("Control UI chat file links", () => {
         .poll(async () => (await gateway.getRequests("sessions.files.list"))[0]?.params)
         .toMatchObject({ path: "packages/app" });
       const browserRow = page
-        .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
+        .locator(".chat-workspace-rail__list--browser .chat-workspace-rail__file")
         .filter({ hasText: "README.md" });
       await browserRow.locator(".chat-workspace-rail__file-open").click();
       await expect
@@ -390,7 +390,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       });
       const openPreview = async (filePath: string) => {
         const fileRow = page
-          .locator(".chat-workspace-rail__browser .chat-workspace-rail__file")
+          .locator(".chat-workspace-rail__list--browser .chat-workspace-rail__file")
           .filter({ hasText: filePath });
         await fileRow.locator(".chat-workspace-rail__file-open").click();
       };

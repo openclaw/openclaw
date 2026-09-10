@@ -388,7 +388,7 @@ openclaw-chat-sidebar-region,
   padding: 10px 12px;
   list-style: none;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: var(--control-ui-text-xs);
 }
 
