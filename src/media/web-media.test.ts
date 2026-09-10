@@ -1022,13 +1022,12 @@ describe("loadWebMedia", () => {
   });
 
   it("allows validated host-read SubRip subtitle files", async () => {
-    const result = await loadDocumentWithHostRead(
-      "captions.srt",
-      "1\n00:00:01,000 --> 00:00:03,000\nHello.\n",
-    );
+    const subtitle = "1\n00:00:01,000 --> 00:00:03,000\nHello.\n";
+    const result = await loadDocumentWithHostRead("captions.srt", subtitle);
     expect(result.kind).toBe("document");
     expect(result.contentType).toBe("application/x-subrip");
     expect(result.fileName).toBe("captions.srt");
+    expect(result.buffer).toEqual(Buffer.from(subtitle));
   });
 
   it("allows host-read Markdown files", async () => {
