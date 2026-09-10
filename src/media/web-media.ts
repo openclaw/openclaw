@@ -192,6 +192,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
 // Markdown, TXT, JSON, and YAML, so host-read needs an explicit "this really
 // decodes as text" fallback.
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set([
+  "application/x-subrip",
   "text/csv",
   "text/markdown",
   "text/plain",
@@ -206,6 +207,7 @@ const HOST_READ_DECLARED_TEXT_ERROR =
   "hostReadCapability permits only validated plain-text documents " +
   "and trusted generated HTML reports for local reads";
 const HOST_READ_TEXT_PLAIN_EXTENSION_BY_MIME: Record<string, readonly string[]> = {
+  "application/x-subrip": [".srt"],
   "text/plain": [".txt"],
 };
 

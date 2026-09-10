@@ -1021,6 +1021,16 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/csv");
   });
 
+  it("allows validated host-read SubRip subtitle files", async () => {
+    const result = await loadDocumentWithHostRead(
+      "captions.srt",
+      "1\n00:00:01,000 --> 00:00:03,000\nHello.\n",
+    );
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/x-subrip");
+    expect(result.fileName).toBe("captions.srt");
+  });
+
   it("allows host-read Markdown files", async () => {
     const mdFile = path.join(fixtureRoot, "notes.md");
     await fs.writeFile(mdFile, "# Title\n\nSome **bold** text.\n", "utf8");
@@ -1464,6 +1474,7 @@ describe("loadWebMedia", () => {
     { label: "Markdown", fileName: "opaque.md" },
     { label: "TXT", fileName: "opaque.txt" },
     { label: "JSON", fileName: "opaque.json" },
+    { label: "SubRip", fileName: "opaque.srt" },
     { label: "YAML", fileName: "opaque.yaml" },
     { label: "YML", fileName: "opaque.yml" },
   ])("rejects opaque non-NUL binary data disguised as $label", async ({ fileName }) => {
