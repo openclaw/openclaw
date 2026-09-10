@@ -226,6 +226,8 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
+  /** Native artifacts owned by the agent harness, restricted to toolMediaUrls. */
+  hostOwnedToolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
   hasToolMediaBlockReply?: boolean;

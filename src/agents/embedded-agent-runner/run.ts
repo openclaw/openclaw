@@ -3728,6 +3728,7 @@ async function runEmbeddedAgentInternal(
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
             payloads,
             toolMediaUrls: attempt.toolMediaUrls,
+            hostOwnedToolMediaUrls: attempt.hostOwnedToolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
             toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

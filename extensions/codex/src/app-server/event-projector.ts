@@ -838,6 +838,7 @@ export class CodexAppServerEventProjector {
       messagingToolSourceReplyPayloads: toolTelemetry.messagingToolSourceReplyPayloads ?? [],
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
       toolMediaUrls: this.buildToolMediaUrls(toolTelemetry),
+      hostOwnedToolMediaUrls: this.buildHostOwnedMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
@@ -1610,6 +1611,16 @@ export class CodexAppServerEventProjector {
       }
     }
     return mediaUrls.size > 0 ? [...mediaUrls] : toolTelemetry.toolMediaUrls;
+  }
+
+  private buildHostOwnedMediaUrls(
+    toolTelemetry: CodexAppServerToolTelemetry,
+  ): string[] | undefined {
+    if ((toolTelemetry.messagingToolSentMediaUrls?.length ?? 0) > 0) {
+      return undefined;
+    }
+    const mediaUrls = [...this.nativeGeneratedMediaUrlsByItemId.values()];
+    return mediaUrls.length > 0 ? mediaUrls : undefined;
   }
 
   private async maybeEndReasoning(): Promise<void> {
@@ -2537,7 +2548,6 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   const value = readNumber(record, key);
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
-
 
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;

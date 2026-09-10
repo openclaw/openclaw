@@ -1750,6 +1750,25 @@ export function createFollowupRunner(params: {
       }
 
       if (run.sourceReplyDeliveryMode === "message_tool_only") {
+        const suppressionDeliverablePayloads = deliveryPayloads.filter(
+          (payload) =>
+            getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+        );
+        if (suppressionDeliverablePayloads.length > 0) {
+          if (isRoomEventFollowup()) {
+            return;
+          }
+          await sendRunPayloads(
+            suppressionDeliverablePayloads,
+            effectiveQueued,
+            {
+              provider: providerUsed,
+              modelId: modelUsed,
+            },
+            { runId },
+          );
+          return;
+        }
         logVerbose(
           "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
         );
