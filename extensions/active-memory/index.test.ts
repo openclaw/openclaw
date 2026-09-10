@@ -1788,6 +1788,41 @@ describe("active-memory plugin", () => {
     },
   );
 
+  it.each(["sessions_send", "subagent_settle", "subagent_announce"])(
+    "skips %s deliveries but still recalls for the next human turn",
+    async (sourceTool) => {
+      const context = { sessionKey: "agent:main:webchat:visible-room" };
+      seedSession(context.sessionKey, "visible-session", 1);
+      const prompt = "what wings should i order?";
+      const result = await runPromptBuild(
+        { prompt },
+        {
+          ...context,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool,
+            sourceSessionKey: "agent:main:other",
+          },
+        },
+      );
+      expect(result).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(api.logger.info).toHaveBeenCalledWith(
+        "active-memory: recall skipped reason=session-ineligible",
+      );
+
+      const humanResult = await runPromptBuild(
+        { prompt },
+        {
+          ...context,
+          inputProvenance: { kind: "external_user" },
+        },
+      );
+      expectPrependContextContains(humanResult, "lemon pepper wings");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("does not rewrite session state for skipped turns with no active-memory entry to clear", async () => {
     const result = await runPromptBuild(
       { prompt: "what wings should i order?" },

@@ -14,6 +14,7 @@ import type { PrepareAssistantTranscriptMessage } from "../config/sessions/trans
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type {
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
@@ -318,6 +319,8 @@ export type PluginHookAgentContext = {
   /** Sender identity for channel-originated runs when available. */
   senderId?: string;
   trigger?: string;
+  /** Current input origin; a user trigger may still carry an inter-session delivery. */
+  inputProvenance?: InputProvenance;
   channelId?: string;
   /** Resolved effective context-token budget after model/config/agent caps. */
   contextTokenBudget?: number;

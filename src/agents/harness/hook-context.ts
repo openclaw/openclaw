@@ -29,6 +29,7 @@ export type AgentHarnessHookContext = {
   messageProvider?: string;
   accountId?: string;
   trigger?: string;
+  inputProvenance?: PluginHookAgentContext["inputProvenance"];
   channelId?: string;
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
@@ -58,6 +59,7 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.accountId ? { accountId: params.accountId } : {}),
     ...(params.channel ? { channel: params.channel } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
+    ...(params.inputProvenance ? { inputProvenance: params.inputProvenance } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),
     ...(params.contextWindowSource ? { contextWindowSource: params.contextWindowSource } : {}),

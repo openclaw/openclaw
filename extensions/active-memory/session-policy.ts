@@ -218,12 +218,13 @@ function shouldSkipActiveMemoryForHarnessSession(params: {
 
 function isEligibleInteractiveSession(ctx: {
   trigger?: string;
+  inputProvenance?: { kind: string };
   sessionKey?: string;
   sessionId?: string;
   messageProvider?: string;
   channelId?: string;
 }): boolean {
-  if (ctx.trigger !== "user") {
+  if (ctx.trigger !== "user" || ctx.inputProvenance?.kind === "inter_session") {
     return false;
   }
   // Exclude only canonical dreaming-narrative session keys (bare or agent-prefixed).
