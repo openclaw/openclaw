@@ -1367,7 +1367,7 @@
                 ]
               },
               {
-                "group": "Guides",
+                "group": "Setup guides and reference",
                 "pages": [
                   "start/openclaw",
                   "start/teams",
@@ -1416,7 +1416,8 @@
                     "pages": [
                       "install/migrating",
                       "install/migrating-claude",
-                      "install/migrating-hermes"
+                      "install/migrating-hermes",
+                      "prose"
                     ]
                   },
                   "install/uninstall",
@@ -1482,8 +1483,7 @@
               {
                 "group": "Advanced setup",
                 "pages": [
-                  "start/setup",
-                  "openclaw-agent-runtime"
+                  "start/setup"
                 ]
               }
             ]
@@ -1494,8 +1494,7 @@
               {
                 "group": "Overview",
                 "pages": [
-                  "channels/index",
-                  "announcements/bluebubbles-imessage"
+                  "channels/index"
                 ]
               },
               {
@@ -1531,7 +1530,8 @@
                       "channels/imessage/rich-messages",
                       "channels/imessage/messaging",
                       "channels/imessage/troubleshooting",
-                      "channels/imessage-from-bluebubbles"
+                      "channels/imessage-from-bluebubbles",
+                      "announcements/bluebubbles-imessage"
                     ]
                   },
                   {
@@ -1796,7 +1796,8 @@
                         ]
                       },
                       "plugins/codex-native-plugins",
-                      "plugins/codex-supervision"
+                      "plugins/codex-supervision",
+                      "specs/codex-supervision"
                     ]
                   },
                   "plugins/copilot",
@@ -1928,8 +1929,7 @@
                   "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
-                  "tools/slash-commands",
-                  "prose"
+                  "tools/slash-commands"
                 ]
               },
               {
@@ -2206,6 +2206,7 @@
                     "pages": [
                       "providers/alibaba",
                       "providers/anthropic",
+                      "plugins/reference/anthropic-vertex",
                       "providers/arcee",
                       "providers/baseten",
                       "providers/bedrock",
@@ -2350,7 +2351,9 @@
                       "platforms/mac/menu-bar",
                       "platforms/mac/icon",
                       "platforms/mac/permissions",
-                      "platforms/mac/signing"
+                      "platforms/mac/signing",
+                      "platforms/mac/remote",
+                      "reference/device-models"
                     ]
                   },
                   {
@@ -2359,7 +2362,6 @@
                       "platforms/mac/bundled-gateway",
                       "platforms/mac/health",
                       "platforms/mac/logging",
-                      "platforms/mac/remote",
                       "platforms/mac/xpc"
                     ]
                   },
@@ -2728,10 +2730,10 @@
                   },
                   "gateway/portals",
                   "web/notifications",
-                  "web/urls",
                   "web/dashboard",
                   "web/dashboards",
                   "web/dashboard-architecture",
+                  "web/urls",
                   "web/webchat",
                   "web/tui",
                   "web/lobster"
@@ -2838,7 +2840,6 @@
                     "group": "Channels and messaging",
                     "pages": [
                       "cli/channels",
-                      "cli/devices",
                       "cli/directory",
                       "cli/pairing",
                       "cli/qr",
@@ -2852,6 +2853,7 @@
                       "cli/browser",
                       "cli/cron",
                       "cli/connect",
+                      "cli/devices",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox",
@@ -2935,12 +2937,11 @@
               {
                 "group": "RPC and API",
                 "pages": [
-                  "reference/rpc",
-                  "reference/device-models"
+                  "reference/rpc"
                 ]
               },
               {
-                "group": "Codex harness",
+                "group": "Codex runtime reference",
                 "pages": [
                   "plugins/codex-harness-reference",
                   {
@@ -3060,7 +3061,7 @@
                 ]
               },
               {
-                "group": "Plugin maintainer reference",
+                "group": "Plugin internals",
                 "pages": [
                   "plugins/architecture",
                   "plugins/architecture-internals",
@@ -3104,7 +3105,6 @@
                   "reference/templates/AGENTS",
                   "reference/templates/BOOT",
                   "reference/templates/BOOTSTRAP",
-                  "reference/templates/HEARTBEAT",
                   "reference/templates/IDENTITY",
                   "reference/templates/SOUL",
                   "reference/templates/USER",
@@ -3116,6 +3116,13 @@
                       "reference/templates/SOUL.dev",
                       "reference/templates/USER.dev"
                     ]
+                  },
+                  {
+                    "group": "Retired workspace files",
+                    "pages": [
+                      "reference/templates/HEARTBEAT",
+                      "reference/templates/TOOLS"
+                    ]
                   }
                 ]
               },
@@ -3123,13 +3130,25 @@
                 "group": "Technical reference",
                 "pages": [
                   "agent-runtime-architecture",
-                  "reference/token-use",
-                  "reference/secretref-credential-surface",
+                  "openclaw-agent-runtime",
                   "reference/openclaw-ai",
-                  "reference/prompt-caching",
+                  "reference/token-use",
                   "reference/api-usage-costs",
                   "concepts/usage-tracking",
+                  "reference/prompt-caching",
+                  "reference/session-management-compaction",
+                  {
+                    "group": "Session management deep dive",
+                    "pages": [
+                      "reference/session-management-compaction/store",
+                      "reference/session-management-compaction/maintenance",
+                      "reference/session-management-compaction/schema",
+                      "reference/session-management-compaction/compaction",
+                      "reference/session-management-compaction/housekeeping"
+                    ]
+                  },
                   "reference/transcript-hygiene",
+                  "reference/memory-config",
                   "reference/database-schemas",
                   {
                     "group": "Database schemas",
@@ -3143,46 +3162,30 @@
                       "reference/database-schemas/integrity-and-recovery"
                     ]
                   },
-                  "reference/memory-config",
                   "reference/rich-output-protocol",
-                  "reference/session-management-compaction",
-                  {
-                    "group": "Session management deep dive",
-                    "pages": [
-                      "reference/session-management-compaction/store",
-                      "reference/session-management-compaction/maintenance",
-                      "reference/session-management-compaction/schema",
-                      "reference/session-management-compaction/compaction",
-                      "reference/session-management-compaction/housekeeping"
-                    ]
-                  },
+                  "reference/secretref-credential-surface",
                   "date-time",
                   "concepts/timezone"
                 ]
               },
               {
-                "group": "Concept internals",
+                "group": "Schemas and formatting",
                 "pages": [
                   "concepts/typebox",
                   "concepts/markdown-formatting"
                 ]
               },
               {
-                "group": "Project",
+                "group": "Project and contributing",
                 "pages": [
-                  "reference/credits"
-                ]
-              },
-              {
-                "group": "Contributing",
-                "pages": [
+                  "reference/credits",
                   "reference/pull-request-review-flow"
                 ]
               }
             ]
           },
           {
-            "tab": "Release & CI",
+            "tab": "Releases",
             "groups": [
               {
                 "group": "Release notes",
@@ -3195,13 +3198,6 @@
                   "releases/2026.8.1",
                   "releases/2026.7.1",
                   "releases/2026.6.11"
-                ]
-              },
-              {
-                "group": "Maturity",
-                "pages": [
-                  "maturity/scorecard",
-                  "maturity/taxonomy"
                 ]
               },
               {
@@ -3223,6 +3219,18 @@
                   },
                   "reference/release-performance-sweep",
                   "gateway/security/dependency-locking"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Contributing",
+            "groups": [
+              {
+                "group": "Maturity",
+                "pages": [
+                  "maturity/scorecard",
+                  "maturity/taxonomy"
                 ]
               },
               {
@@ -3289,7 +3297,35 @@
                       "concepts/qa-e2e-automation/qa-reporting"
                     ]
                   },
-                  "concepts/personal-agent-benchmark-pack"
+                  "concepts/personal-agent-benchmark-pack",
+                  "help/testing",
+                  {
+                    "group": "Testing guide",
+                    "pages": [
+                      "help/testing/suites",
+                      "help/testing/live-workflows",
+                      "help/testing/docker",
+                      "help/testing/qa-runners",
+                      "help/testing/contracts",
+                      "help/testing/writing-tests"
+                    ]
+                  },
+                  "help/testing-updates-plugins",
+                  "help/testing-live",
+                  {
+                    "group": "Live testing guide",
+                    "pages": [
+                      "help/testing-live/quick-smokes",
+                      "help/testing-live/model-smoke",
+                      "help/testing-live/cli-backends",
+                      "help/testing-live/acp-and-codex",
+                      "help/testing-live/long-context-and-matrix",
+                      "help/testing-live/media-providers"
+                    ]
+                  },
+                  "channels/qa-channel",
+                  "concepts/mantis",
+                  "concepts/mantis-slack-desktop-runbook"
                 ]
               }
             ]
@@ -3336,36 +3372,6 @@
                     ]
                   },
                   "help/faq-models"
-                ]
-              },
-              {
-                "group": "Testing",
-                "pages": [
-                  "help/testing",
-                  {
-                    "group": "Testing guide",
-                    "pages": [
-                      "help/testing/suites",
-                      "help/testing/live-workflows",
-                      "help/testing/docker",
-                      "help/testing/qa-runners",
-                      "help/testing/contracts",
-                      "help/testing/writing-tests"
-                    ]
-                  },
-                  "help/testing-updates-plugins",
-                  "help/testing-live",
-                  {
-                    "group": "Live testing guide",
-                    "pages": [
-                      "help/testing-live/quick-smokes",
-                      "help/testing-live/model-smoke",
-                      "help/testing-live/cli-backends",
-                      "help/testing-live/acp-and-codex",
-                      "help/testing-live/long-context-and-matrix",
-                      "help/testing-live/media-providers"
-                    ]
-                  }
                 ]
               },
               {
