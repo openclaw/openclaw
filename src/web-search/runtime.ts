@@ -225,12 +225,13 @@ type WebSearchRequestContext = {
   config?: OpenClawConfig;
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
+  sandboxed: boolean;
 };
 
 function resolveWebSearchRequestContext(
   options?: Pick<
     ResolveWebSearchDefinitionParams,
-    "config" | "preferInputConfig" | "runtimeWebSearch"
+    "config" | "preferInputConfig" | "runtimeWebSearch" | "sandboxed"
   >,
 ): WebSearchRequestContext {
   const config = resolveWebSearchRuntimeConfig({
@@ -242,6 +243,7 @@ function resolveWebSearchRequestContext(
     search: resolveSearchConfig(config),
     runtimeWebSearch:
       options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadataFromState()?.search,
+    sandboxed: options?.sandboxed === true,
   };
 }
 
@@ -268,21 +270,24 @@ function loadSortedWebSearchProviders(
         value: providerId,
       })
     : undefined;
-  const resolveProviders = params.preferRuntimeProviders
-    ? resolveRuntimeWebSearchProviders
-    : resolvePluginWebSearchProviders;
-  return sortPluginEntriesForAutoDetect(
-    resolveProviders({
-      config: params.config,
-      ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),
-    }),
-  );
+  const sharedParams = {
+    config: params.config,
+    ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),
+  };
+  // Sandboxed agents resolve from trusted plugin providers only: runtime providers
+  // are never eligible, even when the caller prefers them.
+  const providers = params.sandboxed
+    ? resolvePluginWebSearchProviders({ ...sharedParams, sandboxed: true })
+    : params.preferRuntimeProviders
+      ? resolveRuntimeWebSearchProviders(sharedParams)
+      : resolvePluginWebSearchProviders(sharedParams);
+  return sortPluginEntriesForAutoDetect(providers);
 }
 
 function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
 ): PluginWebSearchProviderEntry[] {
-  const { config, search, runtimeWebSearch } = resolveWebSearchRequestContext(options);
+  const { config, search, runtimeWebSearch, sandboxed } = resolveWebSearchRequestContext(options);
   if (search?.enabled === false) {
     return [];
   }
@@ -291,6 +296,7 @@ function resolveWebSearchCandidates(
     config,
     search,
     runtimeWebSearch,
+    sandboxed,
     providerId: options?.providerId,
     preferRuntimeProviders: options?.preferRuntimeProviders,
   }).filter(Boolean);

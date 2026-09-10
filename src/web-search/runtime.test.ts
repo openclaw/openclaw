@@ -241,6 +241,52 @@ describe("web search runtime", () => {
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
+  it("keeps sandboxed web search on trusted providers even when runtime providers are preferred", () => {
+    const bundled = createGoogleSearchProvider();
+    const runtimeOnly = createCustomSearchProvider({
+      pluginId: "thirdparty",
+      id: "thirdparty",
+      credentialPath: "plugins.entries.thirdparty.config.webSearch.apiKey",
+      getConfiguredCredentialValue: () => "thirdparty-key",
+    });
+    resolvePluginWebSearchProvidersMock.mockReturnValue([bundled]);
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([runtimeOnly]);
+
+    expect(
+      hasUsableWebSearchProvider({
+        config: {},
+        sandboxed: true,
+        preferRuntimeProviders: true,
+      }),
+    ).toBe(true);
+    expect(resolvePluginWebSearchProvidersMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginWebSearchProvidersMock.mock.calls[0]?.[0]).toMatchObject({
+      sandboxed: true,
+    });
+    expect(resolveRuntimeWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("uses runtime providers for non-sandboxed web search when runtime providers are preferred", () => {
+    const bundled = createGoogleSearchProvider();
+    const runtimeOnly = createCustomSearchProvider({
+      pluginId: "thirdparty",
+      id: "thirdparty",
+      credentialPath: "plugins.entries.thirdparty.config.webSearch.apiKey",
+      getConfiguredCredentialValue: () => "thirdparty-key",
+    });
+    resolvePluginWebSearchProvidersMock.mockReturnValue([bundled]);
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([runtimeOnly]);
+
+    expect(
+      hasUsableWebSearchProvider({
+        config: {},
+        sandboxed: false,
+        preferRuntimeProviders: true,
+      }),
+    ).toBe(true);
+    expect(resolveRuntimeWebSearchProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
   it("passes the run abort signal to provider execution", async () => {
     const controller = new AbortController();
     const execute = vi.fn(
