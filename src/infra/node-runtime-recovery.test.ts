@@ -240,6 +240,27 @@ describe("runtime recovery discovery", () => {
     });
   });
 
+  it("never probes an nvm symlink under cwd pointing outside cwd", async () => {
+    await withRecoveryHome(async (home) => {
+      const cwd = path.join(home, "untrusted-checkout");
+      const root = path.join(cwd, ".nvm");
+      const candidate = path.join(root, "versions/node/v24.19.0/bin/node");
+      const target = await writeFixture(path.join(home, "outside/bin/node"));
+      await writeFixture(path.join(root, "alias/default"), "24");
+      await fs.mkdir(path.dirname(candidate), { recursive: true });
+      await fs.symlink(target, candidate);
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      vi.stubEnv("NVM_DIR", root);
+      vi.stubEnv("PATH", "");
+
+      expect(await recoverNodeRuntime({ homeDir: home })).toBe(false);
+      const probed = mocks.probe.mock.calls.map(([file]) => file);
+      expect(probed).not.toContain(candidate);
+      expect(probed).not.toContain(target);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it("allows an absolute PATH entry explicitly naming the cwd", async () => {
     await withRecoveryHome(async (home) => {
       const cwd = path.join(home, "explicit-bin");

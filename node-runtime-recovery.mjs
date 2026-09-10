@@ -326,7 +326,7 @@ export function isUsableNode(nodePath, { allowCwd = false } = {}) {
   ) {
     return false;
   }
-  if (!allowCwd && isCwdNode(resolved)) {
+  if (!allowCwd && (isCwdNode(nodePath) || isCwdNode(resolved))) {
     return false;
   }
   const env = { NODE_NO_WARNINGS: "1" };
@@ -498,6 +498,9 @@ function resolveNvmDefault(root) {
   return null;
 }
 
+// Absolute roots from PATH and manager env vars are user configuration and trusted
+// like PATH; anything relative or under cwd is never probed. The explicit absolute
+// PATH directory opt-in below retains its cwd exception.
 function* availableNodeCandidates(homeDir) {
   yield [managedServiceNode(homeDir), "managed Gateway service"];
   const pathKey =
@@ -604,7 +607,7 @@ export async function recoverNodeRuntime({ homeDir, allowInstall = false } = {})
       // Only an explicitly named PATH directory may opt into cwd executables.
       const allowCwd =
         source === "PATH" && realNodePath(path.dirname(candidate)) === path.dirname(realPath);
-      if (!allowCwd && isCwdNode(realPath)) {
+      if (!allowCwd && (isCwdNode(candidate) || isCwdNode(realPath))) {
         continue;
       }
       seen.add(realPath);
