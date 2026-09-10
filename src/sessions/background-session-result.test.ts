@@ -8,6 +8,7 @@ import { commitBackgroundResultToSession } from "./background-session-result.js"
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
+  isCompetingSessionWorkAdmissionActive,
 } from "./session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "./transcript-events.js";
 
@@ -125,6 +126,64 @@ describe("commitBackgroundResultToSession", () => {
     ]);
     expect(updates).toHaveLength(1);
     unsubscribe();
+  });
+
+  it("cancels a completion waiting for source work without releasing that work", async () => {
+    const target = await createTarget();
+    const source = await beginSessionWorkAdmission({
+      scope: target.storePath,
+      identities: [target.sessionKey, target.sessionId],
+      assertAllowed: () => {},
+    });
+    const controller = new AbortController();
+    let outcome: unknown;
+    const commit = commitBackgroundResultToSession({
+      agentId: "main",
+      sessionKey: target.sessionKey,
+      expectedGeneration: target.generation,
+      text: "Cancelled while the source is still busy",
+      idempotencyKey: "cancelled-waiting-completion",
+      provenance: { kind: "cron", jobId: "waiting-job", runId: "waiting-run" },
+      config: target.config,
+      signal: controller.signal,
+    }).then(
+      (result) => {
+        outcome = result;
+      },
+      (error: unknown) => {
+        outcome = error;
+      },
+    );
+    try {
+      await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
+      controller.abort(new Error("cron deadline"));
+      await vi.waitFor(() => expect(outcome).toMatchObject({ name: "AbortError" }));
+      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+      expect(
+        isCompetingSessionWorkAdmissionActive(target.storePath, [
+          target.sessionKey,
+          target.sessionId,
+        ]),
+      ).toBe(true);
+      // A new source admission must not be trapped behind the cancelled completion.
+      const next = await beginSessionWorkAdmission({
+        scope: target.storePath,
+        identities: [target.sessionKey, target.sessionId],
+        assertAllowed: () => {},
+      });
+      next.release();
+    } finally {
+      source.release();
+      await commit;
+    }
+    expect(
+      await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      }),
+    ).toEqual([]);
   });
 
   it("keeps canonical model text separate from structured display content", async () => {

@@ -15,6 +15,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
@@ -77,7 +78,12 @@ export async function commitBackgroundResultToSession(params: {
     identities,
     signal: params.signal,
     prepare: async () => {
-      await getSessionWorkAdmissionRelease({ scope: storePath, identities });
+      const sourceWork = getSessionWorkAdmissionRelease({ scope: storePath, identities });
+      if (sourceWork) {
+        // This is only a passive wait: cancel the completion, not the source turn.
+        // The mutation owner still awaits cleanup before reopening admission.
+        await racePromiseWithAbortSignal(sourceWork, params.signal);
+      }
     },
     run: async () => {
       const current = loadSessionEntryReadOnly({
