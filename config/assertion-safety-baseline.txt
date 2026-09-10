@@ -698,7 +698,7 @@ extensions/matrix/src/test-runtime.ts	10
 extensions/matrix/src/tool-actions.ts	1
 extensions/mattermost/src/channel.ts	8
 extensions/mattermost/src/gateway-auth-bypass.ts	3
-extensions/mattermost/src/mattermost/client.ts	9
+extensions/mattermost/src/mattermost/client.ts	8
 extensions/mattermost/src/mattermost/directory.ts	2
 extensions/mattermost/src/mattermost/interactions.ts	4
 extensions/mattermost/src/mattermost/model-picker.ts	1
