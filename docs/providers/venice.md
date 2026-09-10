@@ -126,7 +126,7 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
   </Accordion>
 </AccordionGroup>
 
-Grok-backed Venice models (`grok-4-3` and similar) get the same tool-schema
+Grok-backed Venice models (`grok-4-5` and similar) get the same tool-schema
 compat patch as the native xAI provider, since they share the same upstream
 tool-call format.
 

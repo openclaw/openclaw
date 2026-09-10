@@ -62,7 +62,7 @@ disabled. Direct SDK callers should supply `sessionId` in their stream options.
 
     <Steps>
       <Step title="Use the bundled Go catalog">
-        OpenCode Go is included with OpenClaw for this release, so no separate
+        OpenCode Go is included with OpenClaw, so no separate
         plugin installation or Gateway restart is required.
       </Step>
       <Step title="Run onboarding">

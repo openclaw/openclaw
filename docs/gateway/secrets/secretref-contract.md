@@ -72,7 +72,7 @@ Other aliases and all `file`/`exec` refs require a registered `secrets.providers
 
     - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
     - `id` uses the environment-name grammar `^[A-Z][A-Z0-9_]{0,127}$`
-    - This release resolves only the Gateway-wide team scope
+    - Only the Gateway-wide team scope is resolved
 
   </Tab>
 </Tabs>
@@ -154,7 +154,7 @@ Request payload (stdin):
 Response payload (stdout):
 
 ```jsonc
-{ "protocolVersion": 1, "values": { "providers/openai/apiKey": "<openai-api-key>" } } // pragma: allowlist secret
+{ "protocolVersion": 1, "values": { "providers/openai/apiKey": "<openai-api-key>" } }
 ```
 
 Optional per-id errors:
@@ -177,6 +177,6 @@ but are not displayed because resolver output can contain credential material.
 <Accordion title="Store provider">
 - Reads values from OpenClaw's shared state SQLite database.
 - The provider has no connection settings. `secrets.defaults.store` selects its default alias.
-- Only team scope is resolved in this release. Identity scope is reserved for a later release.
+- Only team scope is resolved. Identity scope is not supported yet.
 
 </Accordion>

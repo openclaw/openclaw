@@ -66,8 +66,8 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 LongCat exposes binary thinking control. OpenClaw maps enabled thinking levels
 to `thinking: { type: "enabled" }` and `/think off` to
-`thinking: { type: "disabled" }`. LongCat does not currently document
-`reasoning_effort`, so OpenClaw does not send it.
+`thinking: { type: "disabled" }`. OpenClaw removes `reasoning_effort`
+from LongCat requests.
 
 LongCat returns reasoning in `reasoning_content`. OpenClaw preserves that field
 when replaying assistant tool-call turns so multi-turn agent sessions retain

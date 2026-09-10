@@ -65,12 +65,12 @@ spend limits, and backend failover without changing OpenClaw config.
             maxTokens: 64000,
           },
           {
-            id: "gpt-4o",
-            name: "GPT-4o",
-            reasoning: false,
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            reasoning: true,
             input: ["text", "image"],
-            contextWindow: 128000,
-            maxTokens: 8192,
+            contextWindow: 1050000,
+            maxTokens: 128000,
           },
         ],
       },
@@ -150,9 +150,9 @@ without a global private-network override. For a LAN-hosted proxy, set
           model: claude-opus-4-6
           api_key: os.environ/ANTHROPIC_API_KEY
 
-      - model_name: gpt-4o
+      - model_name: gpt-5.6-sol
         litellm_params:
-          model: gpt-4o
+          model: gpt-5.6-sol
           api_key: os.environ/OPENAI_API_KEY
     ```
 

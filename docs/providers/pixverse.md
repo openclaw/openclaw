@@ -72,7 +72,7 @@ Local image references are uploaded to PixVerse before the image-to-video reques
 | Generated audio | `audio: true`                                                                                                                    |
 
 <Note>
-PixVerse image template generation is not exposed through `image_generate` yet. That API is template-id driven, while OpenClaw's shared image-generation contract does not currently have a PixVerse-specific typed option bag.
+PixVerse image template generation is not exposed through `image_generate`. That API is template-id driven, while OpenClaw's shared image-generation contract has no PixVerse-specific typed option bag.
 </Note>
 
 ## Provider options

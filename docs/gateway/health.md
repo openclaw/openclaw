@@ -102,7 +102,7 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 
 - **BetterStack:** Set health check URL to `https://<your-gateway-host>:<port>/health`
 - **UptimeRobot:** Add a new HTTP monitor with URL `https://<your-gateway-host>:<port>/health`
-- **Generic:** Any HTTP GET to `/health` returns 200 with `{"ok":true}` when the gateway is healthy
+- **Generic:** Any HTTP GET to `/health` returns 200 with `{"ok":true,"status":"live"}` while the gateway's HTTP server is live
 
 ## When something fails
 

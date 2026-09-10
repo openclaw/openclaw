@@ -6,7 +6,7 @@ read_when:
 title: "MiniMax"
 ---
 
-The bundled `minimax` plugin registers two providers plus five capabilities: chat, image generation, music generation, video generation, image understanding, speech (T2A v2), and web search.
+The bundled `minimax` plugin registers two chat providers plus six capabilities: image generation, music generation, video generation, image understanding, speech (T2A v2), and web search.
 
 | Provider ID      | Auth    | Capabilities                                                                                        |
 | ---------------- | ------- | --------------------------------------------------------------------------------------------------- |
