@@ -86,8 +86,7 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
           ocPath: `cloudWorkers.profiles.${profileId}.settings.binary`,
           target: profileId,
           requirement: `Crabbox ${managedBinary.CRABBOX_MIN_VERSION} or newer`,
-          fixHint:
-            "Run `openclaw doctor --fix` to install the managed Crabbox now. The existing executable and profile configuration are preserved.",
+          fixHint: `Run \`openclaw doctor --fix\` to install the managed Crabbox now, or provision Crabbox ${managedBinary.CRABBOX_MIN_VERSION} or newer using \`cloudWorkers.profiles.${profileId}.settings.binary\`. The existing executable and profile configuration are preserved.`,
         });
       }
       return findings;

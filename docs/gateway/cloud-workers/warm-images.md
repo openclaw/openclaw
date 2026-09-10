@@ -8,7 +8,7 @@ How OpenClaw captures a prepared project and node runtime before enrollment, reu
 
 ## Warm images
 
-Use [Crabbox 0.49.1](https://github.com/openclaw/crabbox/releases/tag/v0.49.1) or newer for coordinator-backed warm images. Older binaries can complete a cold start but reject a later `checkpoint fork --lease-id`; update the binary used by the Gateway before starting the profile. Keep the fixed lease ID: it prevents duplicate allocations when dispatch is retried.
+The Crabbox plugin prepares its [supported CLI](/gateway/config-cloud-workers#crabbox-profile) automatically before warm-image operations. Keep the fixed lease ID: it prevents duplicate allocations when dispatch is retried.
 
 Warm images and project preparation for image capture are Linux only.
 
