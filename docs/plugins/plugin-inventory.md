@@ -39,10 +39,10 @@ openclaw gateway restart
 openclaw plugins inspect discord --runtime --json
 ```
 
-During the launch cutover, ordinary bare package specs still install from npm.
-Use `clawhub:@openclaw/discord` or `npm:@openclaw/discord` when you need an
-explicit source. After install, follow the plugin's setup doc, such as
-[Discord](/channels/discord), to add credentials and channel config. See
+Ordinary bare package specs install from npm. Use `clawhub:@openclaw/discord`
+or `npm:@openclaw/discord` when you need an explicit source. After install,
+follow the plugin's setup doc, such as [Discord](/channels/discord), to add
+credentials and channel config. See
 [Manage plugins](/plugins/manage-plugins) for update, uninstall, and publishing
 commands.
 

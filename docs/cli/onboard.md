@@ -337,6 +337,18 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 `--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
 
+Non-interactive llama.cpp against an existing `llama-server`:
+
+```bash
+openclaw onboard --non-interactive --accept-risk \
+  --auth-choice llama-cpp-existing-server \
+  --custom-base-url "http://127.0.0.1:8080/v1" \
+  --custom-model-id "my-model" \
+  --llama-server-api-key "$LLAMA_SERVER_API_KEY"
+```
+
+`--auth-choice llama-cpp` selects the managed local server instead. `--llama-server-api-key` is optional; if omitted, onboarding checks `LLAMA_SERVER_API_KEY` in env. See [llama.cpp](/plugins/llama-cpp) for endpoint-replacement and auth-profile behavior.
+
 Store provider keys as refs instead of plaintext:
 
 ```bash

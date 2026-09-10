@@ -11,6 +11,10 @@ read_when:
 Build a provider plugin to add a model provider (LLM) to OpenClaw: a model
 catalog, API-key auth, and dynamic model resolution.
 
+Acme AI is a fictional vendor used throughout this guide and its child pages.
+Helpers named `fetchAcme*` in the samples are placeholders for your own vendor
+API calls, not exported OpenClaw functions.
+
 <Info>
   New to OpenClaw plugins? Read [Getting Started](/plugins/building-plugins)
   first for package structure and manifest setup.
@@ -236,7 +240,9 @@ A failed selected import stops the operation instead of silently starting a diff
     `openclaw/plugin-sdk/provider-auth`. This keeps provider entrypoints from
     loading the full agent runtime just to select a credential. The deprecated
     `agent-runtime` exports remain available for compatibility; use the narrower
-    `provider-auth` route in new code.
+    `provider-auth` route in new code. See the [removal
+    timeline](/plugins/sdk-migration/removal-timeline) for the dates and gates
+    that govern deprecated surfaces named on this page and its child pages.
 
     A custom interactive auth method that mints a static token or API key can
     request protected persistence on its returned profile:

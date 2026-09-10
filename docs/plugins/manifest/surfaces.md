@@ -17,7 +17,7 @@ field is required. Use a square PNG that remains recognizable at 16 px; 512×512
 Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
 
 OpenClaw adopts this fixed package path as its icon convention, matching the path proposed in
-[Agent Plugins 1.1](https://github.com/agentplugins/agent-plugins-spec/pull/66). Other Agent Plugins
+an open Agent Plugins spec proposal ([agent-plugins-spec#66](https://github.com/agentplugins/agent-plugins-spec/pull/66)). OpenClaw itself implements Agent Plugins 1.0.0. Other Agent Plugins
 consumers may not discover it unless that proposal is adopted. The fixed path keeps packages
 portable and inspectable, avoids manifest path indirection and precedence rules, and lets OpenClaw
 render the icon without a runtime network request. Top-level plugin-branding icon URLs are not

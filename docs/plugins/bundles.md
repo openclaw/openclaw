@@ -69,8 +69,8 @@ command pack, or a Codex skill bundle and use it immediately.
 
 ## What OpenClaw maps from bundles
 
-Not every bundle feature runs in OpenClaw today. Here is what works and what
-is detected but not yet wired.
+Not every bundle feature runs in OpenClaw. Here is what works and what is
+detected but not wired.
 
 ### Supported now
 
@@ -204,7 +204,7 @@ them:
 - OpenClaw loads `.lsp.json` plus any manifest-declared `lspServers` paths.
 - Bundle LSP config is merged into the effective embedded OpenClaw LSP
   defaults.
-- Only supported stdio-backed LSP servers are runnable today; unsupported
+- Only supported stdio-backed LSP servers are runnable; unsupported
   transports still show up in `openclaw plugins inspect <id>`.
 
 ### Detected but not executed
@@ -245,7 +245,7 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
       skills keep loading; invalid individual server entries are skipped
     - `.mcp.json` (dot-prefixed) and inline manifest `mcpServers` are **not**
       read for this format; the standard's closed schema wins
-    - OpenClaw reads `extensions["ai.openclaw"]`; it currently supports
+    - OpenClaw reads `extensions["ai.openclaw"]`; it supports only
       `activation` with the same semantics as other bundle manifests
     - Other manifest extension namespaces are ignored and reserved for their
       clients

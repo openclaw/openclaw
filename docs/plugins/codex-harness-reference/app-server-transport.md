@@ -152,8 +152,8 @@ collision-resistant `openclaw-network-<fingerprint>` profile name from the
 profile body by default; use `profileName` only when a stable local name is
 required.
 
-```js
-export default {
+```json5
+{
   plugins: {
     entries: {
       codex: {
@@ -174,7 +174,7 @@ export default {
       },
     },
   },
-};
+}
 ```
 
 If the normal app-server runtime would be `danger-full-access`, enabling
@@ -253,7 +253,7 @@ Environment overrides remain available for local testing:
 `OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
 `appServer.command` is unset.
 
-`OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed. Use
+`OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed in 2026.4.22. Use
 `plugins.entries.codex.config.appServer.mode: "guardian"` instead, or
 `OPENCLAW_CODEX_APP_SERVER_MODE=guardian` for one-off local testing. Config is
 preferred for repeatable deployments because it keeps the plugin behavior in
