@@ -66,8 +66,10 @@ CLI startup do not import, restore, or rewrite legacy session JSON/JSONL files.
 When startup finds a legacy session store, it refuses readiness and prints a
 `doctor --fix` command for the active profile instead of serving empty history.
 
-To upgrade history from an older file-backed installation, stop the Gateway,
-back up its state, and run `openclaw doctor --fix` before restarting it.
+To upgrade history from an older file-backed installation, stop the Gateway
+(`openclaw gateway stop`), back up its state (`openclaw backup create --verify`),
+and run `openclaw doctor --fix` before restarting it with
+`openclaw gateway start`.
 `openclaw doctor --session-sqlite <mode>` provides targeted inspection,
 import, validation, and SQLite maintenance. Legacy `sessions.json` files are
 migration sources. Hot transcript JSONL files are imported and archived after
