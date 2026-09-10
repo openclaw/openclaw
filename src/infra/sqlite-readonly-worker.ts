@@ -6,10 +6,12 @@ import { formatByteSize } from "@openclaw/normalization-core";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasErrnoCode } from "./errno.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import {
+  runtimeProcessEntrypoints,
+  SQLITE_READONLY_CHILD_ARG,
+} from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
-export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 const SQLITE_INSPECTION_TIMEOUT_MS = 30_000;
 const SQLITE_INSPECTION_TIMEOUT_MAX_MS = 30 * 60_000;

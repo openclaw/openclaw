@@ -101,7 +101,7 @@ transport selection and are not rejected by this plugin.
   sink so command stdout stays reserved for the JSON response; OTLP traces,
   metrics, and logs continue when configured.
 - `openclaw agent exec` also runs the agent embedded in the CLI process, but
-  does not yet start this exporter, so its runs export no telemetry. Dispatch
+  does not start this exporter, so its runs export no telemetry. Dispatch
   through the Gateway, or use `openclaw agent --local`, when you need traces
   from a headless run.
 

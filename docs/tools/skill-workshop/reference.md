@@ -40,7 +40,7 @@ error. It never reads a retained proposal as a substitute for a missing skill.
 `skills.curator.status` reports live skill usage recorded from trusted
 `skill.used` events, retained pre-cron collection review records, and per-workspace
 experience review outcomes. Current collection reviews use automation run history.
-Age-based skill lifecycle curation is retired.
+No skill is archived or expired by age. Every skill reports as `active`.
 `skills.curator.pin`, `skills.curator.unpin`, and `skills.curator.restore` remain
 registered for existing clients, but always return an error explaining that the
 weekly collection review manages the skill collection.

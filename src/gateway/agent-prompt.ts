@@ -1,6 +1,6 @@
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 // Gateway agent prompt builder.
 // Converts conversation entries into the latest-message-plus-history prompt.
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { buildHistoryContext, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 

@@ -68,7 +68,7 @@ export const vitestWorkerBuildEntries = {
   // The retention fixture executes the real nested QuickJS worker.
   "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
   // The real ulimit fixture must import its parent before imposing a file-size limit.
-  "infra/sqlite-readonly-location": "src/infra/sqlite-readonly-location.ts",
+  "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
   // Keep provider preparation in the same compiled graph as payload rendering;
   // a source-injected plugin would miss duplicated registry scope state.
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",

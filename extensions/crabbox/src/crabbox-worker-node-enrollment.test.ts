@@ -602,8 +602,14 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
   it("selects new source bytes even when the public version has not changed", async () => {
     const { home, stateDir, stop } = testHome();
     const first = await serveArtifact(await packageFixture("first"));
-    await expectSetupPhases(enroll(home, first.nodeBootstrap));
+    const coldPhases = await expectSetupPhases(enroll(home, first.nodeBootstrap));
+    expect(coldPhases).toContain("openclaw-bootstrap-installation");
+    expect(coldPhases.at(-1)).toBe("openclaw-bootstrap-complete");
     const oldLaunch = await readLaunch(stateDir);
+    expect(oldLaunch).toMatchObject({ build: "first", args: expect.arrayContaining(["connect"]) });
+    expect(
+      JSON.parse(fs.readFileSync(path.join(path.dirname(oldLaunch.cli), "installed.json"), "utf8")),
+    ).toEqual({ scriptsRan: true });
     stop();
     fs.rmSync(path.join(stateDir, "launch.json"));
     const second = await serveArtifact(await packageFixture("second"));

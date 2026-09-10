@@ -462,6 +462,7 @@ the same policy under `streaming.progress`:
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop) - the turn lifecycle that emits these stream events
 - [Channel outbound API](/plugins/sdk-channel-outbound) - shared preview, durable send, and finalization APIs
 - [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
 - [Messages](/concepts/messages) - message lifecycle and delivery

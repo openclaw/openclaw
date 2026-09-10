@@ -2351,7 +2351,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy OpenAI Codex auth profile config to the canonical OpenAI provider.",
+      "Migrated legacy auth profile config to canonical providers.",
     ]);
     expect(result.config.auth?.profiles).toEqual({
       "openai:default": {
@@ -2402,7 +2402,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy OpenAI Codex auth profile config to the canonical OpenAI provider.",
+      "Migrated legacy auth profile config to canonical providers.",
     ]);
     expect(result.config.auth?.order).toEqual({
       openai: ["openai:work"],
@@ -2478,7 +2478,7 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
     };
 
     expect(result.changes).toStrictEqual([
-      "Migrated legacy OpenAI Codex auth profile config to the canonical OpenAI provider.",
+      "Migrated legacy auth profile config to canonical providers.",
     ]);
     expect(migrated.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime?.authProfileId).toBe(
       "openai:chatgpt-default",
@@ -3431,7 +3431,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
     expect(result.detected).toEqual([authPath]);
     expect(result.changes).toEqual([
       expect.stringContaining("Migrated auth profile JSON"),
-      `Migrated 1 OpenAI Codex auth profile(s) in ${authPath} to provider "openai".`,
+      `Migrated retired auth profile identifiers in ${authPath}.`,
     ]);
     expect(result.warnings).toStrictEqual([]);
     expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({

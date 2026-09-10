@@ -9,12 +9,6 @@ title: "Agents"
 
 Manage isolated agents (workspaces + auth + routing). Running `openclaw agents` with no subcommand is equivalent to `openclaw agents list`.
 
-Related:
-
-- [Multi-agent routing](/concepts/multi-agent)
-- [Agent workspace](/concepts/agent-workspace)
-- [Skills config](/tools/skills-config): skill visibility configuration.
-
 ## Examples
 
 ```bash
@@ -222,3 +216,4 @@ Config sample:
 - [CLI reference](/cli)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Agent workspace](/concepts/agent-workspace)
+- [Skills config](/tools/skills-config): skill visibility configuration.

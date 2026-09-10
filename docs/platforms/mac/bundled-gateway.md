@@ -163,7 +163,8 @@ Logging:
 
 - launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use
   `gateway-<profile>.log`)
-- launchd stderr: suppressed
+- launchd stderr: merged into the same `gateway.log` file, so startup failures
+  that happen before the logger starts are still recorded
 - If the host loops with repeated `EADDRINUSE` or fast restarts, check for
   duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
   launchd-marker workaround in

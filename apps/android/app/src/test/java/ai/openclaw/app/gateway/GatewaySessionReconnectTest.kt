@@ -700,6 +700,8 @@ class GatewaySessionReconnectTest {
       val connected = CompletableDeferred<Unit>()
       val reconnected = CompletableDeferred<Unit>()
       val connectionCount = AtomicInteger()
+      val readyCount = AtomicInteger()
+      val readyLeases = ConcurrentLinkedQueue<GatewaySession.RequestLease>()
       val unexpectedRequest = CompletableDeferred<Unit>()
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
@@ -709,28 +711,25 @@ class GatewaySessionReconnectTest {
             unexpectedRequest.complete(Unit)
           }
         }
-      val harness =
-        createReconnectHarness(
-          onConnected = {
-            if (connectionCount.incrementAndGet() == 1) {
-              connected.complete(Unit)
-            } else {
-              reconnected.complete(Unit)
-            }
-          },
-        )
+      val harness = createReconnectHarness(onHello = { connectionCount.incrementAndGet() })
+      val onReady = {
+        assertEquals("Hello publication must precede readiness", readyCount.incrementAndGet(), connectionCount.get())
+        readyLeases.add(requireNotNull(harness.session.captureRequestLease("manual|127.0.0.1|${server.port}")))
+        if (readyCount.get() == 1) connected.complete(Unit) else reconnected.complete(Unit)
+        Unit
+      }
 
       try {
-        connectNodeSession(harness.session, server.port)
+        connectNodeSession(harness.session, server.port, onReady = onReady)
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
-        val lease =
-          requireNotNull(
-            harness.session.captureRequestLease("manual|127.0.0.1|${server.port}"),
-          )
+        val lease = requireNotNull(readyLeases.poll())
         assertTrue(lease.isCurrent())
         harness.session.reconnect()
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { reconnected.await() }
         assertFalse(lease.isCurrent())
+        assertTrue(requireNotNull(readyLeases.poll()).isCurrent())
+        assertEquals(2, readyCount.get())
+        assertTrue(readyLeases.isEmpty())
         var committed = false
         assertFalse(lease.commitIfCurrent { committed = true })
         assertFalse(committed)
@@ -1578,12 +1577,64 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun readyCallbackSkipsReentrantDisconnect() = assertReadyCallbackSkipsRetiredHello(replace = false)
+
+  @Test
+  fun readyCallbackSkipsReentrantReplacement() = assertReadyCallbackSkipsRetiredHello(replace = true)
+
+  private fun assertReadyCallbackSkipsRetiredHello(replace: Boolean) =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val retiredHello = CompletableDeferred<Unit>()
+      val replacementReady = CompletableDeferred<GatewaySession.RequestLease>()
+      val helloCount = AtomicInteger()
+      val staleReadyCount = AtomicInteger()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      lateinit var harness: ReconnectHarness
+      harness =
+        createReconnectHarness(onConnected = {
+          if (helloCount.incrementAndGet() == 1) {
+            if (replace) {
+              connectNodeSession(harness.session, server.port, onReady = {
+                replacementReady.complete(requireNotNull(harness.session.captureRequestLease()))
+              })
+            } else {
+              harness.session.disconnect()
+            }
+            retiredHello.complete(Unit)
+          }
+        })
+
+      try {
+        connectNodeSession(harness.session, server.port, onReady = { staleReadyCount.incrementAndGet() })
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { retiredHello.await() }
+        if (replace) {
+          val ready = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { replacementReady.await() }
+          assertTrue(ready.isCurrent())
+          assertEquals(2, helloCount.get())
+        } else {
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
+          assertNull(harness.session.captureRequestLease())
+          assertEquals(1, helloCount.get())
+        }
+        assertEquals("A hello callback that retires its connection must not publish old readiness", 0, staleReadyCount.get())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun connectedCallbackFailureClosesSocketBeforeRetry() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
       val firstClosed = CompletableDeferred<Unit>()
       val secondConnected = CompletableDeferred<Unit>()
       val callbackCount = AtomicInteger()
+      val readyPublished = CompletableDeferred<Unit>()
+      val readyCount = AtomicInteger()
       val server =
         startGatewayServer(
           json = json,
@@ -1602,10 +1653,16 @@ class GatewaySessionReconnectTest {
         )
 
       try {
-        connectNodeSession(harness.session, server.port)
+        connectNodeSession(harness.session, server.port, onReady = {
+          readyCount.incrementAndGet()
+          assertTrue(requireNotNull(harness.session.captureRequestLease()).isCurrent())
+          readyPublished.complete(Unit)
+        })
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { firstClosed.await() }
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { secondConnected.await() }
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { readyPublished.await() }
         assertEquals(2, callbackCount.get())
+        assertEquals("The throwing hello callback must not publish readiness", 1, readyCount.get())
       } finally {
         shutdownReconnectHarness(harness, server)
       }
@@ -2139,6 +2196,7 @@ class GatewaySessionReconnectTest {
     session: GatewaySession,
     port: Int,
     token: String? = "test-token",
+    onReady: (() -> Unit)? = null,
   ) {
     session.connect(
       endpoint =
@@ -2172,6 +2230,7 @@ class GatewaySessionReconnectTest {
             ),
         ),
       tls = null,
+      onReady = onReady,
     )
   }
 

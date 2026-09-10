@@ -59,6 +59,39 @@ mutating native state. The callback belongs to one registered harness lifetime;
 retaining it after the operation closes does not retain authority. Post-delete
 hooks are notifications, not the owner of durable binding removal.
 
+## Subagent task history
+
+Native subagents can expose the shared task transcript view through the optional
+`taskHistory` harness capability. Declare the owned `taskKinds` and implement
+`read({ task, cfg, cursor, limit, assertCurrent })`. Return chronological chat
+`messages` with a stable `messageId` (or canonical `__openclaw.id`) and an optional
+`nextCursor` for older history. Internal runtime-only IDs are insufficient: the
+shared viewer must recognize the identity across pages and refreshes. Rows that
+share a transcript entry ID remain one display group.
+Preserve typed thinking, tool-call, and tool-result content so the normal chat
+renderer can display it. Bound native reads and response sizes.
+
+The Gateway's `tasks.history` method authorizes the task's requester session and
+routes history to its existing OpenClaw child session or the owning harness.
+It accepts a task ID, an optional opaque cursor, and a limit from 1 to 200
+(default 100). The harness must verify native parent/child lineage and the
+bound connection, and call `assertCurrent()` after awaited work. The Gateway
+rechecks access before returning a page and caps the response at 4 MiB.
+
+Record immutable native history routing facts in task detail when creating the
+task. A later parent turn can replace its current native thread without changing
+the child's source. Preserve the original parent and connection identity across
+progress, completion, and recovery; never reconstruct them from a replacement
+binding. Preserve authorized compaction transfers within the same session
+lifecycle, while rejecting resets and account or connection changes.
+Runtime task detail participates in the Gateway's cursor and
+after-await identity checks.
+
+Keep `childSessionKey` absent for native children: it describes an OpenClaw
+session and also determines lifecycle ownership. Reading history must not adopt
+the child, create another transcript store, or change cancellation and recovery.
+`TaskSummary.hasTranscript` advertises readable history to the shared viewer.
+
 ## Tool and media results
 
 Core constructs the OpenClaw tool list and passes it into the prepared

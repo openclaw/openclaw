@@ -104,8 +104,8 @@ Use this when a macOS install keeps restarting every few seconds, `openclaw`
 health checks flap between healthy and unavailable, and channel dispatch stalls
 even though the service appears to be running.
 
-This was observed on older installs where both `ai.openclaw.gateway` and
-`ai.openclaw.node` LaunchAgents were active and each injected
+This happens when both `ai.openclaw.gateway` and
+`ai.openclaw.node` LaunchAgents are active and each injects
 `OPENCLAW_LAUNCHD_LABEL`. In that state OpenClaw can detect launchd
 supervision, try to hand restart back to launchd, and fall into a fast
 `EADDRINUSE`/respawn loop instead of one stable gateway process.

@@ -625,37 +625,6 @@ describe("routeReply", () => {
     });
   });
 
-  it("suppresses routed delivery when reply payload hooks cancel", async () => {
-    mocks.deliverOutboundPayloads.mockImplementationOnce(
-      async ({
-        onPayloadDeliveryOutcome,
-      }: {
-        onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-      }) => {
-        onPayloadDeliveryOutcome?.({
-          index: 0,
-          status: "suppressed",
-          reason: "cancelled_by_reply_payload_sending_hook",
-        });
-        return [];
-      },
-    );
-
-    const res = await routeTestReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-    });
-
-    expect(res).toEqual({
-      ok: true,
-      delivered: false,
-      suppressed: true,
-      reason: "cancelled_by_reply_payload_sending_hook",
-    });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-  });
-
   it("suppresses routed delivery when reply payload hooks empty the payload", async () => {
     mocks.deliverOutboundPayloads.mockImplementationOnce(
       async ({

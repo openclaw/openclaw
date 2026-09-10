@@ -133,7 +133,7 @@ installation, run them once for that agent.
          models: [
            {
              provider: "openai",
-             model: "gpt-transcribe",
+             model: "gpt-4o-transcribe",
              profile: "openai:audio",
              baseUrl: "https://api.openai.com/v1",
              capabilities: ["audio"],
@@ -266,7 +266,7 @@ provider-wide rather than scoped to the audio model entry.
 
 ### Resident local STT
 
-Auto-detected local STT remains process-per-request. OpenClaw does not currently manage a resident whisper.cpp server because the standard Homebrew `whisper-cpp` package disables that server, while the upstream example has no configured bounded admission queue. A plugin-owned resident lifecycle needs a maintained packaged worker with health/startup, model residency, bounded queueing, cancellation/timeout, loopback-only no-auth operation, and no cloud fallback before it can be enabled safely.
+Auto-detected local STT remains process-per-request. OpenClaw does not manage a resident whisper.cpp server because the standard Homebrew `whisper-cpp` package disables that server, while the upstream example has no configured bounded admission queue. A plugin-owned resident lifecycle needs a maintained packaged worker with health/startup, model residency, bounded queueing, cancellation/timeout, loopback-only no-auth operation, and no cloud fallback before it can be enabled safely.
 
 ### Proxy environment support
 

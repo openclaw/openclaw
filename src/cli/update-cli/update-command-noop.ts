@@ -1,7 +1,12 @@
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { readPackageVersion, resolveNodeRunner, UpdatePreMutationError } from "./shared.js";
+import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   formatUpdateAncestryBlockMessage,
   handoffUpdateFromGateway,
@@ -12,7 +17,6 @@ import {
   withOwnedManagedUpdateEnv,
 } from "./update-command-managed-context.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
-import type { FinishUpdateParams } from "./update-command-post-update-types.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import {
   GatewayServiceUpdateOwnershipError,
@@ -44,6 +48,7 @@ export async function finishAlreadyCurrentUpdate(
     | "ownedManagedUpdateEnv"
   > & {
     managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+    legacyConfigPlan?: LegacyConfigUpdatePlan;
     runtimeTarget?: { version: string; nodeEngine: string | null };
     stop: () => void;
     refuseUpdate: (reason: string, message?: string) => Promise<void>;
@@ -62,6 +67,7 @@ export async function finishAlreadyCurrentUpdate(
     };
     const inspection = {
       roots: [params.root],
+      legacyConfigPlan: params.legacyConfigPlan,
       updateInstallKind: params.result.mode === "git" ? ("git" as const) : ("package" as const),
       shouldRestart: params.shouldRestart,
       jsonMode: Boolean(params.opts.json),
@@ -149,19 +155,49 @@ export async function finishAlreadyCurrentUpdate(
       invocationCwd: params.invocationCwd,
     });
     const env = owned?.env ?? context.env;
+    let configSnapshot = owned?.configSnapshot ?? context.configSnapshot;
+    const plan =
+      params.legacyConfigPlan?.snapshot.path === configSnapshot.path
+        ? params.legacyConfigPlan
+        : undefined;
+    const storedChannel = normalizeUpdateChannel(
+      (plan?.config ?? configSnapshot.config).update?.channel,
+    );
+    const beforeRepair = configSnapshot;
+    if (params.opts.channel && plan) {
+      configSnapshot = await withOwnedManagedUpdateEnv(env, () =>
+        withPluginLifecycleLease({}, () =>
+          maybeRepairLegacyConfigForUpdateChannel({
+            configSnapshot,
+            plan,
+            jsonMode: Boolean(params.opts.json),
+          }),
+        ),
+      );
+    }
+    if (!configSnapshot.valid) {
+      throw new Error("Update refused: the selected configuration is still invalid.");
+    }
+    result.status = beforeRepair.raw !== configSnapshot.raw ? "ok" : "skipped";
+    if (result.status === "ok") {
+      delete result.reason;
+    } else {
+      result.reason = "already-current";
+    }
     params.stop();
     await finishUpdate({
       ...params,
       packageUpdateNodeRunner,
       serviceRuntimeRefreshRequired: runtime.value.replacedNodeRunner !== undefined,
-      result: { ...result, status: "skipped", reason: "already-current" },
+      result,
+      storedChannel,
       coreAlreadyCurrent: true,
       mutationStarted: false,
       installKindChanged: false,
       downgradeRisk: false,
       preManagedServiceStop: stopState,
       ownedManagedUpdateEnv: env,
-      configSnapshot: owned?.configSnapshot ?? context.configSnapshot,
+      configSnapshot,
       preUpdatePluginInstallRecords: owned?.pluginInstallRecords ?? {},
     });
   }).catch(async (error: unknown) => {

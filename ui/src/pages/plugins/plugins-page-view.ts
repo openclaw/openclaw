@@ -208,10 +208,6 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                       renderPluginCatalogResults({
                         connected: model.connected,
                         loading: discovery.loading,
-                        paging: discovery.paging,
-                        pageNumber: discovery.pageNumber,
-                        canGoPrevious: discovery.canGoPrevious,
-                        canGoNext: discovery.canGoNext,
                         result: discovery.result,
                         error: discovery.error ?? model.error,
                         remoteError: discovery.remoteError,
@@ -238,8 +234,6 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                             pathname: pathForPluginCatalogEntry(id, context.basePath),
                           }),
                         onInstall: actions.installCatalogEntry,
-                        onPreviousPage: () => void discovery.previousPage(),
-                        onNextPage: () => void discovery.nextPage(),
                         onRetry: () => void discovery.refresh(),
                         onRetryGrouped: () => {
                           void Promise.all([

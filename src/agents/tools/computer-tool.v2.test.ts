@@ -21,6 +21,31 @@ import {
 describe("createComputerTool v2 execution", () => {
   beforeEach(resetComputerToolMocks);
 
+  it.each(["screenshot", "wait"] as const)(
+    "rejects a targeted %s before desktop capture",
+    async (action) => {
+      listNodesMock.mockResolvedValue([
+        macComputerNode({
+          computerUse: v2Descriptor(["screenshot", "get_window_state", "get_browser_state"]),
+        }),
+      ]);
+      const tool = createVisionComputerTool();
+      for (const reference of [
+        "windowRef",
+        "browserRef",
+        "pageRef",
+        "elementRef",
+        "observationId",
+      ]) {
+        await expect(
+          tool.execute(reference, { action, [reference]: "target-1", duration: 0 }),
+        ).rejects.toThrow(/COMPUTER_INVALID_REQUEST:.*get_window_state/);
+      }
+      expect(callGatewayToolMock).not.toHaveBeenCalled();
+      expect(sleepMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("derives local wait from the selected node screenshot capability", async () => {
     const actions: ComputerUseV2ActionName[] = ["screenshot", "list_apps", "get_window_state"];
     listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);

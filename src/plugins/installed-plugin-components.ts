@@ -1,7 +1,10 @@
+import path from "node:path";
 import type {
   PluginDeclaredSurface,
   PluginInstalledComponents,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { loadHookEntriesFromDir } from "../hooks/discovery.js";
+import { resolvePluginSkillNames } from "../skills/loading/plugin-skills.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import {
   inspectBundleMcpRuntimeSupport,
@@ -32,6 +35,9 @@ export function projectInstalledPluginComponents(params: {
   declared: PluginDeclaredSurface;
 }): PluginInstalledComponents {
   const { manifest, declared } = params;
+  const skillNames = manifest?.rootDir
+    ? resolvePluginSkillNames(manifest)
+    : sorted(declared.skills);
   if (manifest?.format !== "bundle" || !manifest.bundleFormat) {
     const mcp = manifest?.rootDir
       ? inspectNativePluginMcpRuntimeSupport({
@@ -39,7 +45,7 @@ export function projectInstalledPluginComponents(params: {
           mcpServers: manifest.mcpServers ?? {},
         })
       : undefined;
-    const skills = sorted(declared.skills);
+    const skills = skillNames;
     const mcpServers = sorted(mcp?.supportedServerNames ?? declared.mcpServers);
     const commands = sorted(declared.cliCommands);
     const hooks = sorted(declared.hooks);
@@ -68,6 +74,23 @@ export function projectInstalledPluginComponents(params: {
     capabilities: manifest.bundleCapabilities ?? [],
   });
   const mapped = new Set(support.mapped);
+  const hooks =
+    mapped.has("hooks") && manifest.rootDir
+      ? sorted(
+          (manifest.hooks ?? []).filter((dir) =>
+            loadHookEntriesFromDir({
+              dir: path.resolve(manifest.rootDir, dir),
+              rootDir: manifest.rootDir,
+              pluginId: manifest.id,
+              source: "openclaw-plugin",
+            }).some(({ hook }) => Boolean(hook.handlerPath)),
+          ),
+        )
+      : [];
+  if (mapped.has("hooks") && hooks.length === 0) {
+    mapped.delete("hooks");
+    support.unavailable.push("hooks");
+  }
   const mcp = manifest.rootDir
     ? inspectBundleMcpRuntimeSupport({
         pluginId: manifest.id,
@@ -84,10 +107,10 @@ export function projectInstalledPluginComponents(params: {
     : undefined;
   return {
     mapped: sorted(mapped),
-    skills: mapped.has("skills") ? sorted(declared.skills) : [],
+    skills: mapped.has("skills") ? skillNames : [],
     mcpServers: mapped.has("mcpServers") ? sorted(mcp?.supportedServerNames ?? []) : [],
     commands: [],
-    hooks: mapped.has("hooks") ? sorted(declared.hooks) : [],
+    hooks,
     lspServers: mapped.has("lspServers") ? sorted(lsp?.supportedServerNames ?? []) : [],
     unavailable: {
       capabilities: sorted(support.unavailable),

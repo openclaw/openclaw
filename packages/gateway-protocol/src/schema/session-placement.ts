@@ -83,9 +83,31 @@ const SessionPlacementDiskSpaceProperties = {
   diskSpace: Type.Optional(SessionPlacementDiskSpaceSchema),
 };
 
+const WORKER_MACHINE_CLASS_MAX_LENGTH = 128;
+const WORKER_OPERATING_SYSTEM_MAX_LENGTH = 64;
+const WorkerMachineClassSchema = Type.String({
+  minLength: 1,
+  maxLength: WORKER_MACHINE_CLASS_MAX_LENGTH,
+});
+const WorkerOperatingSystemIdSchema = Type.String({
+  minLength: 1,
+  maxLength: WORKER_OPERATING_SYSTEM_MAX_LENGTH,
+});
+
+export const SessionPlacementMachineSchema = closedObject({
+  class: Type.Optional(WorkerMachineClassSchema),
+  os: Type.Optional(WorkerOperatingSystemIdSchema),
+  osLabel: Type.Optional(
+    Type.String({ minLength: 1, maxLength: WORKER_OPERATING_SYSTEM_MAX_LENGTH }),
+  ),
+  cpu: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
+  memoryGb: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
+});
+
 const SessionPlacementIdentityProperties = {
   providerId: Type.Optional(NonEmptyString),
   profileId: Type.Optional(NonEmptyString),
+  machine: Type.Optional(SessionPlacementMachineSchema),
 };
 
 const WorkspaceResultConflictSchema = closedObject({
@@ -205,13 +227,6 @@ export const SessionPlacementSchema = Type.Union([
   ReclaimedSessionPlacementSchema,
   FailedSessionPlacementSchema,
 ]);
-
-const WORKER_MACHINE_CLASS_MAX_LENGTH = 128;
-const WorkerMachineClassSchema = Type.String({
-  minLength: 1,
-  maxLength: WORKER_MACHINE_CLASS_MAX_LENGTH,
-});
-const WorkerOperatingSystemIdSchema = Type.String({ minLength: 1, maxLength: 64 });
 
 /**
  * Requests one-way dispatch to an explicit or automatically selected device (`operator.write`),
@@ -399,6 +414,7 @@ export const SessionPlacementProtocolSchemas = {
   SessionPlacementState: SessionPlacementStateSchema,
   SessionPlacementDiskSpace: SessionPlacementDiskSpaceSchema,
   SessionPlacementRunner: SessionPlacementRunnerSchema,
+  SessionPlacementMachine: SessionPlacementMachineSchema,
   LocalSessionPlacement: LocalSessionPlacementSchema,
   RequestedSessionPlacement: RequestedSessionPlacementSchema,
   ProvisioningSessionPlacement: ProvisioningSessionPlacementSchema,
@@ -430,6 +446,7 @@ export const SessionPlacementProtocolSchemas = {
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
 export type SessionPlacementDiskSpace = Static<typeof SessionPlacementDiskSpaceSchema>;
 export type SessionPlacementRunner = Static<typeof SessionPlacementRunnerSchema>;
+export type SessionPlacementMachine = Static<typeof SessionPlacementMachineSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;

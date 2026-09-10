@@ -357,7 +357,6 @@ describe("chat pane retained presentation lifecycle", () => {
     const detailHost = state as unknown as TaskDetailHost;
     readTaskTranscript(detailHost, {
       taskId: "task-live",
-      sessionKey: "agent:main:subagent:task-live",
     });
     expect(detailHost.taskDetailState).toBeDefined();
     pane.presentationId = "p1:visible";

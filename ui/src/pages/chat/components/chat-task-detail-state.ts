@@ -1,28 +1,34 @@
+import type { TasksHistoryResult } from "../../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { visibleChatHistoryMessages } from "../../../lib/chat/message-visibility.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import type { ChatHistoryResult } from "../chat-history-snapshot.ts";
+import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 
 const TASK_TRANSCRIPT_REFRESH_MS = 2_000;
-// The task preview has no back-scroll pagination; retain its wider transcript window.
-const TASK_TRANSCRIPT_REQUEST_LIMIT = 800;
+const TASK_TRANSCRIPT_REQUEST_LIMIT = 100;
 
-type TaskTranscriptLoad =
-  | { status: "loading" }
-  | { status: "loaded"; messages: unknown[] }
-  | { status: "error" };
+type LoadedTaskTranscript = {
+  status: "loaded";
+  messages: unknown[];
+  nextCursor?: string;
+  loading: boolean;
+  error?: "refresh" | "older";
+};
+
+type TaskTranscriptLoad = { status: "loading" } | LoadedTaskTranscript | { status: "error" };
 
 type TaskDetailState = {
   client: GatewayBrowserClient;
   connectionEpoch: number | undefined;
   eventVersion: number;
+  refreshedEventVersion: number;
   inFlight: boolean;
   lastRequestStartedAt: number;
   load: TaskTranscriptLoad;
   refreshTimer: number | null;
   requestId: number;
-  sessionKey: string;
+  olderCursors: Set<string>;
   taskId: string;
 };
 
@@ -67,6 +73,39 @@ function scheduleTranscriptLoad(host: TaskDetailHost, state: TaskDetailState) {
     return;
   }
   clearRefreshTimer(state);
+  void loadTranscriptPage(host, state);
+}
+
+function transcriptEntryKey(message: unknown): string | undefined {
+  const identity = readChatThreadMessageIdentity(message);
+  if (!identity) {
+    return undefined;
+  }
+  const key = identity.externalSource
+    ? `external:${identity.externalSource}`
+    : identity.id
+      ? `id:${identity.id}`
+      : identity.sequence == null
+        ? undefined
+        : `seq:${identity.sequence}`;
+  return key;
+}
+
+function mergeTranscriptMessages(earlier: unknown[], later: unknown[]): unknown[] {
+  const laterKeys = new Set(later.map(transcriptEntryKey).filter(Boolean));
+  const overlap = earlier.findIndex((message) => {
+    const key = transcriptEntryKey(message);
+    return key !== undefined && laterKeys.has(key);
+  });
+  // An entry can project into several rows. Replace the overlapping tail as a
+  // whole so updated, added, and removed siblings stay together.
+  return [...earlier.slice(0, overlap < 0 ? earlier.length : overlap), ...later];
+}
+
+async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, cursor?: string) {
+  if (host.taskDetailState !== state || state.inFlight) {
+    return;
+  }
   const client = host.client;
   if (
     !client ||
@@ -80,53 +119,85 @@ function scheduleTranscriptLoad(host: TaskDetailHost, state: TaskDetailState) {
   }
   const requestId = ++state.requestId;
   const eventVersion = state.eventVersion;
+  const previous = state.load.status === "loaded" ? state.load : undefined;
   state.inFlight = true;
-  state.lastRequestStartedAt = Date.now();
-  if (state.load.status !== "loaded") {
-    state.load = { status: "loading" };
+  if (!cursor) {
+    state.lastRequestStartedAt = Date.now();
+  }
+  state.load = previous ? { ...previous, loading: true, error: undefined } : { status: "loading" };
+  host.requestUpdate?.();
+  let load: TaskTranscriptLoad;
+  try {
+    const result = await client.request<TasksHistoryResult>("tasks.history", {
+      taskId: state.taskId,
+      limit: TASK_TRANSCRIPT_REQUEST_LIMIT,
+      ...(cursor ? { cursor } : {}),
+    });
+    const messages = visibleChatHistoryMessages(result.messages);
+    const previousKeys = new Set(previous?.messages.map(transcriptEntryKey).filter(Boolean));
+    const overlaps = messages.some((message) => {
+      const key = transcriptEntryKey(message);
+      return key !== undefined && previousKeys.has(key);
+    });
+    const retainPrevious = previous !== undefined && (cursor !== undefined || overlaps);
+    if (cursor) {
+      state.olderCursors.add(cursor);
+    } else if (!retainPrevious) {
+      // A disjoint tail may have skipped whole pages. Restart pagination from
+      // that tail so Show earlier can reach every intervening message.
+      state.olderCursors.clear();
+    }
+    load = {
+      status: "loaded",
+      messages: retainPrevious
+        ? cursor
+          ? mergeTranscriptMessages(messages, previous.messages)
+          : mergeTranscriptMessages(previous.messages, messages)
+        : messages,
+      // Only overlapping refreshes preserve the oldest boundary already loaded.
+      nextCursor:
+        retainPrevious && !cursor
+          ? previous.nextCursor
+          : result.nextCursor && !state.olderCursors.has(result.nextCursor)
+            ? result.nextCursor
+            : undefined,
+      loading: false,
+    };
+  } catch {
+    load = previous
+      ? { ...previous, loading: false, error: cursor ? "older" : "refresh" }
+      : { status: "error" };
+  }
+  const current = host.taskDetailState;
+  if (
+    current !== state ||
+    current.requestId !== requestId ||
+    host.client !== client ||
+    host.connectionEpoch !== state.connectionEpoch
+  ) {
+    return;
+  }
+  state.inFlight = false;
+  state.load = load;
+  if (!cursor) {
+    state.refreshedEventVersion = eventVersion;
   }
   host.requestUpdate?.();
-  void (async () => {
-    let load: TaskTranscriptLoad;
-    try {
-      const result = await client.request<ChatHistoryResult>("chat.history", {
-        sessionKey: state.sessionKey,
-        limit: TASK_TRANSCRIPT_REQUEST_LIMIT,
-      });
-      load = { status: "loaded", messages: visibleChatHistoryMessages(result.messages) };
-    } catch {
-      load = { status: "error" };
-    }
-    const current = host.taskDetailState;
-    if (
-      current !== state ||
-      current.requestId !== requestId ||
-      host.client !== client ||
-      host.connectionEpoch !== state.connectionEpoch
-    ) {
-      return;
-    }
-    state.inFlight = false;
-    state.load = load;
-    host.requestUpdate?.();
-    // Events that arrived during this request own a later snapshot. This also
-    // guarantees one final history read after a terminal transition.
-    if (state.eventVersion > eventVersion) {
-      scheduleTranscriptLoad(host, state);
-    }
-  })();
+  // Also refresh after events received during an older-page request.
+  if (state.eventVersion > state.refreshedEventVersion) {
+    scheduleTranscriptLoad(host, state);
+  }
 }
 
 export function readTaskTranscript(
   host: TaskDetailHost,
-  selection: { taskId: string; sessionKey: string },
+  selection: { taskId: string },
 ): TaskTranscriptLoad {
   const client = host.client;
   const current = host.taskDetailState;
   if (
     current &&
     current.taskId === selection.taskId &&
-    current.sessionKey === selection.sessionKey &&
     current.client === client &&
     current.connectionEpoch === host.connectionEpoch
   ) {
@@ -140,17 +211,39 @@ export function readTaskTranscript(
     client,
     connectionEpoch: host.connectionEpoch,
     eventVersion: 0,
+    refreshedEventVersion: 0,
     inFlight: false,
     lastRequestStartedAt: Number.NEGATIVE_INFINITY,
     load: { status: "loading" },
     refreshTimer: null,
     requestId: 0,
-    sessionKey: selection.sessionKey,
+    olderCursors: new Set(),
     taskId: selection.taskId,
   };
   host.taskDetailState = next;
   scheduleTranscriptLoad(host, next);
   return next.load;
+}
+
+export function loadOlderTaskTranscript(host: TaskDetailHost) {
+  const state = host.taskDetailState;
+  if (state?.load.status === "loaded" && state.load.nextCursor) {
+    void loadTranscriptPage(host, state, state.load.nextCursor);
+  }
+}
+
+export function retryTaskTranscript(host: TaskDetailHost) {
+  const state = host.taskDetailState;
+  if (!state) {
+    host.requestUpdate?.();
+    return;
+  }
+  if (state.load.status === "loaded" && state.load.error === "older") {
+    loadOlderTaskTranscript(host);
+  } else {
+    clearRefreshTimer(state);
+    void loadTranscriptPage(host, state);
+  }
 }
 
 export function observeTaskDetailEvent(

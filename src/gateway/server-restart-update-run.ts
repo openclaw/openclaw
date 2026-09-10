@@ -16,7 +16,7 @@ export async function finalizeRestartUpdateRun(
 ) {
   const updateRunId = payload.stats?.runId;
   let updateRun = updateRunId ? getUpdateRun(updateRunId) : undefined;
-  if (updateRun) {
+  if (updateRun?.status === "running") {
     if (!updateRun.origin.sessionKey && payload.sessionKey) {
       updateRun = recordUpdateRunPhase(updateRun.runId, updateRun.phase, {
         origin: {
@@ -66,22 +66,26 @@ export async function finalizeRestartUpdateRun(
     const pluginErrors = getActivePluginRegistry()
       ?.diagnostics.filter((entry) => entry.level === "error")
       .map((entry) => entry.message);
-    updateRun = recordUpdateRunVerification(updateRun.runId, {
-      booted: true,
-      serviceRunning: true,
-      pid: process.pid,
-      runningVersion,
-      ...(runningBuildId ? { runningBuildId } : {}),
-      ...(expectedVersion
-        ? {
-            versionMatch:
-              expectedVersion === runningVersion &&
-              (!expectedBuildId || expectedBuildId === runningBuildId),
-          }
-        : {}),
-      ...(pluginErrors ? { pluginErrors } : {}),
-      ...(payload.doctorHint ? { doctorHint: payload.doctorHint } : {}),
-    });
+    updateRun = recordUpdateRunVerification(
+      updateRun.runId,
+      {
+        booted: true,
+        serviceRunning: true,
+        pid: process.pid,
+        runningVersion,
+        ...(runningBuildId ? { runningBuildId } : {}),
+        ...(expectedVersion
+          ? {
+              versionMatch:
+                expectedVersion === runningVersion &&
+                (!expectedBuildId || expectedBuildId === runningBuildId),
+            }
+          : {}),
+        ...(pluginErrors ? { pluginErrors } : {}),
+        ...(payload.doctorHint ? { doctorHint: payload.doctorHint } : {}),
+      },
+      { onlyIfRunning: true },
+    );
     if (updateRun.phase === "verifying" && updateRun.status === "running") {
       const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
       await createUpdateRunNotifier(updateRun)(updateRun, "verifying");

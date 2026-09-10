@@ -48,7 +48,10 @@ import type {
   CodexSessionRouteRepairSummary,
   SessionRouteRepairResult,
 } from "./codex-route-types.js";
-import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
+import {
+  migrateLegacyRuntimeModelRef,
+  resolveLegacyRuntimeModelProviderAlias,
+} from "./legacy-runtime-model-providers.js";
 import {
   createRetiredModelRefRepairResolver,
   repairRetiredSessionModelRef,
@@ -436,9 +439,21 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
 
   return new Map(
     [...params.authProfileIdMap].filter(([legacyProfileId, canonicalProfileId]) => {
+      const separator = legacyProfileId.indexOf(":");
+      if (separator < 0) {
+        return false;
+      }
+      const legacyProvider = legacyProfileId.slice(0, separator);
+      const provider =
+        isLegacyCodexProviderId(legacyProvider) || legacyProfileId === "openai:codex-cli"
+          ? "openai"
+          : resolveLegacyRuntimeModelProviderAlias(legacyProvider)?.provider;
+      if (!provider) {
+        return false;
+      }
       const localCredential = localProfiles[canonicalProfileId];
       if (localCredential) {
-        return normalizeString(localCredential.provider) === "openai";
+        return normalizeString(localCredential.provider) === provider;
       }
       // A failed local import still owns its account. Never replace it with a
       // same-named main credential; inheritance is safe only without that source.
@@ -453,21 +468,21 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
             return false;
           }
           const canonicalLegacyCredential = parseLegacyCredentialEntry(
-            { ...legacyCredential, provider: "openai" },
-            "openai",
+            { ...legacyCredential, provider },
+            provider,
           );
           // A retained mixed-sidecar source still contains successful entries.
           // Permit deduped main inheritance only when exact account identity matches.
           return (
             canonicalLegacyCredential?.type === "oauth" &&
             inheritedCredential?.type === "oauth" &&
-            inheritedCredential.provider === "openai" &&
+            inheritedCredential.provider === provider &&
             (hasMatchingOAuthIdentity(canonicalLegacyCredential, inheritedCredential) ||
               areOAuthCredentialsEquivalent(canonicalLegacyCredential, inheritedCredential))
           );
         }
       }
-      return normalizeString(inheritedCredential?.provider) === "openai";
+      return normalizeString(inheritedCredential?.provider) === provider;
     }),
   );
 }

@@ -2,7 +2,12 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
-import { summarizeUpdateStepFailure, type UpdateRunRecord } from "./update-run-record.js";
+import {
+  LEGACY_UPDATE_RUN_ADVISORY,
+  LEGACY_UPDATE_RUN_EXPIRED_REASON,
+} from "./update-run-legacy-expiry.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
+import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
@@ -61,6 +66,9 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   if (run.status !== "failed") {
     return [];
   }
+  if (run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
+    return [LEGACY_UPDATE_RUN_ADVISORY];
+  }
   const hints: string[] = [];
   if (run.reason === "preflight-insufficient-space") {
     hints.push(
@@ -108,7 +116,10 @@ export function renderUpdateRunReport(
         : "✅ OpenClaw updated.";
       break;
     case "failed":
-      headline = `⚠️ OpenClaw update failed: ${reason}.${running ? ` The gateway is running ${running}.` : ""}`;
+      headline =
+        run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON
+          ? `ℹ️ OpenClaw update abandoned: ${reason}.`
+          : `⚠️ OpenClaw update failed: ${reason}.${running ? ` The gateway is running ${running}.` : ""}`;
       break;
     case "skipped":
       headline = `ℹ️ OpenClaw update skipped: ${reason}.`;
@@ -136,6 +147,9 @@ export function renderUpdateRunReport(
   }
   for (const step of run.steps.filter((item) => item.status === "failed").slice(-3)) {
     lines.push(bounded(`Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`, 300));
+  }
+  for (const message of updateRunWarningMessages(run.steps).slice(-3)) {
+    lines.push(`Warning: ${bounded(message, 500)}`);
   }
   const verification: string[] = [];
   const facts = run.verification;
@@ -216,13 +230,7 @@ export function updateRunReportInputFromResult(result: UpdateRunResult): ReportI
     verification: {},
     repair: [],
     downtimeMs: null,
-    steps: result.steps.map((step) => ({
-      step: step.name,
-      status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
-      ...(step.exitCode !== 0
-        ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-        : {}),
-    })),
+    steps: result.steps.flatMap(updateRunStepsFromResultStep),
   };
 }
 

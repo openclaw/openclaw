@@ -215,11 +215,14 @@ describe("sidebar session live-run projection", () => {
     },
   );
 
-  it("carries active cloud disk pressure into the existing sidebar badge model", () => {
+  it("carries active cloud identity, machine facts, and disk pressure into the sidebar", () => {
     const projected = projectSidebarSession({
       placement: {
         state: "active",
         environmentId: "environment-disk",
+        providerId: "machine0",
+        profileId: "team",
+        machine: { class: "medium", os: "linux", cpu: 4, memoryGb: 16 },
         generation: 1,
         activeOwnerEpoch: 2,
         workspaceBaseManifestRef: "manifest-disk",
@@ -239,6 +242,9 @@ describe("sidebar session live-run projection", () => {
 
     expect(projected).toMatchObject({
       placementState: "active",
+      placementProviderId: "machine0",
+      placementProfileId: "team",
+      placementMachine: { class: "medium", os: "linux", cpu: 4, memoryGb: 16 },
       diskSpaceStatus: "critical",
     });
   });

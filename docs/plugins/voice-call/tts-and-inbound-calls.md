@@ -147,7 +147,7 @@ consult path, and TTS playback. If no route matches, the global Voice Call
 config is used. Outbound calls do not use `numbers`; pass the outbound
 target, message, and session explicitly when initiating the call.
 
-Route overrides currently support:
+Route overrides support exactly these fields:
 
 - `inboundGreeting`
 - `tts`

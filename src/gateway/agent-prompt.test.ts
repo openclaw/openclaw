@@ -1,8 +1,8 @@
+import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 /**
  * Gateway agent prompt RPC regression tests.
  */
 import { describe, expect, it } from "vitest";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { buildHistoryContextFromEntries } from "../auto-reply/reply/history.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { buildAgentMessageFromConversationEntries } from "./agent-prompt.js";

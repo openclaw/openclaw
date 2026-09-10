@@ -2,12 +2,9 @@ import { toUSVString } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isIncognitoOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -35,7 +32,6 @@ import {
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
 import type {
-  LifecycleArtifactCleanupPlan,
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -93,79 +89,6 @@ export function shouldRemoveSessionEntry(
     return false;
   }
   return removal.expectedUpdatedAt === undefined || entry.updatedAt === removal.expectedUpdatedAt;
-}
-
-function sessionKeySegmentStartsWith(sessionKey: string, prefix: string): boolean {
-  const firstSeparator = sessionKey.indexOf(":");
-  if (firstSeparator < 0) {
-    return sessionKey.startsWith(prefix);
-  }
-  const secondSeparator = sessionKey.indexOf(":", firstSeparator + 1);
-  const sessionSegment = secondSeparator < 0 ? sessionKey : sessionKey.slice(secondSeparator + 1);
-  return sessionSegment.startsWith(prefix);
-}
-
-function sessionKeyBelongsToAgent(sessionKey: string, agentId: string | undefined): boolean {
-  if (agentId === undefined) {
-    return true;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  return parsed !== null && normalizeAgentId(parsed.agentId) === normalizeAgentId(agentId);
-}
-
-function readSessionTranscriptUpdatedAt(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-): number | undefined {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number | bigint>("created_at").as("updated_at"))
-      .where("session_id", "=", sessionId),
-  );
-  if (row?.updated_at === null || row?.updated_at === undefined) {
-    return undefined;
-  }
-  return sqliteNumber(row.updated_at);
-}
-
-function sqliteTranscriptStateIsReclaimable(params: {
-  database: OpenClawAgentDatabase;
-  sessionUpdatedAt?: number;
-  sessionId: string;
-  nowMs: number;
-  orphanTranscriptMinAgeMs: number;
-}): boolean {
-  const transcriptUpdatedAt = readSessionTranscriptUpdatedAt(params.database, params.sessionId);
-  const updatedAt =
-    params.sessionUpdatedAt === undefined
-      ? transcriptUpdatedAt
-      : Math.max(params.sessionUpdatedAt, transcriptUpdatedAt ?? params.sessionUpdatedAt);
-  return updatedAt === undefined || params.nowMs - updatedAt >= params.orphanTranscriptMinAgeMs;
-}
-
-function sqliteTranscriptStateHasMarker(params: {
-  database: OpenClawAgentDatabase;
-  sessionId: string;
-  transcriptContentMarker: string;
-}): boolean {
-  const db = getSessionKysely(params.database.db);
-  const rows = iterateSqliteQuerySync(
-    params.database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("event_json")
-      .where("session_id", "=", params.sessionId)
-      .orderBy("seq", "asc"),
-  );
-  // Consume every row so late SQLite errors still abort cleanup planning.
-  let hasMarker = false;
-  for (const row of rows) {
-    hasMarker ||= row.event_json.includes(params.transcriptContentMarker);
-  }
-  return hasMarker;
 }
 
 /** Session ids protected by live node state. */
@@ -536,187 +459,6 @@ function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId
     db.deleteFrom("session_windows").where("session_id", "=", sessionId),
   );
   return Number(deleted.numAffectedRows ?? 0n) > 0;
-}
-
-// Plans orphan cleanup without file writes or row deletion; finalization
-// handles archive durability before removing rows.
-function planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
-  agentId?: string;
-  archiveRemovedEntryTranscripts: boolean;
-  archiveDirectory: string;
-  database: OpenClawAgentDatabase;
-  excludedSessionIds?: ReadonlySet<string>;
-  pluginOwnerId?: string;
-  referencedSessionIds: ReadonlySet<string>;
-  transcriptContentMarker: string;
-  orphanTranscriptMinAgeMs: number;
-  nowMs: number;
-}): SessionStateDeletePlan[] {
-  const db = getSessionKysely(params.database.db);
-  const rows = executeSqliteQuerySync(
-    params.database.db,
-    db
-      .selectFrom("session_windows")
-      .select(["session_id", "session_key", "plugin_owner_id"])
-      .orderBy("session_id", "asc"),
-  ).rows;
-
-  const deletePlans: SessionStateDeletePlan[] = [];
-  // Orphan transcript state is represented by a historical window that is no
-  // longer the node's current id. The marker scopes cleanup to this lifecycle.
-  for (const row of rows) {
-    if (
-      !sessionKeyBelongsToAgent(row.session_key, params.agentId) ||
-      params.referencedSessionIds.has(row.session_id) ||
-      params.excludedSessionIds?.has(row.session_id) ||
-      (params.pluginOwnerId && row.plugin_owner_id && row.plugin_owner_id !== params.pluginOwnerId)
-    ) {
-      continue;
-    }
-    if (
-      !sqliteTranscriptStateIsReclaimable({
-        database: params.database,
-        sessionId: row.session_id,
-        nowMs: params.nowMs,
-        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-      }) ||
-      !sqliteTranscriptStateHasMarker({
-        database: params.database,
-        sessionId: row.session_id,
-        transcriptContentMarker: params.transcriptContentMarker,
-      })
-    ) {
-      continue;
-    }
-    const plan = planSessionStateDeleteIfUnreferenced({
-      archiveTranscript: params.archiveRemovedEntryTranscripts,
-      archiveDirectory: params.archiveDirectory,
-      database: params.database,
-      reason: "deleted",
-      referencedSessionIds: params.referencedSessionIds,
-      sessionId: row.session_id,
-    });
-    if (plan) {
-      deletePlans.push(plan);
-    }
-  }
-  return deletePlans;
-}
-
-export function planSessionLifecycleArtifactCleanup(
-  database: OpenClawAgentDatabase,
-  params: {
-    agentId?: string;
-    archiveRemovedEntryTranscripts: boolean;
-    archiveDirectory: string;
-    pluginOwnerId?: string;
-    sessionKeySegmentPrefix: string;
-    transcriptContentMarker: string;
-    orphanTranscriptMinAgeMs: number;
-    nowMs: number;
-  },
-): LifecycleArtifactCleanupPlan {
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["entry_json", "session_key", "current_session_id", "updated_at"])
-      .orderBy("session_key", "asc"),
-  ).rows;
-
-  const removedSessionIds = new Set<string>();
-  const entries: LifecycleArtifactCleanupPlan["entries"] = [];
-  const projectedStore = readSessionEntryStore(database);
-  const foreignOwnedSessionIds = params.pluginOwnerId
-    ? new Set(
-        executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("session_windows")
-            .select("session_id")
-            .where("plugin_owner_id", "is not", null)
-            .where("plugin_owner_id", "!=", params.pluginOwnerId),
-        ).rows.map((row) => row.session_id),
-      )
-    : undefined;
-  for (const row of rows) {
-    if (
-      !sessionKeyBelongsToAgent(row.session_key, params.agentId) ||
-      !sessionKeySegmentStartsWith(row.session_key, params.sessionKeySegmentPrefix)
-    ) {
-      continue;
-    }
-    const entry = projectedStore[row.session_key];
-    const sessionIds = uniqueStrings([
-      row.current_session_id,
-      ...(entry ? collectSessionStateIdsForEntry(entry) : []),
-    ]);
-    // Window ownership survives placeholder nodes and ownerless row projections; preserve
-    // the entire node when any referenced generation belongs to another plugin.
-    if (
-      (params.pluginOwnerId &&
-        entry?.pluginOwnerId &&
-        entry.pluginOwnerId !== params.pluginOwnerId) ||
-      sessionIds.some((sessionId) => foreignOwnedSessionIds?.has(sessionId))
-    ) {
-      continue;
-    }
-    if (
-      !sqliteTranscriptStateIsReclaimable({
-        database,
-        // Admission updates the node even when a run has no event yet or reuses old events.
-        sessionUpdatedAt: sqliteNumber(row.updated_at),
-        sessionId: row.current_session_id,
-        nowMs: params.nowMs,
-        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-      })
-    ) {
-      continue;
-    }
-    for (const sessionId of sessionIds) {
-      removedSessionIds.add(sessionId);
-    }
-    entries.push({
-      expectedEntry: entry ? cloneSessionEntry(entry) : undefined,
-      sessionKey: row.session_key,
-    });
-    delete projectedStore[row.session_key];
-  }
-
-  const referencedSessionIds = collectProjectedReferencedSessionIds({
-    database,
-    excludedSessionKeys: entries.map((entry) => entry.sessionKey),
-    projectedStore,
-  });
-  const deletePlans: SessionStateDeletePlan[] = [];
-  for (const sessionId of removedSessionIds) {
-    const plan = planSessionStateDeleteIfUnreferenced({
-      archiveTranscript: params.archiveRemovedEntryTranscripts,
-      archiveDirectory: params.archiveDirectory,
-      database,
-      referencedSessionIds,
-      sessionId,
-    });
-    if (plan) {
-      deletePlans.push(plan);
-    }
-  }
-  deletePlans.push(
-    ...planSqliteOrphanLifecycleTranscriptStateDeletes({
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
-      archiveDirectory: params.archiveDirectory,
-      database,
-      excludedSessionIds: removedSessionIds,
-      ...(params.pluginOwnerId ? { pluginOwnerId: params.pluginOwnerId } : {}),
-      referencedSessionIds,
-      transcriptContentMarker: params.transcriptContentMarker,
-      orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-      nowMs: params.nowMs,
-    }),
-  );
-  return { deletePlans, entries };
 }
 
 export function deletePlannedLifecycleArtifactEntries(

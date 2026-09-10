@@ -1,3 +1,4 @@
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { serializeConfigForm } from "../../lib/config-form-utils.ts";
@@ -56,6 +57,7 @@ export class InstallWizardController {
   invalidate(): void {
     const state = this.host.getState();
     if (!state) {
+      this.retireAttempt();
       return;
     }
     if (!this.ownerIsCurrent()) {
@@ -74,23 +76,39 @@ export class InstallWizardController {
   }
 
   open(result: PluginDiscoveryDetailResult): void {
-    const request = installRequestForDiscoveryDetail(result);
-    if (!request) {
+    if (!installRequestForDiscoveryDetail(result)) {
       return;
     }
-    this.clearReconnectTimeout();
-    this.attempt += 1;
+    this.prepareOpen()?.open(result);
+  }
+
+  prepareOpen() {
+    if (this.busy) {
+      return null;
+    }
+    // Detail loading belongs to the same attempt as review and installation.
+    this.close();
     this.owner = this.host.getOwner();
-    this.restartRequirement = null;
-    this.host.setState({
-      catalogId: result.plugin.id,
-      detail: result,
-      request,
-      stage: "review",
-    });
-    // Prepare the canonical form before the intentional restart so setup can resume immediately.
-    void this.host.getRuntimeConfig().ensureLoaded();
-    void this.host.getRuntimeConfig().ensureSchemaLoaded();
+    const attempt = this.attempt;
+    const isCurrent = () => attempt === this.attempt && this.ownerIsCurrent();
+    return {
+      isCurrent,
+      open: (result: PluginDiscoveryDetailResult) => {
+        const request = installRequestForDiscoveryDetail(result);
+        if (!isCurrent() || !request) {
+          return;
+        }
+        this.host.setState({
+          catalogId: result.plugin.id,
+          detail: result,
+          request,
+          stage: "review",
+        });
+        // Prepare configuration before restart so setup can resume immediately.
+        void this.host.getRuntimeConfig().ensureLoaded();
+        void this.host.getRuntimeConfig().ensureSchemaLoaded();
+      },
+    };
   }
 
   close(): void {
@@ -450,6 +468,10 @@ export class InstallWizardController {
     try {
       await this.host.requestRestart(t("pluginsPage.installWizard.restartReason"));
     } catch (error) {
+      if (!this.host.isConnected() && !(error instanceof GatewayRequestError)) {
+        // The restart can close its socket before acknowledging; reconnect owns completion.
+        return;
+      }
       this.fail(
         attempt,
         catalogId,

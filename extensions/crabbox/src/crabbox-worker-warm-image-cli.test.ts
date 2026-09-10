@@ -36,14 +36,17 @@ function pendingCapture(
 ): WarmProfileRecord {
   const now = Date.now();
   return {
-    version: 2,
+    version: 3,
     allocations: {},
     image: {
       checkpointId: "chk_last_good",
       kind: "native",
       state: "available",
       createdAtMs: now - 86_400_000,
-      lastUsedAtMs: now,
+      preparationKey: null,
+      cacheKey: null,
+      purpose: null,
+      lastDemandAtMs: now,
     },
     operation: {
       type: "capture",
@@ -111,7 +114,10 @@ describe("Crabbox warm-image CLI", () => {
           checkpointId: "chk_last_good",
           state: "available",
           createdAtMs: record.image!.createdAtMs,
-          lastUsedAtMs: record.image!.lastUsedAtMs,
+          preparationKey: null,
+          cacheKey: null,
+          purpose: null,
+          lastDemandAtMs: record.image!.lastDemandAtMs,
           runtimeIdentity: record.image!.runtimeIdentity,
           allocations: {},
           capture: {

@@ -27,7 +27,7 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "../flows/health-checks.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import {
   resolvePluginInstallRoots,
   withPluginInstallRoots,

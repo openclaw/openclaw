@@ -5,8 +5,6 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -15,8 +13,6 @@ import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 
 const states: OpenClawTestState[] = [];
 afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   for (const state of states.splice(0)) {
     await state.cleanup();
   }

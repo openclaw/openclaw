@@ -41,6 +41,12 @@ const Preparation = z
 
 export type WorkerPreparationArtifacts = z.infer<typeof Artifacts>;
 export type WorkerProjectPreparationIdentity = z.infer<typeof Preparation>;
+export type WorkerProviderPreparedIntent = {
+  providerId: string;
+  profileSnapshot: WorkerProfile;
+  preparationKey?: string;
+};
+
 /** Immutable artifact facts are separate from the reserve's demand/expiry/consumption tuple. */
 export function readWorkerProjectPreparation(
   project: unknown,

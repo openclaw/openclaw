@@ -21,29 +21,6 @@ function normalizedAlias(value: string | null | undefined): string | undefined {
   return normalized || undefined;
 }
 
-function localIdentityAliases(plugin: PluginCatalogEntry): string[] {
-  const aliases = [plugin.id, plugin.packageName, plugin.clawhubPackage];
-  if (plugin.install?.source === "clawhub") {
-    aliases.push(plugin.install.packageName);
-  }
-  return aliases.flatMap((value) => {
-    const normalized = normalizedAlias(value);
-    return normalized ? [normalized] : [];
-  });
-}
-
-function indexLocalPlugins(
-  plugins: readonly PluginCatalogEntry[],
-): Map<string, PluginCatalogEntry> {
-  const index = new Map<string, PluginCatalogEntry>();
-  for (const plugin of plugins) {
-    for (const alias of localIdentityAliases(plugin)) {
-      index.set(alias, plugin);
-    }
-  }
-  return index;
-}
-
 function indexClawHubPlugins(
   plugins: readonly PluginCatalogEntry[],
 ): Map<string, PluginCatalogEntry> {
@@ -217,7 +194,8 @@ export function joinClawHubPluginCatalog(params: {
     .map((plugin) =>
       projectLocalDiscoveryEntry(plugin, params.local.mutationAllowed, params.includeBundledOnly),
     );
-  return [...localOnly, ...remote];
+  const joined = [...localOnly, ...remote];
+  return params.intent === "all" && !query ? joined.toSorted(compareOfficialDownloads) : joined;
 }
 
 function localDiscoveryCategories(plugin: PluginCatalogEntry): string[] {
@@ -256,6 +234,14 @@ function projectLocalDiscoveryEntry(
   };
 }
 
+function compareOfficialDownloads(left: PluginDiscoveryEntry, right: PluginDiscoveryEntry): number {
+  if (left.catalog.official !== right.catalog.official) {
+    return left.catalog.official ? -1 : 1;
+  }
+  const downloadOrder = (right.catalog.downloads ?? 0) - (left.catalog.downloads ?? 0);
+  return downloadOrder || left.catalog.name.localeCompare(right.catalog.name);
+}
+
 export function findLocalPluginByIdentity(
   local: PluginsListResult,
   identity: string,
@@ -263,7 +249,7 @@ export function findLocalPluginByIdentity(
 ): PluginCatalogEntry | undefined {
   return origin === "local"
     ? local.plugins.find((plugin) => plugin.id === identity)
-    : indexLocalPlugins(local.plugins).get(normalizedAlias(identity) ?? "");
+    : indexClawHubPlugins(local.plugins).get(normalizedAlias(identity) ?? "");
 }
 
 export function joinLocalPluginDetail(params: {
@@ -281,7 +267,7 @@ export function joinLocalPluginDetail(params: {
       topics: [],
       configuration: [],
       mcpServers: inspection?.declared.mcpServers ?? [],
-      skills: (inspection?.declared.skills ?? []).map((name) => ({ name })),
+      skills: (inspection?.components.skills ?? []).map((name) => ({ name })),
       versions: [],
     },
   };

@@ -81,7 +81,9 @@ import {
   log,
   resolveOpenAIClientBaseUrl,
 } from "./openai-transport-shared.js";
+import { resolveProviderTransportTurnState } from "./provider-transport-turn-state.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
+import { hasOpencodeSessionHeader } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
@@ -125,36 +127,6 @@ function combineWebSocketTimeoutSignal(
     return signal;
   }
   return AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, resolvedTimeoutMs))]);
-}
-
-function resolveProviderTransportTurnState(
-  model: Model,
-  params: {
-    sessionId?: string;
-    turnId: string;
-    attempt: number;
-    transport: "stream" | "websocket";
-  },
-) {
-  const normalizedProvider = model.provider.trim().toLowerCase();
-  const allowRuntimePluginLoad =
-    normalizedProvider === "openai" ||
-    normalizedProvider === "azure-openai" ||
-    normalizedProvider === "azure-openai-responses";
-  return getAiTransportHost().plugin.resolveTransportTurnState({
-    provider: model.provider,
-    modelId: model.id,
-    allowRuntimePluginLoad,
-    context: {
-      provider: model.provider,
-      modelId: model.id,
-      model,
-      sessionId: params.sessionId,
-      turnId: params.turnId,
-      attempt: params.attempt,
-      transport: params.transport,
-    },
-  });
 }
 
 export function createOpenAIResponsesClient(
@@ -224,12 +196,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           transport: websocketMode ? "websocket" : "stream",
         });
         const websocketSessionPolicy = websocketMode ? turnState?.websocket : undefined;
+        const hasExplicitOpencodeSession = hasOpencodeSessionHeader(model, options);
         const websocketHeaders = websocketMode
           ? buildOpenAIClientHeaders(
               model,
               context,
               options?.headers,
-              websocketSessionPolicy?.headers,
+              hasExplicitOpencodeSession ? undefined : websocketSessionPolicy?.headers,
               options?.sessionId,
               options?.cacheRetention,
             )
@@ -238,7 +211,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           model,
           context,
           options?.headers,
-          turnState?.headers,
+          hasExplicitOpencodeSession ? undefined : turnState?.headers,
           options?.sessionId,
           options?.cacheRetention,
         );
@@ -659,7 +632,7 @@ function resolveAzureDeploymentName(model: Model): string {
   });
 }
 
-export function createAzureOpenAIClient(
+function createAzureOpenAIClient(
   model: Model,
   apiKey: string,
   defaultHeaders: Record<string, string>,

@@ -9,12 +9,12 @@ read_when:
 ---
 
 OpenClaw converts outbound replies into native voice messages on Feishu, Matrix,
-Telegram, and WhatsApp; audio attachments everywhere else; and PCM/Ulaw streams
-for telephony and Talk.
+Telegram, and WhatsApp. Every other channel receives an audio attachment.
+Telephony and Talk receive PCM or Ulaw streams.
 
 TTS is the speech-output half of [Talk](/nodes/talk)'s `stt-tts` mode (`talk.speak` calls this
 same synthesis path). Provider-native `realtime` Talk sessions synthesize
-speech inside the realtime provider instead; `transcription` sessions never
+speech inside the realtime provider instead. `transcription` sessions never
 synthesize an assistant voice reply.
 
 This page is an index. Text-to-speech is documented on seven pages, one per
@@ -63,7 +63,7 @@ resolves. Each entry points at the page that now holds the content.
 The previous single-page version also minted an anchor for every step, tab,
 accordion, and field. Those anchors are preserved here so that any deep link
 into the old page still resolves. Nine accordion anchors lost a `-1` suffix
-when the tab that shared their slug moved to a different page; the stub below
+when the tab that shared their slug moved to a different page. The stub below
 keeps the old id and points at the new one.
 
 **Quickstart**
@@ -215,6 +215,7 @@ keeps the old id and points at the new one.
 - [ElevenLabs provider](/providers/elevenlabs)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
+- [Fish Audio provider](/providers/fish-audio)
 - [Gradium](/providers/gradium)
 - [Inworld provider](/providers/inworld)
 - [Inworld TTS API](https://docs.inworld.ai/tts/tts)

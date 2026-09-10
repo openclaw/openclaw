@@ -3,12 +3,8 @@ import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
-import {
-  CRABBOX_OS_LABELS,
-  CRABBOX_WORKER_PROVIDER_ID,
-  findCrabboxBinary,
-} from "./crabbox-worker-profile.js";
+import * as managedBinary from "./crabbox-managed-binary.js";
+import { CRABBOX_WORKER_PROVIDER_ID, findCrabboxBinary } from "./crabbox-worker-profile.js";
 import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -25,34 +21,6 @@ type CrabboxDoctorRegistrationHost = {
   readonly registerHealthCheck: (check: HealthCheck) => void;
 };
 
-function finding(params: {
-  profileId: string;
-  message: string;
-  fixHint: string;
-  binary?: string;
-  severity?: "info" | "warning";
-  minimumVersion?: string;
-}): HealthFinding {
-  return {
-    checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
-    severity: params.severity ?? "warning",
-    source: "crabbox",
-    message: `Cloud worker profile "${params.profileId}" ${params.message}`,
-    ...(params.binary ? { path: params.binary } : {}),
-    ocPath: `cloudWorkers.profiles.${params.profileId}.settings.binary`,
-    target: params.profileId,
-    requirement: `an executable Crabbox ${params.minimumVersion ?? "0.41.1"} or newer binary`,
-    fixHint: params.fixHint,
-  };
-}
-
-function repairHint(profileId: string, explicitBinary?: string, minimumVersion = "0.41.1"): string {
-  const configPath = `cloudWorkers.profiles.${profileId}.settings.binary`;
-  return explicitBinary
-    ? `Install Crabbox ${minimumVersion} or newer at ${explicitBinary}, or set ${configPath} to an executable absolute path, then rerun \`openclaw doctor --json\`.`
-    : `Install Crabbox ${minimumVersion} or newer on the Gateway user's PATH, or set ${configPath} to an executable absolute path, then rerun \`openclaw doctor --json\`.`;
-}
-
 function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck {
   return {
     id: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
@@ -66,68 +34,86 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
       if (profiles.length === 0) {
         return [];
       }
-      const probes = new Map<string, ReturnType<typeof doctorRuntime.probeCrabboxVersion>>();
+      const probes = new Map<string, ReturnType<typeof managedBinary.probeCrabboxVersion>>();
+      const probe = (binary: string) => {
+        let pending = probes.get(binary);
+        if (!pending) {
+          pending = managedBinary.probeCrabboxVersion(binary);
+          probes.set(binary, pending);
+        }
+        return pending;
+      };
       const findings: HealthFinding[] = [];
       for (const [profileId, profile] of profiles) {
-        const settings = readRecord(profile.settings);
-        const target = nonEmptyString(settings?.target);
-        const nonLinux = target === "windows/wsl2" || target === "macos";
-        const targetLabel = nonLinux ? CRABBOX_OS_LABELS[target] : undefined;
-        const minimumVersion = nonLinux ? doctorRuntime.CRABBOX_NON_LINUX_MIN_VERSION : "0.41.1";
-        const explicitBinary = nonEmptyString(settings?.binary);
+        const explicitBinary = nonEmptyString(readRecord(profile.settings)?.binary);
         const binary = findCrabboxBinary({
           ...(explicitBinary ? { explicit: explicitBinary } : {}),
           openclawRoot,
           pathEnv: ctx.env?.PATH ?? process.env.PATH,
         });
-        if (!binary) {
-          findings.push(
-            finding({
-              profileId,
-              minimumVersion,
-              ...(explicitBinary ? { binary: explicitBinary } : {}),
-              message: explicitBinary
-                ? `cannot use Crabbox because ${explicitBinary} is not an executable file.`
-                : "cannot resolve an executable Crabbox binary from the Gateway user's PATH.",
-              fixHint: repairHint(profileId, explicitBinary, minimumVersion),
-            }),
-          );
+        const result = binary ? await probe(binary) : undefined;
+        if (result?.status === "supported") {
           continue;
         }
-        let probe = probes.get(binary);
-        if (!probe) {
-          probe = doctorRuntime.probeCrabboxVersion(binary);
-          probes.set(binary, probe);
+        let managedPath: string;
+        try {
+          managedPath = managedBinary.resolveManagedCrabboxBinaryPath(ctx.env);
+        } catch (error) {
+          findings.push({
+            checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
+            severity: "warning",
+            source: "crabbox",
+            target: profileId,
+            message: error instanceof Error ? error.message : "Crabbox host is unsupported",
+          });
+          continue;
         }
-        const result = await probe;
-        if (
-          result.status !== "indeterminate" &&
-          (result.status === "outdated" ||
-            (nonLinux && !doctorRuntime.supportsCrabboxNonLinuxTargets(result.version)))
-        ) {
-          findings.push(
-            finding({
-              profileId,
-              minimumVersion,
-              binary,
-              message: `uses Crabbox ${result.version}, but ${targetLabel ? `${targetLabel} ` : ""}cloud workers require Crabbox ${minimumVersion} or newer.`,
-              fixHint: repairHint(profileId, explicitBinary, minimumVersion),
-            }),
-          );
-        } else if (result.status === "indeterminate") {
-          findings.push(
-            finding({
-              profileId,
-              minimumVersion,
-              binary,
-              severity: nonLinux ? "warning" : "info",
-              message: `has an executable Crabbox binary, but Doctor could not determine its version: ${result.reason}.`,
-              fixHint: `Run \`${binary} --version\` and confirm it reports Crabbox ${minimumVersion} or newer${targetLabel ? ` for ${targetLabel} cloud workers` : ""}, then rerun \`openclaw doctor --json --severity-min info\`.`,
-            }),
-          );
+        const installed = findCrabboxBinary({ explicit: managedPath, openclawRoot });
+        if (installed && (await probe(installed)).status === "supported") {
+          continue;
         }
+        const reason = !result
+          ? "has no executable Crabbox binary"
+          : result.status === "outdated"
+            ? `uses outdated Crabbox ${result.version}`
+            : `could not determine its Crabbox version: ${result.reason}`;
+        findings.push({
+          checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
+          severity: "warning",
+          source: "crabbox",
+          message: `Cloud worker profile "${profileId}" ${reason}. OpenClaw will install its managed Crabbox before use.`,
+          ...((binary ?? explicitBinary) ? { path: binary ?? explicitBinary } : {}),
+          ocPath: `cloudWorkers.profiles.${profileId}.settings.binary`,
+          target: profileId,
+          requirement: `Crabbox ${managedBinary.CRABBOX_MIN_VERSION} or newer`,
+          fixHint: `Run \`openclaw doctor --fix\` to install the managed Crabbox now, or provision Crabbox ${managedBinary.CRABBOX_MIN_VERSION} or newer using \`cloudWorkers.profiles.${profileId}.settings.binary\`. The existing executable and profile configuration are preserved.`,
+        });
       }
       return findings;
+    },
+    async repair(ctx, findings) {
+      if (findings.length === 0 || ctx.dryRun) {
+        return { status: "skipped", changes: [] };
+      }
+      try {
+        const binary = await managedBinary.ensureManagedCrabboxBinary({
+          binary: managedBinary.resolveManagedCrabboxBinaryPath(ctx.env),
+          env: ctx.env,
+        });
+        return {
+          status: "repaired",
+          changes: [`Installed managed Crabbox at ${binary}`],
+          effects: [{ kind: "package", action: "install", target: binary }],
+        };
+      } catch (error) {
+        return {
+          status: "failed",
+          changes: [],
+          warnings: [
+            error instanceof Error ? error.message : "Managed Crabbox installation failed",
+          ],
+        };
+      }
     },
   };
 }
@@ -148,6 +134,14 @@ export function registerCrabboxWorkerProviderDoctorChecks(
       async detect(ctx) {
         const findings: HealthFinding[] = [];
         for (const image of listCrabboxWarmImages(ctx.env)) {
+          const facts = [
+            image.profileId,
+            image.backend,
+            image.machineClass,
+            image.os,
+            image.projectLabel,
+          ].filter(Boolean);
+          const display = facts.length ? ` (${facts.join(" · ")})` : "";
           const details = {
             checkId: CRABBOX_WARM_IMAGES_CHECK_ID,
             severity: "warning",
@@ -160,10 +154,10 @@ export function registerCrabboxWorkerProviderDoctorChecks(
               ...details,
               severity: uncertain || image.capture.stale ? "warning" : "info",
               message: uncertain
-                ? `Warm-image capture ${image.capture.selector} is paused; its provider outcome requires manual reconciliation.`
+                ? `Warm-image capture ${image.capture.selector}${display} is paused; its provider outcome requires manual reconciliation.`
                 : image.capture.stale
-                  ? `Warm-image capture ${image.capture.selector} is taking longer than usual.`
-                  : `Warm-image capture ${image.capture.selector} is in progress.`,
+                  ? `Warm-image capture ${image.capture.selector}${display} is taking longer than usual.`
+                  : `Warm-image capture ${image.capture.selector}${display} is in progress.`,
               fixHint: uncertain
                 ? crabboxWarmImageRecoveryHint(image.capture.selector)
                 : CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -172,7 +166,7 @@ export function registerCrabboxWorkerProviderDoctorChecks(
           if (image.retirement) {
             findings.push({
               ...details,
-              message: `Warm-image checkpoint ${image.retirement.checkpointId} is still awaiting deletion.`,
+              message: `Warm-image checkpoint ${image.retirement.checkpointId}${display} is still awaiting deletion.`,
               fixHint:
                 "Cleanup retries during the next warm-image capture or worker teardown. Inspect `openclaw crabbox warm-images --json` and resolve provider deletion errors if it remains pending.",
             });

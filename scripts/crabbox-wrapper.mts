@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Resolves and delegates to the repo-local or PATH crabbox binary.
+// Resolves a supported Crabbox binary through the bundled plugin before delegation.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   accessSync,
@@ -25,6 +25,7 @@ import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { ensureManagedCrabboxBinary } from "../extensions/crabbox/cli-runtime-api.js";
 import { crabboxProviderChain, normalizeCrabboxWorkload } from "./crabbox-routing-policy.mts";
 import {
   prepareCrabboxSourceCapsule,
@@ -69,11 +70,18 @@ const CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS = 20_000;
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
 const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
-const binary =
+const candidateBinary =
   repoLocal ??
   pathLocal ??
   resolveGitCommonCrabboxBinary(process.env, process.platform) ??
   "crabbox";
+let binary: string;
+try {
+  binary = await ensureManagedCrabboxBinary({ binary: candidateBinary });
+} catch (error) {
+  console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}
 const args = process.argv.slice(2);
 
 if (args[0] === "--") {
@@ -295,9 +303,6 @@ const awsMacosPackageManagerScriptTargets = new Set([
   "scripts/package-mac-dist.sh",
   "scripts/restart-mac.sh",
 ]);
-const minimumBlacksmithCrabboxVersion = [0, 48, 0];
-const minimumSourceCapsuleCrabboxVersion = [0, 37, 0];
-const minimumBrokeredDaytonaCrabboxVersion = [0, 40, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
   "while",
@@ -487,88 +492,6 @@ function probeCrabboxMetadata(command: string, commandArgs: string[]) {
     return first;
   }
   return checkedOutput(command, commandArgs, CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS);
-}
-
-function supportsPreparedTestboxArtifacts() {
-  const metadata = checkedOutput(binary, ["providers", "describe", "blacksmith-testbox", "--json"]);
-  if (metadata.status !== 0) {
-    return false;
-  }
-  try {
-    const description: unknown = JSON.parse(metadata.stdout);
-    if (
-      !isRecord(description) ||
-      description.schemaVersion !== 2 ||
-      !isRecord(description.provider) ||
-      description.provider.canonical !== "blacksmith-testbox" ||
-      !isRecord(description.capabilities)
-    ) {
-      return false;
-    }
-    const features = description.capabilities.features;
-    return (
-      Array.isArray(features) &&
-      features.every((feature) => typeof feature === "string") &&
-      features.includes("prepared-artifact-workspace")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function parseCrabboxVersion(value: string) {
-  const match = value.match(/\bv?(\d+)\.(\d+)\.(\d+)(?:-([^\s+]+))?(?:\+[^\s]+)?\b/u);
-  if (!match) {
-    return null;
-  }
-  const major = parseVersionTuplePart(match[1] ?? "");
-  const minor = parseVersionTuplePart(match[2] ?? "");
-  const patch = parseVersionTuplePart(match[3] ?? "");
-  if (major === null || minor === null || patch === null) {
-    return null;
-  }
-  return {
-    tuple: [major, minor, patch],
-    suffix: match[4] ?? "",
-  };
-}
-
-function parseVersionTuplePart(value: string) {
-  if (!/^\d+$/u.test(value)) {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-function compareVersionTuples(left: readonly number[], right: readonly number[]) {
-  for (let index = 0; index < 3; index += 1) {
-    const diff = (left[index] ?? 0) - (right[index] ?? 0);
-    if (diff !== 0) {
-      return diff;
-    }
-  }
-  return 0;
-}
-
-function formatVersionTuple(version: readonly number[]) {
-  return version.join(".");
-}
-
-function isPostReleaseDescribeSuffix(suffix: string) {
-  return /^\d+-g[0-9a-f]+(?:-dirty)?$/iu.test(suffix);
-}
-
-function satisfiesMinimumCrabboxVersion(version: string, minimum: number[]) {
-  const parsed = parseCrabboxVersion(version);
-  if (!parsed) {
-    return false;
-  }
-  const comparison = compareVersionTuples(parsed.tuple, minimum);
-  if (comparison !== 0) {
-    return comparison > 0;
-  }
-  return !parsed.suffix || isPostReleaseDescribeSuffix(parsed.suffix);
 }
 
 function gitOutput(commandArgs: string[], extraEnv: ProcessEnv = {}) {
@@ -765,11 +688,7 @@ function commandProvider(commandArgsInput: string[]) {
   return optionValue(commandArgsInput, "--provider");
 }
 
-function selectedProvider(
-  commandArgs: string[],
-  advertisedProviders: string[] = [],
-  versionText = "",
-) {
+function selectedProvider(commandArgs: string[], advertisedProviders: string[] = []) {
   const targetContext = effectiveTargetContext(commandArgs);
   if (workloadOption === null) {
     return {
@@ -866,7 +785,7 @@ function selectedProvider(
   const readiness = new Map<string, ProviderReadiness>();
   let selectedProviderName = "";
   for (const candidate of chain) {
-    const status = crabboxProviderReadiness(candidate, versionText, targetContext);
+    const status = crabboxProviderReadiness(candidate, targetContext);
     readiness.set(candidate, status);
     if (status.ready) {
       selectedProviderName = candidate;
@@ -903,28 +822,8 @@ function requestedWorkload(commandArgs: string[]) {
   return normalizeCrabboxWorkload(raw);
 }
 
-function crabboxProviderReadiness(provider: string, version: string, context: TargetContext) {
+function crabboxProviderReadiness(provider: string, context: TargetContext) {
   const canonicalProvider = canonicalProviderName(provider);
-  if (
-    canonicalProvider === "blacksmith-testbox" &&
-    !satisfiesMinimumCrabboxVersion(version, minimumBlacksmithCrabboxVersion)
-  ) {
-    return {
-      ready: false,
-      reason: `requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for Blacksmith Testbox`,
-      recovery: "update Crabbox, then retry",
-    };
-  }
-  if (
-    canonicalProvider === "daytona" &&
-    !satisfiesMinimumCrabboxVersion(version, minimumBrokeredDaytonaCrabboxVersion)
-  ) {
-    return {
-      ready: false,
-      reason: `requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered Daytona`,
-      recovery: "update Crabbox, then retry",
-    };
-  }
   const doctorArgs = ["doctor", "--provider", canonicalProvider];
   if (context.target) {
     doctorArgs.push("--target", context.target);
@@ -1049,30 +948,6 @@ function directCloudOverrideEnabled(providerName: string) {
   );
 }
 
-function enforceBrokeredDaytonaVersion(
-  commandArgs: string[],
-  providerName: string,
-  versionText: string,
-  explicitProviderRequested: boolean | undefined,
-) {
-  if (
-    canonicalProviderName(providerName) !== "daytona" ||
-    !shouldRequireBrokeredCloud(commandArgs, providerName, explicitProviderRequested) ||
-    satisfiesMinimumCrabboxVersion(versionText, minimumBrokeredDaytonaCrabboxVersion)
-  ) {
-    return;
-  }
-  console.error(
-    [
-      `[crabbox] provider=daytona requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered execution.`,
-      `[crabbox] selected binary reported version=${versionText || "unknown"}.`,
-      "[crabbox] update Crabbox before brokered Daytona execution.",
-      "[crabbox] direct Daytona debugging requires an original `--provider daytona`, no `--workload`, and OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1.",
-    ].join("\n"),
-  );
-  process.exit(2);
-}
-
 function enforceBrokeredCloud(
   commandArgs: string[],
   provider: string,
@@ -1085,7 +960,7 @@ function enforceBrokeredCloud(
   const canonicalProvider = canonicalProviderName(provider);
   const readiness =
     routedReadiness ??
-    crabboxProviderReadiness(canonicalProvider, version.text, effectiveTargetContext(commandArgs));
+    crabboxProviderReadiness(canonicalProvider, effectiveTargetContext(commandArgs));
   if ("brokerAuthFailure" in readiness && readiness.brokerAuthFailure) {
     const instructions = [
       `[crabbox] provider=${canonicalProvider} requires managed Crabbox broker authentication for OpenClaw proof.`,
@@ -3887,7 +3762,7 @@ if (args[userArgStart] === "--") {
   args.splice(userArgStart, 1);
 }
 
-const providerSelection = selectedProvider(args, providers, version.text);
+const providerSelection = selectedProvider(args, providers);
 if (providerSelection.error) {
   console.error(`[crabbox] ${providerSelection.error}`);
   if (providerSelection.readiness) {
@@ -3928,7 +3803,7 @@ if (provider && !isProviderAdvertised(provider, providers)) {
     process.exit(2);
   }
   console.error(
-    `[crabbox] selected binary does not advertise provider ${provider}; update Crabbox or choose a supported provider`,
+    `[crabbox] selected binary does not advertise provider ${provider}; choose a supported provider`,
   );
   process.exit(2);
 }
@@ -3961,41 +3836,9 @@ if (canonicalProvider === "blacksmith-testbox") {
     );
     process.exit(2);
   }
-
-  if (!satisfiesMinimumCrabboxVersion(version.text, minimumBlacksmithCrabboxVersion)) {
-    console.error(
-      [
-        `[crabbox] provider=blacksmith-testbox requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for current Testbox sync, queue, and cleanup behavior.`,
-        `[crabbox] selected binary reported version=${version.text || "unknown"}.`,
-        "[crabbox] if using ../crabbox, rebuild it: version=$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//') && go build -C ../crabbox -trimpath -ldflags \"-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}\" -o bin/crabbox ./cmd/crabbox",
-      ].join("\n"),
-    );
-    process.exit(2);
-  }
-  const artifactRun =
-    normalizedArgs[0] === "run" &&
-    (hasOption(normalizedArgs, "--artifact-glob") ||
-      hasOption(normalizedArgs, "--require-artifact"));
-  if (artifactRun && !supportsPreparedTestboxArtifacts()) {
-    console.error(
-      "[crabbox] Testbox artifact collection requires Crabbox's prepared-artifact-workspace capability. Update Crabbox and retry; refusing to collect from the disposable sync checkout.",
-    );
-    process.exit(2);
-  }
 }
 
 const explicitProviderRequested = Boolean(commandProviderValue);
-enforceBrokeredDaytonaVersion(normalizedArgs, provider, version.text, explicitProviderRequested);
-if (
-  needsSourceCapsule(normalizedArgs, provider) &&
-  !satisfiesMinimumCrabboxVersion(version.text, minimumSourceCapsuleCrabboxVersion)
-) {
-  console.error(
-    `[crabbox] source capsule requires Crabbox >= ${formatVersionTuple(minimumSourceCapsuleCrabboxVersion)} for sync-plan --json; update Crabbox and rerun.`,
-  );
-  console.error(`[crabbox] selected binary reported version=${version.text || "unknown"}.`);
-  process.exit(2);
-}
 enforceBrokeredCloud(
   normalizedArgs,
   provider,

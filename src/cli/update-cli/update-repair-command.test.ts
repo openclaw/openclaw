@@ -172,22 +172,25 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it("exits successfully when the Gateway already reconciled the abandoned row", async () => {
-    const run = seedRun();
-    finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
+  it.each(["abandoned", "legacy-driver-expired"])(
+    "exits successfully when the Gateway already reconciled the %s row",
+    async (reason) => {
+      const run = seedRun();
+      finishUpdateRun(run.runId, { status: "failed", reason });
 
-    await updateRepairCommand({});
+      await updateRepairCommand({});
 
-    expect(getUpdateRun(run.runId)).toMatchObject({
-      status: "failed",
-      reason: "abandoned",
-      steps: expect.arrayContaining([
-        expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
-      ]),
-    });
-    expect(mocks.finalize).not.toHaveBeenCalled();
-    expect(mocks.runtime.log).toHaveBeenCalledWith(expect.stringContaining("already reconciled"));
-  });
+      expect(getUpdateRun(run.runId)).toMatchObject({
+        status: "failed",
+        reason,
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+        ]),
+      });
+      expect(mocks.finalize).not.toHaveBeenCalled();
+      expect(mocks.runtime.log).toHaveBeenCalledWith(expect.stringContaining("already reconciled"));
+    },
+  );
 
   it.each(["repair", "gateway"] as const)(
     "runs full repair on the next invocation after acknowledging %s reconciliation",

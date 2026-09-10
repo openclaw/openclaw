@@ -26,11 +26,11 @@ using a fixed, no-shell `command/exec` reader. The reader rejects symlinks,
 enforces file and response size limits before allocation, and stages immutable
 Gateway-managed media before channel delivery without requiring a shared or
 synchronized filesystem. Codex images are materialized directly from typed
-app-server events; saved-path-only images use the same bounded remote reader.
+app-server events. Saved-path-only images use the same bounded remote reader.
 Uploads always use the Gateway's configured channel identity and request timeout.
 
 Use canonical OpenAI model refs such as `openai/gpt-5.6-sol`. Do not configure
-legacy Codex GPT refs; put OpenAI agent auth order under `auth.order.openai`.
+legacy Codex GPT refs. Put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
 
@@ -53,7 +53,7 @@ dynamic tools routed through the app-server `item/tool/call` bridge. An
 ordinary OpenClaw sandbox or restricted tool policy disables native code mode
 unless you opt into the experimental sandbox exec-server path. Node-backed
 `remote-exec` on a paired device or cloud worker instead uses its
-placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection; ending the connection removes that Codex state and preserves the prepared project home.
+placement-owned environment without that experimental flag. A dedicated cloud worker with a completed project preparation keeps the bound workspace and `HOME` paths, so native commands can reuse setup caches. The node exec-server still uses a separate temporary `CODEX_HOME` for each connection. Ending the connection removes that Codex state and preserves the prepared project home.
 
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
@@ -68,7 +68,7 @@ terminals listed on that Codex thread before releasing the run. Other Codex
 threads and deliberately backgrounded `gateway_process` jobs are unaffected.
 If native terminal cleanup fails, the run reports an error instead of silently
 claiming cleanup succeeded. Inspect that thread's running terminals before
-starting more work. This uses Codex's terminal ownership; it does not guarantee
+starting more work. This uses Codex's terminal ownership. It does not guarantee
 cleanup of commands that deliberately detach from that ownership.
 
 With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
@@ -76,7 +76,7 @@ Codex also receives `node_exec` when a connected node supports `system.run`.
 Offline paired devices and devices without shell support do not expose this tool.
 When a node is configured, that binding must resolve to an eligible node. Native shell
 remains on the Codex app-server host and workspace
-(Gateway-local for the default stdio deployment); `node_exec` selects the sole
+(Gateway-local for the default stdio deployment). `node_exec` selects the sole
 connected node that supports `system.run`, or requires a name or id when several
 are eligible. It keeps OpenClaw's node approval policy in force and waits for the
 remote command to finish. Remote-node background follow-up is not available. If

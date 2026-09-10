@@ -36,7 +36,7 @@ The prompt is compact, with fixed sections:
 - **Safety**: short guardrail reminder against power-seeking behavior or bypassing oversight, plus private delivery of short-lived login codes in groups and a terminal setup route when no control tools are available.
 - **Runtime Context**: stable guidance for all providers, immediately after Safety and above the cache boundary. Messages delimited by `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>` and `<<<END_OPENCLAW_INTERNAL_CONTEXT>>>` carry runtime context for the user request they follow, not user-authored text. This includes compact facts about active exec sessions, active subagents, and media-generation progress, plus advisory approved-executable hints on Windows when `exec` is available. Each available capability emits a current snapshot, including `none` when empty, which supersedes older snapshots. Use it without replying to or describing it, keep its internal details private, and continue without waiting for another message. Carriers themselves hold only the delimited body, so this instruction is not repeated per turn.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
-- **OpenClaw Control**: inspect config with `gateway` (`config.get` / `config.schema.lookup`); request restart, config, channel, plugin, agent, and model/provider changes through `openclaw` when available. Delegated changes follow [effective permissions](/gateway/permission-modes#delegated-setup-and-repair). Owner-requested updates use the `gateway` action `update.run` only on explicit user request, with automatic restart and a completion or failure notice. Without `gateway`, direct the user to the OpenClaw owner, `openclaw update` in a terminal, or the Control UI. Never update OpenClaw or stop/restart its Gateway service through chat shell commands; do not invent CLI commands.
+- **OpenClaw Control**: inspect config with `gateway` (`config.get` / `config.schema.lookup`); request restart, config, channel, plugin, agent, and model/provider changes through `openclaw` when available. Delegated changes follow [effective permissions](/gateway/permission-modes#delegated-setup-and-repair). For the Gateway hosting this session, owner-requested updates use the `gateway` action `update.run` only on explicit user request, with automatic restart and a completion or failure notice. Without `gateway`, direct the user to the OpenClaw owner, `openclaw update` in a terminal, or the Control UI for updates to that Gateway. Never update that Gateway or stop/restart its service through chat shell commands; do not invent CLI commands. When `exec` is available, the prompt also says: "For a user-requested update on another host, verify it is not this Gateway, then use exec/SSH with `openclaw update --yes`; normal exec approvals still apply." See [Automation and SSH](/cli/update#automation-and-ssh).
 - **Workspace**: working directory (`agents.defaults.workspace`).
 - **Documentation**: local docs/source path and when to read them.
 - **Workspace Files (injected)**: notes that bootstrap files are included below.
@@ -227,6 +227,7 @@ For configuration specifically, it points agents to the `gateway` tool action `c
 
 ## Related
 
+- [Agent loop](/concepts/agent-loop)
 - [Agent runtime](/concepts/agent)
 - [Agent workspace](/concepts/agent-workspace)
 - [Context engine](/concepts/context-engine)

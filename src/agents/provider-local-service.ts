@@ -175,40 +175,45 @@ async function acquireProviderLocalService(
   };
 
   try {
-    if (
-      managed.process &&
-      !hasLocalServiceProcessExited(managed.process) &&
-      (await probeHealth(healthUrl, healthHeaders, signal))
-    ) {
-      return { release };
+    target.onReadinessWait?.(true);
+    try {
+      if (
+        managed.process &&
+        !hasLocalServiceProcessExited(managed.process) &&
+        (await probeHealth(healthUrl, healthHeaders, signal))
+      ) {
+        return { release };
+      }
+      if (!managed.starting) {
+        // Concurrent callers share one startup promise for the same service key.
+        const startupAbort = new AbortController();
+        managed.startupAbort = startupAbort;
+        managed.starting = startAndWaitForLocalService({
+          provider: target.providerId,
+          service,
+          healthUrl,
+          healthHeaders,
+          managed,
+          signal: startupAbort.signal,
+        }).finally(() => {
+          managed.starting = undefined;
+          if (managed.startupAbort === startupAbort) {
+            managed.startupAbort = undefined;
+          }
+        });
+      }
+      await waitForAbort(managed.starting, signal);
+      if (
+        (managed.process && !hasLocalServiceProcessExited(managed.process)) ||
+        (await probeHealth(healthUrl, healthHeaders, signal))
+      ) {
+        return { release };
+      }
+      release();
+      return undefined;
+    } finally {
+      target.onReadinessWait?.(false);
     }
-    if (!managed.starting) {
-      // Concurrent callers share one startup promise for the same service key.
-      const startupAbort = new AbortController();
-      managed.startupAbort = startupAbort;
-      managed.starting = startAndWaitForLocalService({
-        provider: target.providerId,
-        service,
-        healthUrl,
-        healthHeaders,
-        managed,
-        signal: startupAbort.signal,
-      }).finally(() => {
-        managed.starting = undefined;
-        if (managed.startupAbort === startupAbort) {
-          managed.startupAbort = undefined;
-        }
-      });
-    }
-    await waitForAbort(managed.starting, signal);
-    if (
-      (managed.process && !hasLocalServiceProcessExited(managed.process)) ||
-      (await probeHealth(healthUrl, healthHeaders, signal))
-    ) {
-      return { release };
-    }
-    release();
-    return undefined;
   } catch (error) {
     const abortingStartup = isAbortForSignal(error, signal) && Boolean(managed.starting);
     release();

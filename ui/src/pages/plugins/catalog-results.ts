@@ -23,10 +23,6 @@ export type PluginDiscoveryIntent = "all" | "bundled" | "trending" | "official" 
 export type PluginCatalogResultsProps = {
   connected: boolean;
   loading: boolean;
-  paging: boolean;
-  pageNumber: number;
-  canGoPrevious: boolean;
-  canGoNext: boolean;
   result: PluginDiscoveryResult | null;
   error: string | null;
   remoteError: string | null;
@@ -50,8 +46,6 @@ export type PluginCatalogResultsProps = {
   onQueryChange: (query: string) => void;
   onOpenEntry: (id: string) => void;
   onInstall: (id: string) => void;
-  onPreviousPage: () => void;
-  onNextPage: () => void;
   onRetry: () => void;
   onRetryGrouped: () => void;
   onRetryCategories: () => void;
@@ -234,40 +228,6 @@ function renderSection(params: {
   </section>`;
 }
 
-function renderPagination(props: PluginCatalogResultsProps): TemplateResult | typeof nothing {
-  if (!props.canGoPrevious && !props.canGoNext) {
-    return nothing;
-  }
-  return html`<nav
-    class="plugin-catalog-pagination"
-    aria-label=${t("pluginsPage.catalogPaginationLabel")}
-  >
-    ${
-      props.canGoPrevious
-        ? html`<button
-            type="button"
-            class="btn btn--sm oc-action oc-action-ghost"
-            ?disabled=${props.paging}
-            @click=${props.onPreviousPage}
-          >
-            ${t("pluginsPage.previousPage")}
-          </button>`
-        : nothing
-    }
-    <span aria-live="polite">
-      ${t("pluginsPage.pageNumber", { page: String(props.pageNumber) })}
-    </span>
-    <button
-      type="button"
-      class="btn btn--sm oc-action oc-action-ghost"
-      ?disabled=${props.paging || !props.canGoNext}
-      @click=${props.onNextPage}
-    >
-      ${t("pluginsPage.nextPage")}
-    </button>
-  </nav>`;
-}
-
 function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
   const activeAll = props.intent === "all" && props.category === null;
   return html`<div class="plugin-catalog-chips" aria-label=${t("pluginsPage.categoriesLabel")}>
@@ -331,13 +291,12 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
     </p>`;
   }
   return html`<div class="plugin-catalog-grid plugin-catalog-grid--results">
-      ${repeat(
-        items,
-        (plugin) => plugin.id,
-        (plugin) => renderCatalogCard(plugin, props),
-      )}
-    </div>
-    ${renderPagination(props)}`;
+    ${repeat(
+      items,
+      (plugin) => plugin.id,
+      (plugin) => renderCatalogCard(plugin, props),
+    )}
+  </div>`;
 }
 
 function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult {
@@ -397,7 +356,6 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
       items: uncategorized,
       props,
     })}
-    ${renderPagination(props)}
   `;
 }
 

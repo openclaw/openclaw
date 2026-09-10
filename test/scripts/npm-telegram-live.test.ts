@@ -9,6 +9,7 @@ import {
   isPrePartialFailureRecoveryTarget,
   isPreProgressToolVisibilityTarget,
   isPreProviderFailureBeforeOutputTarget,
+  isPreQueueInvalidModeTarget,
   isPreSettledEmptyResponseTarget,
   resolveFrozenTelegramScenarioOmissions,
 } from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
@@ -475,6 +476,16 @@ describe("package Telegram live Docker E2E", () => {
     expect(isPreProviderFailureBeforeOutputTarget(root)).toBe(false);
   });
 
+  it("omits invalid queue-mode validation until the frozen source owns its scenario", () => {
+    const root = mkTempRoot();
+    const scenario = path.join(root, "qa/scenarios/channels/telegram-queue-invalid-mode.yaml");
+
+    expect(isPreQueueInvalidModeTarget(root)).toBe(true);
+    mkdirSync(path.dirname(scenario), { recursive: true });
+    writeFileSync(scenario, "id: telegram-queue-invalid-mode\n");
+    expect(isPreQueueInvalidModeTarget(root)).toBe(false);
+  });
+
   it("combines only the unsupported frozen Telegram scenario contracts", () => {
     const root = mkTempRoot();
     const writeOwner = (relativePath: string, source: string) => {
@@ -494,12 +505,14 @@ describe("package Telegram live Docker E2E", () => {
       "telegram-empty-response-after-write-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
+      "telegram-queue-invalid-mode",
     ]);
     writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-empty-response-after-write-recovery",
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
+      "telegram-queue-invalid-mode",
     ]);
     writeOwner(
       "qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml",
@@ -508,6 +521,7 @@ describe("package Telegram live Docker E2E", () => {
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-progress-tool-visibility",
       "telegram-provider-failure-before-output",
+      "telegram-queue-invalid-mode",
     ]);
     writeOwner(
       "qa/scenarios/channels/telegram-progress-tool-visibility.yaml",
@@ -515,10 +529,16 @@ describe("package Telegram live Docker E2E", () => {
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
       "telegram-provider-failure-before-output",
+      "telegram-queue-invalid-mode",
     ]);
     writeOwner(
       "qa/scenarios/channels/telegram-provider-failure-before-output.yaml",
       "id: telegram-provider-failure-before-output\n",
+    );
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual(["telegram-queue-invalid-mode"]);
+    writeOwner(
+      "qa/scenarios/channels/telegram-queue-invalid-mode.yaml",
+      "id: telegram-queue-invalid-mode\n",
     );
     expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([]);
   });

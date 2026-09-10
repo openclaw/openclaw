@@ -2285,6 +2285,7 @@ public struct RequiredNodeCommand: Codable, Sendable {
 }
 
 public struct WorkerEnvironmentMetadata: Codable, Sendable {
+    public let profileid: String?
     public let providerid: String
     public let leaseid: String?
     public let state: WorkerEnvironmentState
@@ -2297,6 +2298,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let desktopapps: [WorkerDesktopAppId]?
 
     public init(
+        profileid: String? = nil,
         providerid: String,
         leaseid: String? = nil,
         state: WorkerEnvironmentState,
@@ -2308,6 +2310,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         desktop: Bool? = nil,
         desktopapps: [WorkerDesktopAppId]? = nil)
     {
+        self.profileid = profileid
         self.providerid = providerid
         self.leaseid = leaseid
         self.state = state
@@ -2321,6 +2324,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
         case providerid = "providerId"
         case leaseid = "leaseId"
         case state
@@ -2366,6 +2370,7 @@ public struct EnvironmentSummary: Codable, Sendable {
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
+    public let preparation: [String: AnyCodable]?
     public let requirednodecommand: RequiredNodeCommand?
 
     public init(
@@ -2387,6 +2392,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
+        preparation: [String: AnyCodable]? = nil,
         requirednodecommand: RequiredNodeCommand? = nil)
     {
         self.id = id
@@ -2407,6 +2413,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         self.desktop = desktop
         self.issues = issues
         self.worker = worker
+        self.preparation = preparation
         self.requirednodecommand = requirednodecommand
     }
 
@@ -2429,6 +2436,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         case desktop
         case issues
         case worker
+        case preparation
         case requirednodecommand = "requiredNodeCommand"
     }
 }
@@ -2470,6 +2478,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
+    public let preparation: [String: AnyCodable]?
 
     public init(
         id: String,
@@ -2489,7 +2498,8 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         invocablecommands: [String]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
-        worker: WorkerEnvironmentMetadata? = nil)
+        worker: WorkerEnvironmentMetadata? = nil,
+        preparation: [String: AnyCodable]? = nil)
     {
         self.id = id
         self.type = type
@@ -2509,6 +2519,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         self.desktop = desktop
         self.issues = issues
         self.worker = worker
+        self.preparation = preparation
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2530,6 +2541,47 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         case desktop
         case issues
         case worker
+        case preparation
+    }
+}
+
+public struct EnvironmentsPrepareParams: Codable, Sendable {
+    public let profileid: String
+    public let projectpath: String
+
+    public init(
+        profileid: String,
+        projectpath: String)
+    {
+        self.profileid = profileid
+        self.projectpath = projectpath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case projectpath = "projectPath"
+    }
+}
+
+public struct EnvironmentsPrepareResult: Codable, Sendable {
+    public let environmentid: String
+    public let preparationkey: String
+    public let reused: Bool
+
+    public init(
+        environmentid: String,
+        preparationkey: String,
+        reused: Bool)
+    {
+        self.environmentid = environmentid
+        self.preparationkey = preparationkey
+        self.reused = reused
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environmentid = "environmentId"
+        case preparationkey = "preparationKey"
+        case reused
     }
 }
 
@@ -2570,6 +2622,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
+    public let preparation: [String: AnyCodable]?
 
     public init(
         id: String,
@@ -2589,7 +2642,8 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         invocablecommands: [String]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
-        worker: WorkerEnvironmentMetadata? = nil)
+        worker: WorkerEnvironmentMetadata? = nil,
+        preparation: [String: AnyCodable]? = nil)
     {
         self.id = id
         self.type = type
@@ -2609,6 +2663,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         self.desktop = desktop
         self.issues = issues
         self.worker = worker
+        self.preparation = preparation
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2630,6 +2685,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         case desktop
         case issues
         case worker
+        case preparation
     }
 }
 
@@ -2693,6 +2749,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
+    public let preparation: [String: AnyCodable]?
 
     public init(
         id: String,
@@ -2712,7 +2769,8 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         invocablecommands: [String]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
-        worker: WorkerEnvironmentMetadata? = nil)
+        worker: WorkerEnvironmentMetadata? = nil,
+        preparation: [String: AnyCodable]? = nil)
     {
         self.id = id
         self.type = type
@@ -2732,6 +2790,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         self.desktop = desktop
         self.issues = issues
         self.worker = worker
+        self.preparation = preparation
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2753,6 +2812,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         case desktop
         case issues
         case worker
+        case preparation
     }
 }
 
@@ -8041,6 +8101,36 @@ public struct SessionPlacementRunner: Codable, Sendable {
     }
 }
 
+public struct SessionPlacementMachine: Codable, Sendable {
+    public let _class: String?
+    public let os: String?
+    public let oslabel: String?
+    public let cpu: Int?
+    public let memorygb: Int?
+
+    public init(
+        _class: String? = nil,
+        os: String? = nil,
+        oslabel: String? = nil,
+        cpu: Int? = nil,
+        memorygb: Int? = nil)
+    {
+        self._class = _class
+        self.os = os
+        self.oslabel = oslabel
+        self.cpu = cpu
+        self.memorygb = memorygb
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case _class = "class"
+        case os
+        case oslabel = "osLabel"
+        case cpu
+        case memorygb = "memoryGb"
+    }
+}
+
 public struct LocalSessionPlacement: Codable, Sendable {
     public let state: String
     public let generation: Int
@@ -8109,6 +8199,7 @@ public struct ProvisioningSessionPlacement: Codable, Sendable {
     public let statechangedatms: Int
     public let providerid: String?
     public let profileid: String?
+    public let machine: SessionPlacementMachine?
     public let environmentid: String?
 
     public init(
@@ -8119,6 +8210,7 @@ public struct ProvisioningSessionPlacement: Codable, Sendable {
         statechangedatms: Int,
         providerid: String? = nil,
         profileid: String? = nil,
+        machine: SessionPlacementMachine? = nil,
         environmentid: String? = nil)
     {
         self.state = state
@@ -8128,6 +8220,7 @@ public struct ProvisioningSessionPlacement: Codable, Sendable {
         self.statechangedatms = statechangedatms
         self.providerid = providerid
         self.profileid = profileid
+        self.machine = machine
         self.environmentid = environmentid
     }
 
@@ -8139,6 +8232,7 @@ public struct ProvisioningSessionPlacement: Codable, Sendable {
         case statechangedatms = "stateChangedAtMs"
         case providerid = "providerId"
         case profileid = "profileId"
+        case machine
         case environmentid = "environmentId"
     }
 }
@@ -8151,6 +8245,7 @@ public struct SyncingSessionPlacement: Codable, Sendable {
     public let statechangedatms: Int
     public let providerid: String?
     public let profileid: String?
+    public let machine: SessionPlacementMachine?
     public let environmentid: String
     public let workerbundlehash: String
 
@@ -8162,6 +8257,7 @@ public struct SyncingSessionPlacement: Codable, Sendable {
         statechangedatms: Int,
         providerid: String? = nil,
         profileid: String? = nil,
+        machine: SessionPlacementMachine? = nil,
         environmentid: String,
         workerbundlehash: String)
     {
@@ -8172,6 +8268,7 @@ public struct SyncingSessionPlacement: Codable, Sendable {
         self.statechangedatms = statechangedatms
         self.providerid = providerid
         self.profileid = profileid
+        self.machine = machine
         self.environmentid = environmentid
         self.workerbundlehash = workerbundlehash
     }
@@ -8184,6 +8281,7 @@ public struct SyncingSessionPlacement: Codable, Sendable {
         case statechangedatms = "stateChangedAtMs"
         case providerid = "providerId"
         case profileid = "profileId"
+        case machine
         case environmentid = "environmentId"
         case workerbundlehash = "workerBundleHash"
     }
@@ -8197,6 +8295,7 @@ public struct StartingSessionPlacement: Codable, Sendable {
     public let statechangedatms: Int
     public let providerid: String?
     public let profileid: String?
+    public let machine: SessionPlacementMachine?
     public let environmentid: String
     public let workerbundlehash: String
     public let workspacebasemanifestref: String
@@ -8210,6 +8309,7 @@ public struct StartingSessionPlacement: Codable, Sendable {
         statechangedatms: Int,
         providerid: String? = nil,
         profileid: String? = nil,
+        machine: SessionPlacementMachine? = nil,
         environmentid: String,
         workerbundlehash: String,
         workspacebasemanifestref: String,
@@ -8222,6 +8322,7 @@ public struct StartingSessionPlacement: Codable, Sendable {
         self.statechangedatms = statechangedatms
         self.providerid = providerid
         self.profileid = profileid
+        self.machine = machine
         self.environmentid = environmentid
         self.workerbundlehash = workerbundlehash
         self.workspacebasemanifestref = workspacebasemanifestref
@@ -8236,6 +8337,7 @@ public struct StartingSessionPlacement: Codable, Sendable {
         case statechangedatms = "stateChangedAtMs"
         case providerid = "providerId"
         case profileid = "profileId"
+        case machine
         case environmentid = "environmentId"
         case workerbundlehash = "workerBundleHash"
         case workspacebasemanifestref = "workspaceBaseManifestRef"
@@ -8251,6 +8353,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
     public let statechangedatms: Int
     public let providerid: String?
     public let profileid: String?
+    public let machine: SessionPlacementMachine?
     public let environmentid: String
     public let activeownerepoch: Int
     public let workerbundlehash: String
@@ -8271,6 +8374,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
         statechangedatms: Int,
         providerid: String? = nil,
         profileid: String? = nil,
+        machine: SessionPlacementMachine? = nil,
         environmentid: String,
         activeownerepoch: Int,
         workerbundlehash: String,
@@ -8290,6 +8394,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
         self.statechangedatms = statechangedatms
         self.providerid = providerid
         self.profileid = profileid
+        self.machine = machine
         self.environmentid = environmentid
         self.activeownerepoch = activeownerepoch
         self.workerbundlehash = workerbundlehash
@@ -8311,6 +8416,7 @@ public struct ActiveWorkerSessionPlacement: Codable, Sendable {
         case statechangedatms = "stateChangedAtMs"
         case providerid = "providerId"
         case profileid = "profileId"
+        case machine
         case environmentid = "environmentId"
         case activeownerepoch = "activeOwnerEpoch"
         case workerbundlehash = "workerBundleHash"
@@ -8333,6 +8439,7 @@ public struct DrainingSessionPlacement: Codable, Sendable {
     public let statechangedatms: Int
     public let providerid: String?
     public let profileid: String?
+    public let machine: SessionPlacementMachine?
     public let environmentid: String
     public let activeownerepoch: Int
     public let workerbundlehash: String
@@ -8352,6 +8459,7 @@ public struct DrainingSessionPlacement: Codable, Sendable {
         statechangedatms: Int,
         providerid: String? = nil,
         profileid: String? = nil,
+        machine: SessionPlacementMachine? = nil,
         environmentid: String,
         activeownerepoch: Int,
         workerbundlehash: String,
@@ -8370,6 +8478,7 @@ public struct DrainingSessionPlacement: Codable, Sendable {
         self.statechangedatms = statechangedatms
         self.providerid = providerid
         self.profileid = profileid
+        self.machine = machine
         self.environmentid = environmentid
         self.activeownerepoch = activeownerepoch
         self.workerbundlehash = workerbundlehash
@@ -8390,6 +8499,7 @@ public struct DrainingSessionPlacement: Codable, Sendable {
         case statechangedatms = "stateChangedAtMs"
         case providerid = "providerId"
         case profileid = "profileId"
+        case machine
         case environmentid = "environmentId"
         case activeownerepoch = "activeOwnerEpoch"
         case workerbundlehash = "workerBundleHash"
@@ -8411,6 +8521,7 @@ public struct ReconcilingSessionPlacement: Codable, Sendable {
     public let statechangedatms: Int
     public let providerid: String?
     public let profileid: String?
+    public let machine: SessionPlacementMachine?
     public let environmentid: String
     public let activeownerepoch: Int
     public let workerbundlehash: String
@@ -8429,6 +8540,7 @@ public struct ReconcilingSessionPlacement: Codable, Sendable {
         statechangedatms: Int,
         providerid: String? = nil,
         profileid: String? = nil,
+        machine: SessionPlacementMachine? = nil,
         environmentid: String,
         activeownerepoch: Int,
         workerbundlehash: String,
@@ -8446,6 +8558,7 @@ public struct ReconcilingSessionPlacement: Codable, Sendable {
         self.statechangedatms = statechangedatms
         self.providerid = providerid
         self.profileid = profileid
+        self.machine = machine
         self.environmentid = environmentid
         self.activeownerepoch = activeownerepoch
         self.workerbundlehash = workerbundlehash
@@ -8465,6 +8578,7 @@ public struct ReconcilingSessionPlacement: Codable, Sendable {
         case statechangedatms = "stateChangedAtMs"
         case providerid = "providerId"
         case profileid = "profileId"
+        case machine
         case environmentid = "environmentId"
         case activeownerepoch = "activeOwnerEpoch"
         case workerbundlehash = "workerBundleHash"
@@ -8485,6 +8599,7 @@ public struct ReclaimedSessionPlacement: Codable, Sendable {
     public let statechangedatms: Int
     public let providerid: String?
     public let profileid: String?
+    public let machine: SessionPlacementMachine?
     public let environmentid: String?
     public let activeownerepoch: Int?
     public let workspacebasemanifestref: String?
@@ -8504,6 +8619,7 @@ public struct ReclaimedSessionPlacement: Codable, Sendable {
         statechangedatms: Int,
         providerid: String? = nil,
         profileid: String? = nil,
+        machine: SessionPlacementMachine? = nil,
         environmentid: String? = nil,
         activeownerepoch: Int? = nil,
         workspacebasemanifestref: String? = nil,
@@ -8522,6 +8638,7 @@ public struct ReclaimedSessionPlacement: Codable, Sendable {
         self.statechangedatms = statechangedatms
         self.providerid = providerid
         self.profileid = profileid
+        self.machine = machine
         self.environmentid = environmentid
         self.activeownerepoch = activeownerepoch
         self.workspacebasemanifestref = workspacebasemanifestref
@@ -8542,6 +8659,7 @@ public struct ReclaimedSessionPlacement: Codable, Sendable {
         case statechangedatms = "stateChangedAtMs"
         case providerid = "providerId"
         case profileid = "profileId"
+        case machine
         case environmentid = "environmentId"
         case activeownerepoch = "activeOwnerEpoch"
         case workspacebasemanifestref = "workspaceBaseManifestRef"
@@ -8563,6 +8681,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
     public let statechangedatms: Int
     public let providerid: String?
     public let profileid: String?
+    public let machine: SessionPlacementMachine?
     public let environmentid: String?
     public let activeownerepoch: Int?
     public let workspacebasemanifestref: String?
@@ -8584,6 +8703,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         statechangedatms: Int,
         providerid: String? = nil,
         profileid: String? = nil,
+        machine: SessionPlacementMachine? = nil,
         environmentid: String? = nil,
         activeownerepoch: Int? = nil,
         workspacebasemanifestref: String? = nil,
@@ -8604,6 +8724,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         self.statechangedatms = statechangedatms
         self.providerid = providerid
         self.profileid = profileid
+        self.machine = machine
         self.environmentid = environmentid
         self.activeownerepoch = activeownerepoch
         self.workspacebasemanifestref = workspacebasemanifestref
@@ -8626,6 +8747,7 @@ public struct FailedSessionPlacement: Codable, Sendable {
         case statechangedatms = "stateChangedAtMs"
         case providerid = "providerId"
         case profileid = "profileId"
+        case machine
         case environmentid = "environmentId"
         case activeownerepoch = "activeOwnerEpoch"
         case workspacebasemanifestref = "workspaceBaseManifestRef"
@@ -9976,6 +10098,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let agentid: String?
     public let label: String?
     public let displayname: String?
+    public let titlesource: String?
     public let category: String?
     public let model: String?
     public let contextwindow: String?
@@ -10012,6 +10135,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         agentid: String? = nil,
         label: String? = nil,
         displayname: String? = nil,
+        titlesource: String? = nil,
         category: String? = nil,
         model: String? = nil,
         contextwindow: String? = nil,
@@ -10047,6 +10171,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.agentid = agentid
         self.label = label
         self.displayname = displayname
+        self.titlesource = titlesource
         self.category = category
         self.model = model
         self.contextwindow = contextwindow
@@ -10084,6 +10209,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case agentid = "agentId"
         case label
         case displayname = "displayName"
+        case titlesource = "titleSource"
         case category
         case model
         case contextwindow = "contextWindow"
@@ -13011,6 +13137,7 @@ public struct TaskSummary: Codable, Sendable {
     public let agentid: String?
     public let sessionkey: String?
     public let childsessionkey: String?
+    public let hastranscript: Bool?
     public let ownerkey: String?
     public let runid: String?
     public let taskid: String?
@@ -13042,6 +13169,7 @@ public struct TaskSummary: Codable, Sendable {
         agentid: String? = nil,
         sessionkey: String? = nil,
         childsessionkey: String? = nil,
+        hastranscript: Bool? = nil,
         ownerkey: String? = nil,
         runid: String? = nil,
         taskid: String? = nil,
@@ -13072,6 +13200,7 @@ public struct TaskSummary: Codable, Sendable {
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.childsessionkey = childsessionkey
+        self.hastranscript = hastranscript
         self.ownerkey = ownerkey
         self.runid = runid
         self.taskid = taskid
@@ -13104,6 +13233,7 @@ public struct TaskSummary: Codable, Sendable {
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case childsessionkey = "childSessionKey"
+        case hastranscript = "hasTranscript"
         case ownerkey = "ownerKey"
         case runid = "runId"
         case taskid = "taskId"
@@ -13201,6 +13331,46 @@ public struct TasksGetResult: Codable, Sendable {
         task: TaskSummary)
     {
         self.task = task
+    }
+}
+
+public struct TasksHistoryParams: Codable, Sendable {
+    public let taskid: String
+    public let cursor: String?
+    public let limit: Int?
+
+    public init(
+        taskid: String,
+        cursor: String? = nil,
+        limit: Int? = nil)
+    {
+        self.taskid = taskid
+        self.cursor = cursor
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+        case cursor
+        case limit
+    }
+}
+
+public struct TasksHistoryResult: Codable, Sendable {
+    public let messages: [AnyCodable]
+    public let nextcursor: String?
+
+    public init(
+        messages: [AnyCodable],
+        nextcursor: String? = nil)
+    {
+        self.messages = messages
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messages
+        case nextcursor = "nextCursor"
     }
 }
 
@@ -21257,6 +21427,7 @@ public struct Question: Codable, Sendable {
     public let questionid: String
     public let header: String
     public let question: String
+    public let url: String?
     public let options: [QuestionOption]
     public let multiselect: Bool?
     public let isother: Bool?
@@ -21268,6 +21439,7 @@ public struct Question: Codable, Sendable {
         questionid: String,
         header: String,
         question: String,
+        url: String? = nil,
         options: [QuestionOption],
         multiselect: Bool? = nil,
         isother: Bool? = nil,
@@ -21278,6 +21450,7 @@ public struct Question: Codable, Sendable {
         self.questionid = questionid
         self.header = header
         self.question = question
+        self.url = url
         self.options = options
         self.multiselect = multiselect
         self.isother = isother
@@ -21290,6 +21463,7 @@ public struct Question: Codable, Sendable {
         case questionid = "questionId"
         case header
         case question
+        case url
         case options
         case multiselect = "multiSelect"
         case isother = "isOther"
@@ -21303,6 +21477,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
     public let questionid: String
     public let header: String
     public let question: String
+    public let url: String?
     public let options: [QuestionOption]
     public let multiselect: Bool?
     public let isother: Bool?
@@ -21313,6 +21488,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         questionid: String,
         header: String,
         question: String,
+        url: String? = nil,
         options: [QuestionOption],
         multiselect: Bool? = nil,
         isother: Bool? = nil,
@@ -21322,6 +21498,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         self.questionid = questionid
         self.header = header
         self.question = question
+        self.url = url
         self.options = options
         self.multiselect = multiselect
         self.isother = isother
@@ -21333,6 +21510,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         case questionid = "questionId"
         case header
         case question
+        case url
         case options
         case multiselect = "multiSelect"
         case isother = "isOther"

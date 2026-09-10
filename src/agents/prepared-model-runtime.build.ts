@@ -82,7 +82,7 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   isBuildCurrent?: () => boolean;
   /** Shared publication guards run before workspace preparation; registration guards do not. */
   isPreparationCurrent?: () => boolean;
-  ownsEphemeralRegistries?: boolean;
+  ownsRegistryResources?: boolean;
 }>;
 
 export type PreparedModelRuntimeBuildResult = Readonly<{
@@ -384,8 +384,8 @@ async function buildSnapshotBatch(
     [
       ...groupBuildCandidates(generationCandidates, (candidate) => {
         const workspace = preparedModelRuntimeWorkspaceFactsKey(candidate.input);
-        if (candidate.ownsEphemeralRegistries) {
-          return `ephemeral\0${workspace}`;
+        if (candidate.ownsRegistryResources) {
+          return `owned\0${workspace}`;
         }
         const kind = candidate.prepareInboundPluginRegistry ? "configured" : "dynamic";
         return pluginGeneration ? workspace : `${kind}\0${workspace}`;
@@ -445,7 +445,7 @@ async function buildSnapshotBatch(
         includeCredentialProviders,
         getConfiguredHarnessRuntimes,
         onStage,
-        ...(groupCandidates.some((candidate) => candidate.ownsEphemeralRegistries)
+        ...(groupCandidates.some((candidate) => candidate.ownsRegistryResources)
           ? { registryResources }
           : {}),
       },

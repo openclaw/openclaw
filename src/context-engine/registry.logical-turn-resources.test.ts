@@ -76,6 +76,7 @@ it.each([
   "closing-factory",
   "last-user",
   "raw",
+  "raw-view",
 ] as const)("retains the adopted engine's native source through %s", async (mode) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "context-engine-source-"));
   const databasePath = path.join(directory, "source.sqlite");
@@ -90,7 +91,9 @@ it.each([
   if (mode !== "raw") {
     source.attach(donor);
   }
-  viewSource.attach(supplyingView);
+  if (mode !== "raw-view") {
+    viewSource.attach(supplyingView);
+  }
   let sourceDisposals = 0;
   const sourceDisposed = createDeferred();
   source.register(plugin.id, {
@@ -225,7 +228,9 @@ it.each([
     registerContextEngineInRegistry(donor, "selected", factory, `plugin:${plugin.id}`);
   });
   const copiedView = adoptRuntimeContextEngineRegistrations(supplyingView, donor);
-  viewSource.attach(copiedView);
+  if (mode !== "raw-view") {
+    viewSource.attach(copiedView);
+  }
   const config = { plugins: { slots: { contextEngine: "selected" } } };
   const cleanupScope = createAgentCleanupScope();
   const parent = new AsyncWorkScope();

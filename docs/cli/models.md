@@ -35,7 +35,7 @@ For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory
 
 `fallbacks`/`image-fallbacks` manage global defaults. `set`, `set-image`, `scan`, `refresh`, and `aliases` also operate globally and reject `--agent`.
 
-`models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
+`models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. Writing `agents.defaults.model` with [`openclaw config set`](/cli/config#values) is stricter than `models set`: it rejects a model reference it cannot resolve instead of warning. That check is text-model only; `config set` does not validate `agents.defaults.imageModel` at all, so it is not the stricter path for the `set-image` setting. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
 
 Default-model, alias, and fallback changes resolve provider-owned model aliases using the current plugin configuration. When stored entries resolve to the selected model, their settings move to its canonical key; existing canonical settings take precedence. Adding an alias replaces the model's previous alias. If config changes during that preparation, the command rejects the write; rerun it against the updated config.
 
@@ -113,7 +113,7 @@ Options:
 
 Probe rows can come from auth profiles, env credentials, or `models.json`. Probe status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
 
-Direct `models status --probe` runs create temporary internal sessions in the selected agent's canonical database, so the command requires exclusive ownership of the configured state directory. Stop a running Gateway with `openclaw gateway stop` before probing; the command removes its internal sessions and releases the state lock when it finishes or is interrupted.
+Direct `models status --probe` runs create temporary internal sessions in the selected agent's canonical database, so the command requires exclusive ownership of the configured state directory. Stop a running Gateway with `openclaw gateway stop` before probing. Probe results can be reported before slow cleanup finishes. Temporary auth directories, internal sessions, and the state lock remain held until accepted work and cleanup settle, including after interruption. Cleanup failures are reported; a timeout does not certify that resources have closed.
 
 Probe detail/reason codes to expect when a probe never reaches a model call:
 

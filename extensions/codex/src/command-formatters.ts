@@ -338,7 +338,7 @@ function escapeCodexChatTextPreservingAt(value: string): string {
   return escapeCodexChatText(value).replaceAll("\uff20", "@");
 }
 
-function formatCodexAccountLine(value: string): string {
+export function formatCodexAccountLine(value: string): string {
   if (value === "") {
     return "";
   }
@@ -403,6 +403,7 @@ export function buildHelp(): string {
     "- /codex diagnostics [note]",
     "- /codex computer-use [status|install]",
     "- /codex account",
+    "- /codex plugins refresh                   refresh hosted inventory for the current Codex account/runtime",
     "- /codex mcp",
     "- /codex skills",
     "- /codex plugins [list|enable|disable]",

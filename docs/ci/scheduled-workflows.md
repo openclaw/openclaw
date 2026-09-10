@@ -207,8 +207,13 @@ Both ordinary CI and this strict audit publish the outcome, package count,
 duration, timestamp, and bounded failure reason in the job summary. A completed
 npm check covers npm bulk advisories only, not every upstream advisory source.
 
-The triage owner is **@steipete**. Investigate failed scheduled runs and rerun
-the strict workflow to confirm recovery:
+The triage owner is **@steipete**, set on 2026-09-03 in
+[#137960](https://github.com/openclaw/openclaw/pull/137960). No `.github/CODEOWNERS`
+rule covers `.github/workflows/dependency-audit.yml`, so this line is the only
+record of that ownership. Review routing for a fix follows the lockfile owner
+`@openclaw/openclaw-secops`, which owns `/pnpm-lock.yaml` and `/package-lock.json`.
+Investigate failed scheduled runs and rerun the strict workflow to confirm
+recovery:
 
 ```bash
 gh workflow run dependency-audit.yml --repo openclaw/openclaw --ref main

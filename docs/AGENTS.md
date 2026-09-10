@@ -18,6 +18,8 @@ This directory owns docs authoring, published link rules, and docs i18n policy.
 - Use an explicit `<a id="stable-section-name" />` for a durable section link when heading wording may change. Keep existing named anchors when reorganizing content.
 - README and other GitHub-rendered docs should keep absolute docs URLs so links work outside the docs site.
 - Docs content must stay generic: no personal device names, hostnames, or local paths. Use placeholders like `user@gateway-host` and `~/path/to/skills`.
+- For tokens, API keys, and credential snippets, follow [Secret Placeholder Conventions](/reference/secret-placeholder-conventions). Keep example values obviously fake so secret scanners stay quiet.
+- For tokens, API keys, and credential snippets, follow [Secret Placeholder Conventions](/reference/secret-placeholder-conventions). Keep example values obviously fake so secret scanners stay quiet.
 
 ## Docs Content Rules
 

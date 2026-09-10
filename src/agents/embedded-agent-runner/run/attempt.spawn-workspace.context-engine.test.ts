@@ -5,7 +5,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 // Coverage for context-engine bootstrap, assembly, and turn finalization.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../../../auto-reply/heartbeat.js";
 import {
   appendTranscriptMessage,
   createSessionEntryWithTranscript,
@@ -757,7 +757,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("filters heartbeat response-tool transcript artifacts before normal prompt snapshots", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
     const sessionMessages = [
-      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat, timestamp: 1 },
       {
         role: "assistant",
         content: [
@@ -826,7 +826,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "heartbeat_respond",
       "notify=false",
       '"notify":false',
-      HEARTBEAT_TRANSCRIPT_PROMPT,
+      INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat,
     ]) {
       expect(assembledMessagesJson).not.toContain(artifact);
       expect(snapshotJson).not.toContain(artifact);
@@ -837,7 +837,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("filters interrupted prompt-only heartbeat artifacts before normal prompt snapshots", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
     const sessionMessages = [
-      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat, timestamp: 1 },
     ] as AgentMessage[];
 
     const result = await createContextEngineAttemptRunner({
@@ -860,15 +860,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
     const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
     const snapshotJson = JSON.stringify(result.messagesSnapshot);
-    expect(assembledMessagesJson).not.toContain(HEARTBEAT_TRANSCRIPT_PROMPT);
-    expect(snapshotJson).not.toContain(HEARTBEAT_TRANSCRIPT_PROMPT);
+    expect(assembledMessagesJson).not.toContain(INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat);
+    expect(snapshotJson).not.toContain(INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat);
     expect(result.finalPromptText).toBe("what model are you");
   });
 
   it("filters pending notify=true heartbeat response-tool calls before normal prompt snapshots", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
     const sessionMessages = [
-      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat, timestamp: 1 },
       {
         role: "assistant",
         content: [
@@ -909,7 +909,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
     const snapshotJson = JSON.stringify(result.messagesSnapshot);
     for (const artifact of [
-      HEARTBEAT_TRANSCRIPT_PROMPT,
+      INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat,
       "heartbeat_respond",
       '"notify":true',
       "Build is blocked on missing credentials.",
@@ -923,7 +923,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("preserves visible heartbeat alerts in normal prompt snapshots", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
     const sessionMessages = [
-      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat, timestamp: 1 },
       {
         role: "assistant",
         content: [
@@ -970,7 +970,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
     const snapshotJson = JSON.stringify(result.messagesSnapshot);
     for (const visibleContext of [
-      HEARTBEAT_TRANSCRIPT_PROMPT,
+      INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat,
       "HEARTBEAT.md says check deployment",
       "Build is blocked on a failing release check.",
     ]) {
@@ -983,7 +983,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("preserves visible heartbeat response-tool notifications in normal prompt snapshots", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
     const sessionMessages = [
-      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat, timestamp: 1 },
       {
         role: "assistant",
         content: [

@@ -32,7 +32,7 @@ command -v sox
 Install the plugin in the VM, where it is enabled by default, and start the node host:
 
 ```bash
-openclaw plugins install npm:@openclaw/google-meet
+openclaw plugins install @openclaw/google-meet
 openclaw node run --host <gateway-host> --port 18789 --display-name parallels-macos
 ```
 

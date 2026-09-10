@@ -24,7 +24,7 @@ Every Gateway WebSocket client connects with one role:
 - `node`: capability hosts (macOS, iOS, Android, headless) that expose
   commands through `node.invoke`.
 
-Operator RPC methods require the `operator` role; node-originated methods
+Operator RPC methods require the `operator` role. Node-originated methods
 require the `node` role.
 
 ## Scope levels
@@ -42,10 +42,10 @@ require the `node` role.
 
 Personal GitHub connection management is a narrowly self-scoped exception to
 read-only behavior: `users.github.*` requires `operator.read` plus the exact
-authenticated durable profile. An identified reader can connect, poll, cancel,
+authenticated durable profile. That person can connect, poll, cancel,
 reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
-and per-agent GitHub changes remain `operator.admin`; publication remains
+and per-agent GitHub changes remain `operator.admin`. Publication remains
 `operator.write` plus current session authorization. See
 [GitHub connections](/concepts/user-model#github-connections).
 
@@ -54,7 +54,7 @@ already holds `operator.admin`.
 
 ## Named operator roles
 
-Team Gateways can bind authenticated user profiles to named operator roles.
+Team Gateways can bind authenticated durable profiles to named operator roles.
 Each role combines four closed policies: access to other people's sessions,
 agents available for session creation and agent runs, a maximum set of operator
 scopes, and whether newly created sessions require sandboxing.
@@ -83,9 +83,9 @@ scopes, and whether newly created sessions require sandboxing.
 ```
 
 Use the administrator-scoped `users.setRole` Gateway method with
-`{ profileId, role }` to assign a configured role; set `role: null` to clear an
+`{ profileId, role }` to assign a configured role. Set `role: null` to clear an
 assignment. Assignment changes immediately invalidate and close that profile's
-active Gateway connections; reconnecting applies the current role and scope
+active Gateway connections. Reconnecting applies the current role and scope
 ceiling. `gateway.roles.default` is required whenever roles are configured,
 must name an existing definition, and applies to profiles without a valid
 assigned role. Omitting `gateway.roles` entirely leaves solo and shared-secret
@@ -96,7 +96,7 @@ receive reusable device or bootstrap tokens: those tokens are not bound to a
 person and could bypass the role ceiling. Device-token or bootstrap-token
 authentication without a verified user identity is rejected for operator
 Gateway connections and HTTP requests. Reconnect through the trusted proxy or
-another supported verified identity, such as Tailscale; node connections,
+another supported verified identity, such as Tailscale. Node connections,
 shared-secret/password access, and Gateways without role configuration retain
 their existing behavior.
 
@@ -108,7 +108,7 @@ For sessions created by other people, `sessions.others` supports these values:
 - `"view"`: allows reading but does not allow mutation, even when a session is
   otherwise shared.
 - `"suggest"`: allows viewing and the existing suggestion flow.
-- `"write"`: allows participation in foreign sessions; draft and incognito
+- `"write"`: allows participation in foreign sessions. Draft and incognito
   restrictions remain in force.
 
 A person always owns their own sessions. Explicit session membership can raise
@@ -127,7 +127,7 @@ sandbox mode is `"off"`. The example lets maintainers use host execution on
 
 Required sandboxes are isolated per authenticated session creator, not merely
 per agent or per session. Different guests using the same agent receive separate
-sandbox environments and workspaces; multiple sessions created by the same guest
+sandbox environments and workspaces. Multiple sessions created by the same guest
 reuse that guest's environment and workspace. This per-guest boundary applies
 regardless of the configured sandbox scope. If the agent configures
 `workspaceAccess: "rw"`, OpenClaw reduces access to `"ro"` for role-required
@@ -146,13 +146,13 @@ person use that person's own role rather than the source session's policy.
 Required creation provenance is immutable. Role changes, sharing, participation,
 `sessions.patch`, whole-entry replacement, legacy imports, and canonical-key
 repair cannot remove or replace an existing required stamp. Blocked persisted
-overwrites emit a `session-sqlite` warning; inspect them with
+overwrites emit a `session-sqlite` warning. Inspect them with
 [`openclaw logs --follow`](/cli/logs). Existing unstamped sessions and new sessions
 whose creator does not require sandboxing retain their existing behavior.
 
 A person whose role requires sandboxing cannot start a run in an existing
 host-execution session, even when explicitly invited. Required sessions
-fail if their sandbox backend is unavailable or provisioning fails; they never
+fail if their sandbox backend is unavailable or provisioning fails. They never
 fall back to the Gateway or a node. `/elevated`, `exec` host overrides, and
 configured host targets cannot bypass this restriction. The agent's managed
 GitHub identity is not injected into sandboxed execution: `GH_CONFIG_DIR` is
@@ -162,26 +162,26 @@ The role's `scopes` list caps scopes granted through connection auth, identity
 grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP requests.
 The ceiling uses the normal scope implications: `operator.admin` permits every
 operator scope, and `operator.write` permits `operator.read` and `operator.talk`.
-It only filters existing grants; it cannot add scopes the connection did not
+It only filters existing grants. It cannot add scopes the connection did not
 already receive.
 This includes plugin HTTP requests and WebSocket upgrades: without a scope
 header, ordinary Gateway-authenticated plugin routes start with only
 `operator.write`, then apply the role ceiling. Read-only and empty roles
 therefore receive no runtime scopes on that default path.
 Control UI plugin grants carry the authenticated profile inside a signed
-cookie; plugin HTTP requests reapply the profile's current role ceiling and
+cookie. Plugin HTTP requests reapply the profile's current role ceiling and
 reject grants without a matching durable identity when roles are enabled.
 Include `operator.admin` explicitly only when that role should retain
 administrative connection authority.
 
-Named roles apply only to connections with an authenticated durable user
+Named roles apply only to connections with an authenticated durable
 profile. They organize collaboration within one trusted Gateway domain and do
 not replace separate Gateways when hostile-tenant isolation is required.
 Diagnostic audit methods, including `audit.run.inspect`, remain shared-domain
 `operator.read` surfaces and are not filtered by session role. Likewise,
 `operator.write` still authorizes Gateway-wide operations such as tool
 invocation, ordinary node command relay, and other write-scoped control-plane
-actions; session restrictions do not turn that scope into a per-person
+actions. Session restrictions do not turn that scope into a per-person
 isolation boundary. Use separate Gateways when mutually untrusted people must
 not share diagnostics or control-plane write authority.
 
@@ -204,18 +204,18 @@ identities from trusted-proxy auth or Tailscale WhoIs:
 ```
 
 The key is the verified proxy identity or Tailscale WhoIs login. Email keys
-match case-insensitively; non-email identities match exactly. Config validation
+match case-insensitively. Non-email identities match exactly. Config validation
 rejects scope names outside the closed set above.
 
 Connection authority is resolved in this order:
 
 1. For trusted-proxy Control UI connections, `x-openclaw-scopes` first caps
    device enrollment or upgrade requests. Device authorization then establishes
-   the persistent scopes; a device-less session contributes no self-declared
+   the persistent scopes. A device-less session contributes no self-declared
    scopes.
 2. OpenClaw unions a matching server-side identity grant with those scopes.
 3. OpenClaw applies `x-openclaw-scopes` to the final union as the session cap.
-   An absent header means no cap; a present-but-empty header yields no scopes.
+   An absent header means no cap. A present-but-empty header yields no scopes.
 4. If the authenticated profile has an effective named operator role,
    OpenClaw intersects the result with that role's configured scope ceiling.
 
@@ -223,7 +223,7 @@ The result is used for both `hello.auth.scopes` and Gateway method
 authorization. Identity grants are session-only: they do not create or modify
 pairing records or request a device scope upgrade. Token, password, and no-auth
 connections carry no verified identity and receive no grant.
-Identity grants apply only to `operator`-role connections; `node`-role connections never receive them.
+Identity grants apply only to `operator`-role connections. `node`-role connections never receive them.
 
 ## Method scope is only the first gate
 
@@ -240,23 +240,23 @@ dispatch so authorization failures have one canonical structured response:
   requests and `operator.admin` when `nodeId` targets a node. Its handler limits
   non-admin Gateway-host browsing to configured agent workspaces.
 - `plugins.sessionAction` requires every scope declared in the selected action's
-  `requiredScopes`; omitted or empty lists default to `operator.write`.
+  `requiredScopes`. Omitted or empty lists default to `operator.write`.
   `operator.write` satisfies `operator.read` and `operator.talk`. Other scopes
   require an exact match, or `operator.admin`.
 - `sessions.create` needs `operator.write` for ordinary creation, including a
   `projectId`, and `operator.admin` for incognito sessions or any `execNode`
   request. For non-admin callers, the handler limits `cwd` to configured agent
-  workspaces; `projectId` cannot be combined with `cwd` or `execNode`.
+  workspaces. `projectId` cannot be combined with `cwd` or `execNode`.
 - `environments.list` needs `operator.read` for plain inventory and
   `operator.write` when `runtimeId` requests runtime-specific command eligibility.
   Session placement methods derive
   their scope from the requested target before schema validation:
   `sessions.dispatch` needs `operator.write` for `deviceId` and
   `operator.admin` for `profileId` or a target-less
-  `cloudWorkers.projectProfiles` lookup; `sessions.move` needs `operator.write`
-  for Gateway or device targets and `operator.admin` for profile targets;
+  `cloudWorkers.projectProfiles` lookup. `sessions.move` needs `operator.write`
+  for Gateway or device targets and `operator.admin` for profile targets.
   `abandonSource: true` remains `operator.write` but is schema-valid only with
-  a Gateway target and runtime-valid only for an exact offline device source;
+  a Gateway target and runtime-valid only for an exact offline device source.
   `sessions.reclaim` remains `operator.write`. Malformed dispatch params or a
   malformed move target use `operator.write` so the handler can return the
   precise schema error. All three methods retain session ownership,
@@ -266,9 +266,9 @@ dispatch so authorization failures have one canonical structured response:
   `environments.destroy`, incognito sessions, direct `execNode` execution, and
   arbitrary host or node paths remain `operator.admin`.
 - `worktrees.branches` needs `operator.write`. Its handler limits non-admin
-  callers to workspace-contained paths or registered-project roots; other host
+  callers to workspace-contained paths or registered-project roots. Other host
   paths require `operator.admin`.
-- `talk.config` needs `operator.read`; `includeSecrets: true` also needs
+- `talk.config` needs `operator.read`. `includeSecrets: true` also needs
   `operator.talk.secrets`.
 - `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need
   `operator.talk` (or the compatible broader `operator.write`).
@@ -309,7 +309,7 @@ grants nor removes session mutation authority.
 `audit.run.inspect` intentionally uses `operator.read`. Every client with that
 scope in a Gateway operator domain may receive the retained execution-identity
 context, including bounded pseudonymized references and secret-redacted display
-labels. `operator.read` is not a per-user or hostile multi-tenant privacy
+labels. `operator.read` is not a per-person or hostile multi-tenant privacy
 boundary. Operators who must keep this data separate need separate Gateway
 trust domains.
 
@@ -325,19 +325,19 @@ A connected limited Control UI can file that same pending request through
 reconnect. The request is bound to the signed device identity on the live connection. Approval still
 comes from `device.pair.approve` and therefore requires `operator.pairing` plus
 authority for every requested scope. After approval rotates the operator token,
-the Gateway returns the new token only to that device's live waiter; the browser
+the Gateway returns the new token only to that device's live waiter. The browser
 stores it before reconnecting. Canceling the wait or disconnecting before
 approval falls back to the ordinary pairing repair flow on the next connection.
 
 A role with only `operator.admin` permits the Control UI's full operator scope
-request. Approval is still required; the role ceiling does not grant device
+request. Approval is still required. The role ceiling does not grant device
 scopes on its own.
 
 Requests outside the authenticated person's assigned role ceiling are denied,
 not queued for device approval. The Gateway checks the current role again after
 approval, before returning the token, so a role demotion during the wait still
 blocks an out-of-role result. The Control UI shows the denial and administrator
-guidance without **Retry**; an administrator must change the role first.
+guidance without **Retry**. An administrator must change the role first.
 
 The explicit exception is the administrator-capable Control UI owner profile
 issued directly on the Gateway host by `openclaw dashboard` or graphical
@@ -359,11 +359,11 @@ Approving a device request:
   the caller to already hold that scope, or `operator.admin`.
 - A request for `operator.admin` requires `operator.admin`.
 - A repair request with no explicit scopes can inherit the existing operator
-  token's scopes; if that token is admin-scoped, approval still requires
+  token's scopes. If that token is admin-scoped, approval still requires
   `operator.admin`.
 
 Non-admin shared-secret and trusted-proxy sessions can only approve
-operator-device requests within their own declared operator scopes; approving
+operator-device requests within their own declared operator scopes. Approving
 non-operator roles is admin-only even when those sessions can otherwise use
 `operator.pairing`.
 
@@ -391,13 +391,13 @@ Here, `fs.listDir` is the node command declared for relay through `node.invoke`,
 not the top-level Gateway RPC described above.
 
 Approving a node declaration records its command surface. For `computer.act`,
-the node advertises that surface only after Computer Control is enabled locally;
-once the pairing update is approved, invoking it through `node.invoke` requires
+the node advertises that surface only after Computer Control is enabled locally.
+Once the pairing update is approved, invoking it through `node.invoke` requires
 write scope but not admin scope for each action. Commands classified as
 dangerous or privacy-heavy still require a persistent
 `gateway.nodes.commands.allow` entry in addition to pairing.
 
-Node pairing establishes identity and trust; it does not replace a node's own
+Node pairing establishes identity and trust. It does not replace a node's own
 `system.run` exec approval policy.
 
 ## Shared-secret auth
@@ -415,3 +415,4 @@ boundary separation.
 
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — how a trusted proxy supplies the operator identity these scopes attach to
 - [Gateway protocol](/gateway/protocol) — the methods these scopes authorize
+- [Cloud Workers](/gateway/cloud-workers) — worker dispatch, whose environment and session calls are authorized against these scopes

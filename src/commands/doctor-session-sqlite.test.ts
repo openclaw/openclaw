@@ -1,4 +1,5 @@
 // Doctor session SQLite tests exercise real temp stores and per-agent SQLite files.
+import { AsyncResource } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -1789,6 +1790,48 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
+  it("imports every legacy Codex assistant message, not only the last one", async () => {
+    const codexReply = (id: string, parentId: string, content: string) =>
+      JSON.stringify({
+        type: "message",
+        id,
+        parentId,
+        message: { role: "assistant", provider: "codex", api: "openai-chatgpt-responses", content },
+      });
+    const userMessage = (id: string, parentId: string | null, content: string) =>
+      JSON.stringify({ type: "message", id, parentId, message: { role: "user", content } });
+    const store = createLegacyStore({
+      transcriptLines: [
+        JSON.stringify({ type: "session", id: "session-1", version: 3 }),
+        userMessage("user-1", null, "hi"),
+        codexReply("reply-1", "user-1", "a"),
+        userMessage("user-2", "reply-1", "b"),
+        codexReply("reply-2", "user-2", "c"),
+        userMessage("user-3", "reply-2", "d"),
+      ],
+    });
+
+    const imported = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(imported.targets[0]?.issues).toEqual([]);
+    expect(imported.totals).toMatchObject({ importedTranscriptEvents: 6 });
+    expect(
+      loadTranscriptEventsSync({
+        agentId: "main",
+        storePath: store.storePath,
+        sessionId: "session-1",
+      }),
+    ).toEqual(
+      ["session-1", "user-1", "reply-1", "user-2", "reply-2", "user-3"].map((id) =>
+        expect.objectContaining({ id }),
+      ),
+    );
+  });
+
   it("retires verified exact originals while preserving current SQLite and unknown archives", async () => {
     const store = createLegacyStore({
       transcriptLines: [
@@ -3101,6 +3144,8 @@ describe("runDoctorSessionSqlite", () => {
     );
     const agentDatabase = await import("../state/openclaw-agent-db.js");
     const migrate = agentDatabase.migrateOpenClawAgentDatabaseForMaintenance;
+    // The competitor must not inherit the maintenance authority being revoked.
+    const claimCompetingLease = AsyncResource.bind(claimOpenClawAgentDatabaseLease);
     let competingLeaseId: string | undefined;
     const repair = vi
       .spyOn(agentDatabase, "migrateOpenClawAgentDatabaseForMaintenance")
@@ -3111,7 +3156,7 @@ describe("runDoctorSessionSqlite", () => {
           .db.prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
           .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
         expect(removed.changes).toBe(1);
-        competingLeaseId = claimOpenClawAgentDatabaseLease({
+        competingLeaseId = claimCompetingLease({
           agentId: "later",
           path: laterPath,
           env: store.env,

@@ -485,7 +485,7 @@ export async function runSqliteSessionReclamation(params: {
           diagnostics: params.diagnostics,
           expectedMessageType: "reclaimed",
           onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
-          withWriteAdmission: async (run) =>
+          withWriteAdmission: async (run, reclamationAdmission) =>
             await runExclusiveSqliteSessionWrite(
               plan.databaseOptions,
               async () => {
@@ -502,7 +502,7 @@ export async function runSqliteSessionReclamation(params: {
                 }
               },
               "session.reclamation.worker-commit",
-              params.diagnostics,
+              { ...params.diagnostics, reclamationAdmission },
             ),
           transferList: prepareReclamationWorkerTransferList(plan),
           workerData: {

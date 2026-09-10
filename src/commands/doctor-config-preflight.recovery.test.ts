@@ -5,13 +5,13 @@ import {
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
-import { withEnvOverride } from "../config/test-helpers.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { ExitError } from "../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
@@ -57,7 +57,7 @@ it.each(["backup", "active config"] as const)(
           throw new ExitError(code);
         },
       };
-      await withEnvOverride(
+      await withEnvAsync(
         { OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined },
         async () => {
           expect(await prepareGatewayRunBootstrap({ opts: {}, runtime })).toBe(true);

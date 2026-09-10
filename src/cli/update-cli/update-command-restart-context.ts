@@ -2,8 +2,8 @@ import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { prepareRestartScript } from "./restart-helper.js";
+import type { UpdateRestartParams } from "./update-command-service-context-types.js";
 import {
   resolveServiceRefreshEnv,
   stripGatewayServiceMarkerEnv,
@@ -19,19 +19,7 @@ import {
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   shouldPrepareUpdatedInstallRestart,
-  type PreManagedServiceStop,
 } from "./update-command-service.js";
-
-export type UpdateRestartParams = {
-  result: UpdateRunResult;
-  root: string;
-  preManagedServiceStop?: PreManagedServiceStop;
-  ownedManagedUpdateEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-  shouldRestart: boolean;
-  updateStepTimeoutMs: number;
-  serviceRuntimeRefreshRequired?: boolean;
-};
 
 export async function prepareUpdateRestart(
   params: UpdateRestartParams,
@@ -41,6 +29,7 @@ export async function prepareUpdateRestart(
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
+  let serviceManagerUid = params.preManagedServiceStop?.serviceManagerUid;
   let serviceUpdateVerdict = params.preManagedServiceStop?.serviceUpdateVerdict;
   let skipLegacyServiceRestart = serviceUpdateVerdict?.kind === "absent";
   const serviceStateReadEnv = resolveServiceRefreshEnv(
@@ -70,6 +59,7 @@ export async function prepareUpdateRestart(
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
         env: serviceStateReadEnv,
         requireEffective: true,
+        requireLoadedCommand: true,
         validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
         timeoutMs: params.updateStepTimeoutMs,
       });
@@ -80,6 +70,7 @@ export async function prepareUpdateRestart(
         allowInstallRootChange: true,
       });
       gatewayServiceEnv = serviceState.env;
+      serviceManagerUid ??= serviceState.runtime?.systemd?.managerUid;
       skipLegacyServiceRestart =
         serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "absent";
       if (serviceUpdateVerdict.kind === "unavailable") {
@@ -161,6 +152,7 @@ export async function prepareUpdateRestart(
     gatewayServiceEnv,
     gatewayServiceInstallEnv,
     serviceUpdateVerdict,
+    serviceManagerUid,
     skipLegacyServiceRestart,
     serviceStateReadEnv,
     serviceMutationAllowed,

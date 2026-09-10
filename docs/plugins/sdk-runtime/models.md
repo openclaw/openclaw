@@ -146,6 +146,19 @@ Prefer `api.runtime.llm.complete` for new plugin code. Existing callers of
 with `prepareSimpleCompletionModelForAgent` and execute it with
 `completeWithPreparedSimpleCompletionModel`.
 
+The executor accepts optional `options.headers` and `options.sessionId` fields.
+Calls that omit them keep the same call shape. For HTTPS OpenCode endpoints,
+a standalone completion gets a fresh opaque `x-opencode-session` routing header
+for each invocation. An explicit model or caller routing header suppresses
+generation, regardless of header name casing. Caller headers take precedence
+over model headers.
+
+A supplied `sessionId` retains its existing provider session and cache behavior.
+It also supplies the OpenCode routing header unless an explicit header overrides
+it. A generated routing value stays in the header only: it does not create
+conversation, transcript, prompt-cache, or WebSocket session ownership. Existing
+transport retries reuse the invocation's header; the executor adds no retry policy.
+
 These prepared results have no release method. Their original Gateway or CLI
 host retains the model resources until shutdown; standalone callers retain them
 for the process lifetime. A closed host rejects new preparation and execution.

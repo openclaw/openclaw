@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import {
   createOpenClawTestInstance,
@@ -37,6 +38,7 @@ const suite = createControlUiE2eSuite({
               apiKey: "synthetic-unused-key",
               baseUrl: "http://127.0.0.1:9/v1",
               models: [
+                { id: "with-effort", name: "With effort", reasoning: true },
                 {
                   id: "no-effort",
                   name: "No effort",
@@ -69,6 +71,159 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("retains saved Off through a real model change to an empty thinking profile", async () => {
+    const key = "agent:main:thinking-saved-off";
+    const commands: unknown[] = [];
+    const frames: Array<{ direction: "sent" | "received"; frame: Record<string, unknown> }> = [];
+    const observations: Record<string, unknown> = {};
+    const call = async (method: string, params: Record<string, unknown>) => {
+      const result = await instance.cli([
+        "gateway",
+        "call",
+        method,
+        "--json",
+        "--params",
+        JSON.stringify(params),
+      ]);
+      commands.push({ method, params, ...result });
+      expect(result.code, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    try {
+      await call("sessions.create", {
+        key,
+        agentId: "main",
+        label: "Saved thinking override",
+        model: "with-effort",
+      });
+      await call("sessions.patch", { key, thinkingLevel: "off" });
+      const before: SessionsListResult = JSON.parse(
+        await call("sessions.list", { agentId: "main", limit: 50 }),
+      );
+      const beforeRow = before.sessions.find((row) => row.key === key);
+      expect(beforeRow).toMatchObject({
+        modelProvider: "thinking-fixture",
+        model: "with-effort",
+        thinkingLevel: "off",
+      });
+      expect(beforeRow?.thinkingLevels?.some((level) => level.id === "high")).toBe(true);
+      observations.before = before;
+      observations.agents = JSON.parse(await call("agents.list", {}));
+      const handoff = await instance.cli(["dashboard", "--json"]);
+      expect(handoff.code, handoff.stderr).toBe(0);
+      const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
+      const url = new URL(browserUrl);
+      url.pathname = "/chat/main/thinking-saved-off";
+      url.search = "?nav=collapsed";
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          page.on("websocket", (socket) => {
+            const recordFrame = (direction: "sent" | "received", payload: string | Buffer) => {
+              const frame: Record<string, unknown> = JSON.parse(payload.toString());
+              // Authentication is outside this observation; retain all subsequent product frames.
+              if (
+                !(frame.type === "req" && frame.method === "connect") &&
+                frame.event !== "connect.challenge" &&
+                !(isRecord(frame.payload) && frame.payload.type === "hello-ok")
+              ) {
+                frames.push({ direction, frame });
+              }
+            };
+            socket.on("framesent", ({ payload }) => recordFrame("sent", payload));
+            socket.on("framereceived", ({ payload }) => recordFrame("received", payload));
+          });
+          await page.goto(url.href);
+          await waitForControlUiGatewayReady(page);
+          const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+          await composer.waitFor({ state: "visible" });
+          await composer.fill("/model thinking-fixture/no-effort");
+          await composer.press("Enter");
+          await expect
+            .poll(async () => {
+              const listed: SessionsListResult = JSON.parse(
+                await call("sessions.list", { agentId: "main", limit: 50 }),
+              );
+              observations.after = listed;
+              return listed.sessions.find((row) => row.key === key);
+            })
+            .toMatchObject({
+              modelProvider: "thinking-fixture",
+              model: "no-effort",
+              thinkingLevel: "off",
+              thinkingLevels: [],
+            });
+          await composer.fill("/think");
+          await composer.press("Tab");
+          await expect.poll(() => composer.inputValue()).toBe("/think ");
+          await composer.press("Enter");
+          await expect
+            .poll(async () => {
+              observations.statusText = await page.getByRole("log").textContent();
+              return observations.statusText;
+            })
+            .toContain("Current thinking level: off.");
+          expect(observations.statusText).toContain("Options: none.");
+          expect(await page.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "saved-off-empty-profile.png"),
+          });
+          await composer.fill("/think high");
+          await composer.press("Enter");
+          await expect
+            .poll(async () => {
+              observations.refusalText = await page.getByRole("log").textContent();
+              return observations.refusalText;
+            })
+            .toContain('Unsupported thinking level "high" for this model.');
+          const after: SessionsListResult = JSON.parse(
+            await call("sessions.list", { agentId: "main", limit: 50 }),
+          );
+          expect(after.sessions.find((row) => row.key === key)).toMatchObject({
+            modelProvider: "thinking-fixture",
+            model: "no-effort",
+            thinkingLevel: "off",
+            thinkingLevels: [],
+          });
+          observations.final = after;
+          const requests = frames
+            .filter(({ direction }) => direction === "sent")
+            .map(({ frame }) => frame);
+          expect(requests.some((frame) => frame.method === "chat.send")).toBe(false);
+          expect(
+            requests
+              .filter((frame) => frame.method === "sessions.patch")
+              .map((frame) => frame.params),
+          ).toEqual([{ key, model: "thinking-fixture/no-effort" }]);
+          const changes = frames
+            .filter(
+              ({ frame }) =>
+                frame.event === "sessions.changed" &&
+                isRecord(frame.payload) &&
+                frame.payload.sessionKey === key,
+            )
+            .map(({ frame }) => frame.payload)
+            .filter(isRecord);
+          expect(changes.length).toBeGreaterThan(0);
+          for (const change of changes) {
+            if (change.model !== undefined || change.modelProvider !== undefined) {
+              expect(typeof change.model).toBe("string");
+              expect(change.modelProvider).toBe("thinking-fixture");
+            }
+          }
+        },
+      );
+    } finally {
+      const serialized = JSON.stringify({ commands, frames, observations }, null, 2)
+        .replaceAll(instance.gatewayToken, "[synthetic token]")
+        .replaceAll(instance.hookToken, "[synthetic token]")
+        .replaceAll(instance.homeDir, "[fixture home]")
+        .replaceAll(instance.stateDir, "[fixture state]")
+        .replaceAll(process.cwd(), "[source checkout]");
+      await fs.writeFile(path.join(suite.artifactDir, "saved-off-public.json"), serialized);
+    }
+  }, 120_000);
+
   it("reports no thinking choices without advertising a default or changing the session", async () => {
     const commands: unknown[] = [];
     const call = async (method: string, params: Record<string, unknown>) => {

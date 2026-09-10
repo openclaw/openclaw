@@ -154,6 +154,14 @@ openclaw-chat-question-panel {
   gap: 10px;
 }
 
+.chat-question-panel__external {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--control-ui-text-sm);
+}
+
 .chat-question-panel__progress {
   display: inline-flex;
   align-items: center;

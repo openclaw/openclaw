@@ -2,7 +2,6 @@ import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   pathForPluginSettings,
   pathForRoute,
@@ -129,7 +128,7 @@ class PluginsPage extends OpenClawLightDomElement {
       }
     },
     applyMutationResult: (result) => this.applyMutationResult(result),
-    refreshCatalogAfterMutation: (client) => this.refreshCatalogAfterMutation(client),
+    refreshCatalogAfterMutation: (client) => this.refreshCatalog(client),
     reconnectAfterMutation: (rowKey) => {
       // The reconnect refreshes hello-owned plugin tabs. Keep only its committed
       // outcome; unrelated Gateway identity changes still clear all row messages.
@@ -212,6 +211,12 @@ class PluginsPage extends OpenClawLightDomElement {
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
+      if (
+        !this.installWizard &&
+        changed.get("routeData")?.location.pathname !== this.routeData?.location.pathname
+      ) {
+        this.installWizardController.close();
+      }
       this.applyRouteData();
     }
   }
@@ -398,12 +403,7 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private ensureInitialData() {
     // The route owns initial loading; a warm page module can render before its data arrives.
-    if (
-      !this.routeDataConsumed ||
-      !this.gateway.connected ||
-      !this.gateway.client ||
-      (this.routeData && !this.routeDataConsumed)
-    ) {
+    if (!this.routeDataConsumed || !this.gateway.connected || !this.gateway.client) {
       return;
     }
     if (!this.loading && !this.result && !this.error) {
@@ -421,9 +421,8 @@ class PluginsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async refreshCatalog(): Promise<void> {
-    const client = this.gateway.client;
-    if (!client || !this.gateway.connected) {
+  private async refreshCatalog(client = this.gateway.connected ? this.gateway.client : null) {
+    if (!client) {
       return;
     }
     this.error = null;
@@ -437,7 +436,7 @@ class PluginsPage extends OpenClawLightDomElement {
       }
       return;
     }
-    this.context.navigate("skills");
+    this.context.navigate(tab);
   }
 
   private mutationBlockedReason(): string | null {
@@ -452,16 +451,14 @@ class PluginsPage extends OpenClawLightDomElement {
     return Boolean(this.result?.mutationAllowed) && this.mutationBlockedReason() === null;
   }
 
-  private configBlockedReason(): string | null {
-    return pluginMutationBlockedReason({
-      connected: this.context.runtimeConfig.state.connected,
-      hasAdminAccess: hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
-      mutationAllowed: this.context.runtimeConfig.canSet,
-    });
-  }
-
   private canEditConfig(): boolean {
-    return this.configBlockedReason() === null;
+    return (
+      pluginMutationBlockedReason({
+        connected: this.context.runtimeConfig.state.connected,
+        hasAdminAccess: hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        mutationAllowed: this.context.runtimeConfig.canSet,
+      }) === null
+    );
   }
 
   private setBusy(key: string, value: boolean) {
@@ -489,14 +486,10 @@ class PluginsPage extends OpenClawLightDomElement {
     this.replaceResult(mergePluginCatalogItem(this.result, result.plugin), true);
   }
 
-  /** Plugin changes can affect both catalog state and route visibility (for example Workboard). */
-  private async refreshCatalogAfterMutation(client: GatewayBrowserClient): Promise<void> {
-    this.error = null;
-    await this.catalogTask.run([client]);
-  }
-
   private async showDetails(pluginId: string | null) {
-    const detail = pluginId ? { pluginId, inspection: null, error: null } : null;
+    let detail: PluginsPageDetail | null = pluginId
+      ? { pluginId, inspection: null, error: null }
+      : null;
     this.detail = detail;
     const plugin = pluginId
       ? this.result?.plugins.find((entry) => entry.id === pluginId)
@@ -507,9 +500,11 @@ class PluginsPage extends OpenClawLightDomElement {
     }
     try {
       const inspection = await inspectPlugin(scope.client, plugin.id);
-      if (this.gateway.isCurrent(scope) && this.detail === detail) {
-        this.detail = { ...detail, inspection };
+      if (!this.gateway.isCurrent(scope) || this.detail !== detail) {
+        return;
       }
+      detail = { ...detail, inspection };
+      this.detail = detail;
       if (!plugin.catalogId) {
         return;
       }
@@ -520,8 +515,8 @@ class PluginsPage extends OpenClawLightDomElement {
           undefined,
           plugin.version,
         );
-        if (this.gateway.isCurrent(scope) && this.detail?.pluginId === plugin.id) {
-          this.detail = { ...this.detail, inspection: { ...inspection, catalog } };
+        if (this.gateway.isCurrent(scope) && this.detail === detail) {
+          this.detail = { ...detail, inspection: { ...inspection, catalog } };
         }
       } catch {
         // ClawHub presentation is optional; local capabilities and controls are already visible.
@@ -567,15 +562,19 @@ class PluginsPage extends OpenClawLightDomElement {
     if (!scope || !this.canMutate()) {
       return;
     }
+    const opening = this.installWizardController.prepareOpen();
+    if (!opening) {
+      return;
+    }
     try {
       const result = await loadPluginDiscoveryDetail(scope.client, id);
-      if (!this.gateway.isCurrent(scope)) {
+      if (!this.gateway.isCurrent(scope) || !opening.isCurrent()) {
         return;
       }
       this.syncCatalogIcons(result);
-      this.installWizardController.open(result);
+      opening.open(result);
     } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
+      if (this.gateway.isCurrent(scope) && opening.isCurrent()) {
         this.discovery.error = formatUiError(error);
         this.requestUpdate();
       }
@@ -628,7 +627,7 @@ class PluginsPage extends OpenClawLightDomElement {
             });
           }
         }
-        await this.refreshCatalogAfterMutation(client);
+        await this.refreshCatalog(client);
       },
       { confirm: () => confirmPluginUninstall(name) },
     );

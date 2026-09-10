@@ -1,5 +1,6 @@
 /** Keeps public and private runtime projections on the same captured catalog. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import {
   projectModelCatalogEntryForRoute,
@@ -27,15 +28,8 @@ export function createModelCatalogView(params: {
   }
   const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
     variantsByKey.get(resolveModelCatalogIdentityKey(entry));
-  const logicalEntries = new Map<string, ModelCatalogEntry>();
-  for (const entry of params.catalog) {
-    const key = resolveModelCatalogIdentityKey(entry);
-    if (!logicalEntries.has(key)) {
-      logicalEntries.set(key, entry);
-    }
-  }
   return {
-    logicalEntries: [...logicalEntries.values()],
+    logicalEntries: dedupeByKey(params.catalog, resolveModelCatalogIdentityKey),
     variantsOf,
     project(entry: ModelCatalogEntry, evaluation: ModelAuthAvailabilityEvaluation) {
       const projection: ModelCatalogRouteProjection =
