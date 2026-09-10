@@ -344,12 +344,15 @@ export function isSensitivePath(targetPath: string): boolean {
     return true;
   }
 
-  // Safe percent decoding with bounded passes; FAIL CLOSED on malformed encoding
+  // Safe percent decoding with bounded passes & decode-depth anomaly check; FAIL CLOSED
   let decoded = raw;
-  const maxDecodePasses = 2;
-  for (let pass = 0; pass < maxDecodePasses; pass++) {
-    if (!decoded.includes("%")) {
-      break;
+  const MAX_DECODE_PASSES = 2;
+  let decodePasses = 0;
+
+  while (decoded.includes("%")) {
+    if (decodePasses >= MAX_DECODE_PASSES) {
+      // Decode-depth anomaly check: exceeds allowed decode depth -> FAIL CLOSED
+      return true;
     }
     try {
       const nextDecoded = decodeURIComponent(decoded);
@@ -357,6 +360,7 @@ export function isSensitivePath(targetPath: string): boolean {
         break;
       }
       decoded = nextDecoded;
+      decodePasses++;
     } catch {
       // Malformed URI encoding -> FAIL CLOSED
       return true;
@@ -818,6 +822,18 @@ export async function evaluateLocalSecurityGateway(args: {
     }
   }, currentConfig.approvalTimeoutMs);
 
+  const resolveRequest = (result: AuthorizationResult) => {
+    if (pendingApprovals.has(reqId)) {
+      clearTimeout(timer);
+      pendingApprovals.delete(reqId);
+      const index = pendingApprovalQueue.findIndex((item) => item.id === reqId);
+      if (index !== -1) {
+        pendingApprovalQueue.splice(index, 1);
+      }
+      approvalPromiseResolver(result);
+    }
+  };
+
   const pendingRequest: PendingApprovalRequest = {
     id: reqId,
     toolName,
@@ -825,7 +841,7 @@ export async function evaluateLocalSecurityGateway(args: {
     digest,
     createdAt,
     expiresAt,
-    resolve: approvalPromiseResolver,
+    resolve: resolveRequest,
     timer,
   };
 
@@ -836,26 +852,12 @@ export async function evaluateLocalSecurityGateway(args: {
 
   Promise.resolve(handler(pendingRequest))
     .then((result) => {
-      if (result && pendingApprovals.has(reqId)) {
-        clearTimeout(timer);
-        pendingApprovals.delete(reqId);
-        const index = pendingApprovalQueue.findIndex((item) => item.id === reqId);
-        if (index !== -1) {
-          pendingApprovalQueue.splice(index, 1);
-        }
-        approvalPromiseResolver(result);
+      if (result) {
+        resolveRequest(result);
       }
     })
     .catch(() => {
-      if (pendingApprovals.has(reqId)) {
-        clearTimeout(timer);
-        pendingApprovals.delete(reqId);
-        const index = pendingApprovalQueue.findIndex((item) => item.id === reqId);
-        if (index !== -1) {
-          pendingApprovalQueue.splice(index, 1);
-        }
-        approvalPromiseResolver("REJECTED_TIMEOUT");
-      }
+      resolveRequest("REJECTED_TIMEOUT");
     });
 
   const authorizationResult = await approvalPromise;

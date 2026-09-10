@@ -32,6 +32,7 @@ describe("Hardened LocalSecurityGateway Security & Adversarial Tests", () => {
     expect(isSensitivePath("%")).toBe(true);
     expect(isSensitivePath("%ZZ")).toBe(true);
     expect(isSensitivePath("%E0%A4%A")).toBe(true); // Incomplete UTF-8 sequence
+    expect(isSensitivePath("%2525252e%2525252e")).toBe(true); // Decode-depth anomaly (triple-encoded)
 
     const classification = classifyAction("read_file", { path: "hello_%ZZ_file.txt" });
     expect(classification.classification).toBe("BLOCKED");
