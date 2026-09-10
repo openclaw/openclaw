@@ -26,6 +26,7 @@ export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  registry: string;
   /**
    * Reference install must send back. Search returns the same slug for several publishers, so
    * the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG. This names the result's own
@@ -61,10 +62,19 @@ const CLAWHUB_SUPPORTED_INSTALL_KINDS = new Set(["clawhub", "github", "skills-sh
  */
 type ClawHubSkillSearchWireEntry = Omit<
   ClawHubSkillSearchResult,
-  "installRef" | "installOnly" | "trustState"
+  "registry" | "installRef" | "installOnly" | "trustState"
 > & {
   source?: string | null;
   install?: { kind?: string | null; reference?: string | null } | null;
+};
+
+type ClawHubSkillTrendingWireEntry = Pick<
+  ClawHubSkillSearchWireEntry,
+  "slug" | "displayName" | "source" | "install" | "official"
+> & {
+  summary?: string | null;
+  publisher?: { handle?: string | null } | null;
+  metrics?: { updatedAt?: number | null };
 };
 
 export type ClawHubSkillDetail = SkillsDetailResult;
@@ -192,19 +202,44 @@ export async function searchClawHubSkills(params: {
   fetchImpl?: ClawHubFetch;
   limit?: number;
 }): Promise<ClawHubSkillSearchResult[]> {
-  const result = await fetchClawHubJson<{ results: ClawHubSkillSearchWireEntry[] }>({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/search",
+  const registry = resolveClawHubBaseUrl(params.baseUrl);
+  const query = params.query.trim();
+  const request = {
+    baseUrl: registry,
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
-    search: {
-      q: params.query.trim(),
-      limit: params.limit ? String(params.limit) : undefined,
-    },
-  });
-  return (result.results ?? []).flatMap((entry) => {
-    const mapped = toClawHubSkillSearchResult(entry, params.baseUrl);
+  };
+  let entries: ClawHubSkillSearchWireEntry[];
+  if (query) {
+    const result = await fetchClawHubJson<{ results: ClawHubSkillSearchWireEntry[] }>({
+      ...request,
+      path: "/api/v1/search",
+      search: { q: query, limit: params.limit ? String(params.limit) : undefined },
+    });
+    entries = result.results ?? [];
+  } else {
+    const result = await fetchClawHubJson<{ items: ClawHubSkillTrendingWireEntry[] }>({
+      ...request,
+      path: "/api/v1/trending",
+      search: { kind: "skills", limit: String(Math.min(params.limit ?? 20, 100)) },
+    });
+    // Trending owns ordering and publisher identity; the plain skills list has no publisher.
+    // Both feeds enter the same source-qualified mapping before detail or install is offered.
+    entries = (result.items ?? []).map((entry) => ({
+      score: 0,
+      slug: entry.slug,
+      displayName: entry.displayName,
+      summary: entry.summary ?? undefined,
+      source: entry.source,
+      install: entry.install,
+      official: entry.official,
+      ownerHandle: entry.publisher?.handle,
+      updatedAt: entry.metrics?.updatedAt ?? undefined,
+    }));
+  }
+  return entries.flatMap((entry) => {
+    const mapped = toClawHubSkillSearchResult(entry, registry);
     return mapped ? [mapped] : [];
   });
 }
@@ -216,10 +251,10 @@ export async function searchClawHubSkills(params: {
  */
 function toClawHubSkillSearchResult(
   entry: ClawHubSkillSearchWireEntry,
-  baseUrl?: string,
+  registry: string,
 ): ClawHubSkillSearchResult | undefined {
   const { install: _install, source: _source, ...rest } = entry;
-  const base = { ...rest, icon: resolveClawHubImageUrl(entry.icon, baseUrl) };
+  const base = { ...rest, registry, icon: resolveClawHubImageUrl(entry.icon, registry) };
   const source = normalizeOptionalString(entry.source);
   const installKind = normalizeOptionalString(entry.install?.kind);
   const reference = normalizeOptionalString(entry.install?.reference);

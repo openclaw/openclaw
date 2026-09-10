@@ -3291,7 +3291,7 @@ describe("skills-clawhub", () => {
     });
   });
 
-  it("uses search for browse-all skill discovery", async () => {
+  it("preserves an empty query for trending skill discovery", async () => {
     searchClawHubSkillsMock.mockResolvedValueOnce([
       {
         score: 1,
@@ -3314,7 +3314,7 @@ describe("skills-clawhub", () => {
       },
     ]);
     expect(searchClawHubSkillsMock).toHaveBeenCalledWith({
-      query: "*",
+      query: "",
       limit: 20,
       baseUrl: undefined,
     });
