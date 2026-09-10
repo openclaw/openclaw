@@ -160,6 +160,75 @@ async function expectRecoveryStarted(home: string) {
 }
 
 describe("runtime recovery discovery", () => {
+  it.each(["HOME", "OPENCLAW_HOME"])(
+    "reuses a private runtime when cwd equals %s",
+    async (homeVariable) => {
+      await withRecoveryHome(async (home) => {
+        const candidate = await writeFixture(
+          path.join(home, ".openclaw/tools/cli-node/tools/node/bin/node"),
+        );
+        vi.stubEnv("OPENCLAW_HOME", homeVariable === "OPENCLAW_HOME" ? home : undefined);
+        if (homeVariable === "OPENCLAW_HOME") {
+          vi.stubEnv("HOME", path.dirname(home));
+        }
+        vi.stubEnv("PATH", "");
+        vi.spyOn(process, "cwd").mockReturnValue(home);
+        mocks.admissible.add(candidate);
+
+        void recoverNodeRuntime();
+        await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledOnce());
+        expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+        expect(mocks.probe.mock.calls.map(([file]) => file)).toEqual([candidate]);
+      });
+    },
+  );
+
+  it.each(["none", "executable", "parent", "root"])(
+    "rejects workspace and manager Nodes from HOME (private symlink escape=%s)",
+    async (privateEscape) => {
+      await withRecoveryHome(async (home) => {
+        vi.stubEnv("OPENCLAW_HOME", undefined);
+        vi.stubEnv("PATH", ".");
+        vi.spyOn(process, "cwd").mockReturnValue(home);
+        const workspaceNode = await writeFixture(path.join(home, "node"));
+        const managerNode = await writeFixture(
+          path.join(home, ".nvm/versions/node/v24.19.0/bin/node"),
+        );
+        const plantedNodes = [workspaceNode, managerNode, await fs.realpath(process.execPath)];
+        await writeFixture(path.join(home, ".nvm/alias/default"), "24");
+        if (privateEscape !== "none") {
+          const privateNode = path.join(home, ".openclaw/tools/cli-node/tools/node/bin/node");
+          if (privateEscape === "root") {
+            const workspaceRoot = path.join(home, "workspace-state");
+            plantedNodes.push(
+              await writeFixture(path.join(workspaceRoot, "tools/cli-node/tools/node/bin/node")),
+            );
+            await fs.symlink(workspaceRoot, path.join(home, ".openclaw"), "junction");
+          } else if (privateEscape === "executable") {
+            await fs.mkdir(path.dirname(privateNode), { recursive: true });
+            await fs.symlink(workspaceNode, privateNode);
+          } else {
+            const workspaceTools = path.join(home, "workspace-tools");
+            const redirectedNode = path.join(workspaceTools, "cli-node/tools/node/bin/node");
+            await fs.mkdir(path.dirname(redirectedNode), { recursive: true });
+            await fs.symlink(process.execPath, redirectedNode);
+            await fs.mkdir(path.join(home, ".openclaw"));
+            await fs.symlink(workspaceTools, path.join(home, ".openclaw/tools"), "junction");
+          }
+        }
+        mocks.admissible.add(workspaceNode);
+        mocks.admissible.add(managerNode);
+
+        expect(await recoverNodeRuntime()).toBe(false);
+        const probed = mocks.probe.mock.calls.map(([file]) => file);
+        for (const planted of plantedNodes) {
+          expect(probed).not.toContain(planted);
+        }
+        expect(mocks.spawn).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it.each([
     { name: "expands the Windows service state directory against home", source: "home" },
     { name: "never reads competing cwd tilde service metadata", source: "competing" },

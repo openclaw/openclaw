@@ -247,12 +247,12 @@ describe("openclaw launcher", () => {
           'if (process.env.OPENCLAW_NODE_UPDATE_RESPAWNED !== "1") throw new Error("legacy lifecycle loaded"); export function completePendingPackageLifecycle() {}',
         );
       }
-      const run = (input: string, args = ["status"], env: NodeJS.ProcessEnv = {}) =>
+      const run = (input: string, args = ["status"], env: NodeJS.ProcessEnv = {}, cwd = root) =>
         spawnSync(
           process.execPath,
           ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs"), ...args],
           {
-            cwd: root,
+            cwd,
             env: {
               ...launcherEnv(),
               HOME: home,
@@ -268,6 +268,49 @@ describe("openclaw launcher", () => {
         );
       return { root, home, nodePath, installLog, run };
     }
+
+    it.each(
+      ["HOME", "OPENCLAW_HOME"].flatMap((homeVariable) =>
+        ["cached", "install", "decline", "non-interactive"].map((mode) => ({
+          homeVariable,
+          mode,
+        })),
+      ),
+    )(
+      "preserves $mode private recovery when cwd equals $homeVariable",
+      async ({ homeVariable, mode }) => {
+        const fixture = await prepareRecovery({
+          cached: mode === "cached",
+          tty: mode !== "non-interactive",
+        });
+        const result = fixture.run(
+          mode === "install" ? "y\n" : "n\n",
+          ["status"],
+          {
+            HOME: homeVariable === "HOME" ? fixture.home : fixture.root,
+            OPENCLAW_HOME: homeVariable === "OPENCLAW_HOME" ? fixture.home : undefined,
+            PATH: "",
+          },
+          fixture.home,
+        );
+        const recovered = mode === "cached" || mode === "install";
+        expect(result.status, result.stderr).toBe(recovered ? 17 : 1);
+        expect(result.stderr.includes("Update NodeJS: Y/N")).toBe(
+          mode === "install" || mode === "decline",
+        );
+        if (recovered) {
+          expect(JSON.parse(result.stdout)).toMatchObject({
+            recovered: true,
+            cwd: await fs.realpath(fixture.home),
+          });
+        } else {
+          expect(result.stderr).toContain("nvm install");
+        }
+        if (mode !== "install") {
+          await expect(fs.stat(fixture.installLog)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      },
+    );
 
     it("accepts Yes before pending lifecycle imports, installs only Node, and retries exact arguments", async () => {
       const fixture = await prepareRecovery({ pendingLifecycle: true });

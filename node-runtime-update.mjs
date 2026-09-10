@@ -36,20 +36,20 @@ function confirmNodeUpdate() {
 
 /** Returns a verified private runtime, or null when recovery was declined/unavailable. */
 export async function resolveUpdatedNodeRuntime(
-  homeDir,
+  recoveryRoot,
   { allowInstall = true, env = process.env } = {},
 ) {
   if (env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1") {
     return null;
   }
+  const privatePaths = { allowMissing: true, trustedRoot: recoveryRoot };
   const prefix = resolveRecoveryPath(
-    path.join(homeDir, ".openclaw", "tools", "cli-node"),
-    homeDir,
-    { allowMissing: true },
+    path.join(recoveryRoot, "tools", "cli-node"),
+    undefined,
+    privatePaths,
   );
   const nodeRoot =
-    prefix &&
-    resolveRecoveryPath(path.join(prefix, "tools", "node"), homeDir, { allowMissing: true });
+    prefix && resolveRecoveryPath(path.join(prefix, "tools", "node"), undefined, privatePaths);
   if (!prefix || !nodeRoot) {
     return null;
   }
@@ -59,7 +59,7 @@ export async function resolveUpdatedNodeRuntime(
       : path.join(nodeRoot, "bin", "node");
 
   // An earlier explicit opt-in is durable, but an incompatible cache is never trusted.
-  if (isUsableNode(nodePath, { env })) {
+  if (isUsableNode(nodePath, { env, trustedRoot: recoveryRoot })) {
     return nodePath;
   }
   if (
@@ -104,7 +104,7 @@ export async function resolveUpdatedNodeRuntime(
       ]
     : [installer, "--node-only", "--prefix", prefix];
   const result = spawnSync(command, args, { stdio: "inherit", env });
-  if (result.status !== 0 || !isUsableNode(nodePath, { env })) {
+  if (result.status !== 0 || !isUsableNode(nodePath, { env, trustedRoot: recoveryRoot })) {
     process.stderr.write(
       "openclaw: Node.js update failed; install a compatible Node.js manually.\n",
     );

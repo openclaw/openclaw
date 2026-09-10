@@ -76,7 +76,9 @@ it.each([
       ),
     );
 
-    expect(await resolveUpdatedNodeRuntime(home)).toBe(lossless ? candidate : null);
+    expect(await resolveUpdatedNodeRuntime(path.join(home, ".openclaw"))).toBe(
+      lossless ? candidate : null,
+    );
     expect(mocks.spawn).toHaveBeenCalledOnce();
     expect(mocks.spawn.mock.calls[0]?.[2].timeout).toBe(5_000);
     const result = mocks.spawn.mock.results[0];

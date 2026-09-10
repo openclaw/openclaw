@@ -311,8 +311,8 @@ function realNodePath(filename) {
   }
 }
 
-function isCwdPath(nodePath, cwd) {
-  const relative = path.relative(cwd, nodePath);
+function isPathWithin(filename, directory) {
+  const relative = path.relative(directory, filename);
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
@@ -320,7 +320,7 @@ function isCwdPath(nodePath, cwd) {
 export function resolveRecoveryPath(
   value,
   homeDir,
-  { allowMissing = false, allowCwd = false } = {},
+  { allowMissing = false, allowCwd = false, trustedRoot } = {},
 ) {
   const expanded = value?.trim().replace(/^~(?=$|[\\/])/, () => homeDir ?? "~");
   if (!expanded || !path.isAbsolute(expanded)) {
@@ -329,14 +329,23 @@ export function resolveRecoveryPath(
   const paths = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(expanded) ? path.win32 : path;
   const absolute = paths.resolve(expanded);
   const cwd = realNodePath(process.cwd()) ?? process.cwd();
-  if (!allowCwd && isCwdPath(absolute, cwd)) {
+  // OpenClaw owns this private recovery root even when the user launches from HOME.
+  // Only private recovery passes it; symlinks into cwd outside it remain excluded.
+  const trusted =
+    trustedRoot && path.isAbsolute(trustedRoot) && isPathWithin(absolute, trustedRoot);
+  const excluded = (filename) =>
+    !allowCwd && isPathWithin(filename, cwd) && !(trusted && isPathWithin(filename, trustedRoot));
+  if (excluded(absolute)) {
     return null;
   }
   if (!allowCwd) {
     // A final symlink can hide a workspace-owned intermediate directory.
     for (let prefix = paths.dirname(absolute); ;) {
+      if (trusted && !isPathWithin(prefix, trustedRoot)) {
+        break;
+      }
       const real = realNodePath(prefix);
-      if (real && isCwdPath(real, cwd)) {
+      if (real && excluded(real)) {
         return null;
       }
       const parent = paths.dirname(prefix);
@@ -352,7 +361,7 @@ export function resolveRecoveryPath(
     const real = realNodePath(existing);
     if (real) {
       const resolved = paths.resolve(real, ...missing);
-      return path.isAbsolute(resolved) && (allowCwd || !isCwdPath(resolved, cwd)) ? resolved : null;
+      return path.isAbsolute(resolved) && !excluded(resolved) ? resolved : null;
     }
     if (!allowMissing) {
       return null;
@@ -376,8 +385,8 @@ export function resolveRecoveryPath(
 }
 
 // Do not pass preload hooks, native-library overrides, or application secrets to probes.
-export function isUsableNode(nodePath, { allowCwd = false, env = process.env } = {}) {
-  const resolved = resolveRecoveryPath(nodePath, undefined, { allowCwd });
+export function isUsableNode(nodePath, { allowCwd = false, trustedRoot, env = process.env } = {}) {
+  const resolved = resolveRecoveryPath(nodePath, undefined, { allowCwd, trustedRoot });
   if (!resolved || !/^node(?:\.exe)?$/i.test(path.basename(resolved))) {
     return false;
   }
@@ -674,15 +683,23 @@ export async function recoverNodeRuntime({
   }
   const osHome = resolveRecoveryPath(inheritedHome || accountHome, accountHome, {
     allowMissing: true,
+    allowCwd: true,
   });
   const recoveryHome = resolveRecoveryPath(
     homeDir ?? (env.OPENCLAW_HOME?.trim() || osHome),
     osHome,
-    { allowMissing: true },
+    { allowMissing: true, allowCwd: true },
   );
+  const recoveryPath = recoveryHome && path.join(recoveryHome, ".openclaw");
+  const recoveryRoot =
+    recoveryPath &&
+    resolveRecoveryPath(recoveryPath, undefined, {
+      allowMissing: true,
+      trustedRoot: recoveryPath,
+    });
   const { resolveUpdatedNodeRuntime } = await import("./node-runtime-update.mjs");
-  let nodePath = recoveryHome
-    ? await resolveUpdatedNodeRuntime(recoveryHome, { allowInstall: false, env })
+  let nodePath = recoveryRoot
+    ? await resolveUpdatedNodeRuntime(recoveryRoot, { allowInstall: false, env })
     : null;
   let reason = "cached OpenClaw runtime";
   const currentNode = realNodePath(process.execPath);
@@ -706,8 +723,8 @@ export async function recoverNodeRuntime({
       }
     }
   }
-  if (!nodePath && allowInstall && recoveryHome) {
-    nodePath = await resolveUpdatedNodeRuntime(recoveryHome, { env });
+  if (!nodePath && allowInstall && recoveryRoot) {
+    nodePath = await resolveUpdatedNodeRuntime(recoveryRoot, { env });
     reason = "private OpenClaw runtime";
   }
   if (!nodePath) {
