@@ -48,12 +48,22 @@ The runtime store keeps `SessionEntry` values in per-agent SQLite. The value typ
 - `lastActivityAt`: timestamp of the last completed agent run that counts as unread-worthy activity (user, channel, and cron runs). Heartbeat and internal-event turns, plus metadata patches, do not update it; `updatedAt` is not an activity signal.
 - `sessionFile`: legacy marker retained for migration/archive compatibility; active runtime uses SQLite identity
 - `chatType`: `direct | group | room`
-- `provider`, `subject`, `room`, `space`, `displayName`: group/channel labeling metadata
+- `label`: explicit custom name; always takes precedence, including older records whose label resembles an automatic device name. Clearing it with `sessions.patch { label: null }` restores automatic naming.
+- `autoLabel`: optional automatic device label, separate from the custom name. Android writes it through `sessions.patch`; duplicate values are allowed, and `null` clears it. It is a display fallback below a saved `displayName`, not a unique session label.
+- `provider`, `subject`, `room`, `space`, `displayName`: group/channel labeling metadata; `displayName` also stores generated conversation titles.
 - Toggles: `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `elevatedLevel`, `sendPolicy` (per-session override)
 - Model selection: `providerOverride`, `modelOverride`, `authProfileOverride`
 - Token counters (best-effort/provider-dependent): `inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`
 - `compactionCount`: how many times auto-compaction completed for this session key
 - `memoryFlushAt` / `memoryFlushCompactionCount`: timestamp and compaction count of the last pre-compaction memory flush
+
+Existing label-only records are preserved: the Gateway does not infer whether a
+saved `label` was automatic from its text. Clear or replace it explicitly to
+change its precedence. An older Gateway that does not support `autoLabel` rejects
+that patch field; Android does not retry the device name as `label`, which could
+overwrite a custom name. Android still uses its locally known device name as a
+display-only fallback for its own session, below server-provided names. This
+fallback is neither sent to the Gateway nor stored in the session cache.
 
 The Gateway is the authority: it may rewrite or rehydrate entries as sessions
 run. For legacy file-backed installs, migrate with

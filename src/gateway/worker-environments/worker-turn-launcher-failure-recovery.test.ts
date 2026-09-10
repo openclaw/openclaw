@@ -413,6 +413,9 @@ describe("worker turn launcher failure recovery", () => {
     const environments: WorkerTurnEnvironmentService &
       Parameters<typeof createWorkerPlacementDispatchService>[0]["environments"] = {
       ...unusedEnvironments(),
+      bindPreparedWorkspace: async () => {
+        throw new Error("unexpected prepared binding");
+      },
       recordError: vi.fn(() => {
         throw new Error("unexpected provisioning interruption");
       }),

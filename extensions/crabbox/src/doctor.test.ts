@@ -94,7 +94,7 @@ describe("Crabbox worker doctor", () => {
     { version: "0.53.0", rejected: true },
     { version: "0.54.0", rejected: false },
     { version: "1.0.0", rejected: false },
-  ])("checks WSL2 profiles against Crabbox $version", async ({ version, rejected }) => {
+  ])("checks non-Linux profiles against Crabbox $version", async ({ version, rejected }) => {
     const probe = vi
       .spyOn(doctorRuntime, "probeCrabboxVersion")
       .mockResolvedValue({ status: "supported", version });
@@ -110,6 +110,10 @@ describe("Crabbox worker doctor", () => {
                   binary: process.execPath,
                   target: "windows/wsl2",
                 },
+              },
+              mac: {
+                provider: "crabbox",
+                settings: { binary: process.execPath, target: "macos" },
               },
             },
           },
@@ -127,6 +131,15 @@ describe("Crabbox worker doctor", () => {
                 requirement: expect.stringContaining("0.53.1"),
                 fixHint: expect.stringContaining("0.53.1"),
               }),
+              expect.objectContaining({
+                target: "mac",
+                severity: "warning",
+                message: expect.stringContaining(
+                  "macOS cloud workers require Crabbox 0.53.1 or newer",
+                ),
+                requirement: expect.stringContaining("0.53.1"),
+                fixHint: expect.stringContaining("0.53.1"),
+              }),
             ]
           : [],
       );
@@ -139,6 +152,7 @@ describe("Crabbox worker doctor", () => {
   it.each([
     { target: "linux", severity: "info", minimum: "0.41.1" },
     { target: "windows/wsl2", severity: "warning", minimum: "0.53.1" },
+    { target: "macos", severity: "warning", minimum: "0.53.1" },
   ])("reports an indeterminate version for $target", async ({ target, severity, minimum }) => {
     const probe = vi.spyOn(doctorRuntime, "probeCrabboxVersion").mockResolvedValue({
       status: "indeterminate",
@@ -225,7 +239,8 @@ describe("Crabbox warm-image doctor", () => {
   it.each([
     { name: "healthy checkpoint", operation: undefined, severity: undefined },
     { name: "fresh capture", operation: "capture", severity: "info" },
-    { name: "paused capture", operation: "stale", severity: "warning" },
+    { name: "long-running capture", operation: "stale", severity: "warning" },
+    { name: "long-running scrub", operation: "stale-scrub", severity: "warning" },
     { name: "failed capture", operation: "uncertain", severity: "warning" },
     { name: "pending retirement", operation: "retire", severity: "warning" },
   ] as const)(
@@ -252,11 +267,17 @@ describe("Crabbox warm-image doctor", () => {
                   : {
                       type: "capture" as const,
                       id: "capture-selector",
-                      startedAtMs: now - (operation === "stale" ? 1_200_000 : 0),
+                      startedAtMs:
+                        now -
+                        (operation === "stale" || operation === "stale-scrub" ? 1_200_000 : 0),
                       leaseId: "cbx_capture",
                       provider: "aws",
                       phase:
-                        operation === "uncertain" ? ("uncertain" as const) : ("creating" as const),
+                        operation === "uncertain"
+                          ? ("uncertain" as const)
+                          : operation === "stale-scrub"
+                            ? ("scrubbing" as const)
+                            : ("creating" as const),
                     },
             }
           : {}),
@@ -288,10 +309,15 @@ describe("Crabbox warm-image doctor", () => {
             ]
           : [],
       );
-      if (operation === "stale") {
+      if (operation === "uncertain") {
         expect(findings[0]?.fixHint).toContain(
           "--recover capture-selector --acknowledge-provider-cleanup",
         );
+      } else if (operation === "stale" || operation === "stale-scrub") {
+        expect(findings[0]?.fixHint).toContain("may still be");
+        expect(findings[0]?.message).not.toContain("paused");
+        expect(findings[0]?.fixHint).not.toContain("--recover");
+        expect(findings[0]?.fixHint).not.toContain("Stop the owning Gateway");
       }
       await check.repair?.(context, findings);
       expect(store.lookup("profile")).toEqual(record);

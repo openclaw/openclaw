@@ -6,6 +6,7 @@ import {
   assertSqliteSchemaTablesPresent,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
+import { splitSqlList } from "../infra/sqlite-schema-sql.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -17,11 +18,12 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
-import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
+  readStateSchemaMigrationVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -75,6 +77,7 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   13: LAZY_ADDITIVE_STATE_TABLES,
   14: LAZY_ADDITIVE_STATE_TABLES,
   15: LAZY_ADDITIVE_STATE_TABLES,
+  16: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -137,7 +140,7 @@ function assertOpenClawStateDatabaseVersionForMigration(
   options: { pathname: string; version: OpenClawStateMigrationVersion },
 ): void {
   const userVersion = readSqliteUserVersion(database);
-  if (userVersion !== options.version) {
+  if (readStateSchemaMigrationVersion(database) !== options.version) {
     throw new Error(
       `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; expected ${options.version} before migrating it.`,
     );
@@ -146,11 +149,11 @@ function assertOpenClawStateDatabaseVersionForMigration(
   const metadata = database
     .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
     .get() as { schema_version?: unknown } | undefined;
-  if (metadata?.schema_version !== options.version) {
+  if (metadata?.schema_version !== userVersion) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
     throw new Error(
-      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${options.version}; repair the ownership metadata before migrating it.`,
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; repair the ownership metadata before migrating it.`,
     );
   }
   assertSqliteSchemaTablesPresent(database, options.pathname, OPENCLAW_STATE_SCHEMA_SQL, {
@@ -247,6 +250,11 @@ export const openClawStateMigrationAssertions = new Map([
     (database: DatabaseSync, options: { pathname: string }) =>
       assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 15 }),
   ],
+  [
+    16,
+    (database: DatabaseSync, options: { pathname: string }) =>
+      assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 16 }),
+  ],
 ]);
 
 export function markCurrentStateSchemaVersion(
@@ -325,6 +333,31 @@ function migrateConversationBindingTargets(db: DatabaseSync, previousVersion: nu
   return true;
 }
 
+/** Add preparation and activation facts without rebuilding the referenced environment table. */
+function migratePreparedWorkerOwnership(db: DatabaseSync, previousVersion: number): boolean {
+  if (previousVersion >= 17 || !tableExists(db, "worker_environments")) {
+    return false;
+  }
+  const marker = "CREATE TABLE IF NOT EXISTS worker_environments (";
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf("\n) STRICT;", start);
+  if (start < 0 || end < start) {
+    throw new Error("OpenClaw worker environment schema marker is missing.");
+  }
+  const columns = splitSqlList(OPENCLAW_STATE_SCHEMA_SQL.slice(start + marker.length, end))
+    .map((column) => column.trim())
+    .filter(
+      (column) => column.startsWith("last_activated_at_ms ") || column.startsWith("preparation_"),
+    );
+  let changed = false;
+  // The final column carries the cross-column CHECK. All additions and schema
+  // markers commit together, preserving inbound foreign keys and cleanup rows.
+  for (const column of columns) {
+    changed = ensureColumn(db, "worker_environments", column) || changed;
+  }
+  return changed;
+}
+
 // v15 collection cleanup released a dropped skill's claim so a path recreated by hand
 // stayed user-owned. Doctor relocates every applied create into the Workshop directory,
 // so released rows turn stale before the marker leaves with its column.
@@ -332,25 +365,16 @@ const RELEASED_WORKSHOP_CLAIM_REASON =
   "Skill Workshop released this skill in a collection review; the path stays user-owned.";
 
 function migrateSkillWorkshopCollectionReviewOwnership(db: DatabaseSync): void {
-  if (!tableExists(db, "skill_workshop_proposals")) {
-    db.exec(`
-      CREATE TABLE skill_workshop_collection_reviews_v16 (
-        review_id TEXT NOT NULL PRIMARY KEY,
-        owner_agent_id TEXT NOT NULL,
-        backup_id TEXT NOT NULL,
-        create_time INTEGER NOT NULL,
-        kept_names_json TEXT NOT NULL,
-        written_names_json TEXT NOT NULL,
-        dropped_json TEXT NOT NULL
-      ) STRICT;
-      DROP TABLE skill_workshop_collection_reviews;
-      ALTER TABLE skill_workshop_collection_reviews_v16
-        RENAME TO skill_workshop_collection_reviews;
-      CREATE INDEX idx_skill_workshop_collection_reviews_owner_time
-        ON skill_workshop_collection_reviews(owner_agent_id, create_time DESC, review_id);
-    `);
-    return;
-  }
+  const retainedObjects = db
+    .prepare(`
+    SELECT sql FROM sqlite_schema
+    WHERE tbl_name = 'skill_workshop_collection_reviews'
+      AND type IN ('index', 'trigger') AND sql IS NOT NULL
+      AND name NOT IN ('idx_skill_workshop_collection_reviews_workspace_time',
+                       'idx_skill_workshop_collection_reviews_owner_time')
+    ORDER BY type, name
+  `)
+    .all();
   db.exec(`
     CREATE TABLE skill_workshop_collection_reviews_v16 (
       review_id TEXT NOT NULL PRIMARY KEY,
@@ -361,6 +385,9 @@ function migrateSkillWorkshopCollectionReviewOwnership(db: DatabaseSync): void {
       written_names_json TEXT NOT NULL,
       dropped_json TEXT NOT NULL
     ) STRICT;
+  `);
+  if (tableExists(db, "skill_workshop_proposals")) {
+    db.exec(`
     INSERT INTO skill_workshop_collection_reviews_v16 (
       review_id, owner_agent_id, backup_id, create_time,
       kept_names_json, written_names_json, dropped_json
@@ -390,12 +417,20 @@ function migrateSkillWorkshopCollectionReviewOwnership(db: DatabaseSync): void {
       WHERE proposal.workspace_dir = review.workspace_dir
         AND proposal.owner_agent_id IS NOT NULL
     ) = 1;
+    `);
+  }
+  db.exec(`
     DROP TABLE skill_workshop_collection_reviews;
     ALTER TABLE skill_workshop_collection_reviews_v16
       RENAME TO skill_workshop_collection_reviews;
     CREATE INDEX idx_skill_workshop_collection_reviews_owner_time
       ON skill_workshop_collection_reviews(owner_agent_id, create_time DESC, review_id);
   `);
+  for (const object of retainedObjects) {
+    if (typeof object.sql === "string") {
+      db.exec(object.sql);
+    }
+  }
 }
 
 /** Remove row provenance after the Workshop directory becomes the ownership boundary. */
@@ -477,6 +512,10 @@ export const versionedStateMigrations: ReadonlyArray<{
   {
     migrate: migrateSkillWorkshopDirectoryOwnership,
     applied: "Moved Skill Workshop ownership to per-agent directories (v16)",
+  },
+  {
+    migrate: migratePreparedWorkerOwnership,
+    applied: "Recorded prepared worker ownership and one-use lifecycle (v17)",
   },
 ];
 

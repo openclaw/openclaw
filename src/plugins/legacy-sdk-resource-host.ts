@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -10,6 +11,7 @@ type ResourceClaim = { release: () => Promise<void> };
 
 /** Owns resources borrowed by shipped SDK results that have no release method. */
 export class LegacyPluginSdkResourceHost {
+  private readonly work = new AsyncWorkScope();
   private readonly claims = new Map<object, ResourceClaim>();
   private readonly pending = new Set<Promise<void>>();
   private readonly failures: unknown[] = [];
@@ -23,6 +25,11 @@ export class LegacyPluginSdkResourceHost {
 
   run<T>(run: () => T): T {
     return hostContext.run(this, run);
+  }
+
+  track<T>(run: () => T | Promise<T>): Promise<T> {
+    this.assertOpen();
+    return this.work.track(() => this.run(run));
   }
 
   adopt(source: object, claim: ResourceClaim): void {
@@ -59,6 +66,7 @@ export class LegacyPluginSdkResourceHost {
     if (!this.closing) {
       // A projection getter can close this host before its temporary claim is adopted.
       this.closing = Promise.resolve().then(async () => {
+        await this.work.drain();
         const claims = [...this.claims.values()];
         this.claims.clear();
         for (const claim of claims) {

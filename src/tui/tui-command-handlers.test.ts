@@ -126,6 +126,7 @@ function createHarness(params?: {
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
+  reopenQuestion?: () => void;
   refreshAgents?: RefreshAgentsMock;
   agentDefaultId?: string;
   agents?: Array<{ id: string; kind?: "agent" | "system"; name?: string }>;
@@ -266,6 +267,7 @@ function createHarness(params?: {
     flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
+    reopenQuestion: params?.reopenQuestion,
   });
 
   return {
@@ -317,6 +319,21 @@ function createHarness(params?: {
 }
 
 describe("tui command handlers", () => {
+  it.each([false, true])(
+    "reopens /question locally without sending a chat turn (local=%s)",
+    async (local) => {
+      const reopenQuestion = vi.fn();
+      const { handleCommand, sendChat, addPendingUser } = createHarness({
+        opts: { local },
+        reopenQuestion,
+      });
+      await handleCommand("/question");
+      expect(reopenQuestion).toHaveBeenCalledOnce();
+      expect(sendChat).not.toHaveBeenCalled();
+      expect(addPendingUser).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not open the agent picker from a cached roster after refresh failure", async () => {
     const refreshAgents = vi
       .fn()

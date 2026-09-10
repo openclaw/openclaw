@@ -1,4 +1,5 @@
-import { SECRET_EGRESS_USAGE_PROMPT } from "./transcript-credential-safety.js";
+const SECRET_EGRESS_USAGE_PROMPT =
+  "Gateway-host commands: use auto-injected opaque env sentinel under stored name. No secret templates; never override/print that variable. Native shell/sandbox/node: no protected injection. First command snapshots store for run; late saves need next turn.";
 
 // Compact built-in summaries shown in tool inventories and model-facing tool
 // descriptions when a longer contextual description is assembled elsewhere.

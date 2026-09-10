@@ -10,7 +10,7 @@ import {
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-identity.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
 
 export { normalizeAuthEmailToken, normalizeAuthIdentityToken } from "./oauth-identity.js";
 
@@ -150,10 +150,11 @@ export function overlayRuntimeExternalOAuthProfiles(
   options?: { runtimeExternalProfileIdsAuthoritative?: boolean },
 ): AuthProfileStore {
   const externalProfiles = Array.from(profiles);
-  const next = cloneAuthProfileStore(store);
+  const next: RuntimeAuthProfileStore = cloneAuthProfileStore(store);
   const overlaidProfileIds = new Set(externalProfiles.map((profile) => profile.profileId));
   for (const profile of externalProfiles) {
     next.profiles[profile.profileId] = profile.credential;
+    delete next.runtimeCredentialSources?.[profile.profileId];
   }
   next.runtimePersistedProfileIds = store.runtimePersistedProfileIds
     ?.filter((profileId) => next.profiles[profileId] && !overlaidProfileIds.has(profileId))

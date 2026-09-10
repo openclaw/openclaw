@@ -44,17 +44,22 @@ function listAccountIds(
   return plugin.config.listAccountIds(cfg);
 }
 
-function formatNothingToRemoveMessage(params: {
+function formatAccountRemovalErrorMessage(params: {
   channel: ChatChannel;
+  kind: "unknown-account" | "nothing-to-remove";
+  accountId: string;
   requestedAccount: string | undefined;
   accountIds: readonly string[];
 }): string {
   const label = channelLabel(params.channel);
   const inspect = `Run ${formatCliCommand(`openclaw channels status --channel ${params.channel}`)} to inspect configured accounts.`;
-  if (!params.requestedAccount) {
-    return `${label} has no ${DEFAULT_ACCOUNT_ID} account to remove. Name an account with ${formatCliCommand("--account <id>")}. ${inspect}`;
-  }
   const known = params.accountIds.length ? ` Known accounts: ${params.accountIds.join(", ")}.` : "";
+  if (params.kind === "nothing-to-remove") {
+    return `${label} account "${params.accountId}" has no configuration to delete.${known} ${inspect}`;
+  }
+  if (!params.requestedAccount) {
+    return `${label} has no ${DEFAULT_ACCOUNT_ID} account to remove.${known} Name an account with ${formatCliCommand("--account <id>")}. ${inspect}`;
+  }
   return `${label} has no account "${params.requestedAccount}" to remove.${known} ${inspect}`;
 }
 
@@ -221,12 +226,16 @@ export async function channelsRemoveCommand(
     runtime,
   });
   if (!removal.ok) {
-    if (removal.error.kind === "nothing-to-remove") {
+    if (removal.error.kind !== "unsupported-action") {
       runtime.error(
-        formatNothingToRemoveMessage({
+        formatAccountRemovalErrorMessage({
           channel: resolvedChannelId,
-          requestedAccount: normalizeOptionalString(opts.account),
-          accountIds: listAccountIds(cfg, resolvedChannelId, plugin),
+          kind: removal.error.kind,
+          accountId: preparedRemoval.accountKey,
+          requestedAccount: useWizard
+            ? preparedRemoval.accountKey
+            : normalizeOptionalString(opts.account),
+          accountIds: removal.error.accountIds,
         }),
       );
       runtime.exit(1);

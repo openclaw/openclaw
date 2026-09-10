@@ -94,9 +94,11 @@ repair records `failed` / `abandoned` and exits successfully without Doctor,
 maintenance, or a service stop. It also acknowledges a Gateway-reconciled row
 once within 30 minutes of reconciliation. Later repair invocations use full
 finalization, so historical recovery cannot suppress plugin convergence.
-Explicit recovery permits identityless historical rows only
-after more than 30 minutes of inactivity; a recorded live or uninspectable driver
-still blocks recovery. JSON output identifies reconciled run IDs in
+Explicit recovery does not wait 30 minutes when every recorded updater process
+is provably dead (its PID is gone or its process-start identity has changed).
+Identityless rows and runs with an unrecorded adopter still require more than
+30 minutes of inactivity; a recorded live or uninspectable driver blocks recovery.
+JSON output identifies reconciled run IDs in
 `reconciledRuns`, with `status: "ok"`, `mode: "repair"`, and `restart: false`.
 
 Explicit channel or capability changes and known incomplete post-core work use

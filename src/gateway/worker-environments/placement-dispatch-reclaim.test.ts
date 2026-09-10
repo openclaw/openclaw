@@ -468,47 +468,6 @@ describe("worker placement dispatch reclaim", () => {
     },
   );
 
-  it("retries pending failed-environment teardown before clearing the placement", async () => {
-    const harness = createHarness(placementStore, {
-      failAt: "sync",
-      destroyFails: true,
-      destroyFailureState: "destroying",
-    });
-    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow("sync failed");
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: expect.stringContaining("environment destroy: destroy pending"),
-    });
-
-    const cleanupError = "release is pending; retry after provider cleanup advances";
-    vi.mocked(harness.environments.destroy).mockRejectedValueOnce(new Error(cleanupError));
-    await expect(harness.service.reclaim(REQUEST)).rejects.toThrow(cleanupError);
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      environmentId: harness.attached.environmentId,
-    });
-    expect(harness.environments.get(harness.attached.environmentId)).toMatchObject({
-      state: "destroying",
-    });
-
-    vi.mocked(harness.environments.destroy).mockImplementationOnce(async () => {
-      harness.markEnvironmentDestroyed();
-      const destroyed = harness.environments.get(harness.attached.environmentId);
-      if (!destroyed) {
-        throw new Error("expected destroyed environment");
-      }
-      return destroyed;
-    });
-    await expect(
-      harness.service.reclaim({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      }),
-    ).resolves.toMatchObject({ state: "local" });
-    expect(harness.environments.destroy).toHaveBeenCalledTimes(3);
-  });
-
   it.each(["active", "failed"] as const)(
     "rejects %s reclaim before its first durable cleanup action when authorization changes",
     async (state) => {

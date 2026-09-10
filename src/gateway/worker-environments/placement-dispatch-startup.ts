@@ -14,6 +14,7 @@ import type {
   WorkerDispatchPlacementStore,
   WorkerProvisioningDispatchPlacement,
 } from "./placement-dispatch-failure.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import {
@@ -287,6 +288,20 @@ export function createWorkerPlacementDispatchStartup(options: {
           throw new Error("Worker workspace preparation lost its exact placement owner");
         }
       };
+      const preparation = readWorkerProjectPreparation(params.environment.profileSnapshot.project);
+      if (preparation) {
+        await environments.bindPreparedWorkspace({
+          environmentId: provisioned.environmentId,
+          ownerEpoch,
+          sessionId: request.sessionId,
+          sessionKey: request.sessionKey,
+          preparationKey: preparation.key,
+          cacheKey: preparation.cacheKey,
+          signal: params.signal,
+          assertCurrent: assertSyncOwner,
+        });
+        assertSyncOwner();
+      }
       const synced =
         params.workspace.kind === "repository"
           ? await syncSessionRepositoryWorkspace({
@@ -308,6 +323,7 @@ export function createWorkerPlacementDispatchStartup(options: {
                 ...(project ? { projectKey: project.key } : {}),
               },
               sessionId: request.sessionId,
+              sessionKey: request.sessionKey,
               generation: placement.generation,
               ...(gitAuthor ? { gitAuthor } : {}),
             });

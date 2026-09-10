@@ -199,7 +199,9 @@ Reconciliation writes status `failed`, reason `abandoned`, and a retained
 `operator-reconciled-inactive-run`. All unfinished steps become terminal, and
 history is retained. Explicit `update repair` can reconcile inactive identityless
 rows when the current Gateway generation is healthy and no post-core repair is
-pending. It cannot override a live or inconclusive recorded driver. The
+pending. When every recorded driver is positively dead and no
+`driver:identity-unavailable` marker exists, explicit recovery does not require
+the inactivity window. It cannot override a live or inconclusive recorded driver. The
 [2026.9.2 updater](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/cli/update-cli/update-command.ts#L465)
 does not record adoption: package-manager and registry preflight can
 leave a live updater at its single `requested/in_progress` step. Older writers

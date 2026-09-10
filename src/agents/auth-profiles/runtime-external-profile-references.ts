@@ -36,8 +36,10 @@ export function removeRuntimeExternalProfileReferences(params: {
     return params.store;
   }
   const next = cloneAuthProfileStore(params.store);
+  const runtimeNext: RuntimeAuthProfileStore = next;
   for (const profileId of params.profileIds) {
     delete next.profiles[profileId];
+    delete runtimeNext.runtimeCredentialSources?.[profileId];
     if (next.usageStats) {
       delete next.usageStats[profileId];
     }

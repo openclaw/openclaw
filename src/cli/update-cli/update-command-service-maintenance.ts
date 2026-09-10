@@ -43,8 +43,6 @@ import {
 
 export { UpdateCommandAbort } from "./update-command-windows-task.js";
 
-const GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE =
-  "Gateway service management skipped: inspection is unavailable. Run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.";
 const GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE =
   "Gateway service inspection is unavailable. Refusing to mutate code because managed service ownership cannot be verified. Run `openclaw gateway status --deep` and retry when service access is restored.";
 const JSON_MODE_SERVICE_STDOUT = new Writable({
@@ -52,6 +50,13 @@ const JSON_MODE_SERVICE_STDOUT = new Writable({
     callback();
   },
 });
+
+function serviceInspectionBlockMessage(state: GatewayServiceState): string {
+  const timeoutMs = state.runtime?.inspectionFailure?.timeoutMs;
+  return timeoutMs === undefined
+    ? GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE
+    : `Scheduled Task probe timed out after ${timeoutMs} ms (ETIMEDOUT). ${GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE}`;
+}
 
 export type PreManagedServiceStop = {
   stoppedAtMs?: number;
@@ -91,7 +96,7 @@ async function inspectManagedGatewayServiceBeforeUpdate(params: {
   const { command } = state;
   const unavailable = (): ManagedGatewayUpdateVerdict => ({
     kind: "unavailable",
-    message: GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE,
+    message: serviceInspectionBlockMessage(state),
   });
   if (!command) {
     return !state.installed &&
@@ -203,7 +208,10 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     (inspection.kind !== verdict.kind || !matchesStoppedService(before, params.state, inspection))
   ) {
     throw new GatewayServiceUpdateOwnershipError(
-      "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
+      inspection.kind === "unavailable" &&
+        params.state.runtime?.inspectionFailure?.timeoutMs !== undefined
+        ? inspection.message
+        : "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
       undefined,
     );
   }
@@ -328,7 +336,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     ...base,
     serviceMutationAllowed: false,
     serviceUpdateVerdict: { kind: "unavailable", message },
-    blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
+    blockMessage: message,
   });
   const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
     process.env,
@@ -346,11 +354,23 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
       timeoutMs: params.timeoutMs,
     });
+    if (
+      process.platform === "win32" &&
+      serviceState.runtime?.inspectionFailure?.timeoutMs !== undefined
+    ) {
+      // Re-read the definition too: a timed-out snapshot cannot grant service ownership.
+      serviceState = await readGatewayServiceState(service, {
+        env: process.env,
+        requireEffective: true,
+        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+        timeoutMs: params.timeoutMs,
+      });
+    }
   } catch (err) {
     if (err instanceof GatewayServiceUpdateOwnershipError) {
       return { ...uninspected, serviceMutationAllowed: false, blockMessage: err.message };
     }
-    return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE);
+    return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE);
   }
   const serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
     root: params.root,

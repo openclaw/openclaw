@@ -1017,6 +1017,8 @@ export const en: TranslationMap & {
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     worktreeUnavailable: "Selected folder is not a Git checkout",
     worktreeBaseRef: "From",
+    worktreeBranchesLimited: "Suggestions are limited. Enter any branch or commit.",
+    worktreeBranchesUnavailable: "Branch suggestions are unavailable. Enter a branch or commit.",
     worktreeName: "Name",
     worktreeNamePlaceholder: "Named from the session title",
     worktreeBranchNote: "Creates branch openclaw/<name> in a separate checkout.",

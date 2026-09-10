@@ -1,6 +1,6 @@
 /** Protects node policy, real pinned Codex stdio framing, and child cleanup. */
 import { EventEmitter, once } from "node:events";
-import { access, readFile, realpath } from "node:fs/promises";
+import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,6 +9,7 @@ import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
@@ -20,7 +21,7 @@ import {
 type JsonRpcRecord = Record<string, unknown>;
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
-function createManagedWorkspaceInvocation(cwd: string) {
+function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
   const placement = {
     cwd,
     environmentId: "paired-environment",
@@ -46,7 +47,7 @@ function createManagedWorkspaceInvocation(cwd: string) {
       ) {
         throw new Error("node placement does not own the requested workspace");
       }
-      return { workspaceDir: cwd, release };
+      return { workspaceDir: cwd, ...(homeDir ? { homeDir } : {}), release };
     },
   );
   const context = {
@@ -479,6 +480,93 @@ describe("Codex node exec-server", () => {
     frames.controller.abort(new Error("malformed-frame fixture closed"));
     await expect(invocation).rejects.toThrow("malformed-frame fixture closed");
     expect(workspace.release).toHaveBeenCalledOnce();
+  });
+
+  it("uses prepared HOME with the actual pinned binary while keeping Codex state private", async ({
+    signal,
+  }) => {
+    pendingNodeProof = withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "codex-prepared-home-" },
+      async ({ dir }) => {
+        const cwd = await realpath(dir);
+        const homeDir = path.join(cwd, "prepared-home");
+        await mkdir(homeDir);
+        await writeFile(path.join(homeDir, "prepared-cache"), "retained build state");
+        const frames = createNodeFrames(signal);
+        const command = createCodexNodeExecServerCommand();
+        const workspace = createManagedWorkspaceInvocation(cwd, homeDir);
+        const invocation = command.handle(
+          JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
+          frames.io,
+          workspace.context,
+        );
+        void invocation.catch((error: unknown) => frames.controller.abort(error));
+        let isolatedCodexHome: string | undefined;
+        try {
+          await Promise.race([frames.ready, invocation]);
+          await frames.send({
+            id: 1,
+            method: "initialize",
+            params: { clientName: "openclaw-node" },
+          });
+          await readNodeResponse(frames, 1);
+          await frames.send({ method: "initialized", params: {} });
+          const script = `const fs = require('node:fs'); const path = require('node:path');
+process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.env.CODEX_HOME,
+  cached: fs.existsSync(path.join(process.env.HOME ?? '.', 'prepared-cache'))}) + '\\n');`;
+          await frames.send({
+            id: 2,
+            method: "process/start",
+            params: {
+              processId: "prepared-home",
+              argv: [process.execPath, "-e", script],
+              cwd: pathToFileURL(cwd).href,
+              env: {},
+              envPolicy: {
+                inherit: "all",
+                ignoreDefaultExcludes: true,
+                exclude: [],
+                set: {},
+                includeOnly: [],
+              },
+              tty: false,
+              pipeStdin: false,
+              arg0: null,
+            },
+          });
+          await readNodeResponse(frames, 2);
+          const notifications = await readNodeProcessNotifications(frames, "prepared-home", 3);
+          const output = notifications.find(
+            (message) => message.method === "process/output",
+          )?.params;
+          if (!isRecord(output) || typeof output.chunk !== "string") {
+            throw new Error("Pinned exec-server omitted process output");
+          }
+          const observed: unknown = JSON.parse(
+            Buffer.from(output.chunk, "base64").toString("utf8"),
+          );
+          expect(observed).toMatchObject({ home: homeDir, cached: true });
+          if (!isRecord(observed) || typeof observed.codexHome !== "string") {
+            throw new Error("Pinned exec-server omitted its private Codex home");
+          }
+          isolatedCodexHome = observed.codexHome;
+          expect(isolatedCodexHome).not.toBe(path.join(homeDir, ".codex"));
+        } finally {
+          frames.controller.abort(new Error("prepared-home proof completed"));
+          await expect(invocation).rejects.toBe(frames.io.signal.reason);
+          await command.onDisconnect?.();
+          expect(workspace.release).toHaveBeenCalledOnce();
+        }
+        expect(await readFile(path.join(homeDir, "prepared-cache"), "utf8")).toBe(
+          "retained build state",
+        );
+        if (!isolatedCodexHome) {
+          throw new Error("Private Codex home was not observed");
+        }
+        await expect(access(isolatedCodexHome)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+    await pendingNodeProof;
   });
 
   it("relays the actual pinned Codex binary, isolates credentials, and removes its private home", async (context) => {

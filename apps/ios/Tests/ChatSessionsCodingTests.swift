@@ -42,6 +42,7 @@ struct ChatSessionsCodingTests {
         {
             "key":"agent:main:telegram:group:1",
             "label":"Release room",
+            "autoLabel":"Device fallback",
             "category":"Operations",
             "pinned":true,
             "archived":false,
@@ -55,6 +56,7 @@ struct ChatSessionsCodingTests {
         let entry = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: data)
 
         #expect(entry.label == "Release room")
+        #expect(entry.autoLabel == "Device fallback")
         #expect(entry.category == "Operations")
         #expect(entry.pinned == true)
         #expect(entry.archived == false)

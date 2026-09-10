@@ -670,7 +670,7 @@ describe("prepared provider auth state", () => {
     await expect(hasAuth("nvidia")).resolves.toBe(true);
     expect(authProfilesMocks.ensureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
       "/state/agents/worker/agent",
-      { allowKeychainPrompt: false },
+      { allowKeychainPrompt: false, config: cfg, migrationProvider: "nvidia" },
     );
     expect(authProfilesMocks.listProfilesForProvider).toHaveBeenCalledWith(
       expect.anything(),

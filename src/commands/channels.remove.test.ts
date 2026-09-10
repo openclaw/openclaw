@@ -303,9 +303,6 @@ describe("channelsRemoveCommand", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  // The shared fixture deletes its whole channel section whatever it is asked for, so
-  // account-existence cases install the real section transforms: the defect is that they
-  // accept an id no account owns.
   function installWorkAccountChannel() {
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
@@ -321,7 +318,7 @@ describe("channelsRemoveCommand", () => {
       createExternalChatCatalogEntry(),
     ]);
     const sectionKey = "external-chat";
-    const scopedPlugin = {
+    const scopedPlugin: ChannelPlugin = {
       ...createExternalChatDeletePlugin(),
       config: {
         listAccountIds: (cfg: OpenClawConfig) => {
@@ -339,7 +336,7 @@ describe("channelsRemoveCommand", () => {
             setAccountEnabledInConfigSection({ ...params, sectionKey, allowTopLevel: true }),
         ),
       },
-    } as unknown as ChannelPlugin;
+    };
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry([
         {
@@ -381,6 +378,7 @@ describe("channelsRemoveCommand", () => {
     await channelsRemoveCommand({ channel: "external-chat" }, runtime, { hasFlags: true });
 
     expectNoRemoval("external-chat has no default account to remove.");
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Known accounts: work."));
   });
 
   it("rejects an unknown --account on a channel that cannot delete accounts", async () => {
@@ -405,15 +403,14 @@ describe("channelsRemoveCommand", () => {
           allowTopLevel: true,
         }),
     );
-    // No deleteAccount: the channel's reported accounts are the only existence signal left.
-    const scopedPlugin = {
+    const scopedPlugin: ChannelPlugin = {
       ...createExternalChatDeletePlugin(),
       config: {
         listAccountIds: () => ["work"],
         resolveAccount: () => ({}),
         setAccountEnabled,
       },
-    } as unknown as ChannelPlugin;
+    };
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry([
         { pluginId: "@vendor/external-chat-plugin", plugin: scopedPlugin, source: "test" },

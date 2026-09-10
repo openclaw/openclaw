@@ -39,7 +39,12 @@ import {
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../../shared/worker-bundle-limits.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 
-const BOOTSTRAP_LAUNCHER_FILES = ["openclaw.mjs", "node-version.mjs"];
+const BOOTSTRAP_LAUNCHER_FILES = [
+  "openclaw.mjs",
+  "node-version.mjs",
+  "node-sqlite.mjs",
+  "node-runtime-update.mjs",
+];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
 const METADATA_KEYS = [

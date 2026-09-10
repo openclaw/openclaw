@@ -241,6 +241,28 @@ them, so interrupted cleanup can be resumed. Restore distinguishes intentional
 disposal, pending cleanup, and unexpected missing files. See
 [Update cleanup](/cli/update#update-cleanup).
 
+### Hard-linked legacy artifacts
+
+Doctor refuses a legacy `sessions.json` or transcript artifact when another hard
+link references its inode. The diagnostic names the artifact path, device, inode,
+and observed link count (`nlink`). Doctor does not scan for other linked paths.
+The refusal protects snapshot copies from changes through a shared inode.
+
+For a legacy source rejected before its identity was recorded for archival, stop
+the Gateway and create a verified backup. Copy the contents to a **new** temporary
+regular file in the same directory, preserving permissions. Verify that the copy
+has identical contents and a link count of one, then rename it over the reported
+source path and rerun the same Doctor command. Do not overwrite the source in
+place or create another hard link: replacing its directory entry with the fresh
+copy preserves the snapshot's contents without needing to find its other paths.
+
+If an earlier migration was interrupted or the reported path is an archived
+recovery artifact, preserve the files and manifests. Run
+`openclaw doctor --session-sqlite recover` with the same profile and legacy-source
+selectors first. Recorded artifacts depend on their original identities;
+replacing them with copies can prevent restoration. If recovery still refuses
+the artifact, retain that evidence for support instead of replacing it.
+
 ### Downgrading After Session SQLite Migration
 
 Follow [Downgrade](/install/updating#downgrade) before starting an older release.

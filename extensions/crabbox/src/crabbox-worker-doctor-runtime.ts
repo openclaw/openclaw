@@ -1,8 +1,8 @@
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-// Include prereleases of the first fixed patch; 0.53.0 predates the WSL2 fixes.
-export const CRABBOX_WSL2_MIN_VERSION = "0.53.1";
+// Include prereleases of the first patch with WSL2 and macOS worker fixes.
+export const CRABBOX_NON_LINUX_MIN_VERSION = "0.53.1";
 
 function parseCrabboxVersion(output: string) {
   const match =
@@ -33,8 +33,8 @@ function isCrabboxVersionAtLeast(version: string, minimumVersion: string): boole
   );
 }
 
-export function supportsCrabboxWsl2(version: string): boolean {
-  return isCrabboxVersionAtLeast(version, CRABBOX_WSL2_MIN_VERSION);
+export function supportsCrabboxNonLinuxTargets(version: string): boolean {
+  return isCrabboxVersionAtLeast(version, CRABBOX_NON_LINUX_MIN_VERSION);
 }
 
 const CRABBOX_VERSION_TIMEOUT_MS = 2_000;

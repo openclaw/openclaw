@@ -292,5 +292,11 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
     timings,
     changes: changes.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
     runIds,
+    contributingRunIds: {
+      blacksmith: [...contributingRuns.blacksmith].toSorted((a, b) => a - b),
+      github: [...contributingRuns.github].toSorted((a, b) => a - b),
+      repoE2e: [...contributingRuns.repoE2e].toSorted((a, b) => a - b),
+      uiE2e: [...contributingRuns.uiE2e].toSorted((a, b) => a - b),
+    },
   };
 }

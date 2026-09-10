@@ -1445,11 +1445,17 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cliSessionId).toBe("stale-cli-session");
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "session-cli",
+    );
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "session-cli",
+    );
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("preserves and resumes a valid Claude CLI binding after format failover", async () => {
@@ -1659,7 +1665,7 @@ describe("CLI attempt execution", () => {
       forkedCliSessionId,
     );
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(forkedCliSessionId);
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(forkedCliSessionId);
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
@@ -2024,14 +2030,14 @@ describe("CLI attempt execution", () => {
       sessionId: "session-cli",
     });
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
     const persisted = readSessionStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "session-cli",
     });
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBe("session-cli");
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("keeps the bound claude-cli session id as the reuse candidate when the native transcript is missing (so reseed can recover)", async () => {
@@ -3717,93 +3723,6 @@ describe("CLI attempt execution", () => {
       toolOverrides: { webSearch: false },
     });
   });
-
-  it("adds Git attribution only to provider-bound CLI and plugin prompts", async () => {
-    const attribution =
-      "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
-    const sessionKey = "agent:main:direct:coauthor-runtime-prompts";
-    const sessionEntry = makeSessionEntry("coauthor-runtime-prompts");
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli result"));
-
-    await runStoredAttempt({
-      providerOverride: "claude-cli",
-      modelOverride: "opus",
-      sessionEntry,
-      sessionKey,
-      body: "commit from CLI",
-      runId: "run-cli-coauthor-prompt",
-      opts: { gitCoauthorAttribution: attribution },
-      sessionStore,
-    });
-
-    const cliArg = firstRunCliAgentArg();
-    const attributionSuffix = `\n\n${attribution}`;
-    expect(cliArg.prompt).toEqual(expect.stringContaining("commit from CLI"));
-    expect(String(cliArg.prompt).endsWith(attributionSuffix)).toBe(true);
-    expect(cliArg.transcriptPrompt).toBe(String(cliArg.prompt).slice(0, -attributionSuffix.length));
-
-    const codexSessionKey = "agent:main:direct:coauthor-codex-prompt";
-    const codexSessionEntry = makeSessionEntry("coauthor-codex-prompt");
-    const codexSessionStore: Record<string, SessionEntry> = {
-      [codexSessionKey]: codexSessionEntry,
-    };
-    await writeSessionStoreSeed(codexSessionStore);
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      meta: { durationMs: 1 },
-    } satisfies EmbeddedAgentRunResult);
-
-    await runStoredAttempt({
-      agentHarnessRuntimeOverride: "codex",
-      body: "commit from Codex",
-      sessionEntry: codexSessionEntry,
-      sessionKey: codexSessionKey,
-      runId: "run-codex-coauthor-prompt",
-      opts: { gitCoauthorAttribution: attribution },
-      sessionStore: codexSessionStore,
-    });
-
-    const codexArg = firstEmbeddedAgentArg();
-    expectRecordFields(codexArg, {
-      agentHarnessId: undefined,
-      agentHarnessRuntimeOverride: "codex",
-      prompt: `commit from Codex\n\n${attribution}`,
-      transcriptPrompt: "commit from Codex",
-    });
-  });
-
-  it("keeps native Git attribution in replayable runtime context, not the user prompt", async () => {
-    const attribution = "Git commit attribution: no enabled co-author credit.";
-    const fragment = { kind: "runtime-instruction" as const, text: "Existing runtime instruction" };
-    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
-      body: "Commit from the native runtime.",
-      opts: { gitCoauthorAttribution: attribution, runtimeContextFragments: [fragment] },
-      runId: "native-coauthor-replay",
-    });
-    expect(embeddedArg.prompt).toBe("Commit from the native runtime.");
-    expect(embeddedArg.runtimeContextFragments).toEqual([
-      fragment,
-      { kind: "runtime-instruction", text: attribution },
-    ]);
-  });
-
-  it.each([{ modelRun: true }, { promptMode: "none" as const }])(
-    "keeps raw-model Git attribution in the existing prompt path: %j",
-    async (rawOptions) => {
-      const attribution = "Git commit attribution: no enabled co-author credit.";
-      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
-        body: "Raw user input",
-        opts: { ...rawOptions, gitCoauthorAttribution: attribution },
-        runId: "raw-coauthor-prompt",
-      });
-      expectRecordFields(embeddedArg, {
-        prompt: `Raw user input\n\n${attribution}`,
-        transcriptPrompt: "Raw user input",
-        runtimeContextFragments: undefined,
-      });
-    },
-  );
 
   it("keeps live stream output for visible subagent lane runs", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({

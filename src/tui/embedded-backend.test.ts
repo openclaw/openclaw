@@ -16,6 +16,10 @@ import {
   clearEmbeddedPluginApprovalBroker,
   getEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
+import {
+  clearEmbeddedQuestionBroker,
+  getEmbeddedQuestionBroker,
+} from "../infra/embedded-question-broker.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -35,6 +39,7 @@ let EmbeddedTuiBackend: typeof EmbeddedTuiBackendType;
 
 const agentCommandFromIngressMock = vi.fn();
 const queueEmbeddedAgentMessageWithOutcomeAsyncMock = vi.fn();
+const claimPendingEmbeddedAgentQuestionAnswerMock = vi.fn();
 const resolveActiveEmbeddedRunSessionIdMock = vi.fn();
 const runBtwSideQuestionMock = vi.fn();
 const formatSessionUsageCostSummaryMock = vi.fn();
@@ -156,6 +161,8 @@ vi.mock("../agents/agent-command.js", () => ({
 }));
 
 vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
+  claimPendingEmbeddedAgentQuestionAnswer: (...args: unknown[]) =>
+    claimPendingEmbeddedAgentQuestionAnswerMock(...args),
   queueEmbeddedAgentMessageWithOutcomeAsync: (...args: unknown[]) =>
     queueEmbeddedAgentMessageWithOutcomeAsyncMock(...args),
 }));
@@ -406,6 +413,7 @@ describe("EmbeddedTuiBackend", () => {
     vi.setSystemTime(embeddedEventTimestamp);
     agentCommandFromIngressMock.mockReset();
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockReset();
+    claimPendingEmbeddedAgentQuestionAnswerMock.mockReset().mockResolvedValue(null);
     resolveActiveEmbeddedRunSessionIdMock.mockReset();
     resolveActiveEmbeddedRunSessionIdMock.mockReturnValue(undefined);
     runBtwSideQuestionMock.mockReset();
@@ -518,6 +526,11 @@ describe("EmbeddedTuiBackend", () => {
     broker?.stop();
     if (broker) {
       clearEmbeddedPluginApprovalBroker(broker);
+    }
+    const questionBroker = getEmbeddedQuestionBroker();
+    questionBroker?.stop();
+    if (questionBroker) {
+      clearEmbeddedQuestionBroker(questionBroker);
     }
     vi.useRealTimers();
     setEmbeddedMode(false);
@@ -714,6 +727,48 @@ describe("EmbeddedTuiBackend", () => {
     pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
     await flushMicrotasks();
     await backend.stop();
+  });
+
+  it("bridges question events and answers through the registered local broker", async () => {
+    const backend = new EmbeddedTuiBackend();
+    const events = captureBackendEvents(backend);
+    backend.start();
+    try {
+      const broker = getEmbeddedQuestionBroker();
+      if (!broker) {
+        throw new Error("expected embedded question broker");
+      }
+      const { id } = broker.request({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        questions: [
+          { questionId: "target", header: "Target", question: "Which target?", options: [] },
+        ],
+      });
+      const { questions } = await backend.listQuestions();
+      expect(questions).toHaveLength(1);
+      expect(events).toContainEqual({ event: "question.requested", payload: questions[0] });
+      const waiting = broker.waitAnswer({ id, includeResolutionId: true });
+      const answers = { answers: { target: ["Staging"] } };
+      await expect(
+        backend.resolveQuestion({ id, answers, resolutionId: "local-answer" }),
+      ).resolves.toEqual({ status: "answered", answers });
+      await expect(waiting).resolves.toEqual({
+        status: "answered",
+        answers,
+        resolutionId: "local-answer",
+      });
+      await expect(backend.getQuestion(id)).resolves.toMatchObject({
+        question: { id, status: "answered", answers },
+      });
+      expect(events).toContainEqual({
+        event: "question.resolved",
+        payload: { id, status: "answered", answers },
+      });
+    } finally {
+      await backend.stop();
+    }
+    expect(getEmbeddedQuestionBroker()).toBeNull();
   });
 
   it("bridges local plugin approvals without a Gateway", async () => {
@@ -2005,6 +2060,43 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it.each(["collect", "followup", "steer", "interrupt"] as const)(
+    "claims local question input before applying %s queue policy",
+    async (mode) => {
+      const first = deferred<EmbeddedAgentResult>();
+      agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
+      resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
+      loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+        cfg: { messages: { queue: { mode } } },
+        agentId: "main",
+        canonicalKey: sessionKey,
+        storePath: "/tmp/openclaw-sessions.json",
+        store: {},
+        entry: {},
+      }));
+      const backend = new EmbeddedTuiBackend();
+      backend.start();
+      try {
+        await sendMainChat(backend, "ask a question", "question-owner");
+        claimPendingEmbeddedAgentQuestionAnswerMock.mockResolvedValue({ runId: "question-owner" });
+        await expect(sendMainChat(backend, "Green", "answer-send")).resolves.toEqual({
+          runId: "question-owner",
+        });
+        expect(claimPendingEmbeddedAgentQuestionAnswerMock).toHaveBeenCalledWith(
+          "active-session",
+          "Green",
+        );
+        expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+        first.resolve({ payloads: [{ text: "answered" }], meta: {} });
+        await flushMicrotasks();
+        expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+      } finally {
+        first.resolve({ payloads: [], meta: {} });
+        await backend.stop();
+      }
+    },
+  );
+
   it("steers same-session sends into the active local run", async () => {
     const first = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
@@ -2046,29 +2138,35 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
-  it("surfaces uncertain question input without queuing it again", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
-    resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
-    const error = new QuestionAnswerUnconfirmedError("synthetic-question");
-    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockRejectedValue(error);
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-    try {
-      await expect(
-        backend.sendChat({
-          sessionKey: "agent:main:main",
-          message: "answer",
-          runId: "run-local-second",
-        }),
-      ).rejects.toBe(error);
-    } finally {
-      first.resolve({ payloads: [{ text: "done" }], meta: {} });
-      await flushMicrotasks();
-    }
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-  });
+  it.each(["claim", "steer"])(
+    "surfaces uncertain question input from %s without queuing it again",
+    async (route) => {
+      const first = deferred<EmbeddedAgentResult>();
+      agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
+      resolveActiveEmbeddedRunSessionIdMock.mockReturnValue("active-session");
+      const error = new QuestionAnswerUnconfirmedError("synthetic-question");
+      (route === "claim"
+        ? claimPendingEmbeddedAgentQuestionAnswerMock
+        : queueEmbeddedAgentMessageWithOutcomeAsyncMock
+      ).mockRejectedValue(error);
+      const backend = new EmbeddedTuiBackend();
+      backend.start();
+      await sendMainChat(backend, "first", "run-local-first");
+      try {
+        await expect(
+          backend.sendChat({
+            sessionKey: "agent:main:main",
+            message: "answer",
+            runId: "run-local-second",
+          }),
+        ).rejects.toBe(error);
+      } finally {
+        first.resolve({ payloads: [{ text: "done" }], meta: {} });
+        await flushMicrotasks();
+      }
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("queues local sends when active-runtime steering rejects them", async () => {
     const first = deferred<EmbeddedAgentResult>();
@@ -2127,7 +2225,6 @@ describe("EmbeddedTuiBackend", () => {
     await sendMainChat(backend, "first", "run-local-first");
     await sendMainChat(backend, "follow up later", "run-local-second");
 
-    expect(resolveActiveEmbeddedRunSessionIdMock).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
     first.resolve({ payloads: [{ text: "first done" }], meta: {} });

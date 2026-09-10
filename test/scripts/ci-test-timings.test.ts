@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs, {
   chmodSync,
   mkdtempSync,
@@ -56,6 +56,159 @@ const baseline: CiTestTimings = {
   updatedAt: "2026-08-22",
   version: 1,
 };
+
+const sampleNow = "2026-08-28T12:00:00.000Z";
+
+function samplerRun(id: number, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    run_attempt: 1,
+    created_at: "2026-08-27T22:00:00Z",
+    status: "completed",
+    conclusion: "success",
+    event: "push",
+    head_branch: "main",
+    head_sha: "a".repeat(40),
+    ...overrides,
+  };
+}
+
+function samplerJob(id: number, runId: number, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    run_id: runId,
+    run_attempt: 1,
+    head_sha: "a".repeat(40),
+    name: "checks-node-compact-small (1)",
+    status: "completed",
+    conclusion: "success",
+    labels: ["blacksmith-4vcpu-ubuntu-2404"],
+    started_at: "2026-08-27T23:00:00Z",
+    completed_at: "2026-08-27T23:10:00Z",
+    log: compactLog(20),
+    ...overrides,
+  };
+}
+
+type SamplerFixture = {
+  runs: ReturnType<typeof samplerRun>[];
+  jobs: ReturnType<typeof samplerJob>[];
+  releaseRuns?: ReturnType<typeof samplerRun>[];
+  runPages?: ReturnType<typeof samplerRun>[][];
+  jobPages?: Record<string, ReturnType<typeof samplerJob>[][]>;
+  jobTotals?: Record<string, number>;
+  baseline?: CiTestTimings;
+};
+
+function withSamplerFixture(
+  fixture: SamplerFixture,
+  check: (context: {
+    invoke: (dryRun?: boolean, count?: number) => SpawnSyncReturns<string>;
+    contents: () => string;
+    requests: () => string[][];
+    original: string;
+  }) => void,
+) {
+  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-ci-refit-")));
+  const fakeGh = path.join(directory, "gh");
+  const output = path.join(directory, "timings.json");
+  const requests = path.join(directory, "requests.jsonl");
+  const clock = path.join(directory, "clock.cjs");
+  const original = `${JSON.stringify(fixture.baseline ?? baseline, null, 2)}\n`;
+  try {
+    writeFileSync(output, original);
+    writeFileSync(requests, "");
+    writeFileSync(
+      clock,
+      `const OriginalDate = Date;
+global.Date = class extends OriginalDate {
+  constructor(...args) { super(...(args.length ? args : [${JSON.stringify(sampleNow)}])); }
+  static now() { return OriginalDate.parse(${JSON.stringify(sampleNow)}); }
+};\n`,
+    );
+    writeFileSync(
+      fakeGh,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(args) + "\\n");
+const fixture = ${JSON.stringify(fixture)};
+const endpoint = new URL(args[1], "https://api.github.com/");
+const page = Number(endpoint.searchParams.get("page") || 1);
+const size = Number(endpoint.searchParams.get("per_page") || 100);
+const slice = rows => rows.slice((page - 1) * size, page * size);
+if (args[1] === "--help") {
+  console.log("--allow-escape-sequences");
+} else if (endpoint.pathname.includes("/workflows/")) {
+  const main = endpoint.pathname.includes("/ci.yml/");
+  const rows = main ? fixture.runs : endpoint.pathname.includes("/openclaw-release-checks.yml/") ? fixture.releaseRuns || [] : [];
+  const selected = main && fixture.runPages ? fixture.runPages[page - 1] || [] : slice(rows);
+  console.log(JSON.stringify(args.at(-1).startsWith("[.workflow_runs") ? selected : {total_count: rows.length, workflow_runs: selected}));
+} else if (endpoint.pathname.endsWith("/jobs")) {
+  const match = endpoint.pathname.match(/\\/runs\\/(\\d+)(?:\\/attempts\\/(\\d+))?\\/jobs$/);
+  if (!match) process.exit(2);
+  const key = match[1] + ":" + (match[2] || "all");
+  const rows = fixture.jobs.filter(job => job.run_id === Number(match[1]) && (!match[2] || job.run_attempt === Number(match[2])));
+  const pages = fixture.jobPages?.[key];
+  console.log(JSON.stringify({total_count: fixture.jobTotals?.[key] ?? rows.length, jobs: pages ? pages[page - 1] || [] : slice(rows)}));
+} else if (endpoint.pathname.endsWith("/logs")) {
+  const id = Number(endpoint.pathname.split("/").at(-2));
+  const job = fixture.jobs.find(job => job.id === id);
+  if (!job) process.exit(2);
+  console.log(job.log);
+} else {
+  console.error("Unexpected gh request", args);
+  process.exit(2);
+}\n`,
+    );
+    chmodSync(fakeGh, 0o755);
+    check({
+      original,
+      contents: () => readFileSync(output, "utf8"),
+      requests: () =>
+        readFileSync(requests, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as string[]),
+      invoke: (dryRun = false, count = 2) =>
+        spawnSync(
+          process.execPath,
+          [
+            "--require",
+            clock,
+            "--import",
+            "tsx",
+            "scripts/ci-refit-test-timings.mts",
+            "--runs",
+            String(count),
+            "--repo",
+            "fixture/repo",
+            "--out",
+            output,
+            ...(dryRun ? ["--dry-run"] : []),
+          ],
+          {
+            cwd: fileURLToPath(new URL("../../", import.meta.url)),
+            encoding: "utf8",
+            timeout: 30_000,
+            env: { ...process.env, OPENCLAW_GH_BIN: fakeGh, GH_TOKEN: "fixture-token" },
+          },
+        ),
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+it("rejects a populated baseline without fresh compact contributors before writing", () => {
+  withSamplerFixture({ runs: [samplerRun(1), samplerRun(2)], jobs: [] }, (fixture) => {
+    const result = fixture.invoke();
+    expect(result.status, result.stderr || result.stdout).toBe(1);
+    expect(result.stderr).toContain("compact");
+    expect(fixture.contents()).toBe(fixture.original);
+  });
+});
 
 it("rejects non-plain timing objects even when their fields are valid", () => {
   expect(() =>
@@ -631,135 +784,141 @@ it.todo("retains todo coverage");
       ).timings,
     ).toEqual(first.timings);
   });
+});
+
+describe("CI timing sampler provenance", () => {
+  it.each([
+    ["manual main dispatch", { event: "workflow_dispatch" }, "event"],
+    ["pull request", { event: "pull_request" }, "event"],
+    ["another branch", { head_branch: "feature" }, "head_branch"],
+    ["missing SHA", { head_sha: null }, "head_sha"],
+    ["missing attempt", { run_attempt: undefined }, "run_attempt"],
+    ["zero attempt", { run_attempt: 0 }, "run_attempt"],
+    ["incomplete run", { status: "in_progress" }, "status"],
+    ["failed run", { conclusion: "failure" }, "conclusion"],
+    ["stale run", { created_at: "2026-08-21T11:59:59.999Z" }, "created_at"],
+    ["future run", { created_at: "2026-08-28T12:00:00.001Z" }, "created_at"],
+  ] satisfies [string, Record<string, unknown>, string][])(
+    "rejects %s before reading logs or changing the baseline",
+    (_name, metadata, field) => {
+      withSamplerFixture(
+        {
+          runs: [samplerRun(1, metadata), samplerRun(2)],
+          jobs: [samplerJob(11, 1), samplerJob(21, 2)],
+        },
+        (fixture) => {
+          const result = fixture.invoke();
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stderr).toContain(field);
+          expect(fixture.requests().some((args) => args[1]?.endsWith("/logs"))).toBe(false);
+          expect(fixture.contents()).toBe(fixture.original);
+        },
+      );
+    },
+  );
 
   it.each([
-    { label: "main push retries", metadata: {}, invalidField: undefined },
-    {
-      label: "manual dispatch from main",
-      metadata: { event: "workflow_dispatch" },
-      invalidField: "event",
-    },
-    {
-      label: "push to another branch",
-      metadata: { head_branch: "feature" },
-      invalidField: "head_branch",
-    },
-    { label: "missing head commit", metadata: { head_sha: null }, invalidField: "head_sha" },
-  ])(
-    "validates $label before fetching samples and preserves dry-run/unchanged bytes",
-    ({ metadata, invalidField }) => {
-      const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-ci-refit-")));
-      const fakeGh = path.join(directory, "gh");
-      const output = path.join(directory, "timings.json");
-      const requests = path.join(directory, "requests.json");
-      const root = fileURLToPath(new URL("../../", import.meta.url));
-      const log = uiLog({ [measuredFile]: 130 });
-      writeFileSync(
-        fakeGh,
-        `#!/usr/bin/env node
-const args = process.argv.slice(2);
-const endpoint = args[1];
-if (args[0] === "api" && args[1] === "--help") {
-  console.log("--allow-escape-sequences");
-} else if (endpoint.replace("&event=push", "") === "repos/fixture/repo/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=3&page=1") {
-  if (!args.includes("--jq")) process.exit(2);
-  require("node:fs").writeFileSync(${JSON.stringify(requests)}, JSON.stringify(args));
-  console.log(JSON.stringify([1, 2, 3].map(id => ({id, created_at: "2026-08-27T23:00:00Z", status: "completed", conclusion: "success", event: "push", head_branch: "main", head_sha: "a".repeat(40), run_attempt: 2, ...${JSON.stringify(metadata)}}))));
-} else if (endpoint.includes("actions/workflows/openclaw-") && endpoint.includes("/runs?event=workflow_dispatch&")) {
-  console.log(JSON.stringify(endpoint.includes("openclaw-release-checks.yml") ? [4, 5, 6].map(id => ({id, created_at: "2026-08-27T23:00:00Z", status: "completed", conclusion: "success", event: "workflow_dispatch", head_branch: "release-ci/frozen", head_sha: "b".repeat(40)})) : []));
-} else if (endpoint.includes("actions/runs/") && endpoint.includes("/jobs?filter=all&")) {
-  if (!args.at(-1).includes("labels")) process.exit(2);
-  if (Number(endpoint.split("/actions/runs/")[1].split("/")[0]) >= 4) {
-    console.log(JSON.stringify({total_count: 2, jobs: [
-      {id: 7, name: "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 1/4)", conclusion: "success", labels: ["ubuntu-24.04"]},
-      {id: 8, name: "UI and plugin E2E / Repo E2E (UI 1/4)", conclusion: "success", labels: ["ubuntu-24.04"]},
-    ]}));
-    process.exit(0);
-  }
-  const jobs = endpoint.endsWith("page=1")
-    ? [{id: 1, name: "unrelated", conclusion: "success"}, {id: 2, name: "checks-ui-e2e (2/11)", conclusion: "failure"}]
-    : [{id: 3, name: "checks-ui-e2e (1/11)", conclusion: "success"},
-       {id: 4, name: "checks-node-compact-small (1)", conclusion: "success", labels: ["blacksmith-4vcpu-ubuntu-2404"]},
-       {id: 5, name: "checks-node-compact-small (1)", conclusion: "success", labels: ["ubuntu-24.04"]},
-       {id: 6, name: "checks-node-compact-small (1)", conclusion: "success", labels: ["ubuntu-24.04"]}];
-  console.log(JSON.stringify({ total_count: 6, jobs: jobs.map(job => ({labels: ["ubuntu-24.04"], ...job})) }));
-} else if (endpoint.endsWith("actions/jobs/3/logs")) {
-  if (!args.includes("--allow-escape-sequences")) process.exit(2);
-  console.log(${JSON.stringify(log)});
-} else if (endpoint.endsWith("actions/jobs/4/logs")) {
-  console.log(${JSON.stringify(compactLog(20))});
-} else if (endpoint.endsWith("actions/jobs/5/logs")) {
-  console.log(${JSON.stringify(compactLog(40))});
-} else if (endpoint.endsWith("actions/jobs/6/logs")) {
-  console.log(${JSON.stringify(compactLog(60))});
-} else if (endpoint.endsWith("actions/jobs/7/logs")) {
-  console.log("✓ test/release.e2e.test.ts (1 test) 4500ms\\nDuration 5s (tests 4.5s)");
-} else {
-  console.error("Unexpected gh request", args);
-  process.exit(2);
-}
-`,
-      );
-      chmodSync(fakeGh, 0o755);
-      const original = `${JSON.stringify(
+    ["wrong run", { run_id: 9 }],
+    ["wrong attempt", { run_attempt: 2 }],
+    ["wrong SHA", { head_sha: "b".repeat(40) }],
+    ["unfinished success", { status: "in_progress" }],
+    ["missing completion", { completed_at: null }],
+    ["stale start", { started_at: "2026-08-21T11:59:59.999Z" }],
+    ["future completion", { completed_at: "2026-08-28T12:00:00.001Z" }],
+    ["reversed timestamps", { completed_at: "2026-08-27T22:59:59Z" }],
+  ] satisfies [string, Record<string, unknown>][])(
+    "rejects a job with %s without reading its log",
+    (_name, metadata) => {
+      const job = samplerJob(11, 1, metadata);
+      withSamplerFixture(
         {
-          ...baseline,
-          compactGroupSeconds: { blacksmith: { deleted: 30 }, github: {} },
+          runs: [samplerRun(1), samplerRun(2)],
+          jobs: [job, samplerJob(21, 2)],
+          jobPages: { "1:1": [[job]] },
+          jobTotals: { "1:1": 1 },
         },
-        null,
-        2,
-      )}\n`;
-      writeFileSync(output, original);
-      const invoke = (dryRun: boolean) =>
-        spawnSync(
-          process.execPath,
-          [
-            "--import",
-            "tsx",
-            "scripts/ci-refit-test-timings.mts",
-            "--runs",
-            "3",
-            "--repo",
-            "fixture/repo",
-            "--out",
-            output,
-            ...(dryRun ? ["--dry-run"] : []),
-          ],
-          {
-            cwd: root,
-            encoding: "utf8",
-            env: { ...process.env, OPENCLAW_GH_BIN: fakeGh, GH_TOKEN: "fixture-token" },
-          },
-        );
-      try {
-        const dryRun = invoke(true);
-        if (invalidField) {
-          expect(dryRun.status, dryRun.stderr).toBe(1);
-          expect(dryRun.stderr).toContain(invalidField);
-          expect(dryRun.stdout).not.toContain("Sampled successful CI and release-check runs");
-          expect(readFileSync(output, "utf8")).toBe(original);
-          return;
-        }
+        (fixture) => {
+          const result = fixture.invoke();
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stderr).toMatch(/cohort|frozen UTC window/u);
+          expect(fixture.requests().some((args) => args[1]?.endsWith("/logs"))).toBe(false);
+          expect(fixture.contents()).toBe(fixture.original);
+        },
+      );
+    },
+  );
+
+  it("seeks compact contributors past docs-only and unparseable runs, preserving all attempts and unchanged bytes", () => {
+    const releaseRuns = [10, 11].map((id) =>
+      samplerRun(id, {
+        event: "workflow_dispatch",
+        head_branch: "release-ci/frozen",
+        head_sha: "b".repeat(40),
+      }),
+    );
+    withSamplerFixture(
+      {
+        runs: [
+          samplerRun(1),
+          samplerRun(2),
+          samplerRun(3, { run_attempt: 2 }),
+          samplerRun(4, { run_attempt: 2 }),
+        ],
+        releaseRuns,
+        jobs: [
+          samplerJob(11, 1, { name: "docs", log: "No test results" }),
+          samplerJob(21, 2, { log: "No complete compact spans" }),
+          ...[3, 4].flatMap((id) => [
+            samplerJob(id * 10 + 1, id),
+            samplerJob(id * 10 + 2, id, {
+              name: "checks-ui-e2e (1/6)",
+              log: uiLog({ [measuredFile]: 130 }),
+            }),
+            samplerJob(id * 10 + 3, id, {
+              run_attempt: 2,
+              labels: ["ubuntu-24.04"],
+              log: compactLog(id === 3 ? 40 : 60),
+            }),
+            samplerJob(id * 10 + 4, id, {
+              run_attempt: 2,
+              conclusion: "failure",
+              log: compactLog(900),
+            }),
+          ]),
+          ...releaseRuns.map((run) =>
+            samplerJob(run.id * 10, run.id, {
+              head_sha: "b".repeat(40),
+              name: "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 1/4)",
+              log: "✓ test/release.e2e.test.ts (1 test) 4500ms\nDuration 5s (tests 4.5s)",
+            }),
+          ),
+        ],
+      },
+      (fixture) => {
+        const dryRun = fixture.invoke(true);
         expect(dryRun.status, dryRun.stderr).toBe(0);
-        expect(JSON.parse(readFileSync(requests, "utf8"))).toEqual([
-          "api",
-          "repos/fixture/repo/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=3&page=1",
-          "--jq",
-          "[.workflow_runs[] | {id, created_at, status, conclusion, event, head_branch, head_sha}]",
-        ]);
+        expect(fixture.contents()).toBe(fixture.original);
         expect(dryRun.stdout).toContain(
-          `| uiE2e.fileSeconds.${measuredFile} | 100 | 130 | 30.0% |`,
+          "Independent main compact contributors: 2 (Blacksmith: 2; GitHub: 2). Release Gateway contributors: 2.",
         );
+        expect(dryRun.stdout).toContain(`| release | 10 | 1 | ${"b".repeat(40)} |`);
         expect(dryRun.stdout).toContain(
-          "| compactGroupSeconds.blacksmith.deleted | 30 | — | removed |",
+          "Release workflow SHAs identify tooling, not the measured target.",
         );
-        expect(dryRun.stdout).toContain(
-          "Sampled successful CI and release-check runs: 1, 2, 3, 4, 5, 6",
-        );
-        expect(readFileSync(output, "utf8")).toBe(original);
-        const write = invoke(false);
+        const requests = fixture.requests();
+        const runRequests = requests.filter((args) => args[1]?.includes("/workflows/"));
+        expect(runRequests).toHaveLength(4);
+        for (const args of runRequests) {
+          const params = new URL(args[1]!, "https://api.github.com").searchParams;
+          expect(params.get("created")).toBe(`2026-08-21T12:00:00.000Z..${sampleNow}`);
+        }
+        expect(requests.some((args) => args[1]?.includes("/runs/3/attempts/1/jobs?"))).toBe(true);
+        expect(requests.some((args) => args[1]?.includes("/runs/3/attempts/2/jobs?"))).toBe(true);
+        expect(requests.some((args) => args[1]?.includes("filter=all"))).toBe(false);
+        expect(requests.some((args) => args[1]?.endsWith("/jobs/34/logs"))).toBe(false);
+        const write = fixture.invoke();
         expect(write.status, write.stderr).toBe(0);
-        const updated = readFileSync(output, "utf8");
+        const updated = fixture.contents();
         const timings = ciTestTimingsSchema.parse(JSON.parse(updated));
         expect(timings.uiE2e.fileSeconds[measuredFile]).toBe(130);
         expect(timings.repoE2eFileSeconds).toEqual({ "test/release.e2e.test.ts": 5 });
@@ -767,16 +926,138 @@ if (args[0] === "api" && args[1] === "--help") {
           blacksmith: { "core-unit-src-security-2": 20 },
           github: { "core-unit-src-security-2": 50 },
         });
-        expect(updated.endsWith("\n")).toBe(true);
-        const unchanged = invoke(false);
+        const unchanged = fixture.invoke();
         expect(unchanged.status, unchanged.stderr).toBe(0);
         expect(unchanged.stdout).toContain("No timing changes");
-        expect(readFileSync(output, "utf8")).toBe(updated);
-      } finally {
-        rmSync(directory, { recursive: true, force: true });
-      }
+        expect(fixture.contents()).toBe(updated);
+      },
+    );
+  });
+
+  it("accepts both date boundaries without changing an unobserved profile", () => {
+    const lower = "2026-08-21T12:00:00.000Z";
+    withSamplerFixture(
+      {
+        runs: [samplerRun(1, { created_at: lower }), samplerRun(2, { created_at: sampleNow })],
+        jobs: [
+          samplerJob(11, 1, { started_at: lower, completed_at: lower }),
+          samplerJob(21, 2, { started_at: sampleNow, completed_at: sampleNow }),
+        ],
+        baseline: {
+          ...baseline,
+          compactGroupSeconds: { blacksmith: {}, github: { retained: 90 } },
+        },
+      },
+      (fixture) => {
+        const result = fixture.invoke();
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(fixture.contents()).compactGroupSeconds.github).toEqual({ retained: 90 });
+      },
+    );
+  });
+
+  it.each(["different keys", "one run with retries", "release only"])(
+    "rejects %s as evidence for a new compact measurement",
+    (condition) => {
+      const first = samplerRun(1, { run_attempt: condition === "one run with retries" ? 2 : 1 });
+      withSamplerFixture(
+        {
+          runs:
+            condition === "release only"
+              ? []
+              : condition === "one run with retries"
+                ? [first]
+                : [first, samplerRun(2)],
+          jobs:
+            condition === "release only"
+              ? [10, 11].map((id) =>
+                  samplerJob(id * 10, id, {
+                    name: "Repo E2E (Gateway 1/4)",
+                    log: "✓ test/release.e2e.test.ts (1 test) 4000ms\nDuration 5s",
+                  }),
+                )
+              : [
+                  samplerJob(11, 1),
+                  samplerJob(21, condition === "one run with retries" ? 1 : 2, {
+                    run_attempt: condition === "one run with retries" ? 2 : 1,
+                    log: compactLog(20, condition === "different keys" ? "different" : undefined),
+                  }),
+                ],
+          releaseRuns:
+            condition === "release only"
+              ? [10, 11].map((id) => samplerRun(id, { event: "workflow_dispatch" }))
+              : [],
+        },
+        (fixture) => {
+          const result = fixture.invoke();
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stderr).toContain("newly eligible compact measurement");
+          expect(fixture.contents()).toBe(fixture.original);
+          expect(fixture.requests().some((args) => args[1]?.includes("/workflows/openclaw-"))).toBe(
+            false,
+          );
+        },
+      );
     },
   );
+
+  it("deduplicates overlapping run and job pages without treating retries as extra runs", () => {
+    const first = samplerRun(1);
+    const second = samplerRun(2);
+    const compact = samplerJob(11, 1);
+    const ui = samplerJob(12, 1, {
+      name: "checks-ui-e2e (1/6)",
+      log: uiLog({ [measuredFile]: 130 }),
+    });
+    withSamplerFixture(
+      {
+        runs: [first, second],
+        runPages: [[first, first], [second]],
+        jobs: [compact, ui, samplerJob(21, 2)],
+        jobPages: { "1:1": [[compact, compact], [ui]] },
+      },
+      (fixture) => {
+        const result = fixture.invoke();
+        expect(result.status, result.stderr).toBe(0);
+        expect(
+          fixture.requests().filter((args) => args[1]?.endsWith("/jobs/11/logs")),
+        ).toHaveLength(1);
+        expect(result.stdout).toContain("Independent main compact contributors: 2");
+      },
+    );
+  });
+
+  it.each(["run", "job"])("refuses incomplete %s pagination without writing", (kind) => {
+    const first = samplerRun(1);
+    const job = samplerJob(11, 1);
+    withSamplerFixture(
+      {
+        runs: [first, samplerRun(2)],
+        jobs: [job, samplerJob(21, 2)],
+        ...(kind === "run"
+          ? { runPages: [[first], []] }
+          : { jobPages: { "1:1": [[job], []] }, jobTotals: { "1:1": 2 } }),
+      },
+      (fixture) => {
+        const result = fixture.invoke();
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain("pagination incomplete");
+        expect(fixture.contents()).toBe(fixture.original);
+      },
+    );
+  });
+
+  it("keeps the 25-page job budget across all captured attempts", () => {
+    withSamplerFixture({ runs: [samplerRun(1, { run_attempt: 26 })], jobs: [] }, (fixture) => {
+      const result = fixture.invoke();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("Job pagination limit reached");
+      const jobRequests = fixture.requests().filter((args) => args[1]?.includes("/jobs?"));
+      expect(jobRequests).toHaveLength(25);
+      expect(jobRequests.at(-1)?.[1]).toContain("/attempts/25/jobs?");
+      expect(fixture.contents()).toBe(fixture.original);
+    });
+  });
 });
 
 describe("CI timing schema", () => {

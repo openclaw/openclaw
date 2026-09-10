@@ -20,6 +20,7 @@ import {
   restoreBridgedRouteLocation,
   routeIdFromPath,
   routePageSpec,
+  setPluginTabSlugs,
   type RouteId,
   type MemoryRouteTab,
   type PluginsHubRouteTab,
@@ -28,6 +29,7 @@ import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts
 import type { ApplicationContext } from "./app/context.ts";
 import type { AgentsPanel } from "./lib/agents/panels.ts";
 import { createApplicationGateway } from "./test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "./test-helpers/gateway-methods.ts";
 
 const AGENT_PANEL_CASES = [
   "overview",
@@ -145,6 +147,83 @@ function createStartupContext(basePath = ""): ApplicationContext {
 }
 
 describe("Dynamic route startup bridge", () => {
+  it("defers a cold slug until hello and loads each tab at its real pathname", async () => {
+    let location: RouteLocation = {
+      pathname: "/ui/reports",
+      search: "?p.range=week",
+      hash: "#latest",
+    };
+    const replace = vi.fn((next: RouteLocation) => {
+      location = next;
+    });
+    const history: RouterHistory = {
+      location: () => location,
+      push: replace,
+      replace,
+      listen: () => () => {},
+    };
+    const router = createApplicationRouter();
+    const baseContext = createStartupContext("/ui");
+    const gateway = createApplicationGateway(baseContext.gateway.snapshot);
+    const context = { ...baseContext, gateway: gateway.gateway };
+    const route = router.getRoute("plugin")!;
+    const originalComponent = route.component;
+    route.component = async () => ({ render: () => null });
+    setPluginTabSlugs();
+    try {
+      await startApplicationRouter(router, history, "/ui", context);
+      expect(location.pathname).toBe("/ui/reports");
+      expect(replace).not.toHaveBeenCalled();
+      expect(router.getState().status).toBe("notFound");
+      setPluginTabSlugs([
+        { pluginId: "fixture", id: "summary", slug: "reports" },
+        { pluginId: "fixture", id: "metrics", slug: "metrics" },
+      ]);
+      await router.navigate("plugin", context, { history: "replace" }, location);
+      expect(router.getState().matches[0]).toMatchObject({
+        routeId: "plugin",
+        location,
+        data: { pluginId: "fixture", id: "summary", params: { range: "week" } },
+      });
+      await router.navigate(
+        "plugin",
+        context,
+        { history: "push" },
+        { ...location, pathname: "/ui/metrics" },
+      );
+      expect(router.getState().matches[0]?.data).toMatchObject({
+        pluginId: "fixture",
+        id: "metrics",
+      });
+      const tabs = [
+        { pluginId: "other-fixture", id: "replacement", label: "Metrics", slug: "metrics" },
+      ];
+      gateway.publish({
+        ...context.gateway.snapshot,
+        phase: "connected",
+        hello: { ...gatewayHelloForMethods([]), controlUiTabs: tabs },
+      });
+      await vi.waitFor(() =>
+        expect(router.getState().matches[0]?.data).toMatchObject({
+          pluginId: "other-fixture",
+          id: "replacement",
+        }),
+      );
+      gateway.publish({ ...context.gateway.snapshot, phase: "stopped", hello: null });
+      gateway.publish({
+        ...context.gateway.snapshot,
+        phase: "connected",
+        hello: gatewayHelloForMethods([]),
+      });
+      await vi.waitFor(() => expect(router.getState().status).toBe("notFound"));
+      expect(location.pathname).toBe("/ui/metrics");
+    } finally {
+      router.stop();
+      route.component = originalComponent;
+      setPluginTabSlugs();
+    }
+  });
+
   it("keeps share-route reservations aligned with every built-in path and alias", () => {
     const reservedRouteSegments = [
       ...new Set([
@@ -555,7 +634,7 @@ describe("Agent panel route paths", () => {
     };
     const context = {
       basePath: "",
-      gateway: { snapshot: { phase: "stopped", client: null } },
+      gateway: createStartupContext().gateway,
       agents: {
         state: { agentsList, agentsError: null },
         ensureList: () => Promise.resolve(agentsList),

@@ -535,8 +535,8 @@ class OpenClawShell
     this.shellNavigation.navigate(routeId, options);
   }
 
-  replaceChatWithCurrentSession() {
-    return this.shellNavigation.replaceChatWithCurrentSession();
+  recoverNotFoundRoute() {
+    return this.shellNavigation.recoverNotFoundRoute();
   }
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {

@@ -90,7 +90,7 @@ extensions/browser/src/browser/pw-tools-core.snapshot.ts	1
 extensions/browser/src/browser/pw-tools-core.state.ts	2
 extensions/browser/src/browser/routes/agent.act.normalize.ts	1
 extensions/browser/src/browser/routes/agent.act.shared.ts	3
-extensions/browser/src/browser/routes/agent.act.ts	2
+extensions/browser/src/browser/routes/agent.act.ts	1
 extensions/browser/src/browser/routes/agent.shared.ts	2
 extensions/browser/src/browser/routes/agent.snapshot.ts	8
 extensions/browser/src/browser/routes/agent.storage.ts	2
@@ -506,7 +506,6 @@ extensions/google-meet/src/cli-space-commands.ts	3
 extensions/google-meet/src/meet-api.ts	1
 extensions/google-meet/src/plugin-registration.ts	1
 extensions/google-meet/src/transports/chrome-create.ts	4
-extensions/google-meet/src/transports/chrome.ts	2
 extensions/google-meet/src/transports/google-meet-platform-adapter.ts	1
 extensions/google/cli-backend-auth.runtime.ts	1
 extensions/google/cli-backend-isolated-auth.runtime.ts	5
@@ -2027,7 +2026,7 @@ src/agents/tools/system-agent-tool.ts	1
 src/agents/tools/task-suggestion-tools.ts	2
 src/agents/tools/terminal-tool.ts	1
 src/agents/tools/tts-tool.ts	1
-src/agents/tools/video-generate-tool.ts	3
+src/agents/tools/video-generate-tool.ts	2
 src/agents/tools/web-fetch.ts	3
 src/agents/tools/web-guarded-fetch.ts	2
 src/agents/tools/web-search-output.ts	3
@@ -2063,7 +2062,7 @@ src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
-src/auto-reply/reply/agent-runner-memory.ts	6
+src/auto-reply/reply/agent-runner-memory.ts	5
 src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-session-reset.ts	1
 src/auto-reply/reply/agent-runner-trace.ts	1
@@ -2357,7 +2356,7 @@ src/commands/backup-restore.ts	1
 src/commands/backup-schedule.ts	1
 src/commands/backup-verify.ts	2
 src/commands/channel-setup/config-compatibility.ts	2
-src/commands/channel-setup/discovery.ts	10
+src/commands/channel-setup/discovery.ts	8
 src/commands/channel-test-registry.ts	2
 src/commands/channels/add-wizard.ts	1
 src/commands/channels/add.ts	2
@@ -3205,7 +3204,7 @@ src/node-host/node-worker-bundle-installer.ts	1
 src/node-host/node-worker-transfer-client.ts	1
 src/node-host/node-worker-transfer-http.ts	2
 src/node-host/node-worker-tree-control.ts	2
-src/node-host/node-worker-workspace.ts	5
+src/node-host/node-worker-workspace.ts	3
 src/node-host/plugin-node-host.ts	1
 src/node-host/pty-command.ts	6
 src/node-host/runtime.ts	2
@@ -3440,7 +3439,7 @@ src/process/windows-command.ts	1
 src/projects/project-registry.ts	1
 src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
-src/proxy-capture/runtime.ts	10
+src/proxy-capture/runtime.ts	5
 src/proxy-capture/store.sqlite.ts	4
 src/realtime-transcription/websocket-session.ts	2
 src/routing/binding-scope.ts	1
@@ -3681,7 +3680,6 @@ src/worker/worker-session-tools.ts	4
 src/worker/workspace-rsync-receiver.ts	1
 ui/src/api/gateway.ts	1
 ui/src/app-navigation.ts	2
-ui/src/app-route-paths.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1
 ui/src/app/app-shell-chrome.ts	2
@@ -3800,14 +3798,13 @@ ui/src/lib/cron/index.ts	11
 ui/src/lib/gateway-diagnostics.ts	2
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
-ui/src/lib/nodes/index.ts	3
+ui/src/lib/nodes/index.ts	2
 ui/src/lib/nodes/inventory.ts	1
 ui/src/lib/plugin-activation.ts	3
 ui/src/lib/session-pull-requests.ts	2
 ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
-ui/src/lib/sessions/reconcile.ts	10
 ui/src/lib/sessions/session-key.ts	4
 ui/src/lib/skills/index.ts	1
 ui/src/lit/stream-auto-follow-controller.ts	1

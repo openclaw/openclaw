@@ -125,7 +125,7 @@ See [Heartbeat](/gateway/heartbeat).
 
 ## Retired inferred commitments
 
-The inferred commitments experiment has been removed: OpenClaw no longer
+The inferred commitments experiment was removed in v2026.8.1: OpenClaw no longer
 extracts follow-ups from conversations or delivers them through heartbeat.
 The `openclaw commitments` maintenance CLI is also gone. The database migration
 discards the old commitment rows and removes their table and indexes.

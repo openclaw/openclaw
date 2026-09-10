@@ -19,6 +19,82 @@ function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResu
   };
 }
 
+describe("history defaults ownership", () => {
+  it.each(["global", "unknown"] as const)(
+    "replaces the selected %s owner without donating another owner's presentation",
+    (key) => {
+      const row = { key, kind: key, sessionId: "shared-session", updatedAt: 1 };
+      const current = buildResult([
+        {
+          ...row,
+          agentId: "main",
+          derivedTitle: "Main title",
+          lastMessagePreview: "Main preview",
+        },
+      ]);
+      const incoming = { ...row, agentId: "work", updatedAt: 2 };
+      expect(reconcileSessionHistory(current, incoming, undefined, { resultAgentId: "main" })).toBe(
+        current,
+      );
+      const next = reconcileSessionHistory(current, incoming, undefined, {
+        resultAgentId: "work",
+      });
+      expect(next?.sessions).toEqual([incoming]);
+    },
+  );
+
+  it.each([
+    { name: "keeps an empty roster's own inherited thinking", agentId: "main", existing: true },
+    { name: "does not initialize a foreign missing roster", agentId: "main", existing: false },
+    { name: "accepts the same agent's updated defaults", agentId: "work", existing: true },
+  ])("$name", ({ agentId, existing }) => {
+    const identity = {
+      modelProvider: "test-provider",
+      model: "reasoning-model",
+      agentRuntime: { id: "openclaw", source: "model" as const },
+    };
+    const defaults: SessionsListResult["defaults"] = {
+      ...identity,
+      contextTokens: 128_000,
+      thinkingDefault: "low",
+      thinkingLevels: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+      ],
+    };
+    const current = existing ? { ...buildResult([]), defaults } : null;
+    const workDefaults = { ...defaults, thinkingDefault: "high" };
+    const next = reconcileSessionHistory(
+      current,
+      {
+        ...identity,
+        key: "global",
+        agentId: "work",
+        kind: "global",
+        sessionId: "work-session",
+        updatedAt: 10,
+      },
+      workDefaults,
+      { resultAgentId: agentId, selectedGlobalAgentId: "work" },
+    );
+
+    if (!existing) {
+      expect(next).toBeNull();
+      return;
+    }
+    const ownAgent = agentId === "work";
+    expect(
+      resolveChatThinkingSelectState({ catalog: [], sessionKey: "global", sessionsResult: next })
+        .inherited,
+    ).toEqual({
+      value: ownAgent ? "high" : "low",
+      displayLabel: ownAgent ? "Inherited: High" : "Inherited: Low",
+    });
+    expect(next?.defaults).toEqual(ownAgent ? workDefaults : defaults);
+    expect(next?.sessions.map((row) => row.sessionId)).toEqual(ownAgent ? ["work-session"] : []);
+  });
+});
+
 describe("preserveRosterPresentationMetadata", () => {
   it("does not preserve presentation metadata without a known matching session identity", () => {
     const key = "agent:main:dashboard:replacement";
@@ -404,12 +480,28 @@ test("ownerless raw-global events invalidate without contaminating the selected 
 
 describe("reconcileSessionChanged", () => {
   it.each([
-    { name: "inherited Medium", thinkingDefault: "medium", thinkingLevel: undefined },
-    { name: "configured Off", thinkingDefault: "off", thinkingLevel: undefined },
-    { name: "explicit Off", thinkingDefault: "medium", thinkingLevel: "off" },
+    {
+      name: "inherited Medium",
+      thinkingDefault: "medium",
+      thinkingLevel: undefined,
+      levels: ["off", "medium"],
+    },
+    {
+      name: "configured Off",
+      thinkingDefault: "off",
+      thinkingLevel: undefined,
+      levels: ["off", "medium"],
+    },
+    {
+      name: "explicit Off",
+      thinkingDefault: "medium",
+      thinkingLevel: "off",
+      levels: ["off", "medium"],
+    },
+    { name: "an empty profile", thinkingDefault: undefined, thinkingLevel: undefined, levels: [] },
   ])(
     "preserves $name when history omits prepared thinking metadata",
-    ({ thinkingDefault, thinkingLevel }) => {
+    ({ thinkingDefault, thinkingLevel, levels }) => {
       const identity = {
         modelProvider: "test-provider",
         model: "reasoning-model",
@@ -424,12 +516,9 @@ describe("reconcileSessionChanged", () => {
         thinkingLevel,
       };
       const metadata = {
-        thinkingDefault,
-        thinkingLevels: [
-          { id: "off", label: "off" },
-          { id: "medium", label: "medium" },
-        ],
-        thinkingOptions: ["off", "medium"],
+        ...(thinkingDefault === undefined ? {} : { thinkingDefault }),
+        thinkingLevels: levels.map((id) => ({ id, label: id })),
+        thinkingOptions: levels,
       };
       const current = {
         ...buildResult([{ ...row, ...metadata }]),
@@ -441,18 +530,20 @@ describe("reconcileSessionChanged", () => {
         { ...identity, contextTokens: null },
       );
 
+      const thinking = resolveChatThinkingSelectState({
+        catalog: [],
+        sessionKey: row.key,
+        sessionsResult: next,
+      });
+      expect(thinking.options.map((option) => option.value)).toEqual(levels);
       expect(next?.sessions[0]).toMatchObject(metadata);
       expect(next?.defaults).toMatchObject(metadata);
+      expect(next?.sessions[0]?.thinkingDefault).toBe(thinkingDefault);
+      expect(next?.defaults.thinkingDefault).toBe(thinkingDefault);
       expect(next?.sessions[0]?.thinkingLevel).toBe(thinkingLevel);
-      expect(
-        resolveChatThinkingSelectState({
-          catalog: [],
-          sessionKey: row.key,
-          sessionsResult: next,
-        }).selection,
-      ).toMatchObject({
+      expect(thinking.selection).toMatchObject({
         source: thinkingLevel === undefined ? "default" : "override",
-        value: thinkingLevel ?? thinkingDefault,
+        value: thinkingLevel ?? thinkingDefault ?? "",
       });
     },
   );

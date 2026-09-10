@@ -456,9 +456,10 @@ describe("native UI page navigation", () => {
     }
   });
 
-  it.each([true, false])(
-    "preserves scoped filters during replacement navigation (native route: %s)",
-    (native) => {
+  it.each(["native", "generic", "slug"])(
+    "preserves scoped filters during replacement navigation (%s route)",
+    (kind) => {
+      const native = kind === "native";
       const originalUrl = window.location.href;
       window.history.replaceState(null, "", "/?agent=main&p.filter=ready");
       const navigate = vi.fn();
@@ -470,7 +471,9 @@ describe("native UI page navigation", () => {
             hello: {
               controlUiTabs: native
                 ? [{ pluginId: "review", id: "board", placement: "route:workboard" }]
-                : [],
+                : kind === "slug"
+                  ? [{ pluginId: "review", id: "board", slug: "reports" }]
+                  : [],
             },
           },
         },
@@ -494,13 +497,20 @@ describe("native UI page navigation", () => {
           window.location.origin,
         );
         expect(location.pathname).toBe(
-          native ? "/console/workboard/Team%20%2F%20One" : "/console/plugin",
+          native
+            ? "/console/workboard/Team%20%2F%20One"
+            : kind === "slug"
+              ? "/console/reports"
+              : "/console/plugin",
         );
         expect(location.searchParams.get("agent")).toBe("main");
         expect(location.searchParams.get("p.filter")).toBe("done");
-        if (!native) {
+        if (kind === "generic") {
           expect(location.searchParams.get("plugin")).toBe("review");
           expect(location.searchParams.get("id")).toBe("board");
+        } else if (kind === "slug") {
+          expect(location.searchParams.has("plugin")).toBe(false);
+          expect(location.searchParams.has("id")).toBe(false);
         }
         host.navigation.openPage(target, { replace: true, preserveSearch: true });
         expect(replace).toHaveBeenCalledWith(

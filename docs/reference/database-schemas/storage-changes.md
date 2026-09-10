@@ -38,6 +38,23 @@ admission. Publish live session changes and other dependent effects only after
 the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
+Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
+eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its
+existing asynchronous admission owner runs the full integrity and foreign-key
+checks in a read-only child, moving those full checks off the main thread while
+retaining that queue position. A supplied caller guard is rechecked before the open
+resumes into index repair, schema work, or registration, and before that caller
+uses the admitted handle. Coalesced callers retain their own guards. History
+eviction also uses this admission when reopening after archive materialization,
+then rereads candidate protection before preparing reclamation.
+
+Prepared session-store updates, entry replacements, and lifecycle upserts use
+the same admission for cold snapshot reads and actual commits, retaining their
+existing writer position. Warm update callbacks remain direct. Result-only
+no-op commits do not reopen a disposed handle. Native deletion and archive
+preparation still run outside the writer; the subsequent commit rechecks its
+native owner's authority after any awaited admission.
+
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
 while full integrity and foreign-key checks run on the same connection. Unrelated
@@ -78,6 +95,14 @@ preserves physical checkpointing before measuring pressure, so unreclaimed pages
 do not cause unnecessary archive deletion. Full logical deletion with resumable
 physical cleanup remains a separate design; existing deletion visibility and rollback
 semantics are unchanged.
+
+Queued archive pruning prepares cold connections through the same asynchronous
+admission owner while retaining its existing writer section. Each page-drain
+pass keeps its checkpoints, freelist reads, and bounded vacuum in one synchronous
+phase on the admitted connection. Archive-row and unpublished-name reads follow
+validation. After removing a derived archive file, pruning reacquires before the
+canonical row-deletion transaction; an acquisition failure propagates without
+deleting that recovery row.
 
 ### Preserve the data and concurrency contracts
 
