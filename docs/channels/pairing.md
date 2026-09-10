@@ -159,6 +159,8 @@ The button is disabled when the current Control UI session does not have
 administrator access. Use the CLI approval flow below from the Gateway host in
 that case.
 
+<a id="pair-via-telegram-recommended-for-ios" />
+
 ### Pair via Telegram
 
 If you use the `device-pair` plugin, you can do first-time device pairing entirely from Telegram:

@@ -477,6 +477,8 @@ Agent selection and its `overview|files|tools|skills|channels|cron|memory`
 panels use paths. Older links with `?agent=<agentId>` are replaced once with
 the agent path while keeping other query parameters and the fragment.
 
+<a id="special-documents-and-startup-modes" />
+
 ## Other special documents and startup modes
 
 These Gateway-served documents sit outside the application route table:

@@ -61,6 +61,8 @@ command handling is enabled for the surface.
   </Accordion>
 </AccordionGroup>
 
+<a id="config" />
+
 ## Configuration
 
 ```json5

@@ -113,6 +113,7 @@ Moved to [Configuration — browser, UI, and desktop](/gateway/config-browser-ui
 
 Moved to [Configuration — gateway](/gateway/config-gateway). Sections: OpenAI-compatible endpoints, Multi-instance isolation, `gateway.tls`, `gateway.reload`.
 
+<a id="gateway-field-details"></a>
 <a id="openai-compatible-endpoints"></a>
 <a id="multi-instance-isolation"></a>
 <a id="gatewaytls"></a>

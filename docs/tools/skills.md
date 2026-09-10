@@ -201,6 +201,8 @@ Do not edit those managed directories directly. Use the editor, the
 authorized authoring tool. Runtime copies are separate from project files and
 must not be committed with a project.
 
+<a id="agent-skill-allowlists" />
+
 ## Agent allowlists
 
 Skill **location** (precedence) and skill **visibility** (which agent can use

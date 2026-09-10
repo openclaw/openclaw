@@ -17,6 +17,8 @@ Setup commands by intent:
 - `openclaw configure` changes targeted parts of an existing setup: model auth, gateway, channels, plugins, or skills.
 - `openclaw channels add` configures channel accounts after the baseline exists; a channel selection alone uses guided setup, while account, credential, or channel-config flags use the direct path for scripts.
 
+<a id="status" />
+
 ## Command pages
 
 | Area                         | Commands                                                                                                                                                                                                                              |

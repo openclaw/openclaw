@@ -497,6 +497,8 @@ Related Anthropic docs:
 
 </Note>
 
+<a id="safety-refusal-fallback-claude-fable-5" />
+
 ## Safety refusal fallback (Claude Opus 5 and Fable 5)
 
 <Warning>

@@ -515,6 +515,8 @@ Batch enablement is the only remote batching setting. Concurrency, polling, and 
 
 ---
 
+<a id="session-memory-search-experimental" />
+
 ## Session memory search
 
 Index session transcripts and surface them via `memory_search`:

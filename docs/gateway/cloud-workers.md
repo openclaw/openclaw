@@ -66,6 +66,8 @@ Node and SSH workspace access and reconciliation outlive worker RPC credential e
 - GitHub CLI (`gh`) on the worker's `PATH` for GitHub commands and HTTPS pushes. The sealed worker bundle includes the credential-binding launcher, not GitHub CLI. Crabbox developer images include `gh`; install it in `settings.setup` for other images.
 - A repository session created with `repository: { url, ref? }`, or a live, registry-owned session managed worktree created with `worktree: true`. Repository sources require a managed node and access to the upstream Git repository. Cloud dispatch does not accept arbitrary plain directories. Manifest mirroring after Git metadata becomes unavailable does not make plain directories dispatchable.
 
+<a id="coordinator-backed-crabbox" />
+
 ### Crabbox provider support
 
 Select a Crabbox backend with `settings.provider`. Use the [Crabbox provider reference](https://crabbox.sh/providers/index.html) for supported providers, authentication, sizing, snapshots, networking, and provider-specific limitations. OpenClaw does not maintain a separate backend catalog; accepting a profile does not establish that the backend can host a cloud session.

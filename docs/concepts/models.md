@@ -68,6 +68,8 @@ Full key reference, defaults, and JSON5 examples: [Configuration reference](/gat
 
 Explicit `modelPolicy.allow` restrictions were introduced in v2026.8.1. For directly authored legacy model maps, `openclaw doctor --fix` copies the complete restriction into `modelPolicy.allow` when every ref is valid. If any ref needs provider qualification, Doctor preserves the entire legacy restriction and reports how to set an explicit policy. Until then, model-map edits still change the legacy restriction; no keys are silently dropped and no empty policy is substituted. Include-owned migrations retain the existing edit-owning-file requirement.
 
+<a id="selection-source-and-fallback-behavior" />
+
 ## Selection source and fallback strictness
 
 The same `provider/model` behaves differently depending on where it came from:
