@@ -1,4 +1,8 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,
@@ -10,12 +14,17 @@ import {
   SESSION_ID,
   SESSION_KEY,
   commandResult,
+  commands,
   createRealPublicationWorkspace,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+  root,
 } from "./github-publication.test-support.js";
+import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 
 const mocks = githubPublicationTestMocks();
+const table = "github_personal_publication_requests";
 vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
   lockWorktreeForProcess: vi.fn(async () => undefined),
@@ -214,4 +223,57 @@ describe("personal publication definitive outcomes", () => {
       expect(fresh[1].requestId).not.toBe(initial.requestId);
     },
   );
+
+  it("stops offering a pending confirmation once the session is archived", async () => {
+    const { client, context, generation, coordinator } = fixture;
+    await persistPublicationTestSession();
+    const controller = new AbortController();
+    const db = openOpenClawStateDatabase().db;
+    ensurePersonalGitHubPublicationSchema(db);
+    db.function("stop_personal_admission", () => {
+      controller.abort();
+      return 1;
+    });
+    db.exec(`CREATE TEMP TRIGGER stop_personal_admission AFTER INSERT ON ${table}
+      BEGIN SELECT stop_personal_admission(); END`);
+    const stopped = preparePersonalGitHubSessionAction(
+      { client, context, signal: controller.signal },
+      { sessionKey: SESSION_KEY },
+    );
+    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
+      "current",
+    );
+    db.exec("DROP TRIGGER stop_personal_admission");
+    const row = openOpenClawStateDatabase()
+      .db.prepare(`SELECT request_id, status, execution_id FROM ${table}`)
+      .get() as { request_id: string; status: string; execution_id: null };
+    expect(row).toMatchObject({ status: "requested", execution_id: null });
+    const pending = await rpc("sessions.github.status", {
+      sessionKey: SESSION_KEY,
+      requestId: row.request_id,
+    });
+    expect(pending[1]).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation, account },
+    });
+    // Archiving preserves sessionId/lifecycleRevision, so only an explicit archivedAt
+    // check can retire the pending confirmation the archived confirm action would reject.
+    await patchSessionEntryCore(
+      { agentId: "main", sessionKey: SESSION_KEY, storePath: path.join(root, "sessions.json") },
+      () => ({ archivedAt: Date.now() }),
+    );
+    const discovered = await rpc("sessions.github.status", {
+      sessionKey: SESSION_KEY,
+      requestId: row.request_id,
+    });
+    expect(discovered[1]).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect((await rpc("sessions.github.options"))[1].pendingPersonal).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+  });
 });
