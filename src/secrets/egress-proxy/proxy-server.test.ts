@@ -5,7 +5,8 @@ import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
 import {
   mintSecretSentinel,
@@ -30,6 +31,8 @@ const servers: Server[] = [];
 const proxies: SecretEgressProxyHandle[] = [];
 const sockets = new Set<Socket>();
 const tempDirs: string[] = [];
+const seedDirs = createTempDirTracker();
+let seed: { dir: string; leaf: Awaited<ReturnType<typeof generateLocalProxyLeaf>> } | undefined;
 let caDir: string;
 let auditEvents: SecretEgressProxyAuditEvent[];
 let originRequests: OriginRequest[];
@@ -51,6 +54,12 @@ function registerSentinel(params: {
       allowedHosts: params.allowedHosts,
     },
   ]);
+}
+
+function copyInitialCa(sourceDir: string, targetDir: string): void {
+  for (const file of ["root-ca.pem", "root-ca-key.pem", "leaf-key.pem"]) {
+    fs.copyFileSync(path.join(sourceDir, file), path.join(targetDir, file));
+  }
 }
 
 async function listen(server: Server): Promise<number> {
@@ -215,16 +224,21 @@ beforeEach(async () => {
   originRequests = [];
   caDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-egress-proxy-test-"));
   tempDirs.push(caDir);
+  if (seed) {
+    copyInitialCa(seed.dir, caDir);
+  }
   proxy = await startSecretEgressProxyServer({
     caDir,
     onAudit: (event) => auditEvents.push(event),
   });
   proxies.push(proxy);
-  const leaf = await generateLocalProxyLeaf({
-    certDir: caDir,
-    ca: { certPath: proxy.caCertPath, keyPath: path.join(caDir, "root-ca-key.pem") },
-    hostname: "localhost",
-  });
+  const leaf = seed
+    ? { cert: Buffer.from(seed.leaf.cert), key: Buffer.from(seed.leaf.key) }
+    : await generateLocalProxyLeaf({
+        certDir: caDir,
+        ca: { certPath: proxy.caCertPath, keyPath: path.join(caDir, "root-ca-key.pem") },
+        hostname: "localhost",
+      });
   originPort = await listen(
     createHttpsServer(leaf, (request, response) => {
       const chunks: Buffer[] = [];
@@ -242,7 +256,20 @@ beforeEach(async () => {
   );
   run = Object.freeze({ instanceId: "instance-1", runId: "run-1" });
   proxyEnv = proxy.registerRun(run);
+  if (!seed) {
+    // Capture after cold setup succeeds, before a case can mutate its files.
+    const dir = seedDirs.make("openclaw-egress-proxy-seed-");
+    try {
+      copyInitialCa(caDir, dir);
+      seed = { dir, leaf: { cert: Buffer.from(leaf.cert), key: Buffer.from(leaf.key) } };
+    } catch (error) {
+      seedDirs.cleanup();
+      throw error;
+    }
+  }
 });
+
+afterAll(() => seedDirs.cleanup());
 
 afterEach(async () => {
   for (const socket of sockets) {

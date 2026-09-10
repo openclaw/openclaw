@@ -14,12 +14,18 @@ import {
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
+import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { usageHandlers } from "./usage.js";
 
-it.each([undefined, "agent:opus:slack:dm", "global"])(
-  "keeps independent same-id transcripts with opus store key %s through the real usage handler",
-  async (opusKey) => {
+it.each([
+  { owner: "opus", key: undefined },
+  { owner: "opus", key: "agent:opus:slack:dm" },
+  { owner: "opus", key: "global" },
+  { owner: SYSTEM_AGENT_ID, key: `agent:${SYSTEM_AGENT_ID}:usage` },
+])(
+  "keeps independent same-id transcripts with $owner store key $key through the real usage handler",
+  async ({ owner, key: opusKey }) => {
     const state = await createOpenClawTestState({ label: "usage-owner-integration" });
     try {
       await state.writeConfig({
@@ -29,7 +35,7 @@ it.each([undefined, "agent:opus:slack:dm", "global"])(
       const config = getRuntimeConfig();
       const sessionId = "shared-usage-session";
       const mainKey = "agent:main:telegram:dm";
-      for (const agentId of ["main", "opus"]) {
+      for (const agentId of ["main", owner]) {
         const key = agentId === "main" ? mainKey : opusKey;
         const scope = {
           agentId,
@@ -59,17 +65,15 @@ it.each([undefined, "agent:opus:slack:dm", "global"])(
       const projected = loadCombinedSessionStoreForGatewayCore(config);
       expect(projected.targetsBySessionKey.get(mainKey)?.agentId).toBe("main");
       if (opusKey) {
-        expect(projected.targetsBySessionKey.get(opusKey)?.agentId).toBe("opus");
+        expect(projected.targetsBySessionKey.get(opusKey)?.agentId).toBe(owner);
       }
       const respond = vi.fn();
-      await expectDefined(
-        usageHandlers["sessions.usage"],
-        "usage handler",
-      )({
+      const request = {
         params: { agentScope: "all", range: "all", limit: 50 },
         context: { getRuntimeConfig: () => config },
         respond,
-      } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
+      } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0];
+      await expectDefined(usageHandlers["sessions.usage"], "usage handler")(request);
       expect(respond).toHaveBeenCalledOnce();
       const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
       expect(ok).toBe(true);
@@ -78,9 +82,48 @@ it.each([undefined, "agent:opus:slack:dm", "global"])(
       expect(result.sessions.map(({ key, agentId }) => ({ key, agentId }))).toEqual(
         expect.arrayContaining([
           { key: mainKey, agentId: "main" },
-          { key: opusKey ?? `agent:opus:${sessionId}`, agentId: "opus" },
+          { key: opusKey ?? `agent:${owner}:${sessionId}`, agentId: owner },
         ]),
       );
+      if (opusKey) {
+        const selected = expectDefined(
+          result.sessions.find((session) => session.agentId === owner),
+          "selected usage owner",
+        );
+        for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"] as const) {
+          for (const explicitOwner of owner === SYSTEM_AGENT_ID ? [false, true] : [true]) {
+            const detail = vi.fn();
+            await expectDefined(
+              usageHandlers[method],
+              "usage detail handler",
+            )({
+              ...request,
+              params: {
+                key: selected.key,
+                ...(explicitOwner ? { agentId: selected.agentId } : {}),
+              },
+              respond: detail,
+            });
+            const [detailOk, detailPayload, detailError] = expectDefined(
+              detail.mock.calls[0],
+              "usage detail response",
+            );
+            if (owner === SYSTEM_AGENT_ID && explicitOwner) {
+              expect(detailOk).toBe(false);
+              expect(detailError).toMatchObject({ message: `Unknown agent id "${owner}"` });
+            } else {
+              expect.soft(detailOk, method).toBe(true);
+              if (detailOk) {
+                expect(detailPayload, method).toMatchObject(
+                  method === "sessions.usage.logs"
+                    ? { logs: [expect.objectContaining({ content: `${owner} turn` })] }
+                    : { sessionId },
+                );
+              }
+            }
+          }
+        }
+      }
     } finally {
       await state.cleanup();
     }

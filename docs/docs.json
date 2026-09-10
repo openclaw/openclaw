@@ -2384,6 +2384,15 @@
                     "group": "Configuration",
                     "pages": [
                       "gateway/configuration",
+                      {
+                        "group": "Configuration",
+                        "pages": [
+                          "gateway/configuration/common-tasks",
+                          "gateway/configuration/hot-reload",
+                          "gateway/configuration/config-rpc",
+                          "gateway/configuration/environment-variables"
+                        ]
+                      },
                       "gateway/configuration-reference",
                       "gateway/config-agents",
                       {
@@ -2441,6 +2450,16 @@
                       "gateway/authentication",
                       "auth-credential-semantics",
                       "gateway/secrets",
+                      {
+                        "group": "Secrets management",
+                        "pages": [
+                          "gateway/secrets/runtime-model",
+                          "gateway/secrets/secretref-contract",
+                          "gateway/secrets/secret-store-and-egress",
+                          "gateway/secrets/integration-examples",
+                          "gateway/secrets/operations"
+                        ]
+                      },
                       "gateway/1password",
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth"
@@ -2481,7 +2500,18 @@
                       "gateway/prometheus",
                       "gateway/logging",
                       "gateway/diagnostics",
-                      "gateway/troubleshooting"
+                      "gateway/troubleshooting",
+                      {
+                        "group": "Troubleshooting",
+                        "pages": [
+                          "gateway/troubleshooting/updates-and-rollbacks",
+                          "gateway/troubleshooting/skills-and-model-providers",
+                          "gateway/troubleshooting/agent-replies-and-control-ui",
+                          "gateway/troubleshooting/gateway-service-and-process",
+                          "gateway/troubleshooting/config-validation-and-probes",
+                          "gateway/troubleshooting/channel-delivery-and-tools"
+                        ]
+                      }
                     ]
                   },
                   {
@@ -2492,6 +2522,21 @@
                       "gateway/restart-recovery",
                       "gateway/cloud-sessions",
                       "gateway/cloud-workers",
+                      {
+                        "group": "Cloud Workers",
+                        "pages": [
+                          "gateway/cloud-workers/warm-images",
+                          "gateway/cloud-workers/per-project-default-profiles",
+                          "gateway/cloud-workers/setup-and-bundle-installation",
+                          "gateway/cloud-workers/verify-the-profile",
+                          "gateway/cloud-workers/dispatching-a-session",
+                          "gateway/cloud-workers/placement-and-machine-selection",
+                          "gateway/cloud-workers/session-lifecycle",
+                          "gateway/cloud-workers/desktop",
+                          "gateway/cloud-workers/security-model",
+                          "gateway/cloud-workers/troubleshooting"
+                        ]
+                      },
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"
                     ]
@@ -2517,6 +2562,22 @@
                       "gateway/security/dependency-locking",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
+                      {
+                        "group": "Sandboxing",
+                        "pages": [
+                          "gateway/sandboxing/what-gets-sandboxed",
+                          "gateway/sandboxing/modes-scope-and-backend",
+                          "gateway/sandboxing/supported-capability-matrix",
+                          "gateway/sandboxing/docker-backend",
+                          "gateway/sandboxing/podman-backend",
+                          "gateway/sandboxing/ssh-backend",
+                          "gateway/sandboxing/openshell-backend",
+                          "gateway/sandboxing/workspace-access",
+                          "gateway/sandboxing/multiple-folders-for-one-agent",
+                          "gateway/sandboxing/images-and-setup",
+                          "gateway/sandboxing/setup-command"
+                        ]
+                      },
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated",
                       "gateway/permission-modes"
@@ -2533,6 +2594,11 @@
                           "gateway/protocol/handshake",
                           "gateway/protocol/presence",
                           "gateway/protocol/rpc-methods",
+                          "gateway/protocol/rpc-system-and-channels",
+                          "gateway/protocol/rpc-talk-config-and-agents",
+                          "gateway/protocol/rpc-session-control",
+                          "gateway/protocol/rpc-devices-nodes-and-approvals",
+                          "gateway/protocol/rpc-bootstrap-and-events",
                           "gateway/protocol/ledgers",
                           "gateway/protocol/operator-methods",
                           "gateway/protocol/versioning",
@@ -2576,6 +2642,14 @@
                   "security/network-proxy",
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
+                  "security/THREAT-MODEL-ATLAS/reconnaissance",
+                  "security/THREAT-MODEL-ATLAS/initial-access",
+                  "security/THREAT-MODEL-ATLAS/execution",
+                  "security/THREAT-MODEL-ATLAS/persistence",
+                  "security/THREAT-MODEL-ATLAS/defense-evasion",
+                  "security/THREAT-MODEL-ATLAS/discovery",
+                  "security/THREAT-MODEL-ATLAS/collection-and-exfiltration",
+                  "security/THREAT-MODEL-ATLAS/impact",
                   "security/CONTRIBUTING-THREAT-MODEL"
                 ]
               },
@@ -2610,6 +2684,15 @@
                     "pages": [
                       "nodes/computer-use",
                       "nodes/talk",
+                      {
+                        "group": "Talk mode",
+                        "pages": [
+                          "nodes/talk/realtime-sessions",
+                          "nodes/talk/session-ownership",
+                          "nodes/talk/macos-relay",
+                          "nodes/talk/client-ui"
+                        ]
+                      },
                       "nodes/voicewake",
                       "nodes/location-command"
                     ]
@@ -2865,7 +2948,21 @@
                       "plugins/codex-harness-reference/workspace-bootstrap-files"
                     ]
                   },
-                  "plugins/codex-harness-runtime"
+                  "plugins/codex-harness-runtime",
+                  {
+                    "group": "Codex harness runtime",
+                    "pages": [
+                      "plugins/codex-harness-runtime/recovery",
+                      "plugins/codex-harness-runtime/threads",
+                      "plugins/codex-harness-runtime/replies",
+                      "plugins/codex-harness-runtime/hooks",
+                      "plugins/codex-harness-runtime/sandbox-streaming",
+                      "plugins/codex-harness-runtime/v1-support-contract",
+                      "plugins/codex-harness-runtime/permissions",
+                      "plugins/codex-harness-runtime/queue-and-feedback",
+                      "plugins/codex-harness-runtime/compaction"
+                    ]
+                  }
                 ]
               },
               {
@@ -2909,6 +3006,19 @@
                   },
                   "plugins/sdk-subpaths",
                   "plugins/sdk-entrypoints",
+                  {
+                    "group": "Plugin entry points",
+                    "pages": [
+                      "plugins/sdk-entrypoints/tool-policy-and-sandbox",
+                      "plugins/sdk-entrypoints/package-entries",
+                      "plugins/sdk-entrypoints/define-tool-plugin",
+                      "plugins/sdk-entrypoints/define-plugin-entry",
+                      "plugins/sdk-entrypoints/native-providers",
+                      "plugins/sdk-entrypoints/define-channel-plugin-entry",
+                      "plugins/sdk-entrypoints/define-setup-plugin-entry",
+                      "plugins/sdk-entrypoints/registration-mode"
+                    ]
+                  },
                   "plugins/sdk-runtime",
                   {
                     "group": "Plugin runtime helpers",
@@ -3011,6 +3121,18 @@
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
                   "reference/database-schemas",
+                  {
+                    "group": "Database schemas",
+                    "pages": [
+                      "reference/database-schemas/layout",
+                      "reference/database-schemas/versioning",
+                      "reference/database-schemas/personal-data",
+                      "reference/database-schemas/storage-changes",
+                      "reference/database-schemas/agent-schema-history",
+                      "reference/database-schemas/state-schema-history",
+                      "reference/database-schemas/integrity-and-recovery"
+                    ]
+                  },
                   "reference/memory-config",
                   "reference/rich-output-protocol",
                   "reference/session-management-compaction",
@@ -3129,6 +3251,16 @@
                       "ci/runners",
                       "ci/capacity",
                       "ci/release-validation",
+                      {
+                        "group": "Release validation",
+                        "pages": [
+                          "ci/release-validation/full-release-validation",
+                          "ci/release-validation/live-and-e2e-shards",
+                          "ci/release-validation/package-acceptance",
+                          "ci/release-validation/install-smoke-and-docker-e2e",
+                          "ci/release-validation/plugin-prerelease"
+                        ]
+                      },
                       "ci/scheduled-workflows",
                       "ci/local-proof"
                     ]
@@ -3168,7 +3300,32 @@
                 "group": "FAQ",
                 "pages": [
                   "help/faq",
+                  {
+                    "group": "FAQ topics",
+                    "pages": [
+                      "help/faq/what-is-openclaw",
+                      "help/faq/skills-and-automation",
+                      "help/faq/sandboxing-and-memory",
+                      "help/faq/where-things-live-on-disk",
+                      "help/faq/config-basics",
+                      "help/faq/remote-gateways-and-nodes",
+                      "help/faq/env-vars",
+                      "help/faq/sessions-and-chats",
+                      "help/faq/gateway-ports-and-remote-mode",
+                      "help/faq/logging-and-debugging",
+                      "help/faq/media-and-attachments",
+                      "help/faq/security-and-access-control",
+                      "help/faq/chat-commands-and-stopping"
+                    ]
+                  },
                   "help/faq-first-run",
+                  {
+                    "group": "First-run FAQ",
+                    "pages": [
+                      "help/faq-first-run/quick-start",
+                      "help/faq-first-run/providers-and-hosting"
+                    ]
+                  },
                   "help/faq-models"
                 ]
               },

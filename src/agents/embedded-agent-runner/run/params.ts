@@ -274,6 +274,8 @@ export type RunEmbeddedAgentParams = {
   modelHasVision?: boolean;
   /** Session-selected context-window option id carried by the run owner. */
   contextWindow?: string;
+  /** Caller-owned upper bound for this run's effective context budget. */
+  contextTokenBudget?: number;
   /** Route-bound thinking capability resolved from the selected prepared catalog row. */
   modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
@@ -409,6 +411,7 @@ export type RunEmbeddedAgentParams = {
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
+  gitCoauthorPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
@@ -533,6 +536,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "forceHeartbeatTool"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
+  | "gitCoauthorPrompt"
   | "sourceReplyDeliveryMode"
   | "taskSuggestionDeliveryMode"
   | "silentReplyPromptMode"

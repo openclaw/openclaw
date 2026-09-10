@@ -300,8 +300,11 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
   retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntime,
 }));
 
-export function setupGatewaySessionsHandlerTestHarness() {
-  const { getHarness, openClient, ...handlerFixture } = createGatewaySessionsTestHarness(false);
+export function setupGatewaySessionsHandlerTestHarness(setup?: GatewaySessionsSuiteSetup) {
+  const { getHarness, openClient, ...handlerFixture } = createGatewaySessionsTestHarness(
+    false,
+    setup,
+  );
   void [getHarness, openClient];
   return handlerFixture;
 }

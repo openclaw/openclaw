@@ -318,6 +318,31 @@ describe("gateway sessions patch", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  test("keeps manual renames independent of automatic device-label writes and clears", async () => {
+    const key = "agent:main:node-1234567890ab";
+    const autoLabel = "OpenClaw App · Pixel · 1234567890ab";
+    const label = "OpenClaw App · Release planning · 1234567890ab";
+    const store: Record<string, SessionEntry> = {};
+    const patch = async (fields: { label?: string | null; autoLabel?: string | null }) =>
+      expectPatchOk(await runPatch({ store, storeKey: key, patch: { key, ...fields } }));
+
+    expect(await patch({ autoLabel })).toMatchObject({ autoLabel });
+    await patch({ label });
+    // A reconnect can finish after a manual rename; the automatic writer owns a different field.
+    expect(await patch({ autoLabel: "Updated device" })).toMatchObject({
+      label,
+      autoLabel: "Updated device",
+    });
+    const cleared = await patch({ label: null });
+    expect(cleared.label).toBeUndefined();
+    expect(cleared.autoLabel).toBe("Updated device");
+    expect((await patch({ autoLabel: null })).autoLabel).toBeUndefined();
+
+    // Automatic names do not participate in unique custom-label lookup.
+    store.other = { sessionId: "other", updatedAt: 1, label: autoLabel, autoLabel };
+    expect(await patch({ autoLabel })).toMatchObject({ autoLabel });
+  });
+
   test("rejects creating a missing agent harness session through patch", async () => {
     const key = "agent:main:harness:codex:supervision:missing";
     const store: Record<string, SessionEntry> = {};

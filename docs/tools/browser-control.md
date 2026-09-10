@@ -417,9 +417,8 @@ OpenClaw supports three "snapshot" styles:
   The first snapshot establishes the baseline without markers; later responses
   also expose `newElements`, and add a count footer when the value is nonzero.
   Structured `--format aria` snapshots with `axN` refs do not use delta markers.
-- Docker proof for the raw-CDP fallback path: `pnpm test:docker:browser-cdp-snapshot`
-  starts Chromium with CDP, runs `browser doctor --deep`, and verifies role
-  snapshots include link URLs, cursor-promoted clickables, and iframe metadata.
+- Contributors: the raw-CDP fallback path has a Docker proof lane, described in
+  [Docker test suites](/reference/test/docker).
 
 Ref behavior:
 

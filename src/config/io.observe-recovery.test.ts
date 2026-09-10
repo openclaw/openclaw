@@ -647,6 +647,47 @@ describe("config observe recovery", () => {
     });
   });
 
+  it.each(["list", "entries"] as const)(
+    "persists explicit ownership when recovering a markerless multi-agent %s roster",
+    async (shape) => {
+      await withSuiteHome(async (home) => {
+        const { io, configPath, warn } = createTestConfigIO(home);
+        const entries = {
+          alpha: { workspace: path.join(home, "workspace-alpha") },
+          beta: { workspace: path.join(home, "workspace-beta") },
+          gamma: { workspace: path.join(home, "workspace-gamma") },
+        };
+        const historical = await makeSnapshot(configPath, {
+          gateway: { mode: "local" },
+          agents:
+            shape === "entries"
+              ? { entries }
+              : {
+                  list: Object.entries(entries).map(([id, config]) =>
+                    Object.assign({ id }, config),
+                  ),
+                },
+          bindings: [{ agentId: "beta", match: { channel: "discord" } }],
+        });
+        await expect(io.promoteConfigSnapshotToLastKnownGood(historical)).resolves.toBe(true);
+        await seedConfig(configPath, { gateway: { mode: "invalid" } });
+
+        const restored = await io.recoverConfigFromLastKnownGood({
+          snapshot: await io.readConfigFileSnapshot(),
+          reason: "doctor-invalid-config",
+        });
+
+        expect(restored, warnMessages(warn).join("\n")).toBe(true);
+        const saved = JSON5.parse(await fsp.readFile(configPath, "utf-8"));
+        expect(saved.agents).toEqual({ ownership: "explicit", entries });
+        expect(saved.bindings).toEqual([{ agentId: "beta", match: { channel: "discord" } }]);
+        const reread = await io.readConfigFileSnapshot();
+        expect(reread.valid).toBe(true);
+        expect(reread.config.agents?.ownership).toBe("explicit");
+      });
+    },
+  );
+
   it.each([
     ["localhost", "loopback"],
     ["0.0.0.0", "lan"],

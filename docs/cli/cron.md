@@ -8,7 +8,7 @@ title: "Automations (cron)"
 
 # `openclaw automations`
 
-Manage automation jobs for the Gateway scheduler. `openclaw automations` is the primary command; `openclaw cron` remains an alias, and every subcommand below works with either spelling.
+Manage automation jobs for the Gateway scheduler. The command registers as `openclaw cron` with `openclaw automations` as an alias; every subcommand below works with either spelling.
 
 <Tip>
 Run `openclaw automations --help` for the full command surface. See [Automations](/automation/cron-jobs) for the conceptual guide.

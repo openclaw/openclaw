@@ -125,4 +125,10 @@ Allowlist entry formats:
   <Card title="Sandbox vs Tool Policy vs Elevated" href="/gateway/sandbox-vs-tool-policy-vs-elevated" icon="scale-balanced">
     How the three gates compose during a tool call.
   </Card>
+  <Card title="Multi-agent sandbox and tools" href="/tools/multi-agent-sandbox-tools" icon="shield">
+    Per-agent sandbox and tool limits.
+  </Card>
+  <Card title="Thinking levels" href="/tools/thinking" icon="brain">
+    The reasoning budget an elevated run uses.
+  </Card>
 </CardGroup>

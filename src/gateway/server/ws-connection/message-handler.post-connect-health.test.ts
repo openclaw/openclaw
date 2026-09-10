@@ -34,9 +34,10 @@ import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
-import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
+import { HEALTH_REFRESH_INTERVAL_MS, MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
+import { healthHandlers } from "../../server-methods/health.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
@@ -1035,6 +1036,84 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     resolveRefresh?.();
   });
+
+  it.each(["connect", "cached health"] as const)(
+    "shares the background health cadence after %s without delaying explicit health",
+    async (first) => {
+      let now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const cached = createHealthSummary();
+      cached.ts = now;
+      const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(
+        async () => cached,
+      );
+      let connection = 0;
+      const connect = async (refresh = refreshHealthSnapshot) => {
+        const id = `background-health-${++connection}`;
+        const harness = attachGatewayHarness({
+          connId: id,
+          connectNonce: id,
+          refreshHealthSnapshot: refresh,
+        });
+        harness.sendConnect(id, {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+          role: "operator",
+          caps: [],
+        });
+        await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+        await nextTurn();
+        const hello = JSON.parse(harness.socketSend.mock.calls[0]![0]);
+        expect(hello.ok).toBe(true);
+      };
+      const health = async (probe = false, snapshot: HealthSummary | null = cached) => {
+        const respond = vi.fn();
+        await healthHandlers.health!({
+          params: { probe },
+          context: {
+            getHealthCache: () => snapshot,
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            refreshHealthSnapshot,
+            logHealth: createLogger(),
+          },
+          respond,
+        } as never);
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+      };
+      try {
+        if (first === "connect") {
+          await connect();
+          await health();
+        } else {
+          await health();
+          await connect();
+        }
+        await connect();
+        expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
+
+        await health(true);
+        await health(false, null);
+        await health(false, { ...cached, ts: now - HEALTH_REFRESH_INTERVAL_MS });
+        expect(refreshHealthSnapshot).toHaveBeenCalledTimes(4);
+        expect(refreshHealthSnapshot).toHaveBeenNthCalledWith(2, {
+          probe: true,
+          includeSensitive: false,
+        });
+
+        now += HEALTH_REFRESH_INTERVAL_MS;
+        await connect();
+        expect(refreshHealthSnapshot).toHaveBeenCalledTimes(5);
+        const otherOwner = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(
+          async () => cached,
+        );
+        await connect(otherOwner);
+        expect(otherOwner).toHaveBeenCalledOnce();
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it("projects a stable durable profile into presence and refreshes avatar state on reconnect", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);

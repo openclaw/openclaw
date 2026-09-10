@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { telegramHtmlToPlainTextFallback } from "./format.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 
-const options = { richMessages: false, maxLines: 8, maxLineChars: 300 };
+const options = { richMessages: false, toolProgress: true, maxLines: 8, maxLineChars: 300 };
 
 describe("renderTelegramProgressDraftPreview", () => {
   it.each(["Bash", "bash", "exec", "Read"])("prints one tool icon for %s", (name) => {
@@ -67,28 +67,86 @@ describe("renderTelegramProgressDraftPreview", () => {
     expect(rich.complete).toBe(true);
   });
 
-  it("keeps attention and the active step within the configured window", () => {
+  it.each([undefined, "exit 1", "exit 0"])(
+    "keeps approval and the active step within the window regardless of status (%s)",
+    (status) => {
+      const preview = renderTelegramProgressDraftPreview(
+        {
+          lines: [
+            { kind: "tool", label: "Read", text: "Read files" },
+            {
+              kind: "approval",
+              label: "Approval",
+              text: "Approval",
+              detail: "Confirm access",
+              status,
+            },
+          ],
+          diffStat: { files: 1, added: 2, removed: 1 },
+          plan: [
+            { step: "Inspect", status: "completed" },
+            { step: "Repair", status: "in_progress" },
+            { step: "Verify", status: "pending" },
+            { step: "Ship", status: "pending" },
+          ],
+        },
+        { ...options, richMessages: true, maxLines: 3 },
+      );
+      expect(preview.text.split("\n")).toHaveLength(3);
+      expect(preview.text).toContain("Confirm access");
+      expect(preview.text).toContain("Repair (in progress)");
+      expect(preview.text).toContain("1/4 done");
+      expect(preview.text).not.toContain("Read files");
+    },
+  );
+
+  it.each([true, false])(
+    "keeps quiet non-zero exits visible above a full plan (rich=%s)",
+    (richMessages) => {
+      const preview = renderTelegramProgressDraftPreview(
+        {
+          lines: [{ kind: "command-output", label: "Exec", text: "🛠️ exit 1", status: "exit 1" }],
+          plan: [
+            { step: "Inspect", status: "completed" },
+            { step: "Repair", status: "in_progress" },
+            { step: "Verify", status: "pending" },
+          ],
+        },
+        { ...options, richMessages, toolProgress: false, maxLines: 3 },
+      );
+      const text = telegramHtmlToPlainTextFallback(preview.text);
+      expect(text).toContain("exit 1");
+      expect(text).toContain("Repair (in progress)");
+      expect(text.split("\n")).toHaveLength(3);
+    },
+  );
+
+  it("keeps the full plan when non-zero exits fill the activity window", () => {
     const preview = renderTelegramProgressDraftPreview(
       {
-        lines: [
-          { kind: "tool", label: "Read", text: "Read files" },
-          { kind: "approval", label: "Approval", text: "Approval", detail: "Confirm access" },
-        ],
-        diffStat: { files: 1, added: 2, removed: 1 },
+        lines: Array.from({ length: 8 }, (_, index) => ({
+          id: `command:${index}`,
+          kind: "command-output" as const,
+          label: "Exec",
+          text: `🛠️ exit ${index + 1}`,
+          status: `exit ${index + 1}`,
+        })),
         plan: [
           { step: "Inspect", status: "completed" },
           { step: "Repair", status: "in_progress" },
           { step: "Verify", status: "pending" },
+          { step: "Audit", status: "pending" },
           { step: "Ship", status: "pending" },
         ],
       },
-      { ...options, richMessages: true, maxLines: 3 },
+      { ...options, maxLines: 8 },
     );
-    expect(preview.text.split("\n")).toHaveLength(3);
-    expect(preview.text).toContain("Confirm access");
-    expect(preview.text).toContain("Repair (in progress)");
-    expect(preview.text).toContain("1/4 done");
-    expect(preview.text).not.toContain("Read files");
+    const text = telegramHtmlToPlainTextFallback(preview.text);
+    for (const step of ["Inspect", "Repair", "Verify", "Audit", "Ship"]) {
+      expect(text).toContain(step);
+    }
+    expect(text).toContain("exit 8");
+    expect(text).not.toContain("exit 1");
   });
   it.each([true, false])(
     "renders retained edit totals without a plan (rich=%s)",

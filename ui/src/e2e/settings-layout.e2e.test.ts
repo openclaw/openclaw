@@ -196,7 +196,7 @@ suite.define(() => {
         const failedScripts: string[] = [];
         const startupScripts: string[] = [];
         const settingsScripts: string[] = [];
-        const providerCopy = "Model providers with auth, plan, quota, and cost data.";
+        const providerCopy = "Providers and credentials for the selected agent.";
         // Keep each cold-boot document alive through the final assertions: replacing
         // an observed document cancels its idle imports and creates test-owned failures.
         for (const pathname of ["new", "chat", "settings/model-providers"]) {
@@ -777,7 +777,7 @@ suite.define(() => {
           routeId: route,
         });
         if (route === "model-providers") {
-          await page.getByRole("heading", { name: "Defaults", exact: true }).waitFor();
+          await page.getByRole("heading", { name: "Global defaults", exact: true }).waitFor();
         }
 
         const titleDescriptionPairs = page.locator(

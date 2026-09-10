@@ -2,9 +2,11 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { confirm } from "@clack/prompts";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { z } from "zod";
+import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import {
@@ -56,6 +58,7 @@ type TriageRecoveryContext = {
   target: InstallationTarget;
   cwd?: string;
   updateFailure: TriageUpdateFailure;
+  signal?: AbortSignal;
   isCurrent?: () => boolean;
 };
 
@@ -79,6 +82,33 @@ const triageDoctorReportSchema = z.object({
 function triageCollectionError(error: unknown, redaction: SupportRedactionContext): string {
   const message = error instanceof Error ? error.message : String(error);
   return scrubDoctorErrorMessage(redactSupportString(message, redaction));
+}
+
+async function confirmAutomaticUpdateTriage(
+  runtime: RuntimeEnv,
+  agent: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), 30_000);
+  let answer: boolean | symbol;
+  try {
+    answer = await confirm({
+      message: stylePromptMessage(
+        `Open ${agent} to diagnose and repair the installation now? [Y/n]`,
+      ),
+      initialValue: true,
+      signal: signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  // Abort settles Clack and restores stdin before handing the terminal to an agent.
+  if (timeout.signal.aborted && !signal?.aborted) {
+    runtime.log(`No answer; continuing with ${agent}`);
+    return true;
+  }
+  return !signal?.aborted && answer === true;
 }
 
 async function collectTriageBundle(
@@ -362,6 +392,17 @@ export async function triageCommand(
     return;
   }
 
+  const needsConfirmation =
+    interactive &&
+    options.nonInteractive !== true &&
+    canStartAgent &&
+    (options.recovery !== undefined || automatic?.failure.kind === "update");
+  const agentLabel = runEmbedded
+    ? "the embedded OpenClaw agent using your configured model"
+    : handoff?.agent;
+  if (needsConfirmation) {
+    runtime.log(`Agent: ${agentLabel}. This will use your own account/tokens.`);
+  }
   if (promptArtifact.ok) {
     runtime.log(`Debugging prompt: ${promptArtifact.value}`);
   } else {
@@ -372,10 +413,35 @@ export async function triageCommand(
   } else if (bundle.kind === "unavailable") {
     runtime.log(`Diagnostics export unavailable: ${bundle.reason}`);
   }
-  if (!allowAgent || runEmbedded || !handoff) {
+  const declined =
+    needsConfirmation &&
+    agentLabel !== undefined &&
+    !(await confirmAutomaticUpdateTriage(
+      runtime,
+      agentLabel,
+      automatic?.signal ?? options.recovery?.signal,
+    ));
+  if (!isCurrent()) {
+    return;
+  }
+  if (declined || !allowAgent || runEmbedded || !handoff) {
     runtime.log("Ready-to-run agent handoffs:");
     for (const command of suggestedCommands) {
       runtime.log(`  ${command}`);
+    }
+    if (declined) {
+      runtime.log(
+        `Run manually: ${formatInstallationTargetCommand(
+          [
+            "openclaw",
+            "triage",
+            ...(updateResultPath ? ["--update-result", updateResultPath] : []),
+          ],
+          target,
+          { env: targetEnv },
+        )}`,
+      );
+      return;
     }
     if (!allowAgent && !runEmbedded) {
       return;

@@ -56,7 +56,7 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
 
 import {
   prepareSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 
 function createOllamaModelResolver(): typeof resolveModelAsync {
@@ -212,20 +212,26 @@ it("selects an explicit agent completion model before runtime acquisition", asyn
     mode: "api-key",
   });
 
-  await prepareSimpleCompletionModelForAgent({
+  const result = await acquireSimpleCompletionModelForAgent({
     cfg: {},
     agentId: "main",
     modelRef: "ollama/qwen3:0.6b",
     modelResolver,
   });
 
-  expect(mocks.acquireRuntimeLease).toHaveBeenCalledWith(
-    expect.objectContaining({
-      runtimePluginSelections: [{ provider: "ollama", modelId: "qwen3:0.6b", agentId: "main" }],
-    }),
-    expect.objectContaining({ catalogMode: "static" }),
-  );
-  expect(modelResolver).toHaveBeenCalledOnce();
+  try {
+    expect(mocks.acquireRuntimeLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: [{ provider: "ollama", modelId: "qwen3:0.6b", agentId: "main" }],
+      }),
+      expect.objectContaining({ catalogMode: "static" }),
+    );
+    expect(modelResolver).toHaveBeenCalledOnce();
+  } finally {
+    if (!("error" in result)) {
+      result.release();
+    }
+  }
 });
 
 it("acquires the canonical manifest-derived utility model selection", async () => {
@@ -246,7 +252,7 @@ it("acquires the canonical manifest-derived utility model selection", async () =
   });
   mocks.resolvePluginMetadataSnapshot.mockReturnValue(metadataSnapshot);
 
-  const result = await prepareSimpleCompletionModelForAgent({
+  const result = await acquireSimpleCompletionModelForAgent({
     cfg: {
       agents: { defaults: { model: "selected-provider/primary-model@work" } },
     },
@@ -260,26 +266,32 @@ it("acquires the canonical manifest-derived utility model selection", async () =
     })),
   });
 
-  expect(
-    mocks.resolvePluginMetadataSnapshot.mock.calls.filter(
-      ([params]) => (params as { pluginIdScope?: unknown } | undefined)?.pluginIdScope,
-    ),
-  ).toHaveLength(2);
-  expect(mocks.acquireRuntimeLease).toHaveBeenCalledWith(
-    expect.objectContaining({
-      runtimePluginSelections: [
-        { provider: "selected-provider", modelId: "utility-model", agentId: "main" },
-      ],
-      agentDir: "/tmp/canonical-agent",
-    }),
-    expect.objectContaining({ catalogMode: "static", pluginMetadataSnapshot: metadataSnapshot }),
-  );
-  expect(result).toMatchObject({
-    selection: {
-      provider: "selected-provider",
-      modelId: "utility-model",
-      profileId: "work",
-      agentDir: "/tmp/canonical-agent",
-    },
-  });
+  try {
+    expect(
+      mocks.resolvePluginMetadataSnapshot.mock.calls.filter(
+        ([params]) => (params as { pluginIdScope?: unknown } | undefined)?.pluginIdScope,
+      ),
+    ).toHaveLength(2);
+    expect(mocks.acquireRuntimeLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: [
+          { provider: "selected-provider", modelId: "utility-model", agentId: "main" },
+        ],
+        agentDir: "/tmp/canonical-agent",
+      }),
+      expect.objectContaining({ catalogMode: "static", pluginMetadataSnapshot: metadataSnapshot }),
+    );
+    expect(result).toMatchObject({
+      selection: {
+        provider: "selected-provider",
+        modelId: "utility-model",
+        profileId: "work",
+        agentDir: "/tmp/canonical-agent",
+      },
+    });
+  } finally {
+    if (!("error" in result)) {
+      result.release();
+    }
+  }
 });

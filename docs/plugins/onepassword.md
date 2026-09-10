@@ -331,3 +331,4 @@ Policy and validation errors:
 ## Related
 
 - [Secrets management](/gateway/secrets)
+- [1Password](/gateway/1password) — the built-in `op://` secret source, and how the plugin, skill, and MCP options compare

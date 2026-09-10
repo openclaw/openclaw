@@ -118,6 +118,26 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
+  it("records provider authentication failures as operator copy, not raw provider text", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await seed();
+      const providerError =
+        "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_401";
+      await persistGatewaySessionLifecycleEvent({
+        ...target,
+        event: { ...event, data: { ...event.data, error: providerError } },
+      });
+      const [report] = await reports();
+      expect(report).toMatchObject({
+        content: expect.stringMatching(
+          /^This turn ended before a reply: ⚠️ Authentication failed \(provider returned HTTP 401\)/,
+        ),
+        details: { runId, error: expect.stringMatching(/^⚠️ Authentication failed/) },
+      });
+      expect(JSON.stringify(report)).not.toContain("Missing bearer");
+    });
+  });
+
   it.each(["active", "inactive", "other-run"] as const)(
     "checks assistant output on the %s branch for this run",
     async (branch) => {

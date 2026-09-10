@@ -3634,7 +3634,7 @@ describe("browser tool act compatibility", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(80_000);
+    expect(options.timeoutMs).toBe(126_250);
     expect(request.params?.path).toBe("/act");
     expect(request.params?.body).toEqual({
       kind: "wait",
@@ -3642,7 +3642,7 @@ describe("browser tool act compatibility", () => {
       text: "ready",
       timeoutMs: "45000",
     });
-    expect(request.params?.timeoutMs).toBe(70_000);
+    expect(request.params?.timeoutMs).toBe(116_250);
   });
 
   it("sizes node proxy calls for recursively nested batch execution", async () => {

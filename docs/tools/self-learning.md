@@ -308,9 +308,9 @@ An eligible experience review can still abstain. No proposal is the expected
 result when the evidence does not clear the reusable-procedure bar.
 Use `openclaw skills curator status` to inspect experience review outcomes and
 live skill usage. Current weekly collection results are in automation run history;
-Curator retains only the earlier collection records. Age-based curation is retired;
-the `curator pin`, `unpin`, and `restore` commands return an error explaining that
-weekly collection review manages the skill collection.
+Curator retains only the earlier collection records. Curator does not archive or
+expire skills by age. The `curator pin`, `unpin`, and `restore` commands return an
+error explaining that weekly collection review manages the skill collection.
 
 ### Doctor reports that Workshop is hidden
 

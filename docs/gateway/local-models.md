@@ -293,3 +293,4 @@ If the model loads cleanly but full agent turns misbehave, confirm transport fir
 
 - [Configuration reference](/gateway/configuration-reference)
 - [Model failover](/concepts/model-failover)
+- [CLI backends](/gateway/cli-backends) — driving a local CLI agent instead of an API model

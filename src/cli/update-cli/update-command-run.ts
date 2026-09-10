@@ -1,3 +1,5 @@
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
+import { formatUnsupportedNodeVersionMessage } from "../../../node-version.mjs";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
@@ -41,9 +43,11 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure, type UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
+import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import {
@@ -250,6 +254,26 @@ export function readDevUpdateTarget(): DevUpdateTarget | undefined {
 }
 
 export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
+  // Refuse before preflight can inspect write ownership or admit a live run ledger.
+  const runtimeFailure = process.versions.bun
+    ? null
+    : nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities());
+  if (runtimeFailure) {
+    const error = `${runtimeFailure}\n${formatUnsupportedNodeVersionMessage(process.versions.node)}`;
+    if (opts.json) {
+      defaultRuntime.writeJson({
+        status: "error",
+        mode: "unknown",
+        reason: "node-runtime-preflight",
+        error,
+        steps: [],
+        durationMs: 0,
+      });
+    } else {
+      defaultRuntime.error(`node-runtime-preflight: ${error}`);
+    }
+    exitCliAfterOutput(defaultRuntime, 1);
+  }
   const startedAt = Date.now();
   suppressDeprecations();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";

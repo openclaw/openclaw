@@ -88,30 +88,34 @@ export async function refreshSqliteSessionPlannerStatisticsBestEffort(
     await active;
     return;
   }
-  const completion = runExclusiveSqliteSessionWrite(scope, async () => {
-    if (!isCurrent()) {
-      return;
-    }
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
-    // Planner maintenance must not inherit the normal 5s writer wait: a competing
-    // process skips this best-effort pass instead of blocking the Gateway event loop.
-    runWithSqliteBusyTimeout(database.db, 0, () => {
-      // SAFETY: SQLite returns this fixed numeric column for PRAGMA analysis_limit.
-      const row = database.db.prepare("PRAGMA analysis_limit").get() as
-        | { analysis_limit?: unknown }
-        | undefined;
-      const previousLimit = Number(row?.analysis_limit ?? 0);
-      try {
-        // Direct analysis is required after known deletions. SQLite 3.44 is still
-        // supported and its optimize heuristic only reacts to table growth.
-        database.db.exec(
-          `PRAGMA analysis_limit = ${SESSION_PLANNER_ANALYSIS_LIMIT}; ANALYZE main;`,
-        );
-      } finally {
-        database.db.exec(`PRAGMA analysis_limit = ${previousLimit};`);
+  const completion = runExclusiveSqliteSessionWrite(
+    scope,
+    async () => {
+      if (!isCurrent()) {
+        return;
       }
-    });
-  })
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
+      // Planner maintenance must not inherit the normal 5s writer wait: a competing
+      // process skips this best-effort pass instead of blocking the Gateway event loop.
+      runWithSqliteBusyTimeout(database.db, 0, () => {
+        // SAFETY: SQLite returns this fixed numeric column for PRAGMA analysis_limit.
+        const row = database.db.prepare("PRAGMA analysis_limit").get() as
+          | { analysis_limit?: unknown }
+          | undefined;
+        const previousLimit = Number(row?.analysis_limit ?? 0);
+        try {
+          // Direct analysis is required after known deletions. SQLite 3.44 is still
+          // supported and its optimize heuristic only reacts to table growth.
+          database.db.exec(
+            `PRAGMA analysis_limit = ${SESSION_PLANNER_ANALYSIS_LIMIT}; ANALYZE main;`,
+          );
+        } finally {
+          database.db.exec(`PRAGMA analysis_limit = ${previousLimit};`);
+        }
+      });
+    },
+    "session.maintenance.planner-statistics",
+  )
     .catch((error: unknown) => {
       getChildLogger({ subsystem: "session-sqlite" }).warn(
         "SQLite session planner-statistics refresh failed",
@@ -580,32 +584,36 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
           entry ? [{ entry, sessionKey }] : [],
         ),
         async () =>
-          await runExclusiveSqliteSessionWrite(scope, async () => {
-            if (!isCurrent()) {
-              return [];
-            }
-            let committed: SessionLifecycleArchivedTranscript[] = [];
-            runOpenClawAgentWriteTransaction((database) => {
-              const partition = partitionUnchangedPlannedLifecycleArtifactEntries(
-                database,
-                batch.entryRemovals,
-              );
-              changedEntryRemovals = partition.changed;
-              committedEntryRemovals = partition.unchanged;
-              committed = deleteMaterializedSessionStatePlans(
-                database,
-                materializedPlans,
-                undefined,
-                new Set(committedEntryRemovals.map((removal) => removal.sessionKey)),
-              );
-              deletePlannedLifecycleArtifactEntries(database, committedEntryRemovals);
-              deferOpenClawAgentPostCommitPublication(
-                database,
-                prepareCommittedSessionEntryRemovals(scope.agentId, committedEntryRemovals),
-              );
-            }, toDatabaseOptions(scope));
-            return committed;
-          }),
+          await runExclusiveSqliteSessionWrite(
+            scope,
+            async () => {
+              if (!isCurrent()) {
+                return [];
+              }
+              let committed: SessionLifecycleArchivedTranscript[] = [];
+              runOpenClawAgentWriteTransaction((database) => {
+                const partition = partitionUnchangedPlannedLifecycleArtifactEntries(
+                  database,
+                  batch.entryRemovals,
+                );
+                changedEntryRemovals = partition.changed;
+                committedEntryRemovals = partition.unchanged;
+                committed = deleteMaterializedSessionStatePlans(
+                  database,
+                  materializedPlans,
+                  undefined,
+                  new Set(committedEntryRemovals.map((removal) => removal.sessionKey)),
+                );
+                deletePlannedLifecycleArtifactEntries(database, committedEntryRemovals);
+                deferOpenClawAgentPostCommitPublication(
+                  database,
+                  prepareCommittedSessionEntryRemovals(scope.agentId, committedEntryRemovals),
+                );
+              }, toDatabaseOptions(scope));
+              return committed;
+            },
+            "session.maintenance.finalize",
+          ),
       );
     } catch (error) {
       warn("SQLite session maintenance cleanup failed", error, batch.stateDeletePlans);

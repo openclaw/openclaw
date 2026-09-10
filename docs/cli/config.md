@@ -618,3 +618,4 @@ Inside the TUI, a leading `!` runs a literal local shell command (after a one-ti
 
 - [CLI reference](/cli)
 - [Configuration](/gateway/configuration)
+- [`openclaw configure`](/cli/configure) — guided editor for the same settings

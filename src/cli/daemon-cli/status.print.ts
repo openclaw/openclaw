@@ -1,6 +1,7 @@
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 // Human and JSON rendering for gathered daemon status diagnostics.
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
+import { formatHostDesktopStatus } from "../../commands/status-overview-values.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -121,23 +122,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       `${label("Gateway heap:")} ${infoText(formatGatewayHeapLimitReport(service.gatewayHeap))}`,
     );
   }
-  const hostDesktop = status.hostDesktop ?? {
-    enabled: false,
-    state: "disabled" as const,
-    port: 5900,
-  };
-  const hostDesktopValue =
-    hostDesktop.state === "disabled"
-      ? "disabled"
-      : hostDesktop.state === "managed"
-        ? hostDesktop.managedState === "running"
-          ? `managed · running · display :${hostDesktop.display} · 127.0.0.1:${hostDesktop.port} · security VncAuth`
-          : hostDesktop.managedState === "failed"
-            ? `managed · failed: ${hostDesktop.error}`
-            : hostDesktop.managedState === "unknown"
-              ? "managed · runtime state unavailable"
-              : `managed · ${hostDesktop.managedState === "not-started" ? "not started" : "starting"}`
-        : `${hostDesktop.state} · 127.0.0.1:${hostDesktop.port}${hostDesktop.security ? ` · security ${hostDesktop.security}` : ""}`;
+  const hostDesktopValue = formatHostDesktopStatus(status.hostDesktop);
   defaultRuntime.log(`${label("Host desktop:")} ${infoText(hostDesktopValue)}`);
   spacer();
 

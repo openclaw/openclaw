@@ -349,7 +349,7 @@ export class QuestionManager {
       if (!values || values.length === 0) {
         throw this.invalidAnswer(question.questionId, "requires an answer");
       }
-      if (values.some((value) => !value.trim())) {
+      if (values.some((value) => (question.isSecret ? value.length === 0 : !value.trim()))) {
         throw this.invalidAnswer(question.questionId, "contains an empty answer");
       }
       if (!question.multiSelect && values.length > 1) {
@@ -358,6 +358,10 @@ export class QuestionManager {
       // Store the declared option label when a value matches trim-insensitively;
       // downstream renderers compare answers to option labels exactly.
       const canonicalValues = values.map((value) => {
+        // Masked free-text answers preserve exact bytes, including whitespace.
+        if (question.isSecret) {
+          return value;
+        }
         const matched = question.options.find((option) => option.label.trim() === value.trim());
         return matched ? matched.label : value.trim();
       });

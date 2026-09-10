@@ -18,8 +18,11 @@ import { runQueuedStoreWrite, type StoreWriterTiming } from "../../shared/store-
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -30,6 +33,7 @@ import type {
   SessionTranscriptWriteScope,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
+import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
@@ -120,9 +124,23 @@ export function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SessionSqliteDatabase>(database);
 }
 
+export function withSqliteSessionDatabase<T>(
+  options: OpenClawAgentDatabaseOptions,
+  operation: (database: OpenClawAgentDatabase) => T,
+  assertCurrent?: () => void,
+): T | Promise<T> {
+  assertCurrent?.();
+  if (getOpenClawAgentDatabaseIfOpen(options)) {
+    return operation(openOpenClawAgentDatabase(options));
+  }
+  // The caller keeps its FIFO section while the existing owner joins the integrity child.
+  return withOpenClawAgentDatabaseAsync(options, operation, assertCurrent);
+}
+
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
+  operation: SqliteSessionWriteOperation,
   reclamation?: SqliteSessionReclamationDiagnostics,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
@@ -133,6 +151,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
     pid: process.pid,
     threadId,
     isMainThread,
+    operation,
     ...(reclamation?.kind ? { reclamationKind: reclamation.kind } : {}),
     ...(reclamation?.workerThreadId !== undefined
       ? { workerThreadId: reclamation.workerThreadId }

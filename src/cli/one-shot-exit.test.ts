@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import {
   exitCliAfterOutput,
@@ -10,6 +11,8 @@ import {
 
 const successfulRun = async () => {};
 const ignoreError = () => {};
+// Fresh proxy children share only temporary source transforms, not module state.
+const proxyChildTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-proxy-child-tmp-");
 
 function spyOnExit(onExit?: (code: number) => void) {
   const exited = createDeferred();
@@ -489,7 +492,9 @@ describe("one-shot CLI exit", () => {
       ...process.env,
       OPENCLAW_STATE_DIR: "/dev/null",
       OPENCLAW_CONFIG_PATH: "/dev/null",
-      TSX_DISABLE_CACHE: "1",
+      TMPDIR: proxyChildTempDir,
+      TEMP: proxyChildTempDir,
+      TMP: proxyChildTempDir,
       NODE_DISABLE_COMPILE_CACHE: "1",
     };
     delete env.VITEST;

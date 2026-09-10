@@ -5,6 +5,7 @@ import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/
 import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
+import { collectNodeRuntimeFindings } from "../commands/node-runtime-diagnostics.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -20,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   isGatewayCredentialsRequiredError: vi.fn(),
   isContainerEnvironment: vi.fn(() => false),
   readGatewayServiceState: vi.fn(),
+  resolveNodeRuntimeInfo:
+    vi.fn<typeof import("../daemon/runtime-paths.js").resolveNodeRuntimeInfo>(),
+  detectRuntime: vi.fn<typeof import("../infra/runtime-guard.js").detectRuntime>(),
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
   resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
@@ -60,6 +64,16 @@ vi.mock("../gateway/call.js", () => ({
 vi.mock("../daemon/service.js", () => ({
   readGatewayServiceState: mocks.readGatewayServiceState,
   resolveGatewayService: mocks.resolveGatewayService,
+}));
+
+vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/runtime-paths.js")>()),
+  resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
+}));
+
+vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
+  detectRuntime: mocks.detectRuntime,
 }));
 
 vi.mock("../infra/container-environment.js", () => ({
@@ -614,6 +628,14 @@ describe("doctor runtime tool schema checks", () => {
 
 describe("doctor gateway runtime checks", () => {
   beforeEach(() => {
+    mocks.resolveNodeRuntimeInfo.mockReset().mockResolvedValue({
+      status: "supported",
+      version: "26.8.1",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    });
+    mocks.detectRuntime.mockReset();
     mocks.isContainerEnvironment.mockReset().mockReturnValue(false);
     mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
       url: "http://127.0.0.1:5829",
@@ -925,6 +947,82 @@ describe("doctor gateway runtime checks", () => {
 
     expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { version: "26.8.1", text: false, severity: "error", message: "truncates TEXT" },
+    {
+      version: "24.15.0",
+      text: true,
+      severity: "info",
+      message: "unsupported version, capability probe passed",
+    },
+  ])(
+    "reports current Node $version probe outcome as $severity",
+    async ({ version, text, severity, message }) => {
+      mocks.detectRuntime.mockReturnValue({
+        kind: "node",
+        version,
+        execPath: "/opt/runtime/bin/node",
+        pathEnv: "/opt/runtime/bin",
+        hasNodeSqlite: true,
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text, blob: true, json: true },
+      });
+
+      expect(await collectNodeRuntimeFindings({ OPENCLAW_PROFILE: "diagnostic-fixture" })).toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/node-runtime",
+          severity,
+          message: expect.stringContaining(message),
+          target: "/opt/runtime/bin/node",
+          ...(severity === "error" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
+        }),
+      ]);
+    },
+  );
+
+  it.each([
+    { version: "26.8.1", text: false, status: "unsupported" as const, severity: "warning" },
+    { version: "24.15.0", text: true, status: "supported" as const, severity: "info" },
+  ])(
+    "reports recorded Node $version capabilities as $severity",
+    async ({ version, text, status, severity }) => {
+      const message = text
+        ? `Node ${version}: unsupported version, capability probe passed.`
+        : `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
+      mocks.readGatewayServiceState.mockResolvedValueOnce({
+        installed: true,
+        loadState: { status: "loaded" },
+        running: true,
+        env: {},
+        command: {
+          programArguments: ["/opt/runtime/bin/node", "gateway"],
+          sourcePath: "/tmp/gateway.service",
+        },
+        runtime: { status: "running" },
+      });
+      mocks.resolveNodeRuntimeInfo.mockResolvedValue({
+        status,
+        version,
+        sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text, blob: true, json: true },
+        nodeSharedSqlite: false,
+        ...(text ? { note: message } : { capabilityError: message }),
+      });
+
+      await expect(
+        collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/gateway-daemon",
+          severity,
+          message,
+          target: "/opt/runtime/bin/node",
+          ...(severity === "warning" ? { fixHint: expect.stringContaining("nvm install 26") } : {}),
+        }),
+      ]);
+    },
+  );
 
   it("skips host-service findings for a container without an OpenClaw service", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);

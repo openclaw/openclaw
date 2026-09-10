@@ -36,46 +36,59 @@ const expiredImage = (id: string): WarmProfileRecord => ({
 });
 
 describe("Crabbox idle image maintenance", () => {
-  it("preserves demand timestamps, capture ownership, and allocation pins without running setup", async () => {
-    const { provider, calls } = createWarmProvider();
-    const store = openWarmImageStore();
-    const recent = expiredImage("chk_recent");
-    recent.image!.lastUsedAtMs = Date.now();
-    const pinned = expiredImage("chk_pinned");
-    pinned.allocations.cbx_pending = {
-      choice: { kind: "checkpoint", checkpointId: "chk_pinned" },
-      machineClass: "standard",
-      phase: "pending",
-    };
-    const capturing = expiredImage("chk_capturing");
-    capturing.operation = {
-      type: "capture",
-      id: "capture-owner",
-      phase: "uncertain",
-      startedAtMs: Date.now(),
-    };
-    for (const [key, record] of Object.entries({ recent, pinned, capturing })) {
-      store.register(key, record);
-    }
-    store.register("expired", expiredImage("chk_expired"));
-    const profile = {
-      ...PROFILE,
-      setup: "echo configured",
-      setupEnv: ["MISSING_MAINTENANCE_SETUP_VALUE"],
-      warmImage: false,
-    };
-    vi.stubEnv("MISSING_MAINTENANCE_SETUP_VALUE", undefined);
+  it.each(["scrubbing", "creating", "uncertain"] as const)(
+    "preserves ownership and pins while reporting an old %s capture",
+    async (phase) => {
+      const { provider, calls, warn } = createWarmProvider();
+      const store = openWarmImageStore();
+      const recent = expiredImage("chk_recent");
+      recent.image!.lastUsedAtMs = Date.now();
+      const pinned = expiredImage("chk_pinned");
+      pinned.allocations.cbx_pending = {
+        choice: { kind: "checkpoint", checkpointId: "chk_pinned" },
+        machineClass: "standard",
+        phase: "pending",
+      };
+      const capturing = expiredImage("chk_capturing");
+      capturing.operation = {
+        type: "capture",
+        id: "capture-owner",
+        phase,
+        startedAtMs: Date.now() - 1_200_000,
+      };
+      for (const [key, record] of Object.entries({ recent, pinned, capturing })) {
+        store.register(key, record);
+      }
+      store.register("expired", expiredImage("chk_expired"));
+      const profile = {
+        ...PROFILE,
+        setup: "echo configured",
+        setupEnv: ["MISSING_MAINTENANCE_SETUP_VALUE"],
+        warmImage: false,
+      };
+      vi.stubEnv("MISSING_MAINTENANCE_SETUP_VALUE", undefined);
 
-    await provider.maintain!({ ...context(), profiles: [profile] });
+      await provider.maintain!({ ...context(), profiles: [profile] });
 
-    expect(calls.map(({ argv }) => argv.slice(1))).toEqual([
-      ["checkpoint", "delete", "chk_expired"],
-    ]);
-    expect(store.lookup("expired")).toBeUndefined();
-    for (const [key, record] of Object.entries({ recent, pinned, capturing })) {
-      expect(store.lookup(key)).toEqual(record);
-    }
-  });
+      expect(calls.map(({ argv }) => argv.slice(1))).toEqual([
+        ["checkpoint", "delete", "chk_expired"],
+      ]);
+      expect(store.lookup("expired")).toBeUndefined();
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls[0]?.[0]).toContain("capture-owner");
+      if (phase === "uncertain") {
+        expect(warn.mock.calls[0]?.[0]).toContain("--recover capture-owner");
+      } else {
+        expect(warn.mock.calls[0]?.[0]).toContain("may still be");
+        expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
+        expect(warn.mock.calls[0]?.[0]).not.toContain("Stop the owning Gateway");
+        expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
+      }
+      for (const [key, record] of Object.entries({ recent, pinned, capturing })) {
+        expect(store.lookup(key)).toEqual(record);
+      }
+    },
+  );
 
   it("retains failed deletion for a later idle sweep", async () => {
     let fails = true;

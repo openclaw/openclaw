@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  assertAuthProfileMigrationReady,
+  clearAuthProfileMigrationDiagnostics,
+} from "../auth-profiles/legacy-source-diagnostic.js";
 import { createOAuthManager } from "../auth-profiles/oauth-manager.js";
 import { refreshSerializedOAuthCredential } from "../auth-profiles/oauth-refresh-fence.js";
 import {
@@ -12,10 +17,14 @@ import {
 } from "../auth-profiles/oauth-refresh-marker.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
+import {
+  readPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../auth-profiles/sqlite.js";
 import * as authProfileStoreRuntime from "../auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "../auth-profiles/types.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
-import { AuthStorage, type AuthStorageBackend } from "./auth-storage.js";
+import { AuthStorage, FileAuthStorageBackend, type AuthStorageBackend } from "./auth-storage.js";
 
 const { ensureAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore } =
   authProfileStoreRuntime;
@@ -104,11 +113,132 @@ async function expectSerializedProviderMismatch(params: {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearAuthProfileMigrationDiagnostics();
   clearRuntimeAuthProfileStoreSnapshots();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("AuthStorage OAuth refresh ownership", () => {
+  it("refreshes local OAuth credentials while the shared owner requires migration", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "auth-local-refresh-" },
+      async (state) => {
+        const agentDir = state.agentDir("worker");
+        await fs.mkdir(agentDir, { recursive: true });
+        const providerId = "test-oauth";
+        const credential = createCredential({ provider: providerId, expires: 1 });
+        const sharedStore = { version: 1, profiles: {} };
+        await state.writeJson("agents/main/agent/auth-profiles.json", {
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "synthetic-legacy-key",
+            },
+          },
+        });
+        writePersistedAuthProfileStoreRaw(sharedStore);
+        writePersistedAuthProfileStoreRaw(
+          { version: 1, profiles: { [`${providerId}:default`]: credential } },
+          agentDir,
+        );
+        const storage = AuthStorage.forAgent(agentDir, {});
+        const refreshed = createCredential({
+          provider: providerId,
+          access: "synthetic-refreshed-access",
+          refresh: "synthetic-refreshed-refresh",
+        });
+        const refreshToken = vi.fn(async () => refreshed);
+        getAuthStorageOAuthProviderRegistry(storage).register({
+          id: providerId,
+          name: "Test OAuth",
+          async login() {
+            throw new Error("not used");
+          },
+          refreshToken,
+          getApiKey: (credentials) => credentials.access,
+        });
+        const fallback = vi.fn(() => "synthetic-fallback-key");
+        storage.setFallbackResolver(fallback);
+
+        expect(
+          (await storage.getApiKey(providerId)) === refreshed.access,
+          "returns the refreshed local credential",
+        ).toBe(true);
+        expect(refreshToken).toHaveBeenCalledOnce();
+        expect(loadPersistedAuthProfileStore(agentDir)?.profiles[`${providerId}:default`]).toEqual(
+          refreshed,
+        );
+        await expect(storage.getApiKey("anthropic")).rejects.toMatchObject({
+          code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+          affectedProviders: ["anthropic"],
+        });
+        expect(fallback).not.toHaveBeenCalled();
+
+        const backend = new FileAuthStorageBackend(path.join(agentDir, "auth.json"));
+        await backend.withLockAsync(async () => ({
+          result: undefined,
+          next: JSON.stringify({
+            [providerId]: refreshed,
+            litellm: { type: "api_key", key: "synthetic-local-key" },
+          }),
+        }));
+        expect(loadPersistedAuthProfileStore(agentDir)?.profiles["litellm:default"]).toEqual({
+          type: "api_key",
+          provider: "litellm",
+          key: "synthetic-local-key",
+        });
+        expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedStore);
+      },
+    );
+  });
+
+  it.each(["worker", "main"])(
+    "blocks sync and async writes when the %s destination requires migration",
+    async (agentId) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "auth-write-fence-" },
+        async (state) => {
+          const agentDir = state.agentDir(agentId);
+          await fs.mkdir(agentDir, { recursive: true });
+          const emptyStore = { version: 1, profiles: {} };
+          writePersistedAuthProfileStoreRaw(emptyStore, agentDir);
+          const backend = new FileAuthStorageBackend(path.join(agentDir, "auth.json"));
+          backend.read();
+          await state.writeJson(
+            `agents/${agentId}/agent/auth-profiles.json`,
+            agentId === "worker"
+              ? { metadata: {} }
+              : {
+                  version: 1,
+                  profiles: {
+                    "anthropic:default": {
+                      type: "api_key",
+                      provider: "anthropic",
+                      key: "synthetic-legacy-key",
+                    },
+                  },
+                },
+          );
+          expect(() => assertAuthProfileMigrationReady(agentDir)).toThrow(
+            "requires legacy credential migration",
+          );
+          const write = vi.fn(() => ({
+            result: undefined,
+            next: JSON.stringify({ litellm: { type: "api_key", key: "synthetic-local-key" } }),
+          }));
+          expect(() => backend.withLock(write)).toThrow("requires legacy credential migration");
+          await expect(backend.withLockAsync(async () => write())).rejects.toMatchObject({
+            code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+          });
+          expect(write).not.toHaveBeenCalled();
+          expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(emptyStore);
+        },
+      );
+    },
+  );
+
   it.each([
     { state: "fresh", expires: Date.now() + 600_000 },
     { state: "expired", expires: 1 },

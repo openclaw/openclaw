@@ -39,6 +39,7 @@ import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
+  GatewayServiceReadOptions,
   GatewayServiceRestartResult,
 } from "./service-types.js";
 import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
@@ -420,15 +421,19 @@ export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Pro
 
 export async function readScheduledTaskRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+  opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
-  const probe = probeScheduledTaskState(resolveTaskName(env));
+  const probe = probeScheduledTaskState(resolveTaskName(env), opts?.timeoutMs);
   if (probe.status === "missing") {
     return (await isStartupEntryInstalled(env))
       ? resolveFallbackRuntime(env)
       : { status: "stopped", missingUnit: true };
   }
   if (probe.status === "unknown") {
-    return { ...createServiceRuntimeInspectionFailure(probe.detail), missingUnit: false };
+    return {
+      ...createServiceRuntimeInspectionFailure(probe.detail, probe.timeoutMs),
+      missingUnit: false,
+    };
   }
   // State owns current activity; LastTaskResult is history and can describe an older run.
   const status =

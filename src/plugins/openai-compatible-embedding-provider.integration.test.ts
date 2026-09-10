@@ -4,7 +4,7 @@ import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearAuthProfileMigrationRequired } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { clearAuthProfileMigrationDiagnostics } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -304,7 +304,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
               expect(requests).toEqual([]);
             }
           } finally {
-            clearAuthProfileMigrationRequired(agentDir);
+            clearAuthProfileMigrationDiagnostics();
             clearRuntimeAuthProfileStoreSnapshots();
             closeOpenClawAgentDatabases(agentDir);
           }

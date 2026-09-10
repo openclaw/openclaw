@@ -5,7 +5,7 @@ import {
   loadExecApprovals,
   saveExecApprovals,
   updateExecApprovalsFormValue,
-} from "./index.ts";
+} from "./page-operations.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

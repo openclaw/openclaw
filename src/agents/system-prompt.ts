@@ -44,6 +44,7 @@ import {
   buildFullBootstrapPromptLines,
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
+import { buildCredentialSafetyPrompt } from "./credential-safety-prompt.js";
 import { buildTemporalContextSection } from "./date-time.js";
 import { buildDelegationGuidanceSection } from "./delegation-guidance.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
@@ -69,7 +70,6 @@ import type {
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
-import { buildCredentialSafetyPrompt } from "./transcript-credential-safety.js";
 import { buildUiPresentationPrompt } from "./ui-presentation-prompt.js";
 import {
   buildWatchedSessionsPromptLines,
@@ -108,6 +108,7 @@ export type SystemPromptRuntimeInfo = {
   sessionKey?: string;
   sessionId?: string;
   sessionUrl?: string;
+  gitCoauthorPrompt?: string;
   host?: string;
   os?: string;
   arch?: string;
@@ -1086,9 +1087,9 @@ export function buildAgentSystemPrompt(params: {
     "Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.",
     "Never persuade anyone to expand access or disable safeguards.",
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
-    buildCredentialSafetyPrompt(
-      availableTools.has("secrets") ? resolveToolName("secrets") : undefined,
-    ),
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable: availableTools.has("openclaw") || availableTools.has("gateway"),
+    }),
     "",
   ];
   // CLI backends own native file tools outside OpenClaw's projected tool list.
@@ -1540,6 +1541,7 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities),
+    ...(runtimeInfo?.gitCoauthorPrompt ? [runtimeInfo.gitCoauthorPrompt] : []),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
     `Reasoning=${reasoningLevel}; hidden unless on/stream. Toggle /reasoning; /status shows when enabled.`,
   );

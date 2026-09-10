@@ -28,7 +28,7 @@ type DeletedSessionShell = {
   activeSessionKey: string;
   routeState: { routeId?: RouteId; location?: RouteLocation };
   didConsiderNativeRouteRestore: boolean;
-  replaceChatWithCurrentSession: () => void;
+  recoverNotFoundRoute: () => void;
   updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
   observeDeletedSessions: (state: ApplicationContext["sessions"]["state"]) => void;
   recoverDeletedActiveSession: (state: ApplicationContext["sessions"]["state"]) => void;
@@ -408,7 +408,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       sessionKeys: [mainKey],
     });
 
-    shell.replaceChatWithCurrentSession();
+    shell.recoverNotFoundRoute();
 
     expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
@@ -422,7 +422,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       sessionKeys: [mainKey, researchKey],
     });
 
-    shell.replaceChatWithCurrentSession();
+    shell.recoverNotFoundRoute();
 
     expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(researchKey);
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/research" });
@@ -435,7 +435,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       sessionKeys: [mainKey],
     });
 
-    shell.replaceChatWithCurrentSession();
+    shell.recoverNotFoundRoute();
 
     expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
@@ -448,7 +448,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       sessionKeys: [mainKey],
     });
 
-    shell.replaceChatWithCurrentSession();
+    shell.recoverNotFoundRoute();
 
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
@@ -461,7 +461,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       sessionKeys: [existingKey],
     });
 
-    shell.replaceChatWithCurrentSession();
+    shell.recoverNotFoundRoute();
 
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", {
@@ -480,7 +480,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       location: { pathname: "/chat/main/unrelated-missing", search: "", hash: "" },
     };
 
-    shell.replaceChatWithCurrentSession();
+    shell.recoverNotFoundRoute();
 
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", {
@@ -495,7 +495,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       sessionKeys: [deletedKey, mainKey],
     });
 
-    shell.replaceChatWithCurrentSession();
+    shell.recoverNotFoundRoute();
 
     expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(mainKey);
     expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });

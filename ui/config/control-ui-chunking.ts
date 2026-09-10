@@ -108,9 +108,9 @@ export const controlUiCodeSplitting = {
         // them (and therefore other routes) into its eagerly imported chunk.
         priority: 8 - index,
         includeDependenciesRecursively: true,
-        // Chat's dense module graph needs a smaller target to stay within the
-        // existing largest-JS budget; shared boot retains its request grouping.
-        maxSize: (route === "chat" ? 1408 : 1536) * 1024,
+        // Shared and chat groups both contain dense UI modules; keep their
+        // generated chunks within the existing compressed-size budget.
+        maxSize: 1408 * 1024,
       };
     }),
   ],

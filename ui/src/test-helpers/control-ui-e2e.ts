@@ -481,8 +481,10 @@ export type ControlUiMockGatewayScenario = {
     icon?: string;
     id: string;
     label: string;
+    path?: string;
     placement?: string;
     pluginId: string;
+    slug?: string;
   }>;
   controlUiWidgetKinds?: Array<{
     kind: string;

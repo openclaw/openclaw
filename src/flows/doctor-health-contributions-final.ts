@@ -168,6 +168,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:github-projects",
       label: "GitHub projects",
+      updatePolicy: "standalone",
       run: runGitHubProjectHealth,
     }),
     createDoctorHealthContribution({
@@ -291,6 +292,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
       label: "Bootstrap size",
+      updatePolicy: "standalone",
       healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
     }),

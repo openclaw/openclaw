@@ -87,7 +87,7 @@ Interpreting a policy finding, repairing it, and the exit codes. Part of the [`o
 
 A finding can include both `target` (the observed workspace thing that does
 not conform) and `requirement` (the authored rule that made it a finding).
-Both are `oc://` address strings today, but the field names describe policy
+Both are `oc://` address strings, but the field names describe policy
 role rather than address format.
 
 Example findings:
@@ -207,7 +207,7 @@ Example findings:
 `workspaceRepairs` is explicitly enabled; otherwise checks report what they
 would repair and leave settings unchanged.
 
-In this version, repair can disable channels denied by `channels.denyRules` and
+Repair can disable channels denied by `channels.denyRules` and
 apply the automatic narrowing repairs listed below. Enable `workspaceRepairs`
 only after the policy file has been reviewed, because a valid rule can change
 workspace config:

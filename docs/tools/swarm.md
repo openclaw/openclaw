@@ -569,13 +569,14 @@ remaining run ids until `pending` is empty. Collector mode supports native
 OpenClaw sub-agents; it does not support ACP runtime, thread binding, visible
 sessions, or persistent session mode.
 
-## Limits and roadmap
+<a id="limits-and-roadmap" />
 
-Swarm v1 runs one-shot collector children; the planned `agents.session()` API
-will add stateful multi-turn workers. Children currently run on the local
-Gateway's sub-agent lane; cloud placement is planned as an explicit spawn
-option. Saved workflow definitions and a graph DSL are not part of Swarm's
-current direction.
+## Limits
+
+Swarm runs one-shot collector children; there is no stateful multi-turn worker
+API. Children run on the local Gateway's sub-agent lane, and spawns have no
+cloud-placement option. Saved workflow definitions and a graph DSL are not part
+of Swarm's current direction.
 
 ## Related
 

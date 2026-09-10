@@ -146,9 +146,13 @@ test("an authenticated metadata patch completes while another session awaits cat
 
       const releaseWriter = createDeferredCore();
       const writerScope = { agentId: "main", env: state.env };
-      const blocker = runExclusiveSqliteSessionWrite(writerScope, async () => {
-        await releaseWriter.promise;
-      });
+      const blocker = runExclusiveSqliteSessionWrite(
+        writerScope,
+        async () => {
+          await releaseWriter.promise;
+        },
+        "session.transcript.batch",
+      );
       let writerTrace: DiagnosticTraceContext | undefined;
       const stopObserving = onInternalDiagnosticEvent((event) => {
         if (

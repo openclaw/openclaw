@@ -548,7 +548,14 @@ export function resolvePackageSetupSource(params: {
 }
 
 /** Resolves runtime extension sources for a plugin package manifest. */
-export function resolvePackageRuntimeExtensionSources(params: {
+export function resolvePackageRuntimeExtensionSources(
+  params: Parameters<typeof resolvePackageRuntimeExtensions>[0],
+): string[] {
+  return resolvePackageRuntimeExtensions(params).map((entry) => entry.source);
+}
+
+/** Keeps declarations paired with their runtime sources when earlier entries cannot resolve. */
+export function resolvePackageRuntimeExtensions(params: {
   packageDir: string;
   packageRootRealPath?: string;
   manifest: PackageManifest | null;
@@ -559,7 +566,7 @@ export function resolvePackageRuntimeExtensionSources(params: {
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
-}): string[] {
+}): Array<{ entryPath: string; source: string }> {
   const runtimeResolution = resolvePackageRuntimeExtensionEntries({
     manifest: params.manifest,
     extensions: params.extensions,
@@ -593,6 +600,6 @@ export function resolvePackageRuntimeExtensionSources(params: {
       diagnostics: params.diagnostics,
       rejectHardlinks: params.rejectHardlinks,
     });
-    return source ? [source] : [];
+    return source ? [{ entryPath, source }] : [];
   });
 }

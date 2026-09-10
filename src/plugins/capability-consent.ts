@@ -105,7 +105,10 @@ function acceptManagedPluginDeclaredSurface<T extends PluginInstallRecord>(
   return accepted;
 }
 
-function throwManagedPluginCapabilityConsentRequired(review: PluginCapabilityConsentReview): never {
+function throwManagedPluginCapabilityConsentRequired(
+  review: PluginCapabilityConsentReview,
+  recovery = `Run "openclaw plugins enable ${review.pluginId} --accept-capabilities" to accept its capabilities.`,
+): never {
   pendingPluginCapabilityReviews.delete(review.pluginId);
   pendingPluginCapabilityReviews.set(review.pluginId, review);
   if (pendingPluginCapabilityReviews.size > 32) {
@@ -115,7 +118,7 @@ function throwManagedPluginCapabilityConsentRequired(review: PluginCapabilityCon
     }
   }
   throw new ManagedPluginLifecycleError(
-    `Plugin "${review.pluginId}" requires capability consent. Use openclaw plugins install or openclaw plugins enable with --accept-capabilities, then retry.`,
+    `Plugin "${review.pluginId}" requires capability consent. ${recovery}`,
     {
       capabilityConsent: {
         pluginId: review.pluginId,
@@ -314,7 +317,11 @@ async function resolvePluginArtifactCapabilityConsent(params: {
             declared: finalDeclared,
             ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
           });
-    return throwManagedPluginCapabilityConsentRequired(finalReview);
+    const outcome = params.currentArtifactDir ? "updated" : "installed";
+    return throwManagedPluginCapabilityConsentRequired(
+      finalReview,
+      `The plugin was not ${outcome}. Re-run the same "openclaw plugins install" or "openclaw plugins update" command with --accept-capabilities, keeping its source and other options. For Doctor or setup, complete the plugin command first, then retry Doctor or setup.`,
+    );
   }
   pendingPluginCapabilityReviews.delete(params.pluginId);
   // Provenance alone is not operator acceptance; an explicit review is.

@@ -203,9 +203,14 @@ any recorded failed-update outcome so it can repair the installation and verify
 Gateway health, using its normal authentication, sandbox, and approval settings.
 Use `openclaw triage --agent codex` to select a particular agent.
 
-Failed interactive updates open triage automatically after updater cleanup and
+Failed interactive updates offer triage after updater cleanup and
 pass the captured failure to the agent before fresh diagnostics can delay the
-handoff. JSON, `--yes`, and non-interactive update invocations collect diagnostics
+handoff. Before launch, OpenClaw shows the agent, saved prompt path when available,
+and use of your own account/tokens; Enter or `y` proceeds, while `n` prints handoff
+commands and preserves diagnostics and the failed update's exit status.
+After 30 seconds without an answer, it announces that it is continuing and
+proceeds as Yes; explicit `openclaw triage` does not ask for this confirmation.
+JSON, `--yes`, and non-interactive update invocations collect diagnostics
 and print handoff commands without starting an agent. For diagnostic collection
 alone, use `openclaw triage --non-interactive`; add `--update-result <path>` to
 include a saved update-failure artifact. See [Triage](/cli/triage) for command

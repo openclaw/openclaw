@@ -1,6 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { isAwaitingGatewayFailure, isGatewayAvailable } from "../gateway-availability.ts";
+import { isGatewayAvailable } from "../gateway-availability.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import {
   appendSessionResults,
@@ -8,7 +8,6 @@ import {
   reconcileRosterPresentationMetadata,
 } from "./reconcile.ts";
 import type {
-  SessionConnectionOwner,
   SessionConnectionScope,
   SessionGateway,
   SessionListOptions,
@@ -20,40 +19,36 @@ import type {
 import { normalizeAgentId } from "./session-key.ts";
 import {
   completeSessionRefreshWaiters,
-  findPublishedSession,
+  isForegroundReplacement,
   isPrimarySessionListQuery,
   isSameSessionListQuery,
   prepareSessionRefreshOptions,
   retainSessionPaginationWindow,
+  sessionListAgentMatcher,
   sessionListQueryAgentId,
+  type ManagedSessionList,
   type QueuedSessionRefresh,
 } from "./session-list-query.ts";
+import {
+  createSessionManagedListRefresh,
+  publishManagedList,
+  type SessionListRefreshHost,
+} from "./session-managed-list-refresh.ts";
 import {
   buildSessionListParams,
   normalizeManagedSessionListQuery,
   requestSessionList,
   requestSessionListParams,
 } from "./session-requests.ts";
+import { createSessionRosterObservations } from "./session-roster-observations.ts";
 
-type SessionRosterRefreshHost = {
-  connection: SessionConnectionOwner;
-  snapshot: () => SessionGateway["snapshot"];
-  readState: () => SessionState;
+type SessionRosterRefreshHost = SessionListRefreshHost & {
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
   observerError: () => string | null;
   bootstrap: (
     scope: SessionConnectionScope,
     list: Readonly<Record<string, unknown>>,
   ) => Promise<SessionsListResult | null>;
-  decorate: (
-    result: SessionsListResult | null,
-    owner: { scope: SessionListScope },
-  ) => SessionsListResult | null;
-  reconcileList: (
-    result: SessionsListResult | null,
-    issuedRevision: number,
-    agentId?: string,
-  ) => SessionsListResult | null;
   onCanonicalList: (
     result: SessionsListResult | null,
     requestRevision: number,
@@ -62,42 +57,29 @@ type SessionRosterRefreshHost = {
   ) => void;
 };
 
-type ManagedSessionListRefresh = {
-  append: boolean;
-  offset?: number;
-  invalidated?: true;
-};
-
 export type SessionRefreshOutcome =
   | { status: "refreshed" | "stale" }
   | { status: "failed"; error: string };
 
-type ManagedSessionList = {
-  key: string;
-  query: ReturnType<typeof normalizeManagedSessionListQuery>;
-  scope: SessionListScope;
-  retainedLimit: number;
-  connectionEpoch: number | null;
-  snapshot: SessionListSnapshot;
-  listeners: Set<(snapshot: SessionListSnapshot) => void>;
-  coordinator: ReturnType<typeof createSessionEventRefreshCoordinator>;
-  pending: Promise<void> | null;
-  queued: ManagedSessionListRefresh | null;
-};
-
-function isForegroundReplacement(options: SessionRefreshOptions): boolean {
-  return options.append !== true && options.backgroundHydrate !== true;
-}
-
-function sessionListAgentMatcher(agentId?: string | null) {
-  const normalized = agentId ? normalizeAgentId(agentId) : null;
-  return (queryAgentId?: string) =>
-    !normalized || !queryAgentId?.trim() || normalizeAgentId(queryAgentId) === normalized;
-}
-
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let gatewayAvailable = isGatewayAvailable(host.snapshot());
   let requestRevision = 0;
+  const eventRevisions = new WeakMap<
+    object,
+    { revision: number; scope: SessionConnectionScope | null }
+  >();
+  const captureEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return { revision: requestRevision, scope: host.connection.capture() };
+    }
+    const previous = eventRevisions.get(payload);
+    if (previous !== undefined) {
+      return previous;
+    }
+    const observation = { revision: ++requestRevision, scope: host.connection.capture() };
+    eventRevisions.set(payload, observation);
+    return observation;
+  };
   // A queued foreground replacement owns publication; older loads may only finish for callers.
   let foregroundPublicationGeneration = 0;
   let inFlight: Promise<SessionsListResult | null> | null = null;
@@ -113,11 +95,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
   let pageActive = !observesPageLifecycle || document.visibilityState !== "hidden";
   const managedLists = new Map<string, ManagedSessionList>();
-
-  const publishManagedList = (entry: ManagedSessionList, snapshot: SessionListSnapshot): void => {
-    entry.snapshot = snapshot;
-    entry.listeners.forEach((listener) => listener(snapshot));
-  };
+  const observations = createSessionRosterObservations(host, managedLists);
 
   const managedList = (scope: SessionListScope): ManagedSessionList => {
     const query = normalizeManagedSessionListQuery(scope);
@@ -184,100 +162,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
   };
 
-  const refreshManagedList = (
-    entry: ManagedSessionList,
-    refresh: ManagedSessionListRefresh,
-  ): Promise<void> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return Promise.resolve();
-    }
-    if (entry.pending) {
-      if (refresh.invalidated) {
-        entry.queued = refresh;
-      }
-      return entry.pending;
-    }
-    if (refresh.append && !entry.snapshot.result) {
-      return Promise.resolve();
-    }
-    if (!refresh.append) {
-      entry.coordinator.absorb();
-    }
-    const isCurrent = () =>
-      managedLists.get(entry.key) === entry && host.connection.isCurrent(scope);
-    const drain = async () => {
-      let next: ManagedSessionListRefresh | null = refresh;
-      while (next && isCurrent()) {
-        const requestParams = {
-          ...entry.query,
-          limit: next.append ? entry.query.limit : entry.retainedLimit,
-          ...(next.append && next.offset !== undefined ? { offset: next.offset } : {}),
-        };
-        publishManagedList(entry, { ...entry.snapshot, loading: true, error: null });
-        try {
-          const issuedRevision = ++requestRevision;
-          const response = await requestSessionListParams(scope.client, requestParams);
-          if (!isCurrent()) {
-            return;
-          }
-          if (!response) {
-            throw new Error("The session query did not return a result. Try again.");
-          }
-          const result = host.reconcileList(
-            response,
-            issuedRevision,
-            sessionListQueryAgentId(entry.query),
-          );
-          const previous = entry.snapshot.result;
-          const nextResult =
-            result && next.append && requestParams.offset && previous
-              ? appendSessionResults(previous, result)
-              : reconcileRosterPresentationMetadata(result, previous);
-          const decorated = host.decorate(nextResult, entry);
-          if (decorated) {
-            entry.retainedLimit = Math.max(entry.retainedLimit, decorated.sessions.length);
-          }
-          entry.connectionEpoch = scope.epoch;
-          publishManagedList(entry, {
-            result: decorated,
-            agentId: sessionListQueryAgentId(entry.query) ?? null,
-            loading: false,
-            error: null,
-          });
-        } catch (error) {
-          if (!isCurrent()) {
-            return;
-          }
-          const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
-          publishManagedList(entry, {
-            ...entry.snapshot,
-            loading: false,
-            error: awaitingGateway ? null : formatUiError(error),
-          });
-        }
-        if (!isCurrent()) {
-          return;
-        }
-        const queued = entry.queued;
-        entry.queued = null;
-        next = pageActive ? queued : null;
-      }
-    };
-    // Loading listeners can request a refresh before the first RPC starts.
-    // Claim the pending owner first so those requests enter its trailing queue.
-    let settleRefresh!: (refresh: Promise<void>) => void;
-    const pending = new Promise<void>((resolve) => {
-      settleRefresh = resolve;
-    }).finally(() => {
-      if (entry.pending === pending) {
-        entry.pending = null;
-      }
-    });
-    entry.pending = pending;
-    settleRefresh(drain());
-    return pending;
-  };
+  const refreshManagedList = createSessionManagedListRefresh(host, {
+    managedLists,
+    observations,
+    nextRevision: () => ++requestRevision,
+    isPageActive: () => pageActive,
+  });
 
   const list = async (options: SessionListOptions = {}): Promise<SessionsListResult | null> => {
     const scope = host.connection.capture();
@@ -353,10 +243,19 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const mergeWithCurrent =
         !currentState.resultCached && append && typeof requestOptions.offset === "number";
       const currentResult = currentState.resultCached ? null : currentState.result;
+      const presented = reconcileRosterPresentationMetadata(result, currentResult);
+      observations.inherit(presented, result, currentResult, requestOptions.agentId);
+      const observed = observations.accept(
+        presented,
+        currentState.result,
+        null,
+        requestOptions.agentId,
+        currentState.agentId,
+      );
       let nextResult =
-        result && mergeWithCurrent && currentResult
-          ? appendSessionResults(currentResult, result)
-          : reconcileRosterPresentationMetadata(result, currentResult);
+        observed && mergeWithCurrent && currentResult
+          ? appendSessionResults(currentResult, observed)
+          : observed;
       if (append && nextResult && !backgroundHydrate) {
         lastListOptions = retainSessionPaginationWindow(
           durableListOptions,
@@ -366,10 +265,20 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           host.snapshot(),
         );
       }
-      if (nextResult && !currentState.resultCached) {
+      if (nextResult) {
         nextResult = preserveCurrentSessionRow(
           nextResult,
-          currentState,
+          {
+            agentId: currentState.agentId,
+            result: currentState.resultCached
+              ? {
+                  sessions:
+                    currentState.result?.sessions.filter((row) =>
+                      observations.hasLiveObservation(row),
+                    ) ?? [],
+                }
+              : currentState.result,
+          },
           host.snapshot(),
           backgroundHydrate,
         );
@@ -380,6 +289,13 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
       primaryList.scope = append ? lastListOptions : durableListOptions;
       nextResult = host.decorate(nextResult, primaryList);
+      const notifyObserved = observations.stageObservedRows(
+        result?.sessions ?? [],
+        scope,
+        requestOptions.agentId,
+        issuedRevision,
+        false,
+      );
       host.onCanonicalList(nextResult, issuedRevision, requestOptions.agentId, result);
       const state = host.readState();
       const error = host.observerError();
@@ -395,6 +311,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         },
         error ? "session-observer" : undefined,
       );
+      notifyObserved();
       lastRefreshOutcome = { status: "refreshed" };
       refreshOutcomeRevision += 1;
       return result;
@@ -571,8 +488,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       refreshOutcomeRevision > previousOutcomeRevision ? lastRefreshOutcome : { status: "stale" },
     );
   };
-  const publishedSession = (matches: Parameters<typeof findPublishedSession>[2]) =>
-    findPublishedSession(host.readState(), managedLists.values(), matches);
   return {
     observeGateway(snapshot: SessionGateway["snapshot"], connectionChanged: boolean) {
       const available = isGatewayAvailable(snapshot);
@@ -581,6 +496,25 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
       gatewayAvailable = available;
     },
+    captureReconciliation: () => observations.captureReconciliation(++requestRevision),
+    copyRow: observations.copyRow,
+    inheritRow: observations.inheritRow,
+    registerRow: observations.registerRow,
+    currentRow: observations.currentRow,
+    mergeRows: observations.mergeRows,
+    rowRevision: observations.rowRevision,
+    hasLiveObservation: observations.hasLiveObservation,
+    isCurrentRow: observations.isCurrentRow,
+    inherit: observations.inherit,
+    observeReadRow: observations.observeReadRow,
+    bindOwner: observations.bindOwner,
+    observeEvent: observations.observeEvent,
+    stageObservedRows: observations.stageObservedRows,
+    stageManagedResults: observations.stageManagedResults,
+    stageRunTerminal: observations.stageRunTerminal,
+    projectFields: observations.projectFields,
+    projectRows: observations.projectRows,
+    captureEvent,
     primaryList: () => primaryList,
     get requestRevision() {
       return requestRevision;
@@ -669,14 +603,32 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     bootstrap: (options: SessionRefreshOptions) => refreshInternal(options, true),
     refreshReplacement: (agentId?: string | null) => refreshReplacementOwned(agentId),
     refreshReplacementResult,
-    publishedSession,
-    publishedRow: (matches: (row: GatewaySessionRow, agentId?: string | null) => boolean) =>
-      publishedSession(matches)?.row,
+    publishedRow(matches: (row: GatewaySessionRow, agentId?: string | null) => boolean) {
+      const state = host.readState();
+      // Primary rows own shared presentation before managed and descriptor-only rows.
+      const primary = state.result?.sessions.find((row) => matches(row, state.agentId));
+      if (primary) {
+        return primary;
+      }
+      for (const entry of managedLists.values()) {
+        const row = entry.snapshot.result?.sessions.find((candidate) =>
+          matches(candidate, entry.scope.agentId),
+        );
+        if (row) {
+          return row;
+        }
+      }
+      return observations.publishedRow(matches);
+    },
     /** Republishes every held list through `decorate` so a UI-owned overlay
      * reaches the archived/all snapshots too, not just the primary state. */
     redecorateLists() {
       const state = host.readState();
       const result = host.decorate(state.result, primaryList);
+      const staged = observations.stageManagedResults(
+        host.connection.capture(),
+        (entry) => entry.snapshot.result,
+      );
       if (result !== state.result) {
         host.publish({ ...state, result });
       }
@@ -686,6 +638,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           publishManagedList(entry, { ...entry.snapshot, result: decorated });
         }
       }
+      staged.notify();
     },
     lastOptions: () => lastListOptions,
     // Gateway-owned membership filters require an authoritative list refresh.
@@ -699,6 +652,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       invalidateManagedLists(options.agentId);
     },
     reset() {
+      observations.reset();
       foregroundPublicationGeneration += 1;
       primaryList = { scope: primaryList.scope };
       eventRefreshCoordinator.reset();
@@ -720,6 +674,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       }
     },
     dispose() {
+      observations.reset();
       foregroundPublicationGeneration += 1;
       eventRefreshCoordinator.dispose();
       if (observesPageLifecycle) {

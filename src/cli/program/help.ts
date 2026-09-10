@@ -13,7 +13,6 @@ import {
   getCommanderErrorCommandNames,
   getCommanderErrorCommandPath,
 } from "./commander-parse-facts.js";
-import type { ProgramContext } from "./context.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
 import { formatCliParseErrorOutput } from "./error-output.js";
 import { getSubCliCommandsWithSubcommands } from "./subcli-descriptors.js";
@@ -67,7 +66,7 @@ export function formatProgramHelpOutput(str: string): string {
 
 export function configureProgramHelp(
   program: Command,
-  ctx: ProgramContext,
+  ctx: { programVersion: string },
   options?: { commandsWithSubcommands?: ReadonlySet<string> },
 ) {
   const commandsWithSubcommands = new Set([

@@ -7,6 +7,7 @@ import {
   dedupeDreamDiaryEntries,
   readRecentDreamDiaryEntries,
   removeBackfillDiaryEntries,
+  updateDeepDreamsFile,
   updateDreamsFile,
   writeBackfillDiaryEntries,
 } from "./dreaming-dreams-file.js";
@@ -313,5 +314,31 @@ describe("dream diary file behavior", () => {
     const content = await fs.readFile(dreamsPath, "utf8");
     expect(content.match(/The server room smelled like rain\./g)?.length).toBe(1);
     expect(content).toContain("A fresh signal arrived after the cleanup started.");
+  });
+
+  it("does not create the workspace when updateDreamsFile skips writing", async () => {
+    const workspaceDir = path.join(await createTempWorkspace("dreaming-skip-no-dir-"), "pending");
+    await updateDreamsFile({
+      workspaceDir,
+      updater: () => ({ content: "", result: undefined, shouldWrite: false }),
+    });
+    await expect(fs.access(workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not create memory/ or DREAMS.md when deep dreaming has no body lines", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-empty-deep-");
+    await updateDeepDreamsFile({ workspaceDir, bodyLines: [] });
+    await expect(fs.access(path.join(workspaceDir, "memory"))).rejects.toThrow();
+    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
+  });
+
+  it("writes DREAMS.md when deep dreaming has body lines", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-nonempty-deep-");
+    await updateDeepDreamsFile({
+      workspaceDir,
+      bodyLines: ["A durable insight was recorded."],
+    });
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+    expect(content).toContain("A durable insight was recorded.");
   });
 });

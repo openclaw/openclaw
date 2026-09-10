@@ -22,6 +22,9 @@ Dreaming is enabled by default. Set
 - **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
 Long-term promotion still writes only to `MEMORY.md`.
+An empty sweep records completion in plugin state without creating memory or
+dreaming files, so it does not complete a new workspace's first-run setup.
+Existing daily notes can still receive managed phase-block updates.
 Each newly promoted entry carries trailing recall metadata derived from the
 candidate: up to three concept tags in `<!-- trigger: phrase one, phrase two -->`
 and a bounded `<!-- importance: N -->` value from 1 to 10. Consolidation keeps

@@ -61,7 +61,35 @@ completed video assets and result metadata. Video assets may contain buffers or
 provider-hosted URLs. Downloads after the call returns belong to the caller;
 registration disposal must not invalidate those completed artifacts.
 
-For `image_generate` and `music_generate` tools prepared from an owned inspection,
+`api.runtime.tts.textToSpeechTelephony(...)`, buffered TTS, and host Talk speech
+also own fresh provider registrations through configuration, persona preparation,
+synthesis, result metadata, and tracked provider cleanup.
+These operations retain managed registrations and preserve raw host ownership.
+Configured fallback catalogs stay separate from direct preference and override
+lookups. Returned audio buffers outlive registration disposal; standard TTS
+transcodes and saves those completed buffers after releasing the provider. The
+separate synchronous speech lookup and directive-parsing APIs keep their
+existing caller lifetime; streaming speech is not part of this finite operation.
+
+Streaming speech owns its provider registrations until stream cleanup finishes.
+`api.runtime.tts.textToSpeechStream(...)` preserves an explicit provider
+`release()` callback's lifetime after EOF or a read error: callers must still
+invoke and await the returned `release()`. Without a provider release callback,
+EOF or a read error releases registrations automatically. Stream cancellation
+and explicit release start source cancellation and provider cleanup before
+joining both, including tracked producer work. Release also handles an unopened
+stream. Existing raw host registrations keep their host lifetime.
+
+`api.runtime.tts.prepareTtsRequest(...)` can return opaque provider overrides for
+later synthesis. Preparation retains borrowed managed registrations
+until the SDK host closes, even if the original inspection is released first.
+Repeated preparation from the same source shares the host claim. Raw loader and
+Gateway registrations keep their existing lifetime and cache reuse; preparation
+does not create a fresh registration for each utterance. The host joins tracked
+preparation work before releasing its claims, including work started by a failed
+projection.
+
+For `image_generate`, `music_generate`, and `video_generate` tools prepared from an owned inspection,
 resources remain held through preflight and, once accepted, through generation, media saving, and
 any rollback. A `started` result acknowledges acceptance; it does not mean the
 work or cleanup has finished. If the original inspection retires during
@@ -70,6 +98,13 @@ setup before retrying.
 An already accepted task keeps its captured resources until its work settles.
 Raw prepared registries retain their existing host lifetime; this does not enable
 automatic physical disposal for all prepared runtimes.
+
+When model-backed image understanding reports request timeout or cancellation,
+its prepared runtime borrow stays held until the actual provider operation and
+tracked transport cleanup settle.
+Supplied managed snapshots retain their original prepared resources, including
+adopted donors; raw snapshots keep their caller-owned lifetime. A timeout reports
+an unfinished request, not completed resource cleanup.
 
 Executable CLI command registration also uses an owned, uncached registry. Its
 resources remain available through asynchronous registration, command actions,
@@ -121,6 +156,24 @@ Bundled plugins whose page already has a matching native Control UI route can se
 plugins or from bundled plugins whose ID does not own that route. The sidebar opens
 the native route while the descriptor is present instead of mounting the generic
 plugin-tab page.
+
+An optional `slug` gives a tab a Control UI address such as `/reports`, prefixed
+by `gateway.controlUi.basePath`. It must be one segment of at most 64 characters
+matching `^[a-z0-9]+(?:-[a-z0-9]+)*$`. Only `surface: "tab"` accepts it, and it
+cannot be combined with `placement: "route:<pluginId>"`. Registration rejects
+duplicate slugs from another active plugin (the first registration wins) and
+Gateway-owned names: `api`, `plugins`, `plugin`, `focus`, `approve`, `ask`, `share`,
+`j`, `v1`, `ui`, `mcp-app-sandbox`, `__openclaw__`, `__openclaw`, `sessions`,
+`agent`, `agents`, and probe names `health`, `healthz`, `ready`, `readyz`, `startup`,
+and `startupz`.
+
+The Control UI ignores slugs matching the first segment of any native route or
+alias. If any plugin's exact or prefix HTTP route would match the mounted slug
+path, the Gateway omits that slug from the hello and logs a diagnostic. In either
+case the tab uses `/plugin?plugin=<pluginId>&id=<tabId>` instead. Generic links to
+a tab with an available slug are replaced once in browser history with its slug
+path, preserving `p.*` parameters and the fragment. A slug changes only the
+Control UI address; it never changes HTTP routing or authentication.
 
 For a gateway-protected external tab, register the descriptor `path` under a
 same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a

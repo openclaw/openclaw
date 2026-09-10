@@ -149,3 +149,4 @@ In-place plugin upgrades preserve the same plugin id and config keys but may mov
 - [Install overview](/install): all installation methods.
 - [Doctor](/gateway/doctor): post-migration health check.
 - [Uninstall](/install/uninstall): removing OpenClaw cleanly.
+- [`openclaw backup`](/cli/backup) — create the archive this migration restores

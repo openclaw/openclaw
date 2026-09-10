@@ -500,3 +500,4 @@ retry, authentication, timeout, or fallback classification.
 
 - [Gateway runbook](/gateway)
 - [Local models](/gateway/local-models)
+- [Thinking levels](/tools/thinking) — how the reasoning budget maps onto a CLI backend

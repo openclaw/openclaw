@@ -627,7 +627,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       (session) =>
         (selected === routeAgentId || lineageAgentId === selected) &&
         session.key === navigationState.activeRowKey &&
-        !isSessionHidden(session.key) &&
+        !isSessionHidden(session) &&
         !adopted.has(session.key) &&
         !areUiSessionKeysEquivalent(session.key, mainSessionKey),
     );
@@ -644,7 +644,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     );
     if (
       lineageRoot &&
-      !isSessionHidden(lineageRoot.key) &&
+      !isSessionHidden(lineageRoot) &&
       (areUiSessionKeysEquivalent(lineageRoot.key, navigationState.routeSessionKey) ||
         sessionMatchesArchivedFilter(lineageRoot, this.sessionsStatusFilter)) &&
       (lineageAgentId === selected || lineageRouteAgentId === selected) &&

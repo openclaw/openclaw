@@ -272,6 +272,30 @@ describe("Crabbox durable allocation admission", () => {
     expect(reopened.lookupLease("cbx_rejected")?.choice).toEqual({ kind: "cold" });
   });
 
+  it("captures newly completed setup only from the current image generation", async () => {
+    const { manager, context, calls } = fixture();
+    const owner = manager();
+    const source = context("cbx_source", "project-a");
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    const next = context("cbx_completed", "project-a");
+    const stale = context("cbx_stale", "project-a");
+    await owner.allocate(next);
+    await owner.allocate(stale);
+    owner.markPrepared(next.id, "a".repeat(40));
+    calls.length = 0;
+    await owner.capture(next);
+    expect(calls.some((argv) => argv[2] === "create")).toBe(false);
+    await owner.capture({ ...next, projectCaptureRequired: true });
+    expect(openWarmImageStore().entries()[0]?.value.image?.checkpointId).toBe(`${CHECKPOINT_ID}_2`);
+    const captures = calls.filter((argv) => argv[2] === "create").length;
+    owner.markPrepared(stale.id, "a".repeat(40));
+    await owner.capture({ ...stale, projectCaptureRequired: true });
+    expect(calls.filter((argv) => argv[2] === "create")).toHaveLength(captures);
+    expect(captures).toBe(1);
+  });
+
   it("captures a verified prepared project once and never captures its enrolled session", async () => {
     const { manager, context, calls } = fixture();
     const owner = manager();

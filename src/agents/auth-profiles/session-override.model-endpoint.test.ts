@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,6 +10,18 @@ import { resolveModelWithRegistry } from "../embedded-agent-runner/model.registr
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { resolveSessionAuthSelection } from "./session-override.js";
+
+const transportTestApiKey = "openclawOpenAIResponsesTransportTestApi";
+const transportTestApi = Object.getOwnPropertyDescriptor(globalThis, transportTestApiKey);
+
+afterAll(() => {
+  // Arcee's Jiti graph republishes this API with a different transport host than Vite's.
+  if (transportTestApi) {
+    Object.defineProperty(globalThis, transportTestApiKey, transportTestApi);
+  } else {
+    Reflect.deleteProperty(globalThis, transportTestApiKey);
+  }
+});
 
 it.each([
   {

@@ -245,7 +245,9 @@ For a multi-agent roster defined directly in the main config file without a
 legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
 both keyed `agents.entries` and older `agents.list` rosters, including with
 `--fix --non-interactive`. Existing bindings and per-surface owners remain
-unchanged. If an account has no fallback route but its matchable narrower bindings
+unchanged. Last-known-good recovery applies the same ownership stamp before
+validating and restoring a directly authored markerless roster.
+If an account has no fallback route but its matchable narrower bindings
 all explicitly name one configured agent, Doctor adds an account-scoped binding for that
 agent. It does not borrow ownership from another account or channel, choose
 between conflicting owners, or assign other unowned surfaces.
@@ -612,3 +614,4 @@ See [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) for detail
 - [Presence](/concepts/presence) — agent presence and availability
 - [Session](/concepts/session) — session isolation and routing
 - [Sub-agents](/tools/subagents) — spawning background agent runs
+- [`openclaw agents`](/cli/agents) — create and inspect agents from the CLI

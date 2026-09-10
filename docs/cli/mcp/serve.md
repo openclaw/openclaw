@@ -73,7 +73,7 @@ Use [`openclaw acp`](/cli/acp) instead when OpenClaw should host the coding runt
 </Tabs>
 
 <Note>
-Today, `auto` behaves the same as `on`. There is no client capability detection yet.
+`auto` behaves the same as `on`. There is no client capability detection.
 </Note>
 
 ### What serve exposes
@@ -327,12 +327,10 @@ For broader testing context, see [Testing](/help/testing).
 
 ## Current limits
 
-This page documents the bridge as shipped today.
-
-Current limits:
+The bridge has these limits:
 
 - conversation discovery depends on existing Gateway session route metadata
 - no generic push protocol beyond the Claude-specific adapter
-- no message edit or react tools yet
-- HTTP/SSE/streamable-http transport connects to a single remote server; no multiplexed upstream yet
+- no message edit or react tools
+- HTTP/SSE/streamable-http transport connects to a single remote server; upstreams are not multiplexed
 - `permissions_list_open` only includes approvals observed while the bridge is connected

@@ -268,3 +268,4 @@ For advanced configuration (reserve tokens, identifier preservation, custom cont
 - [Context engines](/concepts/context-engine): pluggable context assembly.
 - [Hooks](/automation/hooks/event-types): internal compaction events (`session:compact:before`, `session:compact:after`).
 - [Plugin hooks](/plugins/hooks/reference#hook-catalog): typed compaction hooks (`before_compaction`, `after_compaction`).
+- [Goal](/tools/goal) — durable per-session objectives and the `/goal` controls

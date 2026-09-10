@@ -276,7 +276,8 @@ jobs:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
         run: |
           set -euo pipefail
-          pnpm ios:release:signing:check
+          source ./scripts/lib/ios-fastlane.sh
+          (cd apps/ios && run_ios_fastlane ios signing_check)
           node apps/ios/build/mobile-release-ci/authority/.github/actions/ios-signing-keychain/keychain.mjs probe
 
       - name: Revalidate release authority immediately before upload

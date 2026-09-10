@@ -102,7 +102,8 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: async () => {},
   markControlPlaneUpdateRestartSentinelFailureBestEffort: async () => {},
 }));
-import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
+import type { FinishUpdateParams } from "./update-command-post-update-types.js";
+import { finishUpdate } from "./update-command-post-update.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";

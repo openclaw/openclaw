@@ -11,7 +11,7 @@ import {
   isSafeOAuthPostClaimSettlement,
   overlayRuntimeExternalOAuthProfiles,
 } from "./oauth-shared.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
 
 describe("OAuth refresh identity policy", () => {
   const credential = (
@@ -188,9 +188,12 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
   });
 
   it("removes persisted provenance for every externally overlaid profile", () => {
-    const store: AuthProfileStore = {
+    const store: RuntimeAuthProfileStore = {
       version: 1,
       runtimePersistedProfileIds: ["openai:default"],
+      runtimeCredentialSources: {
+        "openai:default": { databasePath: "synthetic-owner.sqlite", provider: "openai" },
+      },
       profiles: {
         "openai:default": oauthCred({
           provider: "openai",
@@ -201,7 +204,7 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       },
     };
 
-    const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
+    const overlaid: RuntimeAuthProfileStore = overlayRuntimeExternalOAuthProfiles(store, [
       {
         profileId: "openai:default",
         persistence: "persisted",
@@ -215,5 +218,6 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
     ]);
 
     expect(overlaid.runtimePersistedProfileIds).toBeUndefined();
+    expect(overlaid.runtimeCredentialSources).toEqual({});
   });
 });

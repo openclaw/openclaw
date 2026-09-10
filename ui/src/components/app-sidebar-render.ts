@@ -538,7 +538,7 @@ export function renderAppSidebarPluginTabEntry(
               tab,
               basePath: host.basePath,
               active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
-              onNavigate: (search) => host.onNavigate?.("plugin", { search }),
+              onNavigate: (location) => host.onNavigate?.("plugin", location),
             })
       }
     </div>
