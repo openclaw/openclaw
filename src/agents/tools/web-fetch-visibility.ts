@@ -7,7 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isAsciiWhitespace, isTagNameChar, readTagToken } from "./web-fetch-html-tag.js";
+import { isAsciiWhitespace, readTagToken } from "./web-fetch-html-tag.js";
 
 // Compile property matchers once: this list is checked for every styled element.
 const HIDDEN_STYLE_PATTERNS = (
@@ -119,6 +119,14 @@ function isStyleHidden(style: string): boolean {
   return false;
 }
 
+// HTML attribute names are wider than tag names: framework syntax like
+// `@click` or `(click)` is legal, and stopping at the first such character
+// would abandon the whole attribute list and let a later `hidden`, `class`,
+// or `style` escape visibility filtering.
+function isAttributeNameChar(value: string): boolean {
+  return value !== "" && !isAsciiWhitespace(value) && value !== "/" && value !== "=";
+}
+
 // The fixed visibility attributes share one reader grammar. It walks real
 // attribute names instead of matching the raw attribute text: a substring like
 // "hidden" inside a quoted value (`title="The hidden cost of cloud"`) is part
@@ -134,11 +142,14 @@ function createAttributeReader(attribute: "aria-hidden" | "class" | "hidden" | "
         pos += 1;
       }
       const nameStart = pos;
-      while (pos < attrs.length && isTagNameChar(attrs.charAt(pos))) {
+      while (pos < attrs.length && isAttributeNameChar(attrs.charAt(pos))) {
         pos += 1;
       }
       if (pos === nameStart) {
-        break;
+        // Nothing consumable here (a stray separator): skip it and keep
+        // scanning so later attributes are still classified.
+        pos += 1;
+        continue;
       }
       const name = attrs.slice(nameStart, pos).toLowerCase();
       while (pos < attrs.length && isAsciiWhitespace(attrs.charAt(pos))) {
@@ -222,16 +233,92 @@ function popDroppedElement(dropStack: string[], tagName: string): void {
 // this, a dropped <li>/<p>/<td> swallows the rest of the document.
 const OPTIONALLY_CLOSED_ELEMENTS = new Set(["dd", "dt", "li", "option", "p", "td", "th", "tr"]);
 
+// When one of these container end tags arrives, it implicitly closes the
+// keyed still-open element, because HTML lets those elements omit their end
+// tag and closes them via the container instead.
+const IMPLICIT_CONTAINER_CLOSE = new Map<string, ReadonlySet<string>>([
+  ["dd", new Set(["dl"])],
+  ["dt", new Set(["dl"])],
+  ["li", new Set(["menu", "ol", "ul"])],
+  ["option", new Set(["datalist", "optgroup", "select"])],
+  [
+    "p",
+    new Set([
+      "address",
+      "article",
+      "aside",
+      "blockquote",
+      "body",
+      "details",
+      "dialog",
+      "div",
+      "dl",
+      "fieldset",
+      "figcaption",
+      "figure",
+      "footer",
+      "form",
+      "header",
+      "hgroup",
+      "li",
+      "main",
+      "menu",
+      "nav",
+      "ol",
+      "section",
+      "table",
+      "td",
+      "th",
+      "ul",
+    ]),
+  ],
+  ["td", new Set(["table", "tr"])],
+  ["th", new Set(["table", "tr"])],
+  ["tr", new Set(["table"])],
+]);
+
+// A same-name element reached across an intervening container (a nested <ul>
+// between two <li>s) is a descendant, not a sibling: closing it would release
+// the outer drop region and leak its content. Only implied-end-tag elements
+// (<p>) may sit between true siblings.
+function findSiblingScopeIndex(dropStack: string[], tagName: string): number {
+  for (let index = dropStack.length - 1; index >= 0; index -= 1) {
+    const name = dropStack[index] ?? "";
+    if (name === tagName) {
+      return index;
+    }
+    if (name !== "p") {
+      return -1;
+    }
+  }
+  return -1;
+}
+
 function closeImplicitlyDroppedElement(dropStack: string[], tagName: string): boolean {
   if (!OPTIONALLY_CLOSED_ELEMENTS.has(tagName)) {
     return false;
   }
-  const index = dropStack.lastIndexOf(tagName);
+  const index = findSiblingScopeIndex(dropStack, tagName);
   if (index >= 0) {
     dropStack.length = index;
     return true;
   }
   return false;
+}
+
+// An end tag for an element that was never opened is only trustworthy as a
+// region terminator when it is a container that implicitly closes a still-open
+// dropped element (like </ul> closing an omitted </li>). Any other unmatched
+// closer is stray markup, and releasing the region on it would leak the rest
+// of the hidden subtree.
+function findImplicitContainerCloseIndex(dropStack: string[], tagName: string): number {
+  for (let index = dropStack.length - 1; index >= 0; index -= 1) {
+    const containers = IMPLICIT_CONTAINER_CLOSE.get(dropStack[index] ?? "");
+    if (containers?.has(tagName)) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function removeMarkedElements(html: string): string {
@@ -278,14 +365,19 @@ function removeMarkedElements(html: string): string {
 
     if (dropStack.length > 0) {
       if (parsed.closing) {
-        if (dropStack.lastIndexOf(parsed.name) < 0) {
-          // The dropped element's own end tag was omitted, so this ancestor end
-          // tag closes the drop region. The ancestor's end tag belongs to the
-          // surviving markup.
-          dropStack.length = 0;
-          output += token;
-        } else {
+        if (dropStack.lastIndexOf(parsed.name) >= 0) {
           popDroppedElement(dropStack, parsed.name);
+        } else {
+          const implicitCloseIndex = findImplicitContainerCloseIndex(dropStack, parsed.name);
+          if (implicitCloseIndex >= 0) {
+            // The dropped element's own end tag was omitted, so this container
+            // end tag closes the drop region. The container's end tag belongs
+            // to the surviving markup.
+            dropStack.length = implicitCloseIndex;
+            output += token;
+          }
+          // Otherwise this closer matches nothing still open: stray markup
+          // inside the hidden region stays suppressed.
         }
       } else if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.name)) {
         if (closeImplicitlyDroppedElement(dropStack, parsed.name)) {

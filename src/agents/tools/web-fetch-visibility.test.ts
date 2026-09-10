@@ -269,6 +269,51 @@ describe("sanitizeHtml", () => {
     expect(result).toContain("Kept body");
   });
 
+  it("classifies hidden after attribute names the tag grammar cannot classify", async () => {
+    // Framework attribute syntax (`@click`, `(click)`) is legal in attribute
+    // names; the reader must consume such names and keep scanning, or every
+    // later visibility lookup silently returns undefined and the hidden
+    // subtree escapes filtering.
+    const at = '<p>Visible</p><div @click="noop" hidden>Secret</div><p>Trailing</p>';
+    const atResult = await sanitizeHtml(at);
+    expect(atResult).toContain("Visible");
+    expect(atResult).toContain("Trailing");
+    expect(atResult).not.toContain("Secret");
+
+    const paren = '<div (click)="noop" hidden>Secret</div>';
+    expect(await sanitizeHtml(paren)).not.toContain("Secret");
+  });
+
+  it("classifies hidden class and style after framework attribute names", async () => {
+    const classed = '<div @click="noop" class="hidden">Secret class</div>';
+    expect(await sanitizeHtml(classed)).not.toContain("Secret class");
+
+    const styled = '<div @click="noop" style="display:none">Secret style</div>';
+    expect(await sanitizeHtml(styled)).not.toContain("Secret style");
+  });
+
+  it("keeps the hidden region open across a nested same-name descendant", async () => {
+    // A same-name element reached across an intervening container is a
+    // descendant, not a sibling: implicit closure must not release the outer
+    // drop region, or the nested content escapes filtering.
+    const html = "<ul><li hidden>Outer<ul><li>Secret</li></ul></li></ul><p>Visible</p>";
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Visible");
+    expect(result).not.toContain("Outer");
+    expect(result).not.toContain("Secret");
+  });
+
+  it("does not end a hidden region on a stray closing tag", async () => {
+    // An unmatched closing tag inside a hidden element is not evidence that
+    // the hidden element ended; the region must stay suppressed until its own
+    // container closes.
+    const html = "<div hidden>Before</span>Secret</div><p>Visible</p>";
+    const result = await sanitizeHtml(html);
+    expect(result).toContain("Visible");
+    expect(result).not.toContain("Before");
+    expect(result).not.toContain("Secret");
+  });
+
   it("handles malformed HTML gracefully", async () => {
     const html = "<p>Unclosed <div>Nested";
     await expect(sanitizeHtml(html)).resolves.toContain("Unclosed");
