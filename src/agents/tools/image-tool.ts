@@ -673,22 +673,6 @@ async function runImagePrompt(params: {
       }
       const describeImage =
         imageProvider?.describeImage ?? imageToolProviderDeps.describeImageWithModel;
-      if (params.images.length === 1) {
-        const image = params.images.at(0);
-        if (!image) {
-          throw new Error("Image input disappeared during model execution");
-        }
-        // A run cancelled mid-dispatch must not buy another provider call.
-        params.signal?.throwIfAborted();
-        const described = await describeImage({
-          buffer: image.buffer,
-          fileName: "image-1",
-          mime: image.mimeType,
-          ...request,
-        });
-        return { text: described.text, provider, model: described.model ?? modelId };
-      }
-
       const parts: string[] = [];
       for (const [index, image] of params.images.entries()) {
         // A run cancelled mid-dispatch must not buy another provider call.
@@ -698,8 +682,14 @@ async function runImagePrompt(params: {
           fileName: `image-${index + 1}`,
           mime: image.mimeType,
           ...request,
-          prompt: `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
+          prompt:
+            params.images.length === 1
+              ? params.prompt
+              : `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
         });
+        if (params.images.length === 1) {
+          return { text: described.text, provider, model: described.model ?? modelId };
+        }
         parts.push(`Image ${index + 1}:\n${described.text.trim()}`);
       }
       return {
