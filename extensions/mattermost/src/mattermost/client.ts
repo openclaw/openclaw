@@ -4,6 +4,7 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
@@ -149,18 +150,21 @@ async function readMattermostSuccessText(res: Response, path: string): Promise<s
 export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   const text = await readResponseTextLimited(res, MATTERMOST_ERROR_BODY_LIMIT_BYTES);
+  // Remote API errors can reflect the request's Authorization header. Force
+  // tool-payload redaction before the text enters any surfaced error message.
+  const redacted = redactToolPayloadText(text);
   if (contentType.includes("application/json")) {
     try {
-      const data = JSON.parse(text) as { message?: string } | undefined;
+      const data = JSON.parse(redacted) as { message?: string } | undefined;
       if (data?.message) {
         return data.message;
       }
       return JSON.stringify(data);
     } catch {
-      return text;
+      return redacted;
     }
   }
-  return text;
+  return redacted;
 }
 
 export function createMattermostClient(params: {

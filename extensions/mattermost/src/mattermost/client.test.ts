@@ -177,6 +177,33 @@ describe("readMattermostError", () => {
     expect(jsonSpy).not.toHaveBeenCalled();
     expect(textSpy).not.toHaveBeenCalled();
   });
+
+  it("redacts reflected credentials in non-JSON error bodies", async () => {
+    // A self-hosted or misbehaving server can echo the request's Authorization
+    // header back in its error body; the surfaced detail must not carry it.
+    const token = "mm-bot-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const response = new Response(`Request failed\nAuthorization: Bearer ${token}\n`, {
+      status: 500,
+      headers: { "content-type": "text/plain" },
+    });
+
+    const detail = await readMattermostError(response);
+
+    expect(detail).not.toContain(token);
+    expect(detail).toContain("Request failed");
+  });
+
+  it("redacts reflected credentials in JSON error messages", async () => {
+    const token = "mm-bot-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const response = new Response(JSON.stringify({ message: `auth failed for Bearer ${token}` }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+
+    const detail = await readMattermostError(response);
+
+    expect(detail).not.toContain(token);
+  });
 });
 
 // ── createMattermostClient ───────────────────────────────────────────
