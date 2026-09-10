@@ -127,7 +127,7 @@ describe("setup inference discovery deadline", () => {
       ],
     );
     const discoverySignal = await hookStarted.promise;
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     const result = await detection;
     expect(result.candidates).toEqual([
       expect.objectContaining({ modelRef: "fixture/environment-model" }),
@@ -150,7 +150,7 @@ describe("setup inference discovery deadline", () => {
     });
     const detection = detectWithProvider(async () => null);
     await loading.promise;
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     const result = await detection;
     expect(result.candidates).toEqual([]);
     expect(result.authOptions).toContainEqual(expect.objectContaining({ id: "custom-api-key" }));
@@ -161,6 +161,23 @@ describe("setup inference discovery deadline", () => {
     const result = await detectWithProvider(async () => ({ modelRef: "fixture/available-model" }));
     expect(result.candidates).toContainEqual(
       expect.objectContaining({ modelRef: "fixture/available-model" }),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retains a valid choice that needs more than ten seconds to discover", async () => {
+    const started = createDeferred();
+    const available = createDeferred<ProviderAppGuidedSetupCandidate | null>();
+    const detection = detectWithProvider(() => {
+      started.resolve();
+      return available.promise;
+    });
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(20_000);
+    available.resolve({ modelRef: "fixture/slow-model" });
+    const result = await detection;
+    expect(result.candidates).toContainEqual(
+      expect.objectContaining({ modelRef: "fixture/slow-model" }),
     );
     expect(vi.getTimerCount()).toBe(0);
   });

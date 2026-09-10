@@ -524,7 +524,7 @@ export async function promptAndConfigureLmstudioInteractive(params: {
       });
   const baseUrl = resolveLmstudioInferenceBase(baseUrlRaw ?? defaultBaseUrl);
   let credentialInput: SecretInput | undefined = params.suppliedApiKey;
-  let credentialMode: SecretInputMode | undefined = params.suppliedApiKey ? "plaintext" : undefined;
+  let credentialMode: SecretInputMode | undefined;
   const implicitRefMode = params.allowSecretRefPrompt === false && !params.secretInputMode;
   const autoRefEnvKey = process.env[LMSTUDIO_DEFAULT_API_KEY_ENV_VAR]?.trim();
   const apiKey = params.suppliedApiKey
@@ -570,11 +570,13 @@ export async function promptAndConfigureLmstudioInteractive(params: {
           PROVIDER_ID,
           credentialSource,
           undefined,
-          credentialMode
-            ? { secretInputMode: credentialMode }
-            : implicitRefMode && autoRefEnvKey
-              ? { secretInputMode: "ref" }
-              : undefined,
+          params.suppliedApiKey
+            ? { secretInputMode: "plaintext" }
+            : credentialMode
+              ? { secretInputMode: credentialMode }
+              : implicitRefMode && autoRefEnvKey
+                ? { secretInputMode: "ref" }
+                : undefined,
         )
       : {
           type: "api_key" as const,

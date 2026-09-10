@@ -210,9 +210,9 @@ export async function detectSetupInference(
     recommendedInstalls: listRecommendedToolInstalls(),
   };
   const controller = new AbortController();
-  // Preserve the 10s discovery deadline introduced in #110625.
+  // Preserve the shipped 30s discovery allowance.
   // This bounds asynchronous discovery; synchronous plugin loading shares the event loop.
-  const timeoutMs = 10_000;
+  const timeoutMs = 30_000;
   return await new Promise<SetupInferenceDetection>((resolve, reject) => {
     const timer = setTimeout(() => {
       controller.abort(new Error("Setup inference discovery timed out"));
