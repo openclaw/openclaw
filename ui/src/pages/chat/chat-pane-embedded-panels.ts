@@ -51,6 +51,7 @@ type SidebarPanelDefinitionParams = {
   lastReadAt: number | undefined;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
+  companionPresented: boolean;
   onCompanionSubmit: (question: string) => void;
   onCompanionDraftChange: (draft: string) => void;
   onCompanionVisibilityChange: (visible: boolean) => void;
@@ -158,6 +159,7 @@ export function sidebarPanelDefinitions(
   const companion = params
     ? html`<openclaw-chat-session-rail
         embedded
+        .presented=${params.companionPresented}
         .sessionKey=${state?.sessionKey}
         .digest=${params.digest}
         .running=${Boolean(params.activeRunId)}
