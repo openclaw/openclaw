@@ -2,11 +2,6 @@ import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-e
 import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
-  CRABBOX_NON_LINUX_MIN_VERSION,
-  type createCrabboxVersionResolver,
-  supportsCrabboxNonLinuxTargets,
-} from "./crabbox-worker-doctor-runtime.js";
-import {
   type CrabboxMachineShape,
   type CrabboxOperatingSystem,
   CRABBOX_ENROLLABLE_TARGETS,
@@ -24,9 +19,8 @@ type CrabboxCatalog = {
 type CrabboxMachineShapes = ReadonlyMap<string, CrabboxCatalog>;
 
 type CrabboxMachineOptionsResolverDependencies = {
-  resolveBinary: (explicit?: string) => string;
+  resolveBinary: (explicit?: string) => Promise<string>;
   runCommand: CrabboxCommandRunner;
-  resolveVersion: ReturnType<typeof createCrabboxVersionResolver>;
   warn: (message: string) => void;
 };
 
@@ -106,7 +100,7 @@ export function createCrabboxMachineOptionsResolver(
 
   const resolveCatalog = async (profile: WorkerProfile) => {
     const parsed = parseCrabboxProfile(profile);
-    const binary = dependencies.resolveBinary(parsed.binary);
+    const binary = await dependencies.resolveBinary(parsed.binary);
     // Cache successful metadata per binary; different builds may advertise different sizes.
     // One rejection handler per load runs after insertion, including synchronous runner throws.
     let shapes = machineShapesByBinary.get(binary);
@@ -121,22 +115,6 @@ export function createCrabboxMachineOptionsResolver(
       machineShapesByBinary.set(binary, shapes);
     }
     const catalog = (await shapes).get(parsed.provider);
-    if (catalog?.operatingSystems.some((os) => os !== "linux")) {
-      const version = await dependencies.resolveVersion(binary);
-      if (version.status === "indeterminate" || !supportsCrabboxNonLinuxTargets(version.version)) {
-        return {
-          parsed,
-          disabledReason:
-            version.status === "indeterminate"
-              ? `Could not verify Crabbox version. Install Crabbox ${CRABBOX_NON_LINUX_MIN_VERSION} or newer, then restart the Gateway.`
-              : `Upgrade Crabbox to ${CRABBOX_NON_LINUX_MIN_VERSION} or newer, then restart the Gateway.`,
-          catalog: {
-            operatingSystems: catalog.operatingSystems,
-            machines: catalog.machines.filter((machine) => machine.os === "linux"),
-          },
-        };
-      }
-    }
     return { parsed, catalog };
   };
   return {
@@ -145,13 +123,10 @@ export function createCrabboxMachineOptionsResolver(
       return listCrabboxMachineOptions(parsed.class, catalog?.machines);
     },
     async listOperatingSystems(profile) {
-      const { parsed, catalog, disabledReason } = await resolveCatalog(profile);
+      const { parsed, catalog } = await resolveCatalog(profile);
       return (catalog?.operatingSystems ?? []).map((id) => {
         const label = CRABBOX_OS_LABELS[id];
-        const system = id === parsed.target ? { id, label, default: true } : { id, label };
-        return id !== "linux" && disabledReason
-          ? Object.assign(system, { disabledReason })
-          : system;
+        return id === parsed.target ? { id, label, default: true } : { id, label };
       });
     },
   };

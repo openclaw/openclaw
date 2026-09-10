@@ -15,8 +15,9 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import * as managedBinary from "./src/crabbox-managed-binary.js";
 import { createNodeBootstrapFixture } from "./src/crabbox-worker-node-enrollment.test-support.js";
 import type { WarmProfileRecord } from "./src/crabbox-worker-warm-image-store.js";
 
@@ -77,6 +78,11 @@ function stopGeneration(services: OpenClawPluginService[]): void | Promise<void>
 }
 
 describe("Crabbox plugin generation lifecycle", () => {
+  beforeEach(() => {
+    vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(
+      async (params) => params?.binary ?? "crabbox",
+    );
+  });
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -298,63 +304,80 @@ describe("Crabbox plugin generation lifecycle", () => {
     await stopGeneration(replacement.services);
   });
 
-  it("holds plugin service stop until an aborted image deletion settles", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-maintenance-generation-"));
-    const store = createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
-      namespace: "warm-images",
-      maxEntries: 128,
-      overflowPolicy: "reject-new",
-    });
-    const old = Date.now() - 14 * 24 * 60 * 60 * 1_000;
-    store.register("expired", {
-      version: 3,
-      allocations: {},
-      image: {
-        checkpointId: "chk_expired",
-        kind: "aws-ebs-snapshot",
-        state: "available",
-        createdAtMs: old,
-        preparationKey: null,
-        cacheKey: null,
-        purpose: null,
-        lastDemandAtMs: old,
-      },
-    });
-    const started = createDeferred<AbortSignal>();
-    const finish = createDeferred<SpawnResult>();
-    vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
-      if (typeof options === "number" || !options.signal) {
-        throw new Error("maintenance command needs a signal");
-      }
-      started.resolve(options.signal);
-      return await finish.promise;
-    });
-    const generation = registerCrabboxGeneration();
-    const maintenance = generation.provider.maintain!({
-      profiles: [PROFILE],
-      signal: new AbortController().signal,
-      assertCurrent() {},
-    });
-    const rejected = expect(maintenance).rejects.toThrow();
-    let stopping: Promise<void> | undefined;
-    let stopped = false;
-    try {
-      const signal = await started.promise;
-      stopping = Promise.resolve(stopGeneration(generation.services)).then(() => {
-        stopped = true;
+  it.each(["binary acquisition", "image deletion"])(
+    "holds plugin service stop until aborted %s settles",
+    async (stage) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-maintenance-generation-"));
+      const store = createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
+        namespace: "warm-images",
+        maxEntries: 128,
+        overflowPolicy: "reject-new",
       });
-      expect(signal.aborted).toBe(true);
-      await Promise.resolve();
-      expect(stopped).toBe(false);
-    } finally {
-      finish.resolve(commandResult());
-      await rejected;
-      await stopping;
-    }
-    expect(stopped).toBe(true);
-    expect(store.lookup("expired")?.operation).toEqual({
-      type: "retire",
-      checkpointId: "chk_expired",
-    });
-  });
+      const old = Date.now() - 14 * 24 * 60 * 60 * 1_000;
+      store.register("expired", {
+        version: 3,
+        allocations: {},
+        image: {
+          checkpointId: "chk_expired",
+          kind: "aws-ebs-snapshot",
+          state: "available",
+          createdAtMs: old,
+          preparationKey: null,
+          cacheKey: null,
+          purpose: null,
+          lastDemandAtMs: old,
+        },
+      });
+      const started = createDeferred<AbortSignal>();
+      const finish = createDeferred<void>();
+      vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(
+        async (_argv, options) => {
+          if (typeof options === "number" || !options.signal) {
+            throw new Error("maintenance command needs a signal");
+          }
+          started.resolve(options.signal);
+          await finish.promise;
+          return commandResult();
+        },
+      );
+      if (stage === "binary acquisition") {
+        vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => {
+          if (!params?.signal) {
+            throw new Error("managed acquisition needs the lifecycle signal");
+          }
+          started.resolve(params.signal);
+          await finish.promise;
+          params.signal.throwIfAborted();
+          return params.binary ?? "crabbox";
+        });
+      }
+      const generation = registerCrabboxGeneration();
+      const maintenance = generation.provider.maintain!({
+        profiles: [PROFILE],
+        signal: new AbortController().signal,
+        assertCurrent() {},
+      });
+      const rejected = expect(maintenance).rejects.toThrow();
+      let stopping: Promise<void> | undefined;
+      let stopped = false;
+      try {
+        const signal = await started.promise;
+        stopping = Promise.resolve(stopGeneration(generation.services)).then(() => {
+          stopped = true;
+        });
+        expect(signal.aborted).toBe(true);
+        await Promise.resolve();
+        expect(stopped).toBe(false);
+      } finally {
+        finish.resolve();
+        await rejected;
+        await stopping;
+      }
+      expect(stopped).toBe(true);
+      expect(store.lookup("expired")?.operation).toEqual(
+        stage === "image deletion" ? { type: "retire", checkpointId: "chk_expired" } : undefined,
+      );
+      expect(store.lookup("expired")?.image?.checkpointId).toBe("chk_expired");
+    },
+  );
 });

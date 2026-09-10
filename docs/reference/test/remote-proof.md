@@ -45,19 +45,18 @@ execution-workspace binding stops the payload; stop that lease and warm a new on
 Use the OpenClaw wrapper for proof: direct native Blacksmith commands target the
 transport checkout, which deliberately has no hydrated runtime.
 
-Testbox requests with `--artifact-glob` or `--require-artifact` also require the
-`prepared-artifact-workspace` feature in the selected Crabbox binary's
-`providers describe blacksmith-testbox --json` response. The wrapper checks this
-before sync or lease work, rather than collecting missing or stale transport files.
-Update Crabbox if that capability is absent. Collection stays anchored in the
-prepared workspace across payload directory changes and normal failure exits;
-existing cancellation and signal-related artifact withholding remains unchanged.
-Ordinary runs without artifact requests do not require this additional capability.
+Testbox requests with `--artifact-glob` or `--require-artifact` collect from the
+prepared execution workspace. Collection stays anchored there across payload
+directory changes and normal failure exits; existing cancellation and
+signal-related artifact withholding remains unchanged.
+
+The wrapper uses the bundled Crabbox plugin to update missing or outdated CLI
+binaries before provider discovery, source sync, or lease work. Every command uses
+the current supported CLI contract; there are no separate version requirements
+for artifacts, providers, or `sync-plan --json`.
 
 Testbox runs and POSIX remote changed gates freeze source into a Git bundle
-against the pinned base. These runs require Crabbox 0.37.0 or later for
-`sync-plan --json`; upgrade Crabbox before retrying an older binary. This API floor
-does not apply to help, warmup, status, or runs that do not prepare a source bundle.
+against the pinned base.
 Selection uses Crabbox's sync policy and Git's repository, info, and effective global
 exclusions, including repo-local overrides, for untracked files. Tracked ignored
 files and staged ignored additions remain source; an explicit privacy exclusion
