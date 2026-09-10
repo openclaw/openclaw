@@ -330,6 +330,25 @@ export function createCodexAppServerAgentHarness(
       });
       const requestedModel = stickyModel ?? attemptModel;
       const result = await runAttemptOnModel(requestedModel);
+      // Entitlement can lapse after the escalation that opened this window.
+      // Close it and say so, rather than routing every later turn to a target
+      // that now answers 401/403; this turn was only pre-routed by us, so it is
+      // owed an attempt on the model the session actually selected.
+      if (stickyModel && isCodexDaybreakUnavailableResult(result)) {
+        recordCodexCyberEscalation({
+          sessionKey: params.sessionKey,
+          outcome: "suppressed",
+          cooloffMs: cyberFailover.cooloffMs,
+        });
+        await emitCodexCyberNotice(params, {
+          state: "unavailable",
+          model: attemptModel,
+          fallbackModel: stickyModel,
+        });
+        return isCodexCyberEscalationReplaySafe(result)
+          ? await runAttemptOnModel(attemptModel)
+          : result;
+      }
       if (!isCodexCyberRefusalResult(result)) {
         return result;
       }
@@ -342,6 +361,14 @@ export function createCodexAppServerAgentHarness(
       if (plan.kind !== "escalate") {
         return result;
       }
+      // Reserve the window before awaiting the retry so a sibling turn on this
+      // session sees the cooloff instead of starting its own attempt. Suppressed
+      // is the safe reservation; the real outcome replaces it below.
+      recordCodexCyberEscalation({
+        sessionKey: params.sessionKey,
+        outcome: "suppressed",
+        cooloffMs: cyberFailover.cooloffMs,
+      });
       const escalated = await runAttemptOnModel(plan.model);
       // Catalog presence never proves entitlement, so the retry itself is the
       // only evidence. An unauthorized target must not be attempted again inside

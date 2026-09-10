@@ -264,6 +264,39 @@ describe("window bookkeeping", () => {
     ).toEqual({ kind: "skip", reason: "cooling_off" });
   });
 
+  it("stays hard-bounded even when every live window is suppressed", () => {
+    const now = 1_000;
+    for (let index = 0; index < 400; index += 1) {
+      recordCodexCyberEscalation({
+        sessionKey: `hardcap-${index}`,
+        outcome: "suppressed",
+        cooloffMs: 600_000,
+        now,
+      });
+    }
+    // The newest suppression must survive; the map must not grow without bound
+    // just because nothing has expired yet.
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: "hardcap-399",
+        currentModel: PRIMARY,
+        replaySafe: true,
+        now: now + 1,
+      }),
+    ).toEqual({ kind: "skip", reason: "cooling_off" });
+    const survivors = Array.from({ length: 400 }, (_, index) =>
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: `hardcap-${index}`,
+        currentModel: PRIMARY,
+        replaySafe: true,
+        now: now + 1,
+      }),
+    ).filter((plan) => plan.kind === "skip" && plan.reason === "cooling_off").length;
+    expect(survivors).toBeLessThanOrEqual(256);
+  });
+
   it("stays bounded when many sessions escalate", () => {
     const now = 1_000;
     for (let index = 0; index < 400; index += 1) {

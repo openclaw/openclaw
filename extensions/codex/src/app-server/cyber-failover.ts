@@ -98,10 +98,9 @@ export function recordCodexCyberEscalation(params: {
         escalationWindows.delete(sessionKey);
       }
     }
-    // Only answered windows may be shed to make room: losing one costs a routing
-    // optimization, while losing a suppressed window would let an unauthorized
-    // target be retried inside its cooloff. If every live window is suppressed,
-    // the bound yields rather than break that guarantee.
+    // Shed answered windows first: losing one costs only a routing optimization,
+    // while losing a suppressed window lets an unauthorized target be retried
+    // inside its cooloff.
     for (const [sessionKey, record] of escalationWindows) {
       if (escalationWindows.size < MAX_ESCALATION_WINDOWS) {
         break;
@@ -109,6 +108,23 @@ export function recordCodexCyberEscalation(params: {
       if (record.outcome === "answered") {
         escalationWindows.delete(sessionKey);
       }
+    }
+    // The cap is hard, so a map full of live suppressed windows still has to
+    // yield one. Drop the soonest to expire: it protects the least remaining
+    // time, which keeps this map bounded against unbounded distinct session keys.
+    while (escalationWindows.size >= MAX_ESCALATION_WINDOWS) {
+      let soonestKey: string | undefined;
+      let soonestExpiry = Number.POSITIVE_INFINITY;
+      for (const [sessionKey, record] of escalationWindows) {
+        if (record.expiresAt < soonestExpiry) {
+          soonestExpiry = record.expiresAt;
+          soonestKey = sessionKey;
+        }
+      }
+      if (soonestKey === undefined) {
+        break;
+      }
+      escalationWindows.delete(soonestKey);
     }
   }
   escalationWindows.set(params.sessionKey, {
