@@ -54,6 +54,7 @@ type WizardSession = {
   retirementGeneration: number;
   terminalResult?: ModelSetupWizardResult;
   cancellationPromise?: Promise<WizardStatusResult>;
+  inputClosurePromise?: Promise<WizardStatusResult>;
   abortController: AbortController;
   startMethod: ModelSetupWizardStartMethod;
   activationTargetId?: string;
@@ -100,6 +101,7 @@ export class ModelSetupWizardRunner {
       client,
       abortController: new AbortController(),
       cancellationPromise: undefined,
+      inputClosurePromise: undefined,
       suspended: false,
       retired: false,
     };
@@ -430,23 +432,28 @@ export class ModelSetupWizardRunner {
 
   private async cancelSession(session: WizardSession): Promise<WizardStatusResult | undefined> {
     try {
-      return await this.sendCancellation(session);
+      return await this.sendCancellation(session, session.startMethod === "models.authLogin");
     } catch {
       // Detached cleanup is best effort; explicit cancellation surfaces failures.
       return undefined;
     }
   }
 
-  private async sendCancellation(session: WizardSession): Promise<WizardStatusResult | undefined> {
+  private async sendCancellation(
+    session: WizardSession,
+    closeInput = false,
+  ): Promise<WizardStatusResult | undefined> {
     if (this.isRetired(session)) {
       return undefined;
     }
-    if (!session.cancellationPromise) {
-      // Explicit cancellation and detached cleanup share only the pending request.
-      session.cancellationPromise = session.client
+    const promiseKey = closeInput ? "inputClosurePromise" : "cancellationPromise";
+    if (!session[promiseKey]) {
+      // Disposal must close input even when a pending user cancellation can
+      // still return running for a protected credential write.
+      session[promiseKey] = session.client
         .request<WizardStatusResult>(
           "wizard.cancel",
-          { sessionId: session.sessionId },
+          { sessionId: session.sessionId, ...(closeInput ? { closeInput: true } : {}) },
           { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
         )
         .then((result) => {
@@ -456,10 +463,10 @@ export class ModelSetupWizardRunner {
           return result;
         })
         .finally(() => {
-          session.cancellationPromise = undefined;
+          session[promiseKey] = undefined;
         });
     }
-    return session.cancellationPromise;
+    return session[promiseKey];
   }
 
   private reportTerminalResult(

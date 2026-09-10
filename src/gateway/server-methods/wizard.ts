@@ -195,13 +195,21 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     respond(true, sanitizeWizardResultForClient(result), undefined);
   },
-  "wizard.cancel": ({ params, respond, context, client }) => {
+  "wizard.cancel": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateWizardCancelParams, "wizard.cancel", respond)) {
       return;
     }
     const sessionId = params.sessionId;
     const session = findWizardSessionOrRespond({ context, respond, sessionId, client });
     if (!session) {
+      return;
+    }
+    if (params.closeInput) {
+      session.close(new Error("The setup window was closed."));
+      await whenAdmittedWizardSessionSettled(session);
+      const status = readWizardStatus(session);
+      context.purgeWizardSession(sessionId);
+      respond(true, status, undefined);
       return;
     }
     const cancelled = session.cancel();

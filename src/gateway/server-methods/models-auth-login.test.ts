@@ -157,6 +157,13 @@ describe("models.authLogin ownership", () => {
         }),
       );
     }
+    expect(
+      await h.invoke("wizard.cancel", { sessionId: "login", closeInput: true }, peer),
+    ).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ details: { code: "WIZARD_NOT_FOUND" } }),
+    );
     expect(accepted).toBe(false);
     expect(session.getStatus()).toBe("running");
     const completed = await h.invoke("wizard.next", { sessionId: "login", answer });
@@ -257,6 +264,55 @@ describe("models.authLogin ownership", () => {
       );
     } finally {
       session.close(new Error("Test cleanup"));
+      await whenAdmittedWizardSessionSettled(session);
+    }
+  });
+
+  it("settles discarded login input before admitting another login on the same connection", async () => {
+    const h = harness();
+    const release = createDeferred();
+    hooks.admission.mockImplementationOnce(
+      async (_stateDir: string, run: () => Promise<unknown>) => {
+        await run();
+        await release.promise;
+      },
+    );
+    hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {
+      await expectDefined(options.beforePersistentEffect, "credential commit callback")();
+      await options.prompter.note("Credentials saved.");
+      return result;
+    });
+    await h.start();
+    const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
+    try {
+      await h.invoke("wizard.next", { sessionId: "login" });
+      expect(await h.invoke("wizard.cancel", { sessionId: "login" })).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "running" }),
+        undefined,
+      );
+      let responded = false;
+      const closing = h.invoke("wizard.cancel", { sessionId: "login", closeInput: true });
+      void closing.then(() => {
+        responded = true;
+      });
+      await withTestTimeout(session.whenSettled(), 1_000, "Disposed login kept waiting for input");
+      expect(responded).toBe(false);
+      release.resolve();
+      expect(await closing).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "error" }),
+        undefined,
+      );
+      expect(h.controller.signal.aborted).toBe(false);
+      expect(await h.start()).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ sessionId: "login", status: "running" }),
+        undefined,
+      );
+    } finally {
+      session.close(new Error("Test cleanup"));
+      release.resolve();
       await whenAdmittedWizardSessionSettled(session);
     }
   });

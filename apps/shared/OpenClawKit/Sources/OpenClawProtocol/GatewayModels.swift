@@ -22872,15 +22872,19 @@ public struct WebLoginWaitParams: Codable, Sendable {
 
 public struct WizardCancelParams: Codable, Sendable {
     public let sessionid: String
+    public let closeinput: Bool?
 
     public init(
-        sessionid: String)
+        sessionid: String,
+        closeinput: Bool? = nil)
     {
         self.sessionid = sessionid
+        self.closeinput = closeinput
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionid = "sessionId"
+        case closeinput = "closeInput"
     }
 }
 

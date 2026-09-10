@@ -1,6 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  WizardCancelParams,
+  WizardNextParams,
+} from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
+import { WizardSession } from "../../../../src/wizard/session.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ModelAuthStatusResult, WizardNextResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -174,6 +179,118 @@ describe("Models provider login", () => {
     await waitForFast(() =>
       expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
     );
+  });
+
+  it("releases a saved login on disposal while Cancel is pending and allows a second login", async () => {
+    const { context, request } = loginHarness();
+    const client = context.gateway.snapshot.client!;
+    const initialAuth = await client.request<ModelAuthStatusResult>("models.authStatus");
+    const originalRequest = request.getMockImplementation()!;
+    const cancelled = deferred<{ status: "running" }>();
+    const cancelReceived = deferred<void>();
+    const sessions = new Map<string, WizardSession>();
+    const profiles = new Set<string>();
+    request.mockImplementation(
+      async (method, params?: Partial<WizardNextParams & WizardCancelParams>) => {
+        if (method === "models.authStatus") {
+          return {
+            ...initialAuth,
+            providers: profiles.size
+              ? [
+                  {
+                    provider: "example",
+                    displayName: "Example provider",
+                    status: "ok",
+                    profiles: [...profiles].map((profileId) => ({
+                      profileId,
+                      type: "api_key",
+                      status: "ok",
+                    })),
+                  },
+                ]
+              : [],
+          };
+        }
+        if (!method.startsWith("wizard.") && method !== "models.authLogin") {
+          return originalRequest(method);
+        }
+        if (!params?.sessionId) {
+          throw new Error("Wizard request has no session ID");
+        }
+        if (method === "models.authLogin") {
+          if ([...sessions.values()].some((session) => !session.isSettled())) {
+            throw new Error("Another login is still running");
+          }
+          const profileId = `example:${sessions.size + 1}`;
+          const session = new WizardSession(async (prompter, _signal, owner) => {
+            await prompter.text({ message: "Enter your key", sensitive: true });
+            owner.lockCancellation();
+            profiles.add(profileId);
+            await prompter.note("Credentials saved. Continue to finish.", "Provider notes");
+          });
+          sessions.set(params.sessionId, session);
+          return { sessionId: params.sessionId, done: false, status: "running" };
+        }
+        const session = sessions.get(params.sessionId);
+        if (!session) {
+          throw new Error("Unknown wizard session");
+        }
+        if (method === "wizard.next") {
+          if (params.answer) {
+            await session.answer(params.answer.stepId, params.answer.value);
+          }
+          return session.next();
+        }
+        if (method === "wizard.cancel") {
+          if (!params.closeInput) {
+            session.cancel();
+            cancelReceived.resolve();
+            return cancelled.promise;
+          }
+          session.close(new Error("Provider credentials were saved, but the view closed."));
+          await session.whenSettled();
+        }
+        return { status: session.getStatus(), error: session.getError() };
+      },
+    );
+
+    const page = appendPage(context);
+    await openLogin(page);
+    await submitCredential(page);
+    await waitForFast(() =>
+      expect(page.textContent).toContain("Credentials saved. Continue to finish."),
+    );
+    page.querySelector<HTMLButtonElement>(".wizard-step__actions .btn")!.click();
+    await cancelReceived.promise;
+    const first = [...sessions.values()][0]!;
+    expect(first.isSettled()).toBe(false);
+
+    page.remove();
+    await waitForFast(() => expect(first.isSettled()).toBe(true));
+    expect(first.getStatus()).toBe("error");
+    expect(first.getError()).toContain("credentials were saved");
+    expect(profiles.has("example:1")).toBe(true);
+    const replacement = appendPage(context);
+    await openLogin(replacement);
+    expect(replacement.querySelector('[data-provider-id="example"]')).not.toBeNull();
+    cancelled.resolve({ status: "running" });
+    await replacement.updateComplete;
+    expect(context.gateway.snapshot.client).toBe(client);
+    expect(replacement.textContent).not.toContain("Provider credentials saved.");
+    expect(replacement.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.disabled).toBe(
+      false,
+    );
+
+    await submitCredential(replacement);
+    await waitForFast(() =>
+      expect(replacement.textContent).toContain("Credentials saved. Continue to finish."),
+    );
+    replacement.querySelector<HTMLButtonElement>(".wizard-step__actions .btn.primary")!.click();
+    await waitForFast(() =>
+      expect(replacement.textContent).toContain("Provider credentials saved."),
+    );
+    expect(sessions.size).toBe(2);
+    expect([...profiles]).toEqual(["example:1", "example:2"]);
   });
 
   it.each(["settled", "purged"])(
