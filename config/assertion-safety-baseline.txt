@@ -3562,7 +3562,6 @@ src/system-agent/operations-execution-helpers.ts	1
 src/system-agent/operations-parse.ts	1
 src/system-agent/probes.ts	1
 src/system-agent/rescue-message.ts	2
-src/system-agent/setup-apply.ts	1
 src/system-agent/setup-inference-activate-persist.ts	1
 src/system-agent/setup-inference-detection.ts	3
 src/system-agent/setup-inference-persist.ts	1
