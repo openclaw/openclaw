@@ -123,8 +123,9 @@ describe("config form composition integrity", () => {
       },
     });
 
+    // retention (string | literal(false)) renders as a text input since the
+    // scalar pass-through fix (issue #143646); it is no longer Raw-only.
     expect(analysis.unsupportedPaths).toEqual([
-      "retention",
       "guarded",
       "nullableBoolean",
       "ambiguousBooleanLabel",

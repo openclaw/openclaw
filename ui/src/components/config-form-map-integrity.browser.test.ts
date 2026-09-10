@@ -353,7 +353,9 @@ describe("config form map integrity", () => {
               : { type: "array", items: rowSchema },
         },
       });
-      expect(analysis.unsupportedPaths).toEqual(["values.*.retained"]);
+      // retained: literal(false) renders as a text input beside its siblings
+      // since the scalar pass-through fix (issue #143646).
+      expect(analysis.unsupportedPaths).toEqual([]);
       const state = createInitialConfigState();
       state.configSchema = analysis.schema;
       state.configForm = { values: collection("before") };
