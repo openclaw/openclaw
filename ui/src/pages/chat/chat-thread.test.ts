@@ -1031,9 +1031,9 @@ describe("collapseCompletedTurnWork", () => {
         ],
       });
 
-      expect(items.map((item) => item.kind)).toEqual(["group", "group", "work-group", "group"]);
-      expect(canvasBlocksIn(requireGroup(items[1]))).toHaveLength(1);
-      expect(requireWorkGroup(items[2]).groups.map((group) => group.role)).toEqual(workRoles);
+      expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
+      expect(canvasBlocksIn(requireGroup(items[2]))).toHaveLength(1);
+      expect(requireWorkGroup(items[1]).groups.map((group) => group.role)).toEqual(workRoles);
       expect(messageRecord(requireGroup(items[3])).content).toBe("All done.");
     },
   );
@@ -1150,7 +1150,7 @@ describe("collapseCompletedTurnWork", () => {
     expect(requireWorkGroup(items[1]).groups).toHaveLength(1);
   });
 
-  it("keeps work after the final reply visible", () => {
+  it("includes work after the final reply in the same disclosure", () => {
     const items = collapsedItems({
       messages: [
         userMessage("go", 1_000),
@@ -1160,8 +1160,9 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
-    expect(requireGroup(items[3]).role).toBe("tool");
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+    expect(requireWorkGroup(items[1]).groups).toHaveLength(2);
+    expect(requireWorkGroup(items[1]).durationMs).toBe(3_000);
   });
 
   it("does not collapse across dividers", () => {

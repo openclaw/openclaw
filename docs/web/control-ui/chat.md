@@ -264,6 +264,13 @@ Absolute external `http(s)` embed URLs stay blocked by default. To let `[embed u
 
 ## Chat transcript layout
 
+In completed dashboard turns, commentary, reasoning-only messages, and tool activity
+share one **Worked for…** disclosure above the answers. Expanding it shows the
+activity in its original order; explicit answer segments and visual results stay
+visible below it. This is display grouping, not a change to stored history. Live
+turns, search results, and turns without an answer stay expanded. User messages,
+forwarded inputs, and structural markers remain boundaries for grouping.
+
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
 
 Images and video previews in your own messages appear above any accompanying text, without a surrounding bubble background. Videos use a still frame with a play icon; select the preview to open the video in the Files panel. If a preview cannot load, the attachment card remains available. Hovering media leaves that layout unchanged, and the text keeps its normal bubble color, including any per-identity tint. Assistant videos retain their inline player.

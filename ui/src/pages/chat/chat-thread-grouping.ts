@@ -215,6 +215,15 @@ export type ActivityRunRenderItem = {
 
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
+// User input, forwarded messages and structural markers bound presentation reordering.
+function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
+  return (
+    item.kind === "group" &&
+    (item.role === "assistant" || item.role === "tool") &&
+    !assistantGroupIsForwardedBoundary(item)
+  );
+}
+
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
     return false;
@@ -265,10 +274,9 @@ function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
 }
 
 /**
- * Once a turn is done, its intermediate work (tool groups and assistant
- * commentary before the final reply) collapses behind one "Worked for X"
- * disclosure so the thread reads final-output-first. Live turns stay fully
- * expanded; the collapse itself is the done signal.
+ * Once a turn is done, collect its activity above the preserved answers in one
+ * "Worked for X" disclosure. Each partition retains source order without changing
+ * the stored transcript. Live turns stay expanded; structural markers stay anchored.
  */
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
@@ -362,16 +370,26 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    const segmentEnd = finalReplyIndex >= 0 ? finalReplyIndex - 1 : turn.length - 1;
-    let segmentStart = segmentEnd + 1;
-    for (let index = segmentEnd; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (!candidate || !isCollapsibleWorkGroup(candidate)) {
-        break;
-      }
-      segmentStart = index;
+    // Partition the answer's output segment, including work after the last answer.
+    // Never move activity across a user, forwarded input, or structural marker.
+    let segmentStart = finalReplyIndex >= 0 ? finalReplyIndex : turn.length - 1;
+    let segmentEnd = segmentStart;
+    while (segmentStart > 0 && isTurnOutputGroup(turn[segmentStart - 1]!)) {
+      segmentStart -= 1;
     }
-    const groups = turn.slice(segmentStart, segmentEnd + 1) as MessageGroup[];
+    while (segmentEnd + 1 < turn.length && isTurnOutputGroup(turn[segmentEnd + 1]!)) {
+      segmentEnd += 1;
+    }
+    const groups: MessageGroup[] = [];
+    const answers: TurnRenderItem[] = [];
+    for (let index = segmentStart; index <= segmentEnd; index += 1) {
+      const item = turn[index]!;
+      if (index !== finalReplyIndex && isCollapsibleWorkGroup(item)) {
+        groups.push(item);
+      } else {
+        answers.push(item);
+      }
+    }
     const firstGroup = groups[0];
     if (!firstGroup) {
       result.push(...turn);
@@ -386,7 +404,10 @@ export function collapseCompletedTurnWork(
         ? boundary.timestamp
         : null;
     const startTimestamp = boundaryTimestamp == null ? firstGroup.timestamp : boundaryTimestamp;
-    const endTimestamp = terminalReply.timestamp;
+    const endTimestamp = groups.reduce(
+      (latest, group) => Math.max(latest, group.timestamp),
+      terminalReply.timestamp,
+    );
     const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
     const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
     result.push(...turn.slice(0, segmentStart));
@@ -399,7 +420,7 @@ export function collapseCompletedTurnWork(
       groups,
       durationMs,
     });
-    result.push(...turn.slice(segmentEnd + 1));
+    result.push(...answers, ...turn.slice(segmentEnd + 1));
   }
   return result;
 }

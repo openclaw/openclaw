@@ -219,8 +219,8 @@ describe("cached group content classification", () => {
 
     expect(project()).toMatchObject([
       { kind: "group", role: "user" },
-      { kind: "group", role: "assistant", messages: [{ message: preview }] },
       { kind: "work-group", groups: [{ role: "tool" }] },
+      { kind: "group", role: "assistant", messages: [{ message: preview }] },
       { kind: "group", role: "assistant" },
     ]);
 
@@ -297,20 +297,82 @@ describe("explicit answer visibility across continuations", () => {
           item.kind === "group" ? item.messages.map(({ message }) => message) : [],
         );
         expect(visible).toContainEqual(messages[1]);
-        expect(visible).toContainEqual(messages.at(-1));
-        if (tool && phase === "final_answer") {
-          expect(parts.find((item) => item.kind === "work-group")).toMatchObject({
-            groups: [{ role: "tool" }],
-          });
+        if (phase === "final_answer") {
+          expect(visible).toContainEqual(messages.at(-1));
+        } else {
+          expect(visible).not.toContainEqual(messages.at(-1));
         }
-        if (phase === "commentary") {
-          expect(
-            parts.filter((item) => item.kind === "group" && item.role === "assistant"),
-          ).toHaveLength(2);
+        const work = parts.filter((item) => item.kind === "work-group");
+        const expectedWork = [
+          ...(tool ? [messages[2]] : []),
+          ...(phase === "commentary" ? [messages.at(-1)] : []),
+        ];
+        expect(
+          work.flatMap((item) =>
+            item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
+          ),
+        ).toEqual(expectedWork);
+        expect(work).toHaveLength(expectedWork.length ? 1 : 0);
+        if (expectedWork.length) {
+          expect(parts[1]?.kind).toBe("work-group");
         }
       }
     },
   );
+
+  it("collects activity on both sides of answers without crossing the next user", () => {
+    const messages = [
+      { role: "user", content: "First question", timestamp: 1 },
+      { role: "assistant", phase: "commentary", content: "Checking first", timestamp: 2 },
+      { role: "assistant", phase: "final_answer", content: "First answer", timestamp: 3 },
+      {
+        role: "toolResult",
+        toolCallId: "first",
+        toolName: "read",
+        content: "Evidence",
+        timestamp: 4,
+      },
+      { role: "assistant", phase: "final_answer", content: "Addendum", timestamp: 5 },
+      { role: "assistant", phase: "commentary", content: "Final check", timestamp: 6 },
+      {
+        role: "toolResult",
+        toolCallId: "last",
+        toolName: "read",
+        content: "Confirmed",
+        timestamp: 7,
+      },
+      { role: "user", content: "Second question", timestamp: 8 },
+      { role: "assistant", phase: "commentary", content: "Checking second", timestamp: 9 },
+      { role: "assistant", phase: "final_answer", content: "Second answer", timestamp: 10 },
+    ];
+    const snapshot = structuredClone(messages);
+    const items = collapseCompletedTurnWork(cachedGroups(messages), {
+      sessionKey: "agent:main:dashboard:answers",
+      runWorking: false,
+    });
+    expect(items.map((item) => item.kind)).toEqual([
+      "group",
+      "work-group",
+      "group",
+      "group",
+      "group",
+      "work-group",
+      "group",
+    ]);
+    const work = items.filter((item) => item.kind === "work-group");
+    expect(
+      work.map((item) =>
+        item.groups.flatMap((group) => group.messages.map(({ message }) => message)),
+      ),
+    ).toEqual([[messages[1], messages[3], messages[5], messages[6]], [messages[8]]]);
+    expect(work[0]?.durationMs).toBe(6);
+    expect(
+      items
+        .filter((item) => item.kind === "group")
+        .flatMap((item) => item.messages.map(({ message }) => message)),
+    ).toEqual([messages[0], messages[2], messages[4], messages[7], messages[9]]);
+    expect(messages).toEqual(snapshot);
+  });
 
   it("preserves mixed-phase answer text when later tools and an answer arrive", () => {
     const answer = {
