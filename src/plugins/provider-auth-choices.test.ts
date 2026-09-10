@@ -230,7 +230,7 @@ describe("provider auth choice manifest helpers", () => {
     expect(resolveManifestDeclaredProviderAuthChoices({ config })).toEqual([]);
   });
 
-  it("retains tied declarations for explicit owner selection but rejects an unqualified start", () => {
+  it("rejects equal-priority choice owners before any login surface can offer them", () => {
     setManifestPlugins(
       ["first", "second"].map((id) => ({
         id,
@@ -238,7 +238,8 @@ describe("provider auth choice manifest helpers", () => {
         providerAuthChoices: [{ provider: id, method: "oauth", choiceId: "shared" }],
       })),
     );
-    expect(resolveManifestDeclaredProviderAuthChoices()).toHaveLength(2);
+    expect(resolveManifestDeclaredProviderAuthChoices()).toEqual([]);
+    expect(resolveManifestProviderAuthChoices()).toEqual([]);
   });
 
   it("keeps installed manifest flags ahead of official cold-install flags", () => {

@@ -6,6 +6,8 @@ import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   formatProviderLoginChoiceRef,
   formatProviderOAuthLoginRef,
@@ -35,14 +37,15 @@ type ProviderChannelLoginPreparation =
       choice: ProviderChannelLoginChoice;
     };
 
-type ProviderLoginSessionEntry = {
-  sessionId: string;
-  providerOverride?: string;
-  modelProvider?: string;
-  authProfileOverride?: string;
-  authProfileOverrideSource?: "auto" | "user";
-  authProfileOverrideCompactionCount?: number;
-};
+type ProviderLoginSessionEntry = Pick<
+  SessionEntry,
+  | "sessionId"
+  | "providerOverride"
+  | "modelProvider"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+>;
 
 type ProviderLoginSessionAdoption =
   | { status: "unchanged" }
@@ -134,13 +137,7 @@ export function decideProviderLoginSessionAdoption(params: {
       return { status: "rejected" };
     }
   } else {
-    const source =
-      params.current.authProfileOverrideSource ??
-      (typeof params.current.authProfileOverrideCompactionCount === "number"
-        ? "auto"
-        : params.current.authProfileOverride
-          ? "user"
-          : undefined);
+    const source = resolveCollapsedSessionAuthPinSource(params.current);
     if (source === "user" && params.current.authProfileOverride !== params.nextProfileId) {
       return { status: "rejected" };
     }

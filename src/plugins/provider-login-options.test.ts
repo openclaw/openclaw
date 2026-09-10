@@ -42,10 +42,6 @@ describe("provider login choices", () => {
     ]);
   });
 
-  it("omits an ambiguous action rather than choosing an owner by order", () => {
-    expect(listProviderLoginOptions([choice(), choice({ pluginId: "other" })])).toEqual([]);
-  });
-
   it("keeps a single provider behind an explicit menu selection", () => {
     declarations.read.mockReturnValue([choice()]);
     expect(resolveProviderChannelLoginChoice(undefined)).toEqual({

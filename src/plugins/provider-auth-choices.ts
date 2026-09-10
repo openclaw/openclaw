@@ -280,22 +280,20 @@ function pickPreferredManifestAuthChoice(
 function resolvePreferredManifestAuthChoicesByChoiceId(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate[] {
-  const preferredByChoiceId = new Map<string, ProviderAuthChoiceCandidate>();
+  const byChoiceId = new Map<string, ProviderAuthChoiceCandidate[]>();
   for (const candidate of candidates) {
     const normalizedChoiceId = candidate.choiceId.trim();
     if (!normalizedChoiceId) {
       continue;
     }
-    const existing = preferredByChoiceId.get(normalizedChoiceId);
-    if (
-      !existing ||
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) <
-        resolveProviderAuthChoiceOriginPriority(existing.origin)
-    ) {
-      preferredByChoiceId.set(normalizedChoiceId, candidate);
-    }
+    const group = byChoiceId.get(normalizedChoiceId) ?? [];
+    group.push(candidate);
+    byChoiceId.set(normalizedChoiceId, group);
   }
-  return [...preferredByChoiceId.values()];
+  return [...byChoiceId.values()].flatMap((group) => {
+    const preferred = pickPreferredManifestAuthChoice(group);
+    return preferred ? [preferred] : [];
+  });
 }
 
 function resolvePreferredManifestAuthChoiceMetadata(params: {
@@ -325,19 +323,7 @@ export function resolveManifestDeclaredProviderAuthChoices(
     { ...params, includeWorkspacePlugins: false },
     true,
   );
-  const preferred = resolvePreferredManifestAuthChoicesByChoiceId(candidates);
-  const priorities = new Map(
-    preferred.map((choice) => [
-      choice.choiceId,
-      resolveProviderAuthChoiceOriginPriority(choice.origin),
-    ]),
-  );
-  return candidates
-    .filter(
-      (choice) =>
-        priorities.get(choice.choiceId) === resolveProviderAuthChoiceOriginPriority(choice.origin),
-    )
-    .map(stripChoiceOrigin);
+  return resolvePreferredManifestAuthChoicesByChoiceId(candidates).map(stripChoiceOrigin);
 }
 
 export function resolveManifestProviderAuthChoice(

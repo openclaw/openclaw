@@ -59,12 +59,8 @@ export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadat
 export function listProviderLoginOptions(
   choices: readonly ProviderAuthChoiceMetadata[],
 ): ProviderLoginOption[] {
-  const counts = new Map<string, number>();
-  for (const choice of choices) {
-    counts.set(choice.choiceId, (counts.get(choice.choiceId) ?? 0) + 1);
-  }
   return choices
-    .filter((choice) => isEligible(choice) && counts.get(choice.choiceId) === 1)
+    .filter(isEligible)
     .toSorted(
       (a, b) =>
         Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||

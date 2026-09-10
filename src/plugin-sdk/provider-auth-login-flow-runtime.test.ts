@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelsAuthLoginFlowOptions } from "../commands/models/auth.js";
 import {
   buildProviderLoginChoicesReply,
+  decideProviderLoginSessionAdoption,
   runProviderChannelLoginFlow,
   type ProviderChannelLoginChoice,
 } from "./provider-auth-login-flow-runtime.js";
@@ -37,6 +38,23 @@ describe("provider channel login runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveChoice.mockReturnValue({ status: "resolved", choice });
+  });
+
+  it("preserves a personal account selected after login started", () => {
+    expect(
+      decideProviderLoginSessionAdoption({
+        currentModelProvider: "acme-cloud",
+        loginProvider: "acme-cloud",
+        nextProfileId: "acme-cloud:new",
+        snapshot: undefined,
+        current: {
+          sessionId: "created-during-login",
+          modelProvider: "acme-cloud",
+          authProfileOverride: "acme-cloud:personal",
+          authProfileOverrideSource: "user-link",
+        },
+      }),
+    ).toEqual({ status: "rejected" });
   });
 
   it.each(["removed", "pluginId", "providerId", "methodId"] as const)(
