@@ -7,6 +7,7 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import pluginFixture from "./plugin-gateway-return.fixture.js";
 
 describe("plugin Gateway returned values", () => {
   it("loads a cast-free TypeScript plugin and returns its payload through Gateway RPC", async () => {
@@ -27,16 +28,11 @@ describe("plugin Gateway returned values", () => {
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({ id: "ts-gateway-return", configSchema: { type: "object" } }),
     );
-    await fs.writeFile(
+    await fs.copyFile(
+      new URL("./plugin-gateway-return.fixture.ts", import.meta.url),
       path.join(pluginDir, "index.ts"),
-      `export default {
-  id: "ts-gateway-return",
-  register(api: import("../../../../src/plugins/plugin-api.types.js").OpenClawPluginApi) {
-    api.registerGatewayMethod("ts-gateway-return.echo", async () => ({ ok: true, source: "typescript" }));
-  },
-};
-`,
     );
+    expect(pluginFixture.id).toBe("ts-gateway-return");
     const token = "plugin-gateway-return-test-token";
     const config = {
       agents: {
