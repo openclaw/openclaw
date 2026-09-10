@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   authorizeGatewaySessionCreation,
+  hasOperatorBoundary,
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
@@ -574,6 +575,15 @@ export function createSessionListEntryFilter(
   }
   const sessionCap = params.cfg ? operatorSessionCap(params.client, params.cfg) : undefined;
   return createProfileSessionEntryFilter({ profileId: identity.id, sessionCap }, isCreator);
+}
+
+export function createSessionReadVisibilityFilter(
+  client: GatewayClient | null,
+  cfg: OpenClawConfig,
+): ReturnType<typeof createSessionListEntryFilter> {
+  return hasOperatorBoundary(client, cfg)
+    ? createSessionListEntryFilter({ client, cfg })
+    : undefined;
 }
 
 export function createProfileSessionEntryFilter(

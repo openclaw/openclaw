@@ -16,6 +16,11 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
+  authorizeIncognitoSessionTarget,
+  hiddenSessionNotFound,
+} from "../session-sharing-policy.js";
+import { createSessionReadVisibilityFilter } from "../session-sharing.js";
+import {
   readSessionTranscriptVisibleMessageDeltaCore,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
@@ -33,7 +38,12 @@ import {
 } from "./open-path.js";
 import { getRepositoryArtifact, listRepositoryArtifacts } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
   getSessionWorkspaceFile,
@@ -293,15 +303,35 @@ export function resolveLocalSessionWorkspaceRoot(params: {
   return loaded.entry?.execNode ? undefined : loaded.root;
 }
 
-async function loadSessionFiles(params: {
+async function loadVisibleSessionFiles(params: {
   sessionKey: string;
   agentId?: string;
+  client: GatewayClient | null;
+  respond: RespondFn;
   context: GatewayRequestContext;
 }): Promise<
-  LoadedSessionFiles & { repository?: ReturnType<typeof resolveRepositoryWorkspaceAccess> }
+  | (LoadedSessionFiles & { repository?: ReturnType<typeof resolveRepositoryWorkspaceAccess> })
+  | undefined
 > {
   const loaded = loadSessionFileRoot(params);
   const { storePath, entry, canonicalKey, agentId } = loaded;
+  const incognitoError = authorizeIncognitoSessionTarget({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    target: entry ? { canonicalKey, entry } : null,
+  });
+  if (incognitoError) {
+    params.respond(false, undefined, incognitoError);
+    return undefined;
+  }
+  const entryFilter = createSessionReadVisibilityFilter(
+    params.client,
+    params.context.getRuntimeConfig(),
+  );
+  if (entry && entryFilter && !entryFilter(canonicalKey, entry)) {
+    params.respond(false, undefined, hiddenSessionNotFound(params.sessionKey));
+    return undefined;
+  }
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
   }
@@ -384,7 +414,7 @@ function requireSessionFilesAgentId(params: {
 
 /** Gateway handlers for session files and workspace browsing. */
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
-  "sessions.files.list": async ({ params, respond, context }) => {
+  "sessions.files.list": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(params, validateSessionsFilesListParams, "sessions.files.list", respond)
     ) {
@@ -399,7 +429,10 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     if (!agentId) {
       return;
     }
-    const loaded = await loadSessionFiles({ ...params, agentId, context });
+    const loaded = await loadVisibleSessionFiles({ ...params, agentId, client, respond, context });
+    if (!loaded) {
+      return;
+    }
     const request = { files: loaded.files, path: params.path, search: params.search };
     const result =
       loaded.repository?.kind === "stored"
@@ -413,7 +446,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       ...(loaded.repository ? { root: undefined } : {}),
     });
   },
-  "sessions.files.get": async ({ params, respond, context }) => {
+  "sessions.files.get": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsFilesGetParams, "sessions.files.get", respond)) {
       return;
     }
@@ -426,7 +459,10 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     if (!agentId) {
       return;
     }
-    const loaded = await loadSessionFiles({ ...params, agentId, context });
+    const loaded = await loadVisibleSessionFiles({ ...params, agentId, client, respond, context });
+    if (!loaded) {
+      return;
+    }
     const request = { files: loaded.files, path: params.path };
     const result =
       loaded.repository?.kind === "stored"
