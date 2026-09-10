@@ -15,6 +15,7 @@ import {
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
   normalizeQaSuiteConcurrency,
+  normalizeQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   resolveQaSuiteWorkerStartStaggerMs,
   selectQaFlowSuiteScenarios,
@@ -88,8 +89,9 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
   const preparedParams = {
     ...params,
     transportReadyTimeoutMs: resolveQaSuiteTransportReadyTimeoutMs(params?.transportReadyTimeoutMs),
-    workerStartStaggerMs:
+    workerStartStaggerMs: normalizeQaSuiteWorkerStartStaggerMs(
       params?.workerStartStaggerMs ?? resolveQaSuiteWorkerStartStaggerMs(concurrency),
+    ),
     adapterFactories: await prepareQaTransportAdapterFactories({
       factories: params?.adapterFactories,
       driver: channelDriver,

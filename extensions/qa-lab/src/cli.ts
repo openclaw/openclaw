@@ -535,7 +535,9 @@ export function registerQaLabCli(program: Command) {
     });
 
   qa.command("parity-report")
-    .description("Write either a model-axis parity gate report or a runtime-axis parity report")
+    .description(
+      "Write a model-axis parity gate, runtime-axis parity, or cross-harness comparison report",
+    )
     .option("--candidate-summary <path>", "Candidate qa-suite-summary.json path")
     .option("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
     .option(

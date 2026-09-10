@@ -392,6 +392,10 @@ function resolveQaSuiteWorkerStartStaggerMs(
   return parsed;
 }
 
+function normalizeQaSuiteWorkerStartStaggerMs(value: number | undefined) {
+  return Math.max(0, Math.floor(value ?? 0));
+}
+
 async function mapQaSuiteWithConcurrency<T, U>(
   items: readonly T[],
   concurrency: number,
@@ -404,7 +408,7 @@ async function mapQaSuiteWithConcurrency<T, U>(
 ) {
   let stopped = false;
   let nextStartGate = Promise.resolve();
-  const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
+  const startStaggerMs = normalizeQaSuiteWorkerStartStaggerMs(opts?.startStaggerMs);
   const sleepImpl =
     opts?.sleepImpl ??
     ((ms: number) =>
@@ -487,6 +491,7 @@ export {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  normalizeQaSuiteWorkerStartStaggerMs,
   normalizeQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannels,

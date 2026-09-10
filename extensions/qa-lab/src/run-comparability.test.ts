@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildQaAgenticParityComparison } from "./agentic-parity-report.js";
 import {
   captureQaRunComparisonIdentity,
   compareQaRunConditions,
@@ -103,6 +104,25 @@ describe("QA completed-run comparability", () => {
         alternateModel: "unqualified-model",
         alternateProvider: null,
       },
+    });
+  });
+
+  it("keeps legacy reports compatible with summaries with or without captured metadata", () => {
+    const current = summary();
+    const legacy = structuredClone(current);
+    delete legacy.run.comparisonIdentity;
+    const report = (candidateSummary: typeof current) =>
+      buildQaAgenticParityComparison({
+        candidateSummary: JSON.parse(JSON.stringify(candidateSummary)),
+        baselineSummary: JSON.parse(JSON.stringify(legacy)),
+        candidateLabel: "provider-a/model-a",
+        baselineLabel: "provider-a/model-a",
+        comparedAt: "2026-01-01T00:00:01Z",
+      });
+    expect(report(current)).toEqual(report(legacy));
+    expect(compareQaRunConditions(legacy, current)).toEqual({
+      status: "not-comparable",
+      reasons: ["Candidate lacks valid completed-run comparison metadata."],
     });
   });
 
