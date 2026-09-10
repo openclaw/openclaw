@@ -85,6 +85,8 @@ export function applyToolAvailabilityDescriptions(tools: AnyAgentTool[]): AnyAge
   const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
   const hasProcessTool = availableTools.has("process");
   const hasSessionsSpawnTool = availableTools.has("sessions_spawn");
+  const hasFileWriteTool =
+    availableTools.has("write") || availableTools.has("edit") || availableTools.has("apply_patch");
   return tools.map((tool) => {
     if (tool.name === "exec") {
       return replaceDescription(
@@ -92,6 +94,7 @@ export function applyToolAvailabilityDescriptions(tools: AnyAgentTool[]): AnyAge
         describeExecTool({
           hasCronTool,
           hasProcessTool,
+          hasFileWriteTool,
           autoReview: tool.description.includes(EXEC_AUTO_REVIEW_GUIDANCE),
         }),
       );

@@ -5,6 +5,7 @@ export const EXEC_AUTO_REVIEW_GUIDANCE =
 export function describeExecTool(params?: {
   hasCronTool?: boolean;
   hasProcessTool?: boolean;
+  hasFileWriteTool?: boolean;
   autoReview?: boolean;
 }): string {
   const continuation =
@@ -19,6 +20,9 @@ export function describeExecTool(params?: {
     ...continuation,
     params?.hasCronTool ? "No sleep loops for reminders/follow-ups; use automations." : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
+    params?.hasFileWriteTool
+      ? "File writes: prefer dedicated file-writing tools (write/edit/apply_patch) over shell heredocs or bash -c for multi-line content."
+      : undefined,
   ]
     .filter(Boolean)
     .join(" ");
