@@ -304,7 +304,6 @@ export function createCodexAppServerAgentHarness(
         planCodexCyberEscalation,
         recordCodexCyberEscalation,
         resolveCodexCyberFailoverConfig,
-        resolveCodexCyberStickyModel,
       } = await import("./src/app-server/cyber-failover.js");
       const { emitCodexCyberNotice } = await import("./src/app-server/cyber-failover-notice.js");
       const pluginConfig = resolveAttemptPluginConfig(params.config);
@@ -327,65 +326,24 @@ export function createCodexAppServerAgentHarness(
         agentId: params.agentId,
         authProfileId: params.authProfileId,
       };
-      // An open window from an answered escalation routes follow-up work straight
-      // to Daybreak so related turns do not each spend a refusal round-trip.
-      const stickyModel = resolveCodexCyberStickyModel({
-        config: cyberFailover,
-        sessionKey: params.sessionKey,
-        currentModel: attemptModel,
-        workspace: cyberWorkspace,
-      });
-      const requestedModel = stickyModel ?? attemptModel;
-      const result = await runAttemptOnModel(requestedModel);
-      // Entitlement can lapse after the escalation that opened this window.
-      // Close it and say so, rather than routing every later turn to a target
-      // that now answers 401/403; this turn was only pre-routed by us, so it is
-      // owed an attempt on the model the session actually selected.
-      if (stickyModel && isCodexDaybreakUnavailableResult(result)) {
-        recordCodexCyberEscalation({
-          sessionKey: params.sessionKey,
-          outcome: "unavailable",
-          model: stickyModel,
-          workspace: cyberWorkspace,
-          cooloffMs: cyberFailover.cooloffMs,
-        });
-        await emitCodexCyberNotice(params, {
-          state: "unavailable",
-          model: attemptModel,
-          fallbackModel: stickyModel,
-        });
-        return isCodexCyberEscalationReplaySafe(result)
-          ? await runAttemptOnModel(attemptModel)
-          : result;
-      }
+      // Every turn starts on the model the session selected. Only a turn OpenAI
+      // actually refused is routed to the weaker Daybreak tier.
+      const result = await runAttemptOnModel(attemptModel);
       if (!isCodexCyberRefusalResult(result)) {
-        return result;
-      }
-      // A sticky turn that Daybreak refused proves the window is no longer
-      // earning its keep; stop pre-routing before the cooloff would have ended.
-      if (stickyModel) {
-        recordCodexCyberEscalation({
-          sessionKey: params.sessionKey,
-          outcome: "suppressed",
-          model: stickyModel,
-          workspace: cyberWorkspace,
-          cooloffMs: cyberFailover.cooloffMs,
-        });
         return result;
       }
       const plan = planCodexCyberEscalation({
         config: cyberFailover,
         sessionKey: params.sessionKey,
-        currentModel: requestedModel,
+        currentModel: attemptModel,
         replaySafe: isCodexCyberEscalationReplaySafe(result),
         workspace: cyberWorkspace,
       });
       if (plan.kind !== "escalate") {
         return result;
       }
-      // Reserve the window before awaiting the retry so a sibling turn on this
-      // session sees the cooloff instead of starting its own attempt. Suppressed
-      // is the safe reservation; the real outcome replaces it below.
+      // Reserve the session before awaiting the retry so a sibling turn sees the
+      // cooloff instead of starting its own attempt.
       recordCodexCyberEscalation({
         sessionKey: params.sessionKey,
         outcome: "suppressed",
@@ -398,26 +356,23 @@ export function createCodexAppServerAgentHarness(
       // only evidence. An unauthorized target must not be attempted again inside
       // the window: each try costs the transport's full reconnect ladder.
       const unavailable = isCodexDaybreakUnavailableResult(escalated);
-      // Only a real Daybreak reply earns sticky routing. A second refusal, a
-      // transport failure, or a cancellation all leave the session suppressed.
-      const answered =
-        !unavailable &&
-        !isCodexCyberRefusalResult(escalated) &&
-        isCodexCyberEscalationAnswered(escalated);
-      recordCodexCyberEscalation({
-        sessionKey: params.sessionKey,
-        outcome: unavailable ? "unavailable" : answered ? "answered" : "suppressed",
-        model: plan.model,
-        workspace: cyberWorkspace,
-        cooloffMs: cyberFailover.cooloffMs,
-      });
+      if (unavailable) {
+        recordCodexCyberEscalation({
+          sessionKey: params.sessionKey,
+          outcome: "unavailable",
+          model: plan.model,
+          workspace: cyberWorkspace,
+          cooloffMs: cyberFailover.cooloffMs,
+        });
+      }
       // Announce only the two outcomes this owner can state truthfully. A turn
       // Daybreak also refused keeps the projector's own block, and any other
       // failure surfaces through its normal terminal error.
+      const answered = !unavailable && isCodexCyberEscalationAnswered(escalated);
       if (answered || unavailable) {
         await emitCodexCyberNotice(params, {
           state: answered ? "escalated" : "unavailable",
-          model: requestedModel,
+          model: attemptModel,
           fallbackModel: plan.model,
         });
       }

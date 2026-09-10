@@ -125,11 +125,11 @@ work that was actually refused:
 - A turn that already acted is never retried. Escalation requires the attempt's
   own replay-safe verdict, so a turn refused after it sent a message, added a
   cron entry, spawned a session, or generated media keeps its refusal.
-- After an attempt, the session enters a `cooloffMs` window. If Daybreak
-  answered, turns in that window start there directly so related work does not
-  spend another refusal round-trip. Any other outcome suppresses further
-  attempts for that session instead. The window expires back to the selected
-  model in both cases.
+- Only a refused turn is ever routed to Daybreak. Every turn starts on the model
+  the session selected, and a turn that was not refused never reaches the weaker
+  tier.
+- After an attempt, that session is damped for `cooloffMs`, so a burst of
+  refusals does not each pay for its own retry.
 - Escalation never changes the session's stored model selection, and all of this
   state is process-local rather than persisted.
 
@@ -139,12 +139,10 @@ still receives `401`/`403` on use, and each such attempt costs the transport's
 full reconnect ladder. OpenClaw therefore treats the retry itself as the only
 evidence and reports an `unavailable` notice rather than a silent block.
 
-Because entitlement belongs to the workspace and the target model rather than to
-any one conversation, an unauthorized target is remembered once for every
-session and cannot be displaced by session churn. Entitlement can also lapse
-after a window opens, so a turn already routed to Daybreak that comes back
-unauthorized closes the window, reports it, and is retried on the model the
-session actually selected.
+Because entitlement belongs to the authenticated workspace and the target model
+rather than to any one conversation, an unauthorized target is remembered once
+for every session under that workspace and cannot be displaced by session churn.
+A separate workspace that is entitled keeps escalating normally.
 
 ## Parallel chats and thread ownership
 

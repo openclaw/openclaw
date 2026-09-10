@@ -10,7 +10,6 @@ import {
   planCodexCyberEscalation,
   recordCodexCyberEscalation,
   resolveCodexCyberFailoverConfig,
-  resolveCodexCyberStickyModel,
   type CodexCyberFailoverConfig,
 } from "./cyber-failover.js";
 
@@ -188,7 +187,7 @@ describe("escalation planning", () => {
     const SESSION = nextSession();
     recordCodexCyberEscalation({
       sessionKey: SESSION,
-      outcome: "answered",
+      outcome: "suppressed",
       model: DAYBREAK,
       cooloffMs: 600_000,
       now: 1_000,
@@ -284,7 +283,7 @@ describe("window bookkeeping", () => {
     for (let index = 0; index < 400; index += 1) {
       recordCodexCyberEscalation({
         sessionKey: `filler-${index}`,
-        outcome: "answered",
+        outcome: "suppressed",
         model: DAYBREAK,
         cooloffMs: 600_000,
         now,
@@ -301,15 +300,6 @@ describe("window bookkeeping", () => {
         now: now + 1,
       }),
     ).toEqual({ kind: "skip", reason: "target_unavailable" });
-    // And it must not pre-route ordinary work to that target either.
-    expect(
-      resolveCodexCyberStickyModel({
-        config: config(),
-        sessionKey: "filler-399",
-        currentModel: PRIMARY,
-        now: now + 1,
-      }),
-    ).toBeUndefined();
   });
 
   it("releases the target once its cooloff expires", () => {
@@ -371,110 +361,11 @@ describe("window bookkeeping", () => {
     for (let index = 0; index < 400; index += 1) {
       recordCodexCyberEscalation({
         sessionKey: `bounded-${index}`,
-        outcome: "answered",
+        outcome: "suppressed",
         model: DAYBREAK,
         cooloffMs: 600_000,
         now,
       });
     }
-    // The newest session keeps its window; older ones are shed rather than kept
-    // for the life of the process.
-    expect(
-      resolveCodexCyberStickyModel({
-        config: config(),
-        sessionKey: "bounded-399",
-        currentModel: PRIMARY,
-        now: now + 1,
-      }),
-    ).toBe(DAYBREAK);
-    expect(
-      resolveCodexCyberStickyModel({
-        config: config(),
-        sessionKey: "bounded-0",
-        currentModel: PRIMARY,
-        now: now + 1,
-      }),
-    ).toBeUndefined();
-  });
-});
-
-describe("sticky routing inside the window", () => {
-  it("pre-routes follow-up turns only after Daybreak actually answered", () => {
-    const SESSION = nextSession();
-    const now = 1_000;
-    recordCodexCyberEscalation({
-      sessionKey: SESSION,
-      outcome: "answered",
-      model: DAYBREAK,
-      cooloffMs: 600_000,
-      now,
-    });
-    expect(
-      resolveCodexCyberStickyModel({
-        config: config(),
-        sessionKey: SESSION,
-        currentModel: PRIMARY,
-        now: now + 1,
-      }),
-    ).toBe(DAYBREAK);
-  });
-
-  it("never pre-routes after a suppressed escalation", () => {
-    const SESSION = nextSession();
-    const now = 1_000;
-    recordCodexCyberEscalation({
-      sessionKey: SESSION,
-      outcome: "suppressed",
-      model: DAYBREAK,
-      cooloffMs: 600_000,
-      now,
-    });
-    expect(
-      resolveCodexCyberStickyModel({
-        config: config(),
-        sessionKey: SESSION,
-        currentModel: PRIMARY,
-        now: now + 1,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("reverts to the selected model once the window expires", () => {
-    const SESSION = nextSession();
-    const now = 1_000;
-    recordCodexCyberEscalation({
-      sessionKey: SESSION,
-      outcome: "answered",
-      model: DAYBREAK,
-      cooloffMs: 600_000,
-      now,
-    });
-    expect(
-      resolveCodexCyberStickyModel({
-        config: config(),
-        sessionKey: SESSION,
-        currentModel: PRIMARY,
-        now: now + 600_001,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("stays inert when escalation is disabled", () => {
-    const SESSION = nextSession();
-    recordCodexCyberEscalation({
-      sessionKey: SESSION,
-      outcome: "answered",
-      model: DAYBREAK,
-      cooloffMs: 600_000,
-      now: 1_000,
-    });
-    expect(
-      resolveCodexCyberStickyModel({
-        config: config({ mode: "off" }),
-        sessionKey: SESSION,
-        currentModel: PRIMARY,
-        now: 1_001,
-      }),
-    ).toBeUndefined();
   });
 });
