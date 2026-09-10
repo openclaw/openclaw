@@ -793,45 +793,6 @@ describe("worker placement dispatch", () => {
     expect(harness.log).toEqual(["environment:reconcile"]);
   });
 
-  it("fails closed when an active worker turn claim cannot be proven live after restart", async () => {
-    const harness = createTestHarness();
-    await harness.environments.attachSession({
-      environmentId: harness.ready.environmentId,
-      ownerEpoch: harness.ready.ownerEpoch,
-      sessionId: REQUEST.sessionId,
-    });
-    harness.placements.seedActive(harness.attached.ownerEpoch);
-    placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "claim-1",
-      runId: "run-1",
-      owner: {
-        kind: "worker",
-        environmentId: harness.attached.environmentId,
-        ownerEpoch: harness.attached.ownerEpoch,
-      },
-    });
-    harness.log.length = 0;
-
-    await harness.service.reconcile();
-
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      turnClaim: null,
-      recoveryError: "Active worker turn claim cannot be proven live after gateway restart",
-    });
-    expect(harness.log).toEqual([
-      "environment:reconcile",
-      "workspace",
-      "placement:draining",
-      "placement:reconciling",
-      "teardown:stop",
-      "teardown:destroy",
-      "placement:failed",
-    ]);
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-  });
-
   it("fails closed instead of activating a synced placement after restart", async () => {
     const harness = createTestHarness();
     harness.placements.seedStarting();

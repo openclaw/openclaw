@@ -230,6 +230,9 @@ describe("worker environment service", () => {
     const liveEvents = support.createLiveEvents();
     const unsubscribeTurnClaimClosed = vi.fn();
     const placementStore = {
+      assertWorkerRuntimeRefresh: vi.fn(() => {
+        throw new Error("Runtime refresh is outside this timer fixture");
+      }),
       readWorkerTurnClaim: vi.fn(),
       readWorkerTurnLiveAckCursor: vi.fn(() => 0),
       validateWorkerTurn: vi.fn(() => false),

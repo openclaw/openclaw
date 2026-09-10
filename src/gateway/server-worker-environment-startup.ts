@@ -511,6 +511,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       installation,
       resolveIdentity,
       signal,
+      assertCurrent,
     }) => {
       const workerRuntime = await loadWorkerEnvironmentRuntimeModule();
       return await workerRuntime.bootstrapWorker(
@@ -520,7 +521,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
           artifact: installation,
           pinnedHostKey: sshEndpoint.hostKey,
         },
-        { signal, resolveIdentity },
+        { signal, resolveIdentity, assertCurrent },
       );
     },
     logger: workerEnvironmentLog,

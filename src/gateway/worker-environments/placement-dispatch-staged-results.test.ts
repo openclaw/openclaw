@@ -402,37 +402,85 @@ describe("staged worker placement result recovery", () => {
     expect(harness.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
   });
 
-  it("applies a staged result after restart even when the worker is dead", async () => {
-    const workspacePath = path.join(root, "dead-worker-staged-result");
-    const originalHarness = createHarness(database, placementStore, { workspacePath });
-    const { claim } = seedWorkerTurn(originalHarness);
-    const staged = await stagePendingResult({
-      store: placementStore,
-      claim,
-      workspacePath,
-      base: "base\n",
-      current: "worker\n",
-    });
-    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const restartedHarness = createHarness(database, restartedStore, { workspacePath });
-    restartedHarness.markEnvironmentDestroyed();
+  it.each([
+    "surviving node",
+    "same-instance node",
+    "dead worker",
+    "draining node",
+    "destroy-requested node",
+  ] as const)(
+    "applies a staged result after restart while preserving only its active surviving node: %s",
+    async (scenario) => {
+      const workspacePath = path.join(root, "dead-worker-staged-result");
+      const originalHarness = createHarness(database, placementStore, { workspacePath });
+      const { active, claim } = seedWorkerTurn(originalHarness);
+      const staged = await stagePendingResult({
+        store: placementStore,
+        claim,
+        workspacePath,
+        base: "base\n",
+        current: "worker\n",
+      });
+      const sameGatewayInstance = scenario === "same-instance node";
+      const preserved = scenario === "surviving node" || sameGatewayInstance;
+      const restartedStore = sameGatewayInstance
+        ? placementStore
+        : createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+      const restartedHarness = createHarness(database, restartedStore, { workspacePath });
+      if (sameGatewayInstance) {
+        placementStore.handoffWorkspaceResultRecovery(claim);
+      }
+      if (scenario === "dead worker") {
+        restartedHarness.markEnvironmentDestroyed();
+      } else {
+        restartedHarness.markEnvironmentNodeDeviceId("surviving-node");
+        if (scenario === "draining node") {
+          restartedStore.startWorkspaceResultDrain(claim);
+        } else if (scenario === "destroy-requested node") {
+          vi.mocked(restartedHarness.environments.get).mockReturnValue({
+            ...restartedHarness.attached,
+            nodeDeviceId: "surviving-node",
+            destroyRequestedAtMs: 2_000,
+          });
+        }
+      }
 
-    await restartedHarness.service.reconcile();
+      await restartedHarness.service.reconcile();
 
-    await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
-      "worker\n",
-    );
-    expect(restartedHarness.placements.current()).toMatchObject({
-      state: "reclaimed",
-      turnClaim: null,
-      workspaceBaseManifestRef: staged.currentManifestRef,
-    });
-    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
-    expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
-    expect(restartedHarness.log).not.toContain("placement:failed");
-  });
+      await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+        "worker\n",
+      );
+      expect(restartedHarness.placements.current()).toMatchObject({
+        state: preserved ? "active" : "reclaimed",
+        turnClaim: null,
+        workspaceBaseManifestRef: staged.currentManifestRef,
+      });
+      expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
+      expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
+      expect(restartedHarness.log).not.toContain("placement:failed");
+      if (preserved) {
+        expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
+        if (sameGatewayInstance) {
+          expect(restartedHarness.environments.stopTunnel).not.toHaveBeenCalled();
+        } else {
+          expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledOnce();
+          expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledWith(
+            active.environmentId,
+            active.activeOwnerEpoch,
+          );
+        }
+        expect(restartedHarness.placements.current()).toMatchObject({
+          environmentId: active.environmentId,
+          activeOwnerEpoch: active.activeOwnerEpoch,
+          remoteWorkspaceDir: active.remoteWorkspaceDir,
+        });
+      } else if (scenario !== "dead worker") {
+        expect(restartedHarness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
+      }
+    },
+  );
 
-  it.each(["active", "draining", "draining-reclaim", "accepted-reclaim"] as const)(
+  it.each(["active", "active-node", "draining", "draining-reclaim", "accepted-reclaim"] as const)(
     "recovers a staged remote-exec %s result after restart clears its local claim",
     async (placementState) => {
       const workspacePath = path.join(root, `remote-exec-restart-${placementState}-result`);
@@ -444,7 +492,10 @@ describe("staged worker placement result recovery", () => {
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
-      const claimId = `reclaim-remote-exec-restart-${placementState}`;
+      const preservesNode = placementState === "active-node";
+      const claimId = preservesNode
+        ? "remote-exec-restart-node-turn"
+        : `reclaim-remote-exec-restart-${placementState}`;
       const claimInput = {
         ...REQUEST,
         claimId,
@@ -469,7 +520,7 @@ describe("staged worker placement result recovery", () => {
         drain();
       }
       const claim =
-        placementState === "draining"
+        placementState === "draining" || preservesNode
           ? placementStore.claimTurn(claimInput)
           : placementStore.claimReclaimWorkspaceResult(claimInput);
       if (placementState === "draining") {
@@ -497,7 +548,7 @@ describe("staged worker placement result recovery", () => {
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
       expect(restartedStore.clearLocalTurnClaimsAfterRestart()).toBe(1);
       expect(restartedStore.get(active.sessionId)).toMatchObject({
-        state: placementState === "active" ? "active" : "draining",
+        state: placementState === "active" || preservesNode ? "active" : "draining",
         turnClaim: null,
       });
       expect(restartedStore.validateTurnClaim(claim)).toBe(false);
@@ -540,6 +591,9 @@ describe("staged worker placement result recovery", () => {
       expect(restartedStore.validateWorkspaceResultClaim(claim)).toBe(true);
       const restartedHarness = createHarness(database, restartedStore, { workspacePath });
       restartedHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+      if (preservesNode) {
+        restartedHarness.markEnvironmentNodeDeviceId("surviving-remote-exec-node");
+      }
       if (placementState === "accepted-reclaim") {
         restartedHarness.markEnvironmentDestroyed();
         expect(restartedHarness.environments.get(active.environmentId)).toMatchObject({
@@ -555,11 +609,23 @@ describe("staged worker placement result recovery", () => {
       );
       expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
       expect(restartedHarness.placements.current()).toMatchObject({
-        state: "reclaimed",
+        state: preservesNode ? "active" : "reclaimed",
         turnClaim: null,
         workspaceBaseManifestRef: staged.currentManifestRef,
       });
       expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
+      if (preservesNode) {
+        expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
+        expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledWith(
+          active.environmentId,
+          active.activeOwnerEpoch,
+        );
+        expect(restartedHarness.placements.current()).toMatchObject({
+          environmentId: active.environmentId,
+          activeOwnerEpoch: active.activeOwnerEpoch,
+          remoteWorkspaceDir: active.remoteWorkspaceDir,
+        });
+      }
       if (placementState === "accepted-reclaim") {
         expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
         expect(

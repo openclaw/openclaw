@@ -176,6 +176,16 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
           "Worker lease isolation is not reconciled; retry after provider inspection",
         );
       }
+      if (
+        record.ownerEpoch === request.ownerEpoch &&
+        record.lastError &&
+        !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)
+      ) {
+        throw serviceError(
+          "invalid_state",
+          `Cloud worker runtime update is pending; recovery will retry when the worker is available: ${boundedError(record.lastError)}`,
+        );
+      }
       const credential = store.getCredential(request.environmentId);
       if (
         record.ownerEpoch !== request.ownerEpoch ||
