@@ -1,10 +1,14 @@
 // QA Lab tests cover canonical profile scheduling evidence.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
-import { qaMaturityTaxonomyIdentity, readQaMaturityTaxonomySource } from "./scorecard-taxonomy.js";
+import {
+  qaMaturityTaxonomyIdentity,
+  readQaMaturityTaxonomySource,
+  type QaMaturityTaxonomyIdentity,
+} from "./scorecard-taxonomy.js";
 
 describe("QA profile evidence plan", () => {
   const portable = readQaScenarioById("thread-isolation");
@@ -81,6 +85,9 @@ describe("QA profile evidence plan", () => {
   });
 
   it("includes semantic identity in attestation", () => {
+    expectTypeOf<
+      Parameters<typeof qaProfileEvidencePlan.build>[0]["taxonomyIdentity"]
+    >().toEqualTypeOf<QaMaturityTaxonomyIdentity>();
     const plan = buildPlan([]);
     expect(
       qaProfileEvidencePlan.attest({
@@ -89,16 +96,17 @@ describe("QA profile evidence plan", () => {
       }).sha256,
     ).not.toBe(qaProfileEvidencePlan.attest(plan).sha256);
     expect(() =>
-      qaProfileEvidencePlan.build({
-        profile: "all",
-        membershipScenarios: [],
-        selectedScenarios: [],
-        excludedScenarios: [],
-        expectedCells: [],
-        observedCells: [],
-        // @ts-expect-error new producers must supply identity even though historical parsing accepts absence.
-        taxonomyIdentity: undefined,
-      }),
+      Reflect.apply(qaProfileEvidencePlan.build, undefined, [
+        {
+          profile: "all",
+          membershipScenarios: [],
+          selectedScenarios: [],
+          excludedScenarios: [],
+          expectedCells: [],
+          observedCells: [],
+          taxonomyIdentity: undefined,
+        },
+      ]),
     ).toThrow();
   });
 

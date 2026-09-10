@@ -4,11 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { qaProfileEvidencePlan } from "../../extensions/qa-lab/src/profile-evidence-plan.js";
 import {
   qaMaturityTaxonomyIdentity,
+  qaProfileEvidencePlan,
   readQaMaturityTaxonomySource,
-} from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
+} from "../../extensions/qa-lab/test-api.js";
 import { parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
