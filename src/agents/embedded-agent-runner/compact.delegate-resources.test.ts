@@ -301,8 +301,8 @@ vi.mock("./skill-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./skill-runtime.js")>();
   return {
     ...actual,
-    prepareEmbeddedSkills: (params: Parameters<typeof actual.prepareEmbeddedSkills>[0]) => {
-      const prepared = actual.prepareEmbeddedSkills(params);
+    prepareEmbeddedSkills: async (params: Parameters<typeof actual.prepareEmbeddedSkills>[0]) => {
+      const prepared = await actual.prepareEmbeddedSkills(params);
       const current = fixture();
       return {
         ...prepared,

@@ -148,7 +148,7 @@ export async function buildPreparedCompactionRuntime(
   onCleanupReady({ disposeToolRuntimes, restoreSkillEnvironment });
 
   try {
-    const preparedSkills = prepareEmbeddedSkills({
+    const preparedSkills = await prepareEmbeddedSkills({
       attempt: {
         config: params.config,
         bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,

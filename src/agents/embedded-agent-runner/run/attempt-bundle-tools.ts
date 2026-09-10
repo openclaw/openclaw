@@ -1,15 +1,30 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
-import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import {
+  assignSafeServerNames,
+  sanitizeServerName,
+  TOOL_NAME_SEPARATOR,
+} from "../../agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
 import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import type { BundleMcpToolRuntime } from "../../agent-bundle-mcp-types.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
+import { resolveSandboxConfigForAgent } from "../../sandbox/config.js";
+import type { SandboxEnvironmentCapabilityDiscovery } from "../../sandbox/environment-capabilities.js";
+import {
+  collectDiscoveredSandboxMcpServers,
+  createSandboxEnvironmentMcpToolRuntime,
+} from "../../sandbox/environment-mcp.js";
+import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+import type { SandboxContext } from "../../sandbox/types.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
@@ -29,11 +44,13 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type PreparedToolBase = Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
 
 export async function prepareEmbeddedAttemptBundleTools(params: {
+  environmentCapabilities?: readonly SandboxEnvironmentCapabilityDiscovery[];
   agentDir: string;
   attempt: EmbeddedRunAttemptParams;
   setup: EmbeddedAttemptSetup;
   isRawModelRun: boolean;
   preparedToolBase: PreparedToolBase;
+  sandbox?: SandboxContext | null;
 }) {
   const {
     cronCreatorToolAllowlist,
@@ -99,6 +116,25 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     manifestRegistry: bundleManifestRegistry,
     toolOverrides: params.attempt.toolOverrides,
   };
+  const sandboxBackend = params.sandbox?.backend;
+  const environmentMcpServers =
+    sandboxBackend && params.environmentCapabilities?.length
+      ? collectDiscoveredSandboxMcpServers(params.environmentCapabilities, sandboxBackend)
+      : undefined;
+  const configuredNames = Object.keys(params.attempt.config?.mcp?.servers ?? {});
+  const environmentNames = [...(environmentMcpServers?.keys() ?? [])];
+  let configuredMcpSafeNames: ReadonlyMap<string, string> | undefined;
+  let environmentMcpSafeNames: ReadonlyMap<string, string> | undefined;
+  if (configuredNames.length > 0 || environmentNames.length > 0) {
+    const { loaded } = loadSessionMcpConfig({ ...mcpConfig, logDiagnostics: false });
+    configuredMcpSafeNames = assignSafeServerNames(Object.keys(loaded.mcpServers));
+    const usedNames = new Set(
+      [...configuredMcpSafeNames.values()].map(normalizeLowercaseStringOrEmpty),
+    );
+    environmentMcpSafeNames = new Map(
+      environmentNames.map((name) => [name, sanitizeServerName(name, usedNames)]),
+    );
+  }
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
     shouldCreateBundleMcpRuntimeForAttempt({
@@ -106,18 +142,20 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       disableTools: params.attempt.disableTools || params.isRawModelRun,
       toolsAllow: params.attempt.toolsAllow,
       resolveConfiguredMcpNamespaces: () => {
-        const configuredNames = Object.keys(params.attempt.config?.mcp?.servers ?? {});
-        if (configuredNames.length === 0) {
+        if (configuredNames.length === 0 && environmentNames.length === 0) {
           return [];
         }
-        const { loaded } = loadSessionMcpConfig({ ...mcpConfig, logDiagnostics: false });
-        // Use the complete merged declaration order: bundled peers can own a
-        // collision suffix before a configured server. This does not connect MCP.
-        const safeNames = assignSafeServerNames(Object.keys(loaded.mcpServers));
-        return configuredNames.flatMap((name) => {
-          const safeName = safeNames.get(name);
+        const configuredPrefixes = configuredNames.flatMap((name) => {
+          const safeName = configuredMcpSafeNames?.get(name);
           return safeName ? [`${safeName}${TOOL_NAME_SEPARATOR}`] : [];
         });
+        return [
+          ...configuredPrefixes,
+          ...environmentNames.flatMap((name) => {
+            const safeName = environmentMcpSafeNames?.get(name);
+            return safeName ? [`${safeName}${TOOL_NAME_SEPARATOR}`] : [];
+          }),
+        ];
       },
     });
   const bundleMcpAcquisition = bundleMcpEnabled
@@ -144,8 +182,74 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ],
       })
     : undefined;
+  let environmentMcpRuntime: BundleMcpToolRuntime | undefined;
+  let effectiveMcpRuntime: BundleMcpToolRuntime | undefined = bundleMcpRuntime;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   try {
+    environmentMcpRuntime =
+      bundleMcpEnabled && sandboxBackend && environmentMcpServers?.size
+        ? await createSandboxEnvironmentMcpToolRuntime({
+            backend: sandboxBackend,
+            servers: environmentMcpServers,
+            sessionId: params.attempt.sessionId + ":sandbox:" + sandboxBackend.runtimeId,
+            sessionKey: params.attempt.sessionKey,
+            workspaceDir: params.setup.effectiveWorkspace,
+            cfg: params.attempt.config,
+            safeServerNamesByServer: environmentMcpSafeNames,
+            // Starts and reconnects must consult the current sandbox owner. The attempt's
+            // captured config cannot retain executable authority after a config reload.
+            readCurrentCapabilityRoots: () => {
+              const currentConfig = getRuntimeConfigSnapshot();
+              if (!currentConfig) {
+                return [];
+              }
+              const current = resolveSandboxConfigForAgent(
+                currentConfig,
+                params.setup.sessionAgentId,
+              );
+              const runtime = resolveSandboxRuntimeStatus({
+                cfg: currentConfig,
+                agentId: params.setup.sessionAgentId,
+                sessionKey: params.attempt.sessionKey,
+              });
+              return runtime.sandboxed && current.backend === sandboxBackend.id
+                ? current.environment.capabilityRoots
+                : [];
+            },
+            agentId: params.setup.sessionAgentId,
+            signal: params.attempt.abortSignal,
+            toolOverrides: params.attempt.toolOverrides,
+            reservedToolNames: [
+              ...tools.map((tool) => tool.name),
+              ...(clientTools?.map((tool) => tool.function.name) ?? []),
+              ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ],
+          })
+        : undefined;
+    const environmentRuntime = environmentMcpRuntime;
+    effectiveMcpRuntime = environmentRuntime
+      ? {
+          tools: [...(bundleMcpRuntime?.tools ?? []), ...environmentRuntime.tools],
+          appTools: [...(bundleMcpRuntime?.appTools ?? []), ...(environmentRuntime.appTools ?? [])],
+          diagnostics: [
+            ...(bundleMcpRuntime?.diagnostics ?? []),
+            ...(environmentRuntime.diagnostics ?? []),
+          ],
+          restrictAppTools: (
+            allowedTools: Parameters<NonNullable<BundleMcpToolRuntime["restrictAppTools"]>>[0],
+          ) => {
+            bundleMcpRuntime?.restrictAppTools?.(allowedTools);
+            environmentRuntime.restrictAppTools?.(allowedTools);
+          },
+          dispose: async () => {
+            try {
+              await bundleMcpRuntime?.dispose();
+            } finally {
+              await environmentRuntime.dispose();
+            }
+          },
+        }
+      : bundleMcpRuntime;
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
       shouldCreateBundleLspRuntimeForAttempt({
@@ -161,12 +265,12 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
-            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ...(effectiveMcpRuntime?.tools.map((tool) => tool.name) ?? []),
           ],
         })
       : undefined;
     const allowedBundleMcpTools = applyEmbeddedAttemptToolsAllow(
-      bundleMcpRuntime?.tools ?? [],
+      effectiveMcpRuntime?.tools ?? [],
       effectiveToolsAllow,
       { toolMeta: (tool) => getPluginToolMeta(tool) },
     );
@@ -183,9 +287,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
-    if (bundleMcpRuntime?.restrictAppTools) {
+    if (effectiveMcpRuntime?.restrictAppTools) {
       const runtimeAllowedAppTools = applyEmbeddedAttemptToolsAllow(
-        bundleMcpRuntime.appTools ?? bundleMcpRuntime.tools,
+        effectiveMcpRuntime.appTools ?? effectiveMcpRuntime.tools,
         effectiveToolsAllow,
         { toolMeta: (tool) => getPluginToolMeta(tool) },
       );
@@ -198,7 +302,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         warn: (message) => log.warn(message),
       });
       // The view outlives this attempt; capture policy against the complete MCP catalog now.
-      bundleMcpRuntime.restrictAppTools(allowedAppTools);
+      effectiveMcpRuntime.restrictAppTools(allowedAppTools);
     }
     const normalizedBundledTools =
       filteredBundledTools.length > 0 ? normalizeTools(filteredBundledTools) : filteredBundledTools;
@@ -241,7 +345,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     const uncompactedEffectiveTools = projectTools(tools);
     return {
       bundleLspRuntime,
-      bundleMcpRuntime,
+      bundleMcpRuntime: effectiveMcpRuntime,
       clientTools,
       tools,
       uncompactedEffectiveTools,
@@ -258,7 +362,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     };
   } catch (error) {
     const cleanup = await Promise.allSettled(
-      [bundleMcpRuntime, bundleLspRuntime].map(async (runtime) => await runtime?.dispose()),
+      [effectiveMcpRuntime, bundleLspRuntime].map(async (runtime) => await runtime?.dispose()),
     );
     if (cleanup.some((result) => result.status === "rejected")) {
       recordAgentCleanupFailure();

@@ -5,8 +5,15 @@ import {
   applySkillEnvOverridesFromSnapshot,
 } from "../../skills/runtime/env-overrides.js";
 import { resolveCodeModeSkills, type CodeModeSkillReader } from "../code-mode-skills.js";
+import type { SandboxEnvironmentCapabilityDiscovery } from "../sandbox/environment-capabilities.js";
+import {
+  MAX_ENVIRONMENT_SKILL_BYTES,
+  mergeSandboxEnvironmentSkillCatalog,
+  prepareSandboxEnvironmentSkills,
+} from "../sandbox/environment-skills.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
+import { log } from "./logger.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import {
   createSandboxPromptEntryLoader,
@@ -16,9 +23,10 @@ import {
 } from "./sandbox-skills.js";
 
 /** Prepares readable skills and owns environment rollback until the caller takes custody. */
-export function prepareEmbeddedSkills(params: {
+export async function prepareEmbeddedSkills(params: {
   /** Prompt-only callers can skip process-wide environment overrides. */
   applySkillEnvironment?: boolean;
+  environmentCapabilities?: readonly SandboxEnvironmentCapabilityDiscovery[];
   attempt: Pick<
     EmbeddedRunAttemptParams,
     | "config"
@@ -27,6 +35,7 @@ export function prepareEmbeddedSkills(params: {
     | "contextTokenBudget"
     | "toolExecutionAllow"
     | "operation"
+    | "abortSignal"
   >;
   effectiveWorkspace: string;
   sandbox: SandboxContext | null | undefined;
@@ -48,6 +57,17 @@ export function prepareEmbeddedSkills(params: {
       codeModeSkills: [],
     };
   }
+  const environmentSkillByteLimit = Math.min(
+    MAX_ENVIRONMENT_SKILL_BYTES,
+    params.attempt.config?.skills?.limits?.maxSkillFileBytes ?? MAX_ENVIRONMENT_SKILL_BYTES,
+  );
+  const environmentEntries = await prepareSandboxEnvironmentSkills({
+    sandbox: params.sandbox,
+    discoveries: params.environmentCapabilities,
+    maxSkillFileBytes: environmentSkillByteLimit,
+    signal: params.attempt.abortSignal,
+    warn: (message) => log.warn(message),
+  });
   const {
     skillsEligibility,
     skillsPromptWorkspaceDir,
@@ -96,7 +116,7 @@ export function prepareEmbeddedSkills(params: {
       skillsWorkspaceDir,
       skillsPromptWorkspaceDir,
     });
-    const skillsPrompt = resolveSkillsPrompt({
+    const nativeSkillsPrompt = resolveSkillsPrompt({
       contextTokenBudget: params.attempt.contextTokenBudget,
       skillsSnapshot,
       entries: promptSkillEntries,
@@ -111,6 +131,21 @@ export function prepareEmbeddedSkills(params: {
       eligibility: skillsEligibility,
       preserveEntryOrder,
     });
+    const { skillsPrompt, candidates } = mergeSandboxEnvironmentSkillCatalog({
+      skillsPrompt: nativeSkillsPrompt,
+      candidates:
+        skillsSnapshot?.resolvedSkills ??
+        (promptSkillEntries ?? skillEntries).map((entry) => entry.skill),
+      environmentEntries,
+      config: params.attempt.config,
+      agentId: params.sessionAgentId,
+      workspaceDir: skillsPromptWorkspaceDir,
+      snapshot: params.attempt.skillsSnapshot,
+      remoteNote: skillsEligibility?.remote?.note,
+      contextTokenBudget: params.attempt.contextTokenBudget,
+      warn: (message) => log.warn(message),
+    });
+    const environmentPaths = new Set(environmentEntries.map((entry) => entry.skill.filePath));
     const sandbox = params.sandbox;
     const sandboxSkillReader: CodeModeSkillReader | undefined = sandbox?.enabled
       ? async ({ location, signal }) => {
@@ -122,6 +157,7 @@ export function prepareEmbeddedSkills(params: {
             await bridge.readFile({
               filePath: location,
               cwd: sandbox.containerWorkdir,
+              ...(environmentPaths.has(location) ? { maxBytes: environmentSkillByteLimit } : {}),
               signal,
             })
           ).toString("utf8");
@@ -130,7 +166,7 @@ export function prepareEmbeddedSkills(params: {
     const codeModeSkills = params.includeCodeModeSkills
       ? resolveCodeModeSkills({
           skillsPrompt,
-          candidates: skillsSnapshot?.resolvedSkills ?? skillEntries.map((entry) => entry.skill),
+          candidates,
           reader: sandboxSkillReader,
         })
       : [];
