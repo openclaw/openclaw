@@ -4355,6 +4355,26 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-height: 0;
 }
 
+/* Embedded pages own their spacing and scrolling inside the frame. */
+.content:has(.plugin-tab-embed) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
+.content:has(.plugin-tab-embed) > * + * {
+  margin-top: 0;
+}
+
+.content:has(.plugin-tab-embed) > openclaw-router-outlet {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 :root[data-theme-mode="light"] .content {
   background: var(--bg-content);
 }
