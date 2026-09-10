@@ -1,5 +1,6 @@
 {
   "id": "novita",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -59,6 +60,9 @@
     "properties": {}
   },
   "modelCatalog": {
+    "modelsDev": {
+      "novita": "novita-ai"
+    },
     "aliases": {
       "novita-ai": {
         "provider": "novita"

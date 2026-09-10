@@ -25,6 +25,8 @@ export type SqliteSchemaCompatibility = {
    * canonical shape.
    */
   allowedMissingTables?: readonly string[];
+  /** Same-version non-unique indexes that a writable cold open lazily repairs. */
+  allowedMissingIndexes?: readonly string[];
   /** Additive columns that may be absent until their owning feature lazily ensures them. */
   allowedMissingColumns?: readonly string[];
   /**
@@ -119,7 +121,9 @@ export function throwSqliteSchemaMismatches(
   if (mismatches.length > shown.length) {
     shown.push(`${mismatches.length - shown.length} additional mismatch(es)`);
   }
+  // Drift is repairable by the doctor migration owner, so the throw must name it:
+  // callers surface this straight to operators, and the gateway refuses to start.
   throw new Error(
-    `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}`,
+    `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}; run openclaw doctor --fix to repair it.`,
   );
 }

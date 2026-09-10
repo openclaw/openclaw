@@ -1,5 +1,6 @@
 // Codex plugin module implements apply behavior.
 import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   applyMigrationManualItem,
   markMigrationItemConflict,
@@ -27,11 +28,9 @@ import type {
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
-import {
-  resolveCodexAppServerAuthAccountCacheKey,
-  resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerFallbackApiKeyCacheKey,
-} from "../app-server/auth-bridge.js";
+import { resolveCodexAppServerAuthAccountCacheKey } from "../app-server/auth-bridge.js";
+import { resolveCodexAppServerFallbackApiKeyCacheKey } from "../app-server/auth-cache-key.js";
+import { resolveCodexAppServerAuthProfileIdForAgent } from "../app-server/auth-profile.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   readCodexPluginConfig,
@@ -47,9 +46,9 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
 import { codexPluginActivationReportState, sanitizeAppsNeedingAuth } from "./apply-report.js";
-import { applyCodexAuthItems, type CodexAuthSource } from "./auth.js";
-import { buildCodexMigrationPlan } from "./plan.js";
+import { applyCodexAuthItems, resolveCodexConfigPatchMode, type CodexAuthSource } from "./auth.js";
 import {
+  buildCodexMigrationPlan,
   buildCodexPluginsConfigValue,
   CODEX_PLUGIN_CONFIG_ITEM_ID,
   CODEX_PLUGIN_CONFIG_PATH,
@@ -61,7 +60,6 @@ import { resolveCodexMigrationTargets } from "./targets.js";
 
 const CODEX_PLUGIN_AUTH_REQUIRED_REASON = "auth_required";
 const CODEX_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
-const CODEX_CONFIG_PATCH_MODE_RETURN = "return";
 const CODEX_PLUGIN_LOAD_WARNING =
   "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.";
 const TARGET_CODEX_MARKETPLACE_DISCOVERY_POLL_MS = 250;
@@ -81,7 +79,7 @@ class CodexPluginConfigConflictError extends Error {
 }
 
 function shouldReturnCodexPluginConfigPatch(ctx: MigrationProviderContext): boolean {
-  return ctx.providerOptions?.configPatchMode === CODEX_CONFIG_PATCH_MODE_RETURN;
+  return resolveCodexConfigPatchMode(ctx) === "return";
 }
 
 export function prepareTargetCodexAppServer(
@@ -272,14 +270,14 @@ async function applyCodexPluginInstallItem(
           ...item.details,
           code: "plugin_inventory_unavailable",
           warningReason: CODEX_PLUGIN_LOAD_WARNING,
-          diagnostic: formatCodexMigrationError(error),
+          diagnostic: coerceErrorMessage(error),
         },
       };
     }
     return {
       ...item,
       status: "error",
-      reason: formatCodexMigrationError(error),
+      reason: coerceErrorMessage(error),
       details: {
         ...item.details,
         code: "plugin_install_failed",
@@ -289,12 +287,8 @@ async function applyCodexPluginInstallItem(
 }
 
 function isCodexPluginInventoryLoadError(error: unknown): boolean {
-  const message = formatCodexMigrationError(error);
+  const message = coerceErrorMessage(error);
   return message.includes("codex app-server plugin/list timed out");
-}
-
-function formatCodexMigrationError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
@@ -476,7 +470,7 @@ async function applyCodexPluginConfigItem(
     if (error instanceof CodexPluginConfigConflictError) {
       return markMigrationItemConflict(item, error.reason);
     }
-    return markMigrationItemError(item, error instanceof Error ? error.message : String(error));
+    return markMigrationItemError(item, coerceErrorMessage(error));
   }
 }
 

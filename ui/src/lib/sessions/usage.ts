@@ -1,10 +1,12 @@
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
 
-type SessionUsageQuery = {
+export type SessionUsageTarget = { key: string; agentId?: string };
+
+export type SessionUsageQuery = {
   startDate: string;
   endDate: string;
   scope: "instance" | "family";
@@ -33,73 +35,47 @@ export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
       };
 }
 
-function buildSessionUsageParams(query: SessionUsageQuery): Record<string, unknown> {
+function buildSessionUsageParams(query: SessionUsageQuery, key?: string): Record<string, unknown> {
   return {
     startDate: query.startDate,
     endDate: query.endDate,
-    ...(query.agentId ? { agentId: query.agentId } : { agentScope: "all" }),
+    ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
     ...buildSessionUsageDateParams(query.timeZone),
     groupBy: query.scope,
-    includeHistorical: query.scope === "family",
-    limit: 1000,
-    includeContextWeight: true,
+    ...(key ? { key, limit: 1 } : { limit: 1000 }),
+    includeContextWeight: false,
   };
-}
-
-function isOlderGatewayWithoutUsageTimeZone(
-  error: unknown,
-  params: Record<string, unknown>,
-): boolean {
-  return (
-    typeof params.timeZone === "string" &&
-    typeof params.utcOffset === "string" &&
-    error instanceof GatewayRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("invalid sessions.usage params:") &&
-    error.message.includes("unexpected property 'timeZone'")
-  );
-}
-
-async function requestSessionsUsage(
-  client: SessionRequestClient,
-  params: Record<string, unknown>,
-): Promise<SessionsUsageResult> {
-  try {
-    return await client.request<SessionsUsageResult>("sessions.usage", params);
-  } catch (error) {
-    if (!isOlderGatewayWithoutUsageTimeZone(error, params)) {
-      throw error;
-    }
-    // Protocol v4 gateways predating timeZone reject the additive field.
-    // Retry with the accompanying fixed offset for mixed-version clients.
-    const legacyParams = { ...params };
-    delete legacyParams.timeZone;
-    return await client.request<SessionsUsageResult>("sessions.usage", legacyParams);
-  }
 }
 
 export function requestSessionUsage(
   client: SessionRequestClient,
   query: SessionUsageQuery,
+  options?: { key?: string; includeContextWeight?: boolean; signal?: AbortSignal },
 ): Promise<SessionsUsageResult> {
-  return requestSessionsUsage(client, buildSessionUsageParams(query));
+  const params = {
+    ...buildSessionUsageParams(query, options?.key),
+    includeContextWeight: options?.includeContextWeight === true,
+  };
+  return options?.signal
+    ? client.request<SessionsUsageResult>("sessions.usage", params, { signal: options.signal })
+    : client.request<SessionsUsageResult>("sessions.usage", params);
 }
 
 export function requestSessionUsageTimeSeries(
   client: SessionRequestClient,
-  key: string,
+  target: SessionUsageTarget,
 ): Promise<SessionUsageTimeSeries | null> {
   return client
-    .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", { key })
+    .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", target)
     .then((result) => result ?? null);
 }
 
 export function requestSessionUsageLogs(
   client: SessionRequestClient,
-  key: string,
+  target: SessionUsageTarget,
 ): Promise<{ logs?: unknown }> {
   return client.request<{ logs?: unknown }>("sessions.usage.logs", {
-    key,
+    ...target,
     limit: 1000,
   });
 }

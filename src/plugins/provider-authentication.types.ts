@@ -10,9 +10,23 @@ import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
+type ProviderAuthSecretStorage = {
+  /** Final persistence target. The inline credential remains available for staged validation. */
+  kind: "store";
+  /** Environment-style prefix used for the host-owned secret-store entry. */
+  namePrefix: string;
+};
+
+export type ProviderAuthProfile = {
+  profileId: string;
+  credential: AuthProfileCredential;
+  /** Request host-owned SecretRef materialization at the final persistence boundary. */
+  secretStorage?: ProviderAuthSecretStorage;
+};
+
 /** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
-  profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
+  profiles: ProviderAuthProfile[];
   /**
    * Optional config patch to merge after credentials are written.
    *
@@ -41,6 +55,8 @@ export type ProviderAuthContext = {
   runtime: RuntimeEnv;
   /** Cancels browser callbacks, device polling, and other app-owned auth work. */
   signal?: AbortSignal;
+  /** Personal-account methods must recheck live caller authority immediately before external effects. */
+  assertCurrent?: () => void;
   /**
    * Optional onboarding CLI options that triggered this auth flow.
    *
@@ -154,6 +170,12 @@ export type ProviderAuthMethod = {
   kind: ProviderAuthKind;
   /** Provider-owned model used to validate app-guided secret setup. */
   starterModel?: string;
+  /** One-time import attempted only after the user starts this login method. */
+  credentialImport?: {
+    migrationProviderId: string;
+    itemId: string;
+    credentialKind: "oauth" | "api_key" | "token";
+  };
   /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *
@@ -162,6 +184,11 @@ export type ProviderAuthMethod = {
    * method-specific auth choices while keeping the provider id stable.
    */
   wizard?: ProviderPluginWizardSetup;
+  /** Proven provider identity for reconnecting an owned personal account; absent means a new slot. */
+  matchesPersonalAccount?: (
+    credential: AuthProfileCredential,
+    existing: AuthProfileCredential,
+  ) => boolean;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,

@@ -1,4 +1,4 @@
-import type { ErrorShape, EventFrame, HelloOk } from "@openclaw/gateway-protocol";
+import type { EventFrame, HelloOk } from "@openclaw/gateway-protocol";
 import {
   isGatewayEventFrame,
   isGatewayResponseFrame,
@@ -6,6 +6,14 @@ import {
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
+import type {
+  CloseSnapshot,
+  ConnectTimingState,
+  GatewayProtocolClientOptions,
+  GatewayProtocolCloseContext,
+  GatewayProtocolSocket,
+  GatewayProtocolTiming,
+} from "./protocol-client-contract.js";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
@@ -20,115 +28,12 @@ export {
   type GatewayProtocolRequestTiming,
 };
 
-export type GatewayProtocolSocket = {
-  isOpen: () => boolean;
-  send: (data: string) => void;
-  close: (code?: number, reason?: string) => void;
-};
-export type GatewayProtocolSocketHandlers = {
-  open: () => void;
-  message: (data: string) => void;
-  close: (code: number, reason: string) => void;
-  error: (error: Error) => void;
-};
-type GatewayProtocolConnectContext<TPlan> = {
-  generation: number;
-  nonce: string | null;
-  challengeTs: number | null | undefined;
-  plan: TPlan;
-};
-export type GatewayProtocolCloseContext = {
-  code: number;
-  reason: string;
-  generation: number;
-  socketOpened: boolean;
-  helloReceived: boolean;
-  connectRequestSent: boolean;
-  connectFailure?: { error: Error; reconnectDelayMs?: number };
-};
-type GatewayProtocolConnectDecision = {
-  closeCode: number;
-  closeReason: string;
-  reconnectDelayMs?: number;
-  stop?: boolean;
-  error?: Error;
-};
-type GatewayProtocolCloseDecision = {
-  retry: boolean;
-  notify: boolean;
-  reconnectDelayMs?: number;
-  pendingError?: Error;
-};
-export type GatewayProtocolTiming<TPlan> = {
-  phase:
-    | "socket-open"
-    | "challenge"
-    | "fallback"
-    | "device-identity-ready"
-    | "connect-plan-ready"
-    | "request-sent"
-    | "hello"
-    | "failed";
-  generation: number;
-  durationMs: number;
-  phaseDurationMs: number;
-  hasChallenge: boolean;
-  usedFallback: boolean;
-  plan?: TPlan;
-  detail?: unknown;
-};
-type GatewayProtocolClientOptions<TPlan> = {
-  createSocket: (handlers: GatewayProtocolSocketHandlers) => GatewayProtocolSocket;
-  createRequestId: () => string;
-  createRequestError?: (error: Partial<ErrorShape>) => GatewayProtocolRequestError;
-  createRequestTimeoutError?: (method: string, timeoutMs: number, requestSent: boolean) => Error;
-  createRequestAbortError?: (method: string) => Error;
-  buildConnectPlan: (params: {
-    nonce: string | null;
-    challengeTs: number | null | undefined;
-    generation: number;
-  }) => TPlan | Promise<TPlan>;
-  buildConnectParams: (plan: TPlan) => unknown;
-  onConnectPlanError?: (error: Error) => GatewayProtocolConnectDecision;
-  onConnectHello?: (hello: HelloOk, context: GatewayProtocolConnectContext<TPlan>) => void;
-  onHello?: (hello: HelloOk) => void;
-  onConnectFailure?: (
-    error: GatewayProtocolRequestError,
-    context: GatewayProtocolConnectContext<TPlan>,
-  ) => GatewayProtocolConnectDecision;
-  resolveClose: (context: GatewayProtocolCloseContext) => GatewayProtocolCloseDecision;
-  onClose?: (context: GatewayProtocolCloseContext, decision: GatewayProtocolCloseDecision) => void;
-  notifyStoppedClose?: boolean;
-  onConnectError?: (error: Error) => void;
-  onSocketFactoryError?: (error: Error) => void;
-  onParseError?: (error: unknown) => void;
-  onEvent?: (event: EventFrame) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
-  onActivity?: () => void;
-  onTiming?: (timing: GatewayProtocolTiming<TPlan>) => void;
-  onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
-  onCallbackError?: (label: string, error: unknown) => void;
-  handshake:
-    | { mode: "fallback"; timeoutMs: number }
-    | {
-        mode: "require-challenge";
-        timeoutMs: number;
-        timeoutMessage?: (elapsedMs: number) => string;
-      };
-  reconnect: { initialMs: number; multiplier: number; maxMs: number };
-  requestTimeoutMs?: number;
-  nowMs?: () => number;
-  shouldRetrySocketFactoryError?: (error: Error) => boolean;
-  rethrowSocketFactoryError?: (error: Error) => boolean;
-};
-type ConnectTimingState = {
-  generation: number;
-  startedAtMs: number;
-  lastAtMs: number;
-  hasChallenge: boolean;
-  usedFallback: boolean;
-};
-type CloseSnapshot = Omit<GatewayProtocolCloseContext, "code" | "reason">;
+export type {
+  GatewayProtocolCloseContext,
+  GatewayProtocolSocket,
+  GatewayProtocolSocketHandlers,
+  GatewayProtocolTiming,
+} from "./protocol-client-contract.js";
 
 /**
  * Browser-safe gateway wire client. Environment adapters own transport and auth
@@ -300,6 +205,9 @@ export class GatewayProtocolClient<TPlan> {
       this.opts.onSocketFactoryError?.(normalized);
       this.opts.onConnectError?.(normalized);
       if (this.opts.rethrowSocketFactoryError?.(normalized)) {
+        if (this.generation > 0 && !this.stopped && !this.socket && !this.reconnectSignal) {
+          this.opts.onReconnectStopped?.(normalized);
+        }
         throw normalized;
       }
       // Callbacks can stop or restart synchronously; never schedule over their replacement socket.
@@ -310,6 +218,8 @@ export class GatewayProtocolClient<TPlan> {
         !this.reconnectSignal
       ) {
         this.scheduleReconnect();
+      } else if (this.generation > 0 && !this.stopped && !this.socket && !this.reconnectSignal) {
+        this.opts.onReconnectStopped?.(normalized);
       }
       return;
     }
@@ -430,7 +340,9 @@ export class GatewayProtocolClient<TPlan> {
     this.connectRequestSent = true;
     void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan))
       .then((hello) => {
-        if (!this.isActive(socket, generation)) {
+        // Closing transports remain current until their close callback runs;
+        // a late response must not publish readiness or reset reconnect backoff.
+        if (!this.isActive(socket, generation) || !socket.isOpen()) {
           return;
         }
         this.helloReceived = true;
@@ -562,8 +474,23 @@ export class GatewayProtocolClient<TPlan> {
         new Error(`gateway closed (${code}): ${reason}`),
     );
     this.invoke("close", () => this.opts.onClose?.(context, decision));
-    if (decision.retry && !this.stopped) {
-      this.scheduleReconnect(decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs);
+    // A close callback can reconnect synchronously and already own the next socket or retry.
+    if (decision.retry && !this.stopped && !this.socket && !this.reconnectSignal) {
+      const error = context.connectFailure?.error;
+      // Apply server timing only after adapter policy admits retry; a hint
+      // must never turn terminal authentication failures into reconnects.
+      const retryAfterMs =
+        error instanceof GatewayProtocolRequestError &&
+        error.retryable &&
+        error.retryAfterMs !== undefined &&
+        Number.isFinite(error.retryAfterMs) &&
+        error.retryAfterMs > 0
+          ? error.retryAfterMs
+          : undefined;
+      this.scheduleReconnect(
+        decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs,
+        retryAfterMs,
+      );
     }
   }
 
@@ -571,13 +498,13 @@ export class GatewayProtocolClient<TPlan> {
     if (!this.isActive(socket, generation) || this.connectSent) {
       return;
     }
+    this.connectFailure = { error };
     this.opts.onConnectError?.(error);
   }
 
-  private scheduleReconnect(overrideMs?: number): void {
+  private scheduleReconnect(overrideMs?: number, minimumMs = 0): void {
     if (overrideMs !== undefined) {
-      // Retry-After is a floor for this wait, not a failed attempt. Preserve
-      // the exponential sequence for the next transport failure.
+      // Adapter-owned startup timing does not consume a transport attempt.
       this.reconnectSupervisor.nextDelayOverrideMs = overrideMs;
     }
     const retry = this.reconnectSupervisor.next();
@@ -586,13 +513,17 @@ export class GatewayProtocolClient<TPlan> {
     }
     this.reconnectSignal = retry.signal;
     // Ignore cancelled sleeps only; reconnect start failures stay observable.
-    void sleepWithAbort(retry.delayMs, retry.signal).then(
+    // Wire Retry-After is a floor: repeated short hints must still advance
+    // normal backoff, while adapter-owned startup overrides stay independent.
+    const delayMs = overrideMs ?? Math.max(retry.delayMs, minimumMs);
+    void sleepWithAbort(delayMs, retry.signal).then(
       () => {
         if (this.reconnectSignal !== retry.signal) {
           return;
         }
         this.reconnectSignal = null;
-        this.connect();
+        // Explicit start retains synchronous policy errors; background retries cannot reject orphaned.
+        this.invoke("reconnect", () => this.connect());
       },
       () => {
         if (this.reconnectSignal === retry.signal) {

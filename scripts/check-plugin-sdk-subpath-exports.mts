@@ -126,6 +126,10 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
 
   for (const filePath of files) {
     const sourceText = readFileSync(filePath, "utf8");
+    // Escaped module names need parsing even when the literal SDK prefix is absent.
+    if (!sourceText.includes("plugin-sdk") && !sourceText.includes("\\")) {
+      continue;
+    }
     const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
 
     function push(kind: string, node: ts.Node, specifierNode: ts.Node, specifier: string): void {

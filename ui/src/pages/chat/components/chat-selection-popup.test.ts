@@ -39,26 +39,26 @@ function selectRange(node: Text, start: number, end: number) {
 
 function pointerUp(thread: HTMLElement) {
   handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
-    onMoreDetails: onMoreDetailsSpy,
+    onAddToChat: onAddToChatSpy,
     onAskSideChat: onAskSideChatSpy,
   });
   vi.runAllTimers();
 }
 
-const onMoreDetailsSpy = vi.fn();
 const onAskSideChatSpy = vi.fn();
+const onAddToChatSpy = vi.fn();
 
 describe("chat selection popup", () => {
   afterEach(() => {
     removeChatSelectionPopup();
     window.getSelection()?.removeAllRanges();
     document.body.innerHTML = "";
-    onMoreDetailsSpy.mockReset();
     onAskSideChatSpy.mockReset();
+    onAddToChatSpy.mockReset();
     vi.useRealTimers();
   });
 
-  it("shows the toolbar over bubble selections and fires the actions", () => {
+  it.each([0, 1])("routes selection action %i to its own composer", (actionIndex) => {
     vi.useFakeTimers();
     const { thread, textNode } = buildThreadWithBubble("Let's Encrypt cert is valid");
     selectRange(textNode, 0, 18);
@@ -69,25 +69,18 @@ describe("chat selection popup", () => {
     expect(popup?.getAttribute("aria-label")).toBe("Selection actions");
     const buttons = [...(popup?.querySelectorAll("button") ?? [])];
     expect(buttons.map((button) => button.textContent)).toEqual([
-      "More details",
+      "Add to chat",
       "Ask in side chat",
     ]);
+    expect(buttons[0]?.querySelector("svg")).toBeNull();
 
-    buttons[0]?.click();
-    expect(onMoreDetailsSpy).toHaveBeenCalledWith("Let's Encrypt cert");
+    buttons[actionIndex]?.click();
+    const [called, untouched] =
+      actionIndex === 0 ? [onAddToChatSpy, onAskSideChatSpy] : [onAskSideChatSpy, onAddToChatSpy];
+    expect(called).toHaveBeenCalledWith("Let's Encrypt cert");
+    expect(untouched).not.toHaveBeenCalled();
+    expect(window.getSelection()?.isCollapsed).toBe(true);
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
-  });
-
-  it("routes the second button to the side-chat action", () => {
-    vi.useFakeTimers();
-    const { thread, textNode } = buildThreadWithBubble("cron scan job is installed");
-    selectRange(textNode, 0, 13);
-    pointerUp(thread);
-
-    const buttons = document.body.querySelectorAll(".chat-selection-popup button");
-    (buttons[1] as HTMLButtonElement | undefined)?.click();
-    expect(onAskSideChatSpy).toHaveBeenCalledWith("cron scan job");
-    expect(onMoreDetailsSpy).not.toHaveBeenCalled();
   });
 
   it("ignores selections outside chat bubbles and collapsed selections", () => {
@@ -110,7 +103,7 @@ describe("chat selection popup", () => {
     const { thread, textNode } = buildThreadWithBubble("tear down before the selection settles");
     selectRange(textNode, 0, 9);
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
-      onMoreDetails: onMoreDetailsSpy,
+      onAddToChat: onAddToChatSpy,
       onAskSideChat: onAskSideChatSpy,
     });
 
@@ -123,25 +116,23 @@ describe("chat selection popup", () => {
   it("keeps only the latest pending selection popup", () => {
     vi.useFakeTimers();
     const { thread, textNode } = buildThreadWithBubble("replacement selection");
-    const firstMoreDetails = vi.fn();
-    const secondMoreDetails = vi.fn();
+    const firstAskSideChat = vi.fn();
+    const secondAskSideChat = vi.fn();
     selectRange(textNode, 0, 11);
     const pendingTimerCount = vi.getTimerCount();
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
-      onMoreDetails: firstMoreDetails,
-      onAskSideChat: onAskSideChatSpy,
+      onAskSideChat: firstAskSideChat,
     });
     handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
-      onMoreDetails: secondMoreDetails,
-      onAskSideChat: onAskSideChatSpy,
+      onAskSideChat: secondAskSideChat,
     });
 
     expect(vi.getTimerCount()).toBe(pendingTimerCount + 1);
     vi.advanceTimersToNextTimer();
     (document.body.querySelector(".chat-selection-popup button") as HTMLButtonElement).click();
 
-    expect(firstMoreDetails).not.toHaveBeenCalled();
-    expect(secondMoreDetails).toHaveBeenCalledWith("replacement");
+    expect(firstAskSideChat).not.toHaveBeenCalled();
+    expect(secondAskSideChat).toHaveBeenCalledWith("replacement");
   });
 
   it("dismisses when the selection collapses", () => {

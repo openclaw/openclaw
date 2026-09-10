@@ -9,6 +9,8 @@ title: "Camera capture"
 
 OpenClaw supports camera capture for agent workflows on paired **iOS**, **Android**, **macOS**, and **Linux** nodes: capture a photo (`jpg`) or a short video clip (`mp4`, with optional audio) via Gateway `node.invoke`.
 
+When a capture request includes `deviceId`, the selected camera must match that ID exactly. An unknown ID fails instead of capturing from a different camera; run `camera.list` to refresh device IDs, which change when cameras are reconnected.
+
 The macOS app can also physically pan, tilt, and zoom supported USB UVC cameras. PTZ moves the camera hardware; it does not rotate, crop, or otherwise transform a captured image.
 
 All camera access is gated behind a user-controlled setting per platform.
@@ -31,7 +33,7 @@ All camera access is gated behind a user-controlled setting per platform.
     - `facing`: `front|back` (default: `front`)
     - `maxWidth`: number (optional; default `1600`)
     - `quality`: `0..1` (optional; default `0.9`, clamped to `[0.05, 1.0]`)
-    - `format`: currently `jpg`
+    - `format`: `jpg` (the only supported value)
     - `delayMs`: number (optional; default `0`, internally capped at `10000`)
     - `deviceId`: string (optional; from `camera.list`)
   - Response payload: `format: "jpg"`, `base64`, `width`, `height`.
@@ -42,13 +44,13 @@ All camera access is gated behind a user-controlled setting per platform.
     - `facing`: `front|back` (default: `front`)
     - `durationMs`: number (default `3000`, clamped to `[250, 60000]`)
     - `includeAudio`: boolean (default `true`)
-    - `format`: currently `mp4`
+    - `format`: `mp4` (the only supported value)
     - `deviceId`: string (optional; from `camera.list`)
   - Response payload: `format: "mp4"`, `base64`, `durationMs`, `hasAudio`.
 
 ### iOS foreground requirement
 
-Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
+The iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### CLI helper
 
@@ -58,9 +60,12 @@ The easiest way to get media files is via the CLI helper, which writes decoded m
 openclaw nodes camera snap --node <id>                 # default: one node-selected photo
 openclaw nodes camera snap --node <id> --facing front
 openclaw nodes camera snap --node <id> --facing both   # front then back (2 saved paths)
-openclaw nodes camera clip --node <id> --duration 3000
+openclaw nodes camera clip --node <id> --duration 10s
 openclaw nodes camera clip --node <id> --no-audio
 ```
+
+`--duration` accepts a bare number of milliseconds (`3000`) or a unit suffix
+(`10s`, `1m`, `1h30m`). It defaults to `3000` (3 seconds).
 
 Without `--facing`, `nodes camera snap` captures one photo using the node's default camera and labels the saved artifact `unknown`. On non-Linux nodes, `--facing both` captures front then back and prints two saved paths. `--device-id` is valid without `--facing`; on non-Linux nodes, it cannot be combined with `--facing both`. Linux always sends one facing-less request and labels the artifact `unknown`, regardless of `--facing`. Output files are temporary (in the OS temp directory) unless you build your own wrapper.
 
@@ -81,7 +86,7 @@ The app prompts for runtime permissions when possible.
 
 ### Android foreground requirement
 
-Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE: command requires foreground`.
+The Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE: command requires foreground`.
 
 ### Android commands (via Gateway `node.invoke`)
 
@@ -119,7 +124,6 @@ openclaw nodes camera snap --node <id> --max-width 1280
 openclaw nodes camera snap --node <id> --delay-ms 2000
 openclaw nodes camera snap --node <id> --device-id <id>
 openclaw nodes camera clip --node <id> --duration 10s       # prints saved path
-openclaw nodes camera clip --node <id> --duration-ms 3000   # prints saved path (legacy flag)
 openclaw nodes camera clip --node <id> --device-id <id>
 openclaw nodes camera clip --node <id> --no-audio
 ```
@@ -128,13 +132,15 @@ openclaw nodes camera clip --node <id> --no-audio
 - `camera.snap` waits `delayMs` (default 2000ms, clamped to `[0, 10000]`) after warm-up/exposure settle before capturing.
 - Photo payloads are recompressed to keep base64 under 5MB.
 
+If a macOS external camera starts a photo session in portrait, OpenClaw selects an advertised landscape format with transposed dimensions and the same encoding, when one exists. Already-landscape, built-in, and Continuity Camera formats are unchanged. Without an exact counterpart, or if the camera cannot be reconfigured, capture keeps the negotiated format. `--max-width` still only limits the returned JPEG width; it does not choose a camera format.
+
 ### macOS physical PTZ
 
 Physical PTZ is implemented by the Mac app for USB cameras that expose standard UVC absolute pan/tilt or zoom controls. It uses the same **Allow Camera** setting as capture. Other node platforms do not advertise these commands.
 
 Always pass an explicit `deviceId` returned by `camera.list`. OpenClaw never chooses a default camera for physical movement.
 
-- `camera.ptz.status` is a safe read command. Request: `{ "deviceId": "<camera-id>" }`.
+- `camera.ptz.status` reads the current position without moving the camera. Request: `{ "deviceId": "<camera-id>" }`.
   - The response contains only executable `pan`, `tilt`, and `zoom` axes under `axes`.
   - Pan and tilt values are degrees. Zoom values are percentages.
   - Each axis reports `current`, `min`, `max`, `step`, `unit`, `canSet`, and `canMove`. `default` appears only when the camera successfully reports a device default.
@@ -146,7 +152,9 @@ Always pass an explicit `deviceId` returned by `camera.list`. OpenClaw never cho
 
 `set` and `move` require at least one finite axis value. Omitted axes remain unchanged, and move deltas for zoom are percentage points. `home` restores the device-advertised defaults; it returns `CAMERA_PTZ_UNSUPPORTED` without moving the camera when `canHome` is false. The Mac app clamps and snaps requested values to the camera's range and resolution; the response returns the post-operation `state` and lists changed request fields in `adjusted`. Requesting an unsupported axis returns `CAMERA_PTZ_AXIS_UNSUPPORTED`.
 
-Pan/tilt and zoom use separate hardware writes and cannot be atomic. If an earlier control group succeeds but a later write or final status read fails, `CAMERA_PTZ_PARTIAL` names the applied groups, includes best-effort resulting state when readable, and tells the caller to run `camera.ptz.status` before retrying.
+Both PTZ commands briefly open a live camera stream because supported cameras only service UVC controls while streaming. This activates the camera and its privacy indicator for the duration, including when `camera.ptz.status` only reads the position. Frames are not retained, and no photo, video, or file is produced.
+
+Pan/tilt and zoom use separate hardware writes and cannot be atomic. OpenClaw verifies the resulting position through a fresh control connection. If a later write or final status read fails, or an axis does not reach its requested position within the camera's reported resolution, `CAMERA_PTZ_PARTIAL` names the acknowledged control groups, includes the independently observed state when readable, and tells the caller to run `camera.ptz.status` before retrying. Position failures also report the requested and observed values; check that a video stream reaches the camera and disable on-camera AI framing or tracking that can override UVC controls.
 
 `camera.ptz.control` is dangerous and remains disarmed until the operator explicitly adds it to `gateway.nodes.commands.allow`:
 
@@ -216,3 +224,6 @@ Requires macOS **Screen Recording** permission (TCC).
 - [Image and media support](/nodes/images)
 - [Media understanding](/nodes/media-understanding)
 - [Location command](/nodes/location-command)
+- [Computer use](/nodes/computer-use)
+- [Node troubleshooting](/nodes/troubleshooting)
+- [Nodes overview](/nodes)

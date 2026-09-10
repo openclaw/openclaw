@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig, resolveAgentRunCwd } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
@@ -12,6 +13,11 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
+import {
+  attachToolAllowlistIntersection,
+  readToolAllowlistIntersection,
+} from "../../agents/tool-policy.js";
+import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
@@ -20,7 +26,9 @@ import {
   createUserTurnTranscriptRecorder,
   resolvePersistedUserTurnText,
 } from "../../sessions/user-turn-transcript.js";
+import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -28,11 +36,11 @@ import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
 import {
   buildPersistedMediaImageLayout,
   normalizeMessageTimestampMs,
+  suppressUnresolvedPromptMedia,
   updateRoomEventAmbientTranscriptWatermark,
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { normalizeToolProgressDetail } from "./prompt-session-context.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import {
@@ -51,6 +59,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const {
     context,
     resolvedThinkLevel,
+    thinkLevelOverride,
     thinkingCatalog,
     skillsSnapshot,
     prefixedCommandBody,
@@ -58,6 +67,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     transcriptBody,
     transcriptCommandBody,
     promptMedia,
+    inboundMediaIndexes,
     currentInboundContext,
     isRoomEvent,
     providedReplyOperation,
@@ -99,6 +109,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     shouldInjectGroupIntro,
     typingMode,
     allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation,
   } = context;
   const {
     ctx,
@@ -106,7 +117,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     cfg,
     agentId,
     agentDir,
-    agentCfg,
     command,
     provider,
     model,
@@ -132,8 +142,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   } = params;
 
   const runHasStoredSessionModelOverride = Boolean(
-    normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
-    normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
+    preparedSessionState.sessionEntry?.modelOverrideSource !== "default" &&
+    (normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
+      normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride)),
   );
   const runHasLegacyAutoFallbackWithoutOrigin =
     runHasStoredSessionModelOverride &&
@@ -141,7 +152,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const runHasSessionModelOverride =
     runHasStoredSessionModelOverride && !runHasLegacyAutoFallbackWithoutOrigin;
   const runModelOverrideSource = runHasSessionModelOverride
-    ? preparedSessionState.sessionEntry?.modelOverrideSource
+    ? preparedSessionState.sessionEntry?.modelOverrideSource === "default"
+      ? undefined
+      : preparedSessionState.sessionEntry?.modelOverrideSource
     : undefined;
   const runHasAutoFallbackProvenance =
     runHasSessionModelOverride &&
@@ -178,6 +191,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       OriginatingTo: ctx.OriginatingTo ?? sessionCtx.OriginatingTo,
       AccountId: ctx.AccountId ?? sessionCtx.AccountId,
       InputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+      InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
       ChatType: ctx.ChatType ?? sessionCtx.ChatType,
     },
     entry: preparedSessionState.sessionEntry,
@@ -202,15 +216,45 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         })
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
-  const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
+  // Direct sender identity is safe only after channel admission and an ingress-owned
+  // self check. Gateway-local and from-me turns must keep the operator identity.
+  const persistChannelSender =
+    replyRoute.chatType === "group" ||
+    replyRoute.chatType === "channel" ||
+    (replyRoute.chatType === "direct" &&
+      ctx.InboundAccessAuthorized === true &&
+      ctx.SenderIsSelf !== true);
   const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
-  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
+  const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
+  const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
+    unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
+  );
+  const userTurnMediaForPersistence = [...persistedCtxMedia, ...(opts?.media ?? [])];
+  const promptMediaForRun = suppressUnresolvedPromptMedia({
+    promptMedia: promptMedia ?? [],
+    inboundMediaIndexes,
+    unresolvedSourceIndexes,
+  });
   const mediaImageLayout = buildPersistedMediaImageLayout({
     ctx,
     media: userTurnMediaForPersistence,
     ctxMediaCount: ctxMediaForPersistence.length,
     imageOrder: currentTurnImages.imageOrder,
     imageSourceIndexes: currentTurnImages.imageSourceIndexes,
+  });
+  const promptMediaSourceIndexes = currentTurnImages.imageSourceIndexes?.map((sourceIndex) => {
+    if (sourceIndex === undefined) {
+      return undefined;
+    }
+    const promptIndex = inboundMediaIndexes.indexOf(sourceIndex);
+    return promptIndex >= 0 ? promptIndex : undefined;
+  });
+  const promptMediaImageLayout = buildPersistedMediaImageLayout({
+    ctx: {},
+    media: promptMediaForRun,
+    ctxMediaCount: inboundMediaIndexes.length,
+    imageOrder: currentTurnImages.imageOrder,
+    imageSourceIndexes: promptMediaSourceIndexes,
   });
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
@@ -259,7 +303,12 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
           ...(isHeartbeat
-            ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
+            ? {
+                provenance: resolveInternalTurnTranscript({
+                  InputProvenance: inputProvenance,
+                  InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
+                }).provenance,
+              }
             : {}),
           ...(transport ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
@@ -270,14 +319,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           // is identical whether this turn is sent as the current turn or
           // replayed as history. See: https://github.com/openclaw/openclaw/issues/3658
           ...(userTurnTimestamp ? { timestamp: userTurnTimestamp } : {}),
-          // Direct transcripts keep their existing identity-storage boundary.
-          sender: persistGroupSender
-            ? {
-                id: normalizeOptionalString(sessionCtx.SenderId),
-                name: normalizeOptionalString(sessionCtx.SenderName),
-                username: normalizeOptionalString(sessionCtx.SenderUsername),
-              }
-            : undefined,
+          sender: persistChannelSender ? buildChannelUserTurnSender(sessionCtx) : undefined,
         }
       : undefined;
   const userTurnTranscriptRecorder =
@@ -311,26 +353,47 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
+  const queuedToolsAllow = opts?.toolsAllow ? [...opts.toolsAllow] : opts?.toolsAllow;
+  const queuedToolIntersections = opts?.toolsAllow
+    ? readToolAllowlistIntersection(opts.toolsAllow)
+    : undefined;
+  if (queuedToolsAllow && queuedToolIntersections) {
+    attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
+  }
+  const admittedSessionSettings = opts?.admittedSessionSettings;
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
     currentInboundAudio: hasInboundAudio(sessionCtx),
+    channelAdmissionEvidence:
+      readChannelContextAdmissionEvidence(ctx) ?? readChannelContextAdmissionEvidence(sessionCtx),
     currentInboundContext,
+    explicitSkillSelections: params.explicitSkillSelections,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
-    onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
       : {}),
+    ...(opts && "onQueuedFollowupReplyBatch" in opts
+      ? {
+          queuedFollowupReplyDisposition: opts.onQueuedFollowupReplyBatch
+            ? { kind: "deliver" as const, deliver: opts.onQueuedFollowupReplyBatch }
+            : { kind: "drop" as const, reason: "source-unavailable" as const },
+        }
+      : {}),
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
+    ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
+    ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
     enqueuedAt: Date.now(),
+    currentTurnImagesPrepared: true as const,
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
-    media: promptMedia,
+    mediaImageLayout: promptMediaImageLayout,
+    media: promptMediaForRun,
     // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,
@@ -355,12 +418,18 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
+      conversationRoutePeerId: sessionCtx.ConversationRoutePeerId,
       conversationToolPolicy: sessionCtx.ConversationToolPolicy,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:
         normalizeOptionalString(sessionCtx.GroupChannel) ??
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
+      memberRoleIds: Array.isArray(sessionCtx.MemberRoleIds)
+        ? sessionCtx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
+            (roleId): roleId is string => Boolean(roleId),
+          )
+        : undefined,
       // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
       spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
@@ -373,12 +442,21 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       senderIsOwner: command.senderIsOwner,
       traceAuthorized:
         command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+      traceLevelOverride: params.directives.traceLevel,
+      verboseLevelOverride: params.directives.verboseLevel,
       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
-      cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
+      cwd:
+        normalizeOptionalString(state.sessionEntry?.spawnedCwd) ?? resolveAgentRunCwd(cfg, agentId),
+      permissionMode: admittedSessionSettings
+        ? admittedSessionSettings.permissionMode
+        : preparedSessionState.sessionEntry?.permissionMode,
+      sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
-      toolOverrides: preparedSessionState.sessionEntry?.toolOverrides,
+      toolOverrides: admittedSessionSettings
+        ? admittedSessionSettings.toolOverrides
+        : preparedSessionState.sessionEntry?.toolOverrides,
       skillsSnapshot,
       provider,
       model,
@@ -392,6 +470,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       authProfileIdSource,
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
+      thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {
           return { fastMode: false, fastModeAutoOnSeconds: undefined, fastModeOverride: true };
@@ -427,7 +506,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           : {}),
       },
       timeoutMs,
-      runTimeoutOverrideMs: opts?.timeoutOverrideSeconds !== undefined ? timeoutMs : undefined,
+      runTimeoutOverrideMs:
+        opts?.timeoutOverrideMs !== undefined || opts?.timeoutOverrideSeconds !== undefined
+          ? timeoutMs
+          : undefined,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: resolveOwnerPromptNumbers({
         ownerNumbers: command.ownerList,
@@ -446,7 +528,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
+      terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
+      ...(opts?.skillWorkshopProposalRevision
+        ? {
+            skillWorkshopProposalRevision: { ...opts.skillWorkshopProposalRevision },
+          }
+        : {}),
+      ...(opts?.skillLibraryAuthoring ? { skillLibraryAuthoring: opts.skillLibraryAuthoring } : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })
         ? { enforceFinalTag: true }
@@ -485,8 +574,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     : undefined;
   const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
   const createdCronCreatorAuthorityCapability =
-    !inheritedCronCreatorAuthorityCapability && authorityRunId
-      ? createCronCreatorAuthorityCapability(authorityRunId)
+    !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
+      ? createCronCreatorAuthorityCapability(authorityRunId, {
+          kind: "external",
+          channel: messageProvider,
+        })
       : undefined;
   const cronCreatorAuthorityCapability =
     inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;
@@ -523,11 +615,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       runtimePolicySessionKey,
       storePath,
       defaultModel,
-      agentCfgContextTokens: agentCfg?.contextTokens,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-      toolProgressDetail:
-        normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
-        normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
+      toolProgressDetail: resolveAgentConfig(cfg, agentId)?.toolProgressDetail,
       isNewSession: params.isNewSession,
       blockStreamingEnabled,
       blockReplyChunking,

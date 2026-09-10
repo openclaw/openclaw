@@ -1,8 +1,8 @@
 import { css } from "lit";
 
 export const terminalPanelUploadStyles = css`
-  .tp-icon:disabled {
-    opacity: 0.35;
+  .rail-header__action:disabled {
+    opacity: var(--rail-header-action-disabled-opacity, 0.4);
     pointer-events: none;
   }
   .tp-file-input {
@@ -76,6 +76,9 @@ export const terminalPanelUploadStyles = css`
   .tp-upload-card__actions {
     display: flex;
     gap: 4px;
+  }
+  .tp-upload-card__recovery {
+    margin-top: 8px;
   }
   .tp-upload-card__action {
     margin: -3px 0;

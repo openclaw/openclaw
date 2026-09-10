@@ -104,45 +104,72 @@ describe("models-config merge helpers", () => {
     ]);
   });
 
-  it("preserves explicit input modality overrides when implicit metadata has the same model id", () => {
-    const merged = mergeProviderModels(
-      {
-        api: "ollama",
+  it.each([false, true])(
+    "preserves configured provider routing for catalog rows (overlap: %s)",
+    (overlap) => {
+      const implicit = createConfigProvider({
+        api: "anthropic-messages",
+        baseUrl: "https://catalog.example/v1",
         models: [
-          {
-            id: "qwen3-vl:latest",
-            name: "Qwen3 VL",
-            input: ["text"],
-            reasoning: true,
-            contextWindow: 128_000,
-            maxTokens: 8192,
-          },
+          createModel({
+            id: overlap ? "config-model" : "catalog-only",
+            ...(overlap
+              ? { api: "anthropic-messages", baseUrl: "https://catalog-model.example/v1" }
+              : {}),
+          }),
         ],
-      } as ProviderConfig,
-      {
-        api: "ollama",
-        models: [
-          {
-            id: "qwen3-vl:latest",
-            name: "Qwen3 VL",
-            input: ["text", "image"],
-            contextWindow: 128_000,
-            maxTokens: 8192,
-          },
-        ],
-      } as ProviderConfig,
-    );
+      });
+      const explicit = createConfigProvider();
+      const merged = mergeProviders({
+        implicit: { example: implicit },
+        explicit: { example: explicit },
+      });
+      const provider = merged.example;
+      const selected = provider?.models.find(
+        (model) => model.id === (overlap ? "config-model" : "catalog-only"),
+      );
+      expect(selected).toBeDefined();
+      expect(selected?.api ?? provider?.api).toBe(explicit.api);
+      expect(selected?.baseUrl ?? provider?.baseUrl).toBe(explicit.baseUrl);
+    },
+  );
 
-    expect(merged.models).toEqual([
-      {
-        id: "qwen3-vl:latest",
-        name: "Qwen3 VL",
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 128_000,
-        maxTokens: 8192,
-      },
-    ]);
+  it("uses source input presence when merging matching model metadata", () => {
+    const implicit = {
+      api: "ollama",
+      models: [
+        {
+          id: "qwen3-vl:latest",
+          name: "Qwen3 VL",
+          input: ["text", "image"],
+          reasoning: true,
+          contextWindow: 128_000,
+          maxTokens: 8192,
+        },
+      ],
+    } as ProviderConfig;
+    const explicit = {
+      api: "ollama",
+      models: [
+        {
+          id: "qwen3-vl:latest",
+          name: "Qwen3 VL",
+          input: ["text"],
+          contextWindow: 128_000,
+          maxTokens: 8192,
+        },
+      ],
+    } as ProviderConfig;
+
+    expect(mergeProviderModels(implicit, explicit).models?.[0]?.input).toEqual(["text"]);
+    expect(
+      mergeProviderModels(implicit, explicit, {
+        providerId: "ollama",
+        sourceModelFields: new Map([
+          [JSON.stringify(["ollama", "qwen3-vl:latest"]), { inputOmitted: true, cost: undefined }],
+        ]),
+      }).models?.[0]?.input,
+    ).toEqual(["text", "image"]);
   });
 
   it("keeps compat catalog-owned for a configured model on the catalog route", () => {

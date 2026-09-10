@@ -1,4 +1,5 @@
 // Defines plugin entry and install configuration types.
+import type { PluginAcceptedDeclaredSurface, PluginInstallRecord } from "./zod-schema.installs.js";
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {
@@ -58,12 +59,7 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
-export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
-  source: InstallRecordBase["source"] | "marketplace";
-  marketplaceName?: string;
-  marketplaceSource?: string;
-  marketplacePlugin?: string;
-};
+export type { PluginAcceptedDeclaredSurface, PluginInstallRecord };
 
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */
@@ -82,4 +78,3 @@ export type PluginsConfig = {
    */
   installs?: Record<string, PluginInstallRecord>;
 };
-import type { InstallRecordBase } from "./types.installs.js";

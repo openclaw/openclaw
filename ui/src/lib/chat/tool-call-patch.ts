@@ -2,12 +2,17 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   MAX_DIFF_RENDER_LINES,
+  type DiffFilePaths,
   type DiffLine,
   type DiffLineKind,
   type DiffStat,
 } from "./tool-call-diff.ts";
 
 type PatchOperation = "add" | "delete" | "update";
+
+export type PatchFileOperation = DiffFilePaths & {
+  operation: PatchOperation;
+};
 
 type PatchSection = {
   operation: PatchOperation;
@@ -32,6 +37,7 @@ type HunkState = {
 
 type PatchViewData = {
   paths: string[];
+  fileOperations: PatchFileOperation[];
   lines: DiffLine[];
   stat: DiffStat;
   move?: { from: string; to: string };
@@ -156,6 +162,11 @@ function finish(collector: PatchCollector): PatchViewData | null {
     return null;
   }
   const paths = [...new Set(collector.sections.map((section) => section.path).filter(Boolean))];
+  const fileOperations = collector.sections.map(({ operation, path, sourcePath }) => ({
+    operation,
+    path,
+    ...(operation === "update" && sourcePath !== path ? { oldPath: sourcePath } : {}),
+  }));
   const stat = collector.sections.reduce(
     (sum, section) => ({
       added: sum.added + section.stat.added,
@@ -172,12 +183,17 @@ function finish(collector: PatchCollector): PatchViewData | null {
       clipped = true;
     }
   };
-  for (const section of collector.sections) {
+  for (const [index, section] of collector.sections.entries()) {
     if (collector.sections.length > 1) {
       if (lines.length > 0 && lines.at(-1)?.kind !== "skip") {
         append({ kind: "skip", text: "" });
       }
-      append({ kind: "file", text: sectionLabel(section) });
+      append({
+        kind: "file",
+        path: section.path,
+        ...("oldPath" in fileOperations[index]! ? { oldPath: section.sourcePath } : {}),
+        text: sectionLabel(section),
+      });
     }
     for (const line of section.lines) {
       append(line);
@@ -191,7 +207,7 @@ function finish(collector: PatchCollector): PatchViewData | null {
     only && only.operation === "update" && only.sourcePath !== only.path
       ? { from: only.sourcePath, to: only.path }
       : undefined;
-  return { paths, lines, stat, ...(move ? { move } : {}) };
+  return { paths, fileOperations, lines, stat, ...(move ? { move } : {}) };
 }
 
 function parseCodexPatch(text: string): PatchViewData | null {

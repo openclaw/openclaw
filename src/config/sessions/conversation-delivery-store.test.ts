@@ -17,7 +17,9 @@ import {
 } from "./conversation-delivery-store.js";
 import { resolveConversation } from "./conversation-registry.js";
 import {
+  applySessionEntryLifecycleMutation,
   deleteSessionEntryLifecycle,
+  loadSessionEntry,
   upsertSessionEntryCore as upsertCanonicalSessionEntry,
 } from "./session-accessor.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
@@ -211,24 +213,81 @@ describe("conversation delivery store", () => {
     });
   });
 
-  it("retains terminal delivery evidence after its local session binding is pruned", async () => {
+  it("preserves routed session bindings and terminal delivery evidence during maintenance", async () => {
     await withConversationStore(async ({ scope, conversationRef }) => {
+      const sessionKey = "agent:main:reef:direct:peer-agent";
       beginConversationDeliveryOperation(scope, {
-        operationId: "operation-pruned-session",
+        operationId: "operation-preserved-session",
         operationKind: "send",
         conversationRef,
+        sourceSessionKey: sessionKey,
         message: "hello",
       });
-      markConversationDeliverySent(scope, "operation-pruned-session", "platform-pruned");
+      markConversationDeliverySent(scope, "operation-preserved-session", "platform-preserved");
+
+      await applySessionEntryLifecycleMutation({
+        agentId: scope.agentId,
+        storePath: scope.storePath,
+        maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
+      });
+
+      expect(resolveConversation(scope, conversationRef)).toMatchObject({
+        conversationRef,
+        channel: "reef",
+        sessionId: "reef-session",
+      });
+      expect(loadSessionEntry({ ...scope, sessionKey })?.archivedAt).toBeUndefined();
+      expect(getConversationDeliveryOperation(scope, "operation-preserved-session")).toMatchObject({
+        channel: "reef",
+        conversationRef,
+        platformMessageId: "platform-preserved",
+        status: "sent",
+      });
+    });
+  });
+
+  it("removes source-bound delivery evidence when its session is fully deleted", async () => {
+    await withConversationStore(async ({ scope, conversationRef }) => {
+      const sessionKey = "agent:main:reef:direct:peer-agent";
+      beginConversationDeliveryOperation(scope, {
+        operationId: "operation-deleted-session",
+        operationKind: "send",
+        conversationRef,
+        sourceSessionKey: sessionKey,
+        message: "hello",
+      });
+      markConversationDeliverySent(scope, "operation-deleted-session", "platform-deleted");
+
+      await deleteSessionEntryLifecycle({
+        agentId: scope.agentId,
+        archiveTranscript: false,
+        deleteDeliveryArtifacts: true,
+        storePath: scope.storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
+
+      expect(getConversationDeliveryOperation(scope, "operation-deleted-session")).toBeUndefined();
+      expect(resolveConversation(scope, conversationRef)).toMatchObject({ conversationRef });
+    });
+  });
+
+  it("retains source-bound delivery evidence for guarded lifecycle cleanup", async () => {
+    await withConversationStore(async ({ scope, conversationRef }) => {
+      const sessionKey = "agent:main:reef:direct:peer-agent";
+      beginConversationDeliveryOperation(scope, {
+        operationId: "operation-migrated-session",
+        operationKind: "send",
+        conversationRef,
+        sourceSessionKey: sessionKey,
+        message: "hello",
+      });
+      markConversationDeliverySent(scope, "operation-migrated-session", "platform-migrated");
 
       await deleteSessionEntryLifecycle({
         agentId: scope.agentId,
         archiveTranscript: false,
         storePath: scope.storePath,
-        target: {
-          canonicalKey: "agent:main:reef:direct:peer-agent",
-          storeKeys: ["agent:main:reef:direct:peer-agent"],
-        },
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
 
       expect(resolveConversation(scope, conversationRef)).toMatchObject({
@@ -236,10 +295,11 @@ describe("conversation delivery store", () => {
         channel: "reef",
       });
       expect(resolveConversation(scope, conversationRef)?.sessionId).toBeUndefined();
-      expect(getConversationDeliveryOperation(scope, "operation-pruned-session")).toMatchObject({
-        channel: "reef",
+      expect(loadSessionEntry({ ...scope, sessionKey })).toBeUndefined();
+      expect(getConversationDeliveryOperation(scope, "operation-migrated-session")).toMatchObject({
         conversationRef,
-        platformMessageId: "platform-pruned",
+        platformMessageId: "platform-migrated",
+        sourceSessionKey: sessionKey,
         status: "sent",
       });
     });

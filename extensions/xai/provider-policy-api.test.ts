@@ -45,6 +45,27 @@ describe("xai provider thinking policy", () => {
     });
   });
 
+  it.each(["xai", "x-ai"])("exposes Grok 4.6 xhigh reasoning for %s", (provider) => {
+    expect(resolveThinkingProfile({ provider, modelId: "grok-4.6" })).toEqual({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
+      defaultLevel: "high",
+    });
+  });
+
+  it("does not infer thinking controls from retired canonical-target metadata", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "xai",
+        modelId: "auto",
+        reasoning: true,
+        params: { canonicalModelId: "grok-4.6" },
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+  });
+
   it("keeps non-reasoning and non-xai routes off-only", () => {
     expect(
       resolveThinkingProfile({

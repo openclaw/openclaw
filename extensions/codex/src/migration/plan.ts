@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/file-access-runtime";
+import {
   createMigrationItem,
   createMigrationManualItem,
   hasMigrationConfigPatchConflict,
@@ -14,11 +18,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  canonicalPathFromExistingAncestor,
-  extractErrorCode,
-  isPathInside,
-} from "openclaw/plugin-sdk/security-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
@@ -535,27 +535,36 @@ export async function buildCodexMigrationPlan(
     ctx.itemKinds !== undefined &&
     ctx.itemKinds.length > 0 &&
     ctx.itemKinds.every((kind) => kind === "memory");
+  const authOnly =
+    ctx.itemKinds !== undefined &&
+    ctx.itemKinds.length > 0 &&
+    ctx.itemKinds.every((kind) => kind === "auth");
   const source = await discoverCodexSource({
     input: ctx.source,
     memoryOnly,
-    evaluatePluginMigrationEligibility: !memoryOnly,
+    authOnly,
+    evaluatePluginMigrationEligibility: !memoryOnly && !authOnly,
     verifyPluginApps: shouldVerifyPluginApps(ctx),
   });
-  if (!hasCodexSource(source)) {
+  if (!hasCodexSource(source) && !authOnly) {
     throw new Error(
       `Codex state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
     );
   }
   const items: MigrationItem[] = [];
-  items.push(
-    ...(await buildCodexMemoryItems({
-      memoryFiles: source.memoryFiles,
-      workspaceDir: targets.workspaceDir,
-      overwrite: ctx.overwrite,
-    })),
-  );
+  if (!authOnly) {
+    items.push(
+      ...(await buildCodexMemoryItems({
+        memoryFiles: source.memoryFiles,
+        workspaceDir: targets.workspaceDir,
+        overwrite: ctx.overwrite,
+      })),
+    );
+  }
   if (!memoryOnly) {
     items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
+  }
+  if (!memoryOnly && !authOnly) {
     items.push(
       ...(await buildCodexSkillItems({
         skills: source.skills,

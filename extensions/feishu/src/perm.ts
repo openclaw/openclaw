@@ -1,7 +1,6 @@
 // Feishu plugin module implements perm behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import {
@@ -114,24 +113,14 @@ async function removeMember(
 // ============ Tool Registration ============
 
 export function registerFeishuPermTools(api: OpenClawPluginApi) {
-  if (!api.config) {
-    return;
-  }
-
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
-  if (!toolsCfg.perm) {
-    return;
-  }
-
   type FeishuPermExecuteParams = FeishuPermParams & { accountId?: string };
 
   api.registerTool(
     (ctx) => {
+      const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
+      if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg).perm) {
+        return null;
+      }
       const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_perm",
@@ -143,7 +132,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
           const p = params as FeishuPermExecuteParams;
           try {
             const client = createFeishuToolClient({
-              api,
+              cfg,
               executeParams: p,
               defaultAccountId,
               requiredTool: { family: "perm", label: "Perm" },

@@ -1,8 +1,7 @@
 /** Handles informational commands such as /help, /commands, /tools, and exports. */
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   resolveEffectiveToolInventory,
-  resolveEffectiveToolInventoryRuntimeModelContextAsync,
+  acquireEffectiveToolInventoryRuntimeModelContext,
 } from "../../agents/tools-effective-inventory.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import {
@@ -43,12 +42,9 @@ async function resolveSkillCommands(
   if (params.loadSkillCommands) {
     return params.loadSkillCommands();
   }
-  const agentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-    : params.agentId;
   return listSkillCommandsForAgents({
     cfg: params.cfg,
-    agentIds: agentId ? [agentId] : undefined,
+    agentIds: [params.agentId],
     sessionEntry: params.sessionEntry,
     sessionKey: params.sessionKey,
   });
@@ -68,9 +64,6 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
     silentUnauthorized: true,
   },
   async (params) => {
-    const agentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
     const skillCommands = await resolveSkillCommands(params);
     const surface = params.ctx.Surface;
     const commandPlugin = surface ? getChannelPlugin(surface) : null;
@@ -81,7 +74,7 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
     const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({
       currentPage: paginated.currentPage,
       totalPages: paginated.totalPages,
-      agentId,
+      agentId: params.agentId,
     });
     if (channelData) {
       return {
@@ -165,57 +158,60 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
     });
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionBound = Boolean(params.sessionKey);
-    const agentId = sessionBound
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
     const threadingContext = buildThreadingToolContext({
       sessionCtx: params.ctx,
       config: params.cfg,
       hasRepliedRef: undefined,
     });
-    const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
+    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
       cfg: params.cfg,
-      agentId,
+      agentId: params.agentId,
       agentDir: sessionBound ? undefined : params.agentDir,
       workspaceDir: params.workspaceDir,
       modelProvider: params.provider,
       modelId: params.model,
     });
-    const result = resolveEffectiveToolInventory({
-      cfg: params.cfg,
-      agentId,
-      sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-      agentDir: sessionBound ? undefined : params.agentDir,
-      modelProvider: params.provider,
-      modelId: params.model,
-      modelApi: runtimeModelContext.modelApi,
-      runtimeModel: runtimeModelContext.runtimeModel,
-      messageProvider: params.command.channel,
-      senderId: params.command.senderId,
-      senderName: params.ctx.SenderName,
-      senderUsername: params.ctx.SenderUsername,
-      senderE164: params.ctx.SenderE164,
-      accountId: effectiveAccountId,
-      currentChannelId: threadingContext.currentChannelId,
-      currentThreadTs:
-        typeof params.ctx.MessageThreadId === "string" ||
-        typeof params.ctx.MessageThreadId === "number"
-          ? String(params.ctx.MessageThreadId)
-          : undefined,
-      currentMessageId: threadingContext.currentMessageId,
-      groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
-      groupChannel:
-        targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
-      groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
-      replyToMode: resolveReplyToMode(
-        params.cfg,
-        params.ctx.OriginatingChannel ?? params.ctx.Provider,
-        effectiveAccountId,
-        params.ctx.ChatType,
-      ),
-    });
-    return commandReply(buildToolsMessage(result, { verbose }));
+    try {
+      return acquired.run((runtimeModelContext) => {
+        const result = resolveEffectiveToolInventory({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          agentDir: sessionBound ? undefined : params.agentDir,
+          modelProvider: params.provider,
+          modelId: params.model,
+          modelApi: runtimeModelContext.modelApi,
+          runtimeModel: runtimeModelContext.runtimeModel,
+          messageProvider: params.command.channel,
+          senderId: params.command.senderId,
+          senderName: params.ctx.SenderName,
+          senderUsername: params.ctx.SenderUsername,
+          senderE164: params.ctx.SenderE164,
+          accountId: effectiveAccountId,
+          currentChannelId: threadingContext.currentChannelId,
+          currentThreadTs:
+            typeof params.ctx.MessageThreadId === "string" ||
+            typeof params.ctx.MessageThreadId === "number"
+              ? String(params.ctx.MessageThreadId)
+              : undefined,
+          currentMessageId: threadingContext.currentMessageId,
+          groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
+          groupChannel:
+            targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+          groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
+          replyToMode: resolveReplyToMode(
+            params.cfg,
+            params.ctx.OriginatingChannel ?? params.ctx.Provider,
+            effectiveAccountId,
+            params.ctx.ChatType,
+          ),
+        });
+        return commandReply(buildToolsMessage(result, { verbose }));
+      });
+    } finally {
+      acquired.release();
+    }
   } catch {
     // Inventory resolves in-process after sender authorization; this path cannot receive
     // gateway RPC scope errors, so failures here are local discovery failures.
@@ -251,6 +247,7 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const reply = await buildStatusReply({
       cfg: params.cfg,
+      agentId: params.agentId,
       command: params.command,
       sessionEntry: targetSessionEntry,
       sessionKey: params.sessionKey,

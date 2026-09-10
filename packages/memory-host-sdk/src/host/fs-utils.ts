@@ -1,4 +1,3 @@
-// Memory Host SDK helper module supports fs utils behavior.
 import { configureFsSafeNative } from "@openclaw/fs-safe/config";
 // fs-safe facade with native acceleration disabled by default for this package's
 // host-side memory file operations.
@@ -28,12 +27,13 @@ if (!hasModeOverride) {
 export function isFileMissingError(
   err: unknown,
 ): err is NodeJS.ErrnoException & { code: "ENOENT" | "ENOTDIR" | "not-file" | "not-found" } {
-  return Boolean(
-    err &&
-    typeof err === "object" &&
-    "code" in err &&
-    ((err as Partial<NodeJS.ErrnoException>).code === "ENOENT" ||
-      (err as Partial<NodeJS.ErrnoException>).code === "ENOTDIR" ||
-      (err as { code?: unknown }).code === "not-found"),
+  if (!err || typeof err !== "object" || !("code" in err)) {
+    return false;
+  }
+  return (
+    err.code === "ENOENT" ||
+    err.code === "ENOTDIR" ||
+    err.code === "not-file" ||
+    err.code === "not-found"
   );
 }

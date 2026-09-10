@@ -9,8 +9,14 @@ const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 
 vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
 
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import {
+  drainPendingSessionDelivery,
+  recoverPendingSessionDeliveries,
+} from "./session-delivery-queue-recovery.js";
 import {
   deferSessionDelivery,
+  enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
   markSessionDeliveryAttemptStarted,
@@ -20,11 +26,6 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
-import {
-  drainPendingSessionDeliveries,
-  enqueueSessionDelivery,
-  recoverPendingSessionDeliveries,
-} from "./session-delivery-queue.js";
 
 describe("session-delivery queue recovery", () => {
   beforeEach(() => {
@@ -49,11 +50,7 @@ describe("session-delivery queue recovery", () => {
         deliver,
         onSettled,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -213,11 +210,7 @@ describe("session-delivery queue recovery", () => {
       const summary = await recoverPendingSessionDeliveries({
         deliver,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -256,14 +249,13 @@ describe("session-delivery queue recovery", () => {
       const deliver = vi.fn(async () => undefined);
       const onSettled = vi.fn(async () => undefined);
 
-      await drainPendingSessionDeliveries({
-        drainKey: "test-acknowledged-cleanup",
+      await drainPendingSessionDelivery({
+        id,
         logLabel: "test acknowledged cleanup",
         deliver,
         onSettled,
         stateDir: tempDir,
         log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        selectEntry: (candidate) => ({ match: candidate.id === id }),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -304,11 +296,7 @@ describe("session-delivery queue recovery", () => {
         const recovery = recoverPendingSessionDeliveries({
           deliver,
           stateDir: tempDir,
-          log: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-          },
+          log: createInfoWarnErrorLogger(),
         });
 
         await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
@@ -352,11 +340,7 @@ describe("session-delivery queue recovery", () => {
           deliver,
           stateDir: tempDir,
           maxRecoveryMs: 1,
-          log: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-          },
+          log: createInfoWarnErrorLogger(),
         });
 
         await expect(controlledSleep.started).resolves.toBe(1);
@@ -432,11 +416,7 @@ describe("session-delivery queue recovery", () => {
         }),
         onSettled,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       const [failedEntry] = await loadPendingSessionDeliveries(tempDir);
@@ -608,20 +588,13 @@ describe("session-delivery queue recovery", () => {
       }
 
       const deliver = vi.fn(async () => undefined);
-      await drainPendingSessionDeliveries({
-        drainKey: "test-restart-continuation",
+      await drainPendingSessionDelivery({
+        id,
         logLabel: "test restart continuation",
+        bypassBackoff: true,
         deliver,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
-        selectEntry: (entry) => ({
-          match: entry.id === id,
-          bypassBackoff: true,
-        }),
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -645,14 +618,14 @@ describe("session-delivery queue recovery", () => {
 
       const deliver = vi.fn(async () => undefined);
       const onSettled = vi.fn(async () => undefined);
-      await drainPendingSessionDeliveries({
-        drainKey: "test-restart-continuation-exhausted",
+      await drainPendingSessionDelivery({
+        id,
         logLabel: "test restart continuation",
+        bypassBackoff: true,
         deliver,
         onSettled,
         stateDir: tempDir,
         log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        selectEntry: (entry) => ({ match: entry.id === id, bypassBackoff: true }),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -721,13 +694,13 @@ describe("session-delivery queue recovery", () => {
             vi.setSystemTime(new Date(Date.now() + 60_000));
           }
           if (mode === "runtime") {
-            await drainPendingSessionDeliveries({
-              drainKey: `test-started-exhausted-${mode}`,
+            await drainPendingSessionDelivery({
+              id,
               logLabel: "test started reconciliation",
+              bypassBackoff: true,
               deliver,
               stateDir: tempDir,
               log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-              selectEntry: (candidate) => ({ match: candidate.id === id, bypassBackoff: true }),
             });
           } else {
             const summary = await recoverPendingSessionDeliveries({
@@ -775,13 +748,13 @@ describe("session-delivery queue recovery", () => {
         throw new Error("terminal evidence unavailable");
       });
       const drain = async () =>
-        await drainPendingSessionDeliveries({
-          drainKey: "test-started-reconciliation-failed",
+        await drainPendingSessionDelivery({
+          id,
           logLabel: "test started reconciliation",
+          bypassBackoff: true,
           deliver,
           stateDir: tempDir,
           log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          selectEntry: (candidate) => ({ match: candidate.id === id, bypassBackoff: true }),
         });
 
       await drain();
@@ -826,11 +799,7 @@ describe("session-delivery queue recovery", () => {
         deliver,
         stateDir: tempDir,
         maxEnqueuedAt,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);

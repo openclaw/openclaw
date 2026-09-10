@@ -11,8 +11,11 @@ import {
   expectConfigOption,
   expectSessionUpdate,
 } from "./translator.bridge-test-helpers.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
@@ -27,7 +30,7 @@ describe("acp setSessionMode bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
       sessionStore,
     });
 
@@ -36,8 +39,6 @@ describe("acp setSessionMode bridge behavior", () => {
     await expect(
       agent.setSessionMode(createSetSessionModeRequest("mode-session", "high")),
     ).rejects.toThrow(/gateway rejected mode/i);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("emits current mode and thought-level config updates after a successful mode change", async () => {
@@ -69,7 +70,7 @@ describe("acp setSessionMode bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -90,8 +91,6 @@ describe("acp setSessionMode bridge behavior", () => {
       "thought_level",
       { currentValue: "high" },
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 });
 
@@ -125,7 +124,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -149,8 +148,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       "thought_level",
       { currentValue: "minimal" },
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("updates non-mode ACP config options through gateway session patches", async () => {
@@ -183,7 +180,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -200,8 +197,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       "reasoning_level",
       { currentValue: "stream" },
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("updates fast mode ACP config options through gateway session patches", async () => {
@@ -240,7 +235,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -257,8 +252,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       "fast_mode",
       { currentValue: "on" },
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("accepts forwarded timeout config options without failing OpenClaw ACP bridge turns", async () => {
@@ -291,7 +284,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       return { ok: true };
     });
     const request = requestMock as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -303,8 +296,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     expect(Array.isArray(result.configOptions)).toBe(true);
 
     expect(requestMock.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects non-string ACP config option values", async () => {
@@ -335,7 +326,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -355,8 +346,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
           requireAcpObject(params, "sessions.patch params").key === "bool-config-session",
       ),
     ).toBe(false);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it('maps response_usage "inherit" selection to sessions.patch with responseUsage: null', async () => {
@@ -390,7 +379,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -407,8 +396,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
         ([method]) => method === "sessions.patch",
       ),
     ).toBe(true);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it('maps response_usage "off" selection to sessions.patch with responseUsage: "off"', async () => {
@@ -441,7 +428,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -457,7 +444,5 @@ describe("acp setSessionConfigOption bridge behavior", () => {
         ([method]) => method === "sessions.patch",
       ),
     ).toBe(true);
-
-    sessionStore.clearAllSessionsForTest();
   });
 });

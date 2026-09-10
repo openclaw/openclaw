@@ -5,6 +5,7 @@ import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-work
 export { PLUGIN_REGISTRY_STATE };
 
 type PluginRegistry = import("./registry-types.js").PluginRegistry;
+type MemoryCapabilityRegistrar = import("./types.js").OpenClawPluginApi["registerMemoryCapability"];
 
 export type RegistryState = {
   activeRegistry: PluginRegistry | null;
@@ -14,9 +15,17 @@ export type RegistryState = {
   workspaceDir: string | null;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
   importedPluginIds: Set<string>;
-  registrationContext?: { registry: PluginRegistry; pluginId: string };
+  registrationContext?: {
+    registry: PluginRegistry;
+    pluginId: string;
+    registerMemoryCapability?: MemoryCapabilityRegistrar;
+  };
   commandRegistryClearTail?: Promise<void>;
   commandRegistryClearRegistries?: Map<PluginRegistry, number>;
+  retiredRegistryCleanups?: Map<
+    Promise<void>,
+    { registry: PluginRegistry; work: import("../shared/async-work-scope.js").AsyncWorkScope }
+  >;
 };
 
 type GlobalRegistryState = typeof globalThis & {
@@ -26,6 +35,12 @@ type GlobalRegistryState = typeof globalThis & {
 export function getPluginRegistryState(): RegistryState | undefined {
   return (globalThis as GlobalRegistryState)[PLUGIN_REGISTRY_STATE];
 }
+
+/** Policy reads the process-active registry, independently of request or registration scopes. */
+export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
+  return getPluginRegistryState()?.activeRegistry ?? null;
+}
+
 export function getActivePluginRegistryWorkspaceDirFromState(): string | undefined {
   return getActivePluginRegistryWorkspaceDirFromStateCore();
 }

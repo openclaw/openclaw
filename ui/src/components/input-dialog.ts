@@ -1,7 +1,8 @@
 // Control UI helper presents Promise-based text input without relying on a native prompt bridge.
-import { html, nothing, render } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import "./modal-dialog.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
 
 type InputDialogOptions = {
   title: string;
@@ -32,13 +33,8 @@ type InputDialogOptions = {
 let inputActive = false;
 
 function presentInputDialog(options: InputDialogOptions): Promise<string | null> {
-  if (options.signal?.aborted) {
-    return Promise.resolve(null);
-  }
-  const host = document.createElement("div");
-  document.body.append(host);
-  return new Promise((resolve) => {
-    let settled = false;
+  return withPromiseModalHost<string | null>({ signal: options.signal, value: null }, (modal) => {
+    const { host, finish, render } = modal;
     let submitting = false;
     let failure: string | null = null;
     const entryValue = (raw: string) => (options.requireValue === true ? raw.trim() : raw);
@@ -55,17 +51,6 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
     // composition across the repaints this triggers.
     let blocked = submitBlocked(options.defaultValue ?? "");
 
-    const finish = (value: string | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      options.signal?.removeEventListener("abort", handleAbort);
-      render(nothing, host);
-      host.remove();
-      resolve(value);
-    };
-    const handleAbort = () => finish(null);
     const inputElement = () => host.querySelector<HTMLInputElement>('input[name="value"]');
 
     const handleInput = (event: Event) => {
@@ -104,9 +89,9 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
       try {
         message = await options.submit(value);
       } catch (error) {
-        message = String(error);
+        message = formatUiError(error);
       }
-      if (settled) {
+      if (modal.settled) {
         return;
       }
       submitting = false;
@@ -129,12 +114,11 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
       finish(null);
     }
 
-    options.signal?.addEventListener("abort", handleAbort, { once: true });
     const label = options.label ?? options.title;
 
     function paint() {
-      render(
-        html`
+      render(() => {
+        return html`
           <openclaw-modal-dialog
             label=${options.title}
             description=${label}
@@ -158,9 +142,11 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
                   autofocus
                 />
               </label>
-              ${failure
-                ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
-                : nothing}
+              ${
+                failure
+                  ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
+                  : nothing
+              }
               <div class="exec-approval-actions">
                 <button type="submit" class="btn primary" ?disabled=${submitting || blocked}>
                   ${options.submitLabel ?? t("common.save")}
@@ -176,9 +162,8 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
               </div>
             </form>
           </openclaw-modal-dialog>
-        `,
-        host,
-      );
+        `;
+      });
     }
 
     paint();

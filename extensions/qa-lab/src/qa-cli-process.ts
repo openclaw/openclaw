@@ -1,7 +1,8 @@
 // Qa Lab plugin module runs CLI processes and parses their structured output.
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord as isJsonRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendQaChildOutput,
@@ -16,7 +17,7 @@ import { QaSuiteInfraError } from "./errors.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { createQaPosixCommandSettlement } from "./posix-command-settlement.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
 
@@ -81,10 +82,6 @@ function parseBalancedJsonPayloadStart(text: string) {
   } catch {
     return undefined;
   }
-}
-
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isStructuredDiagnosticJson(value: unknown) {
@@ -184,19 +181,8 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
 }
 
 function killQaCliWindowsProcessTree(child: Pick<ChildProcessWithoutNullStreams, "kill" | "pid">) {
-  if (child.pid) {
-    const result = spawnSync(
-      resolveQaWindowsSystem32ExePath("taskkill.exe"),
-      ["/PID", String(child.pid), "/T", "/F"],
-      {
-        stdio: "ignore",
-        windowsHide: true,
-        timeout: 5_000,
-      },
-    );
-    if (!result.error && result.status === 0) {
-      return;
-    }
+  if (child.pid && runQaWindowsTaskkill({ pid: child.pid, signal: "SIGKILL" })) {
+    return;
   }
   child.kill("SIGKILL");
 }
@@ -212,11 +198,14 @@ async function runQaCli(
   const stdout = createQaChildOutputCapture();
   const stdoutTail = createQaChildOutputTail();
   const stderr = createQaChildOutputTail();
-  const distEntryPath = path.join(env.repoRoot, "dist", "index.js");
-  const nodeExecPath = await resolveQaNodeExecPath();
+  const command = env.gateway.cliCommand ?? {
+    executablePath: await resolveQaNodeExecPath(),
+    argsPrefix: [path.join(env.repoRoot, "dist", "index.js")],
+    cwd: env.gateway.tempRoot,
+  };
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(nodeExecPath, [distEntryPath, ...args], {
-      cwd: env.gateway.tempRoot,
+    const child = spawn(command.executablePath, [...command.argsPrefix, ...args], {
+      cwd: command.cwd,
       env: {
         ...env.gateway.runtimeEnv,
         ...opts?.env,

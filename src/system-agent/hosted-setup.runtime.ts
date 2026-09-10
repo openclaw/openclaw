@@ -52,7 +52,7 @@ export async function runHostedSetup(params: {
   run: (context: { baseConfig: OpenClawConfig; runtime: RuntimeEnv }) => Promise<
     | {
         nextConfig: OpenClawConfig;
-        afterWrite?: (committedConfig: OpenClawConfig) => Promise<void>;
+        afterWrite?: (configPath: string) => Promise<void>;
       }
     | { keptCurrent: true }
   >;
@@ -71,12 +71,12 @@ export async function runHostedSetup(params: {
     return "kept-current";
   }
   await params.beforePersistentApply(runtime);
-  const committedConfig = await writeWizardConfigFile(result.nextConfig, {
+  const committed = await writeWizardConfigFile(result.nextConfig, {
     allowConfigSizeDrop: false,
     baseHash: snapshot.hash,
     ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
   });
-  await result.afterWrite?.(committedConfig);
+  await result.afterWrite?.(committed.path);
   return "applied";
 }
 
@@ -86,38 +86,36 @@ export async function runHostedChannelSetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
-  const {
-    createChannelOnboardingPostWriteHookCollector,
-    runCollectedChannelOnboardingPostWriteHooks,
-    setupChannels,
-  } = await import("../commands/onboard-channels.js");
-  const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
+  const { createChannelSetupHooks, setupChannels } =
+    await import("../commands/onboard-channels.js");
+  let channelSetup: ReturnType<typeof createChannelSetupHooks>;
   return await runHostedSetup({
     label: "Channel setup",
     runtime,
     beforePersistentApply,
-    run: async ({ baseConfig, runtime: setupRuntime }) => ({
-      nextConfig: await setupChannels(baseConfig, setupRuntime, prompter, {
-        initialSelection: [channel],
-        forceAllowFromChannels: [channel],
-        allowIMessageInstall: true,
-        allowSignalInstall: true,
-        deferStatusUntilSelection: true,
-        quickstartDefaults: true,
-        skipDmPolicyPrompt: true,
-        skipConfirm: true,
+    run: async ({ baseConfig, runtime: setupRuntime }) => {
+      channelSetup = createChannelSetupHooks({
+        runtime: setupRuntime,
         beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
-        onPostWriteHook: (hook) => postWriteHooks.collect(hook),
-      }),
-      afterWrite: async (committedConfig) => {
-        await runCollectedChannelOnboardingPostWriteHooks({
-          hooks: postWriteHooks.drain(),
-          cfg: committedConfig,
-          runtime: setupRuntime,
+      });
+      return {
+        nextConfig: await setupChannels(baseConfig, setupRuntime, prompter, {
+          initialSelection: [channel],
+          forceAllowFromChannels: [channel],
+          allowIMessageInstall: true,
+          allowSignalInstall: true,
+          deferStatusUntilSelection: true,
+          quickstartDefaults: true,
+          skipDmPolicyPrompt: true,
+          skipConfirm: true,
           beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
-        });
-      },
-    }),
+          onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
+        }),
+        afterWrite: async (configPath) => {
+          await channelSetup.runPostWriteHooks(configPath);
+        },
+      };
+    },
   });
 }
 
@@ -126,7 +124,7 @@ export async function runHostedSkillsSetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
-  const [{ setupSkills }, { resolveOnboardingAgentTarget }] = await Promise.all([
+  const [{ setupSkills }, { resolveSystemAgentOnboardingTarget }] = await Promise.all([
     import("../commands/onboard-skills.js"),
     import("../commands/onboard-agent-target.js"),
   ]);
@@ -137,7 +135,7 @@ export async function runHostedSkillsSetup(
     run: async ({ baseConfig, runtime: setupRuntime }) => ({
       nextConfig: await setupSkills(
         baseConfig,
-        resolveOnboardingAgentTarget(baseConfig).workspaceDir,
+        resolveSystemAgentOnboardingTarget(baseConfig).workspaceDir,
         setupRuntime,
         prompter,
         { beforePersistentEffect: async () => await beforePersistentApply(setupRuntime) },
@@ -220,8 +218,8 @@ export async function runHostedMemoryImport(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
 ): Promise<HostedMemoryImportOutcome> {
-  const [{ resolveAgentWorkspaceDir, resolveDefaultAgentId }, { readSetupConfigFileSnapshot }] =
-    await Promise.all([import("../agents/agent-scope.js"), loadSetupShared()]);
+  const [{ readSetupConfigFileSnapshot }, { resolveSystemAgentOnboardingTarget }] =
+    await Promise.all([loadSetupShared(), import("../commands/onboard-agent-target.js")]);
   const snapshot = await readSetupConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
     throw new Error(
@@ -230,8 +228,7 @@ export async function runHostedMemoryImport(
   }
   const baseHash = snapshot.hash;
   const config = snapshot.config;
-  const agentId = resolveDefaultAgentId(config);
-  const workspace = resolveAgentWorkspaceDir(config, agentId);
+  const { agentId, workspaceDir: workspace } = resolveSystemAgentOnboardingTarget(config);
   try {
     if (!(await stat(workspace)).isDirectory()) {
       return { status: "workspace-missing", providers: [], workspace };
@@ -248,6 +245,7 @@ export async function runHostedMemoryImport(
   const runtime = createHostedWizardRuntime(defaultRuntime);
   return await runSetupMemoryImportStep({
     config,
+    agentId,
     prompter,
     runtime,
     beforeApply: async () => {

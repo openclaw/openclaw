@@ -114,7 +114,7 @@ async function applyWorkspace(params: {
     ...params,
     baseManifestRef: `sha256:${"a".repeat(64)}`,
     currentManifestRef: `sha256:${"b".repeat(64)}`,
-    publishAcceptedManifest: params.publishAcceptedManifest,
+    acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
     journal: {
       load: () => pending,
       begin: (journal) => {
@@ -480,10 +480,13 @@ describe("worker workspace reconciliation", () => {
     });
 
     expect(cleanupRef).toBe(cleanupWorkerWorkspaceResultRef(stagedResultRef));
-    await deleteWorkerWorkspaceResultCleanupRefs({
+    const retainedRefs = new Set<string>();
+    const cleanup = deleteWorkerWorkspaceResultCleanupRefs({
       root: local,
-      retainedRefs: new Set([cleanupRef]),
+      retainedRefs: () => retainedRefs,
     });
+    retainedRefs.add(cleanupRef);
+    await cleanup;
     await expect(
       hasWorkerWorkspaceResultRef({ root: local, stagedResultRef: cleanupRef }),
     ).resolves.toBe(true);

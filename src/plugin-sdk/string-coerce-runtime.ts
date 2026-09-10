@@ -1,4 +1,4 @@
-// Narrow primitive coercion helpers for plugins that do not need the full text-runtime barrel.
+// Browser-safe primitive coercion, normalization, and UTF-16 helpers for plugins.
 
 export {
   hasNonEmptyString,
@@ -13,10 +13,12 @@ export {
   normalizeOptionalStringifiedId,
   normalizeStringifiedEntries,
   normalizeStringifiedOptionalString,
+  readNonBlankString,
   readNonEmptyStringPreservingWhitespace,
   readStringValue,
 } from "../../packages/normalization-core/src/string-coerce.js";
 export {
+  asDateTimestampMs,
   asFiniteNumberInRange,
   asFiniteNumber,
   asPositiveSafeInteger,
@@ -35,10 +37,12 @@ export {
   asNullableRecord,
   asOptionalObjectRecord,
   asOptionalRecord,
+  filterStringRecord,
   isRecord,
   readStringField,
 } from "../../packages/normalization-core/src/record-coerce.js";
 export {
+  filterStringEntries,
   normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,
@@ -53,4 +57,5 @@ export {
   uniqueStrings,
   uniqueValues,
 } from "../../packages/normalization-core/src/string-normalization.js";
+export { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
 export { summarizeStringEntries } from "../shared/string-sample.js";

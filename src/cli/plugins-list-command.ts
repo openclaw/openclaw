@@ -29,6 +29,7 @@ async function loadHumanListModules() {
 
   return {
     formatPluginLine: listFormat.formatPluginLine,
+    formatPluginStatus: listFormat.formatPluginStatus,
     formatPluginSourceForTable: sourceDisplay.formatPluginSourceForTable,
     formatCliCommand: commandFormat.formatCliCommand,
     getTerminalTableWidth: table.getTerminalTableWidth,
@@ -55,6 +56,7 @@ export async function runPluginsListCommand(
   if (opts.json) {
     const payload = {
       workspaceDir: report.workspaceDir,
+      workspaceScope: report.workspaceScope,
       registry: {
         source: report.registrySource,
         diagnostics: report.registryDiagnostics,
@@ -69,12 +71,27 @@ export async function runPluginsListCommand(
   const {
     formatCliCommand,
     formatPluginLine,
+    formatPluginStatus,
     formatPluginSourceForTable,
     getTerminalTableWidth,
     renderTable,
     resolvePluginSourceRoots,
     theme,
   } = await loadHumanListModules();
+
+  const diagnostics = [...report.diagnostics, ...report.registryDiagnostics].filter(
+    (diagnostic) =>
+      diagnostic.level !== "info" &&
+      (diagnostic.level !== "error" ||
+        !list.some((plugin) => plugin.status === "error" && plugin.error === diagnostic.message)),
+  );
+  for (const { level, message } of diagnostics) {
+    const format = level === "error" ? theme.error : theme.warn;
+    runtime.log(format(`${level === "error" ? "Error" : "Warning"}: ${message}`));
+  }
+  if (diagnostics.length > 0) {
+    runtime.log("");
+  }
 
   if (list.length === 0) {
     const message =
@@ -99,23 +116,18 @@ export async function runPluginsListCommand(
     });
     const usedRoots = new Set<keyof typeof sourceRoots>();
     const rows = list.map((plugin) => {
-      const desc = plugin.description ? theme.muted(plugin.description) : "";
+      const error = plugin.status === "error" && plugin.error;
+      const desc = error ? theme.error(error) : theme.muted(plugin.description ?? "");
       const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
       if (formattedSource.rootKey) {
         usedRoots.add(formattedSource.rootKey);
       }
-      const sourceLine = desc ? `${formattedSource.value}\n${desc}` : formattedSource.value;
       return {
         Name: plugin.name || plugin.id,
         ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
         Format: plugin.format ?? "openclaw",
-        Status:
-          plugin.status === "error"
-            ? theme.error("error")
-            : plugin.enabled
-              ? theme.success("enabled")
-              : theme.warn("disabled"),
-        Source: sourceLine,
+        Status: formatPluginStatus(plugin),
+        Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
         Version: plugin.version ?? "",
       };
     });
@@ -154,7 +166,7 @@ export async function runPluginsListCommand(
 
   const lines: string[] = [];
   for (const plugin of list) {
-    lines.push(formatPluginLine(plugin, true));
+    lines.push(formatPluginLine(plugin));
     lines.push("");
   }
   runtime.log(lines.join("\n").trim());

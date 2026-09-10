@@ -1,4 +1,5 @@
 // Shared config loading and account-line formatting helpers for channel commands.
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
@@ -7,11 +8,14 @@ import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targ
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { requireValidConfig, requireValidConfigFileSnapshot } from "../config-validation.js";
+import { requireValidConfig, requireValidConfigForWrite } from "../config-validation.js";
 
 export type ChatChannel = ChannelId;
 
-export { requireValidConfigFileSnapshot };
+export const NO_CONFIGURED_CHAT_CHANNELS_LINE =
+  "- no configured chat channels (run `openclaw channels list --all` to see installable channels)";
+
+export { requireValidConfigForWrite };
 
 /** Load valid channel command config with read-only secret resolution applied. */
 export async function requireValidChannelConfig(
@@ -40,9 +44,9 @@ export async function requireValidChannelConfig(
 }
 
 function formatAccountLabel(params: { accountId: string; name?: string }) {
-  const base = params.accountId || DEFAULT_ACCOUNT_ID;
+  const base = sanitizeTerminalText(params.accountId || DEFAULT_ACCOUNT_ID);
   if (params.name?.trim()) {
-    return `${base} (${params.name.trim()})`;
+    return `${base} (${sanitizeTerminalText(params.name.trim())})`;
   }
   return base;
 }
@@ -56,7 +60,7 @@ export function formatChannelAccountLabel(params: {
   channelStyle?: (value: string) => string;
   accountStyle?: (value: string) => string;
 }): string {
-  const channelText = params.channelLabel ?? params.channel;
+  const channelText = sanitizeTerminalText(params.channelLabel ?? params.channel);
   const accountText = formatAccountLabel({
     accountId: params.accountId,
     name: params.name,

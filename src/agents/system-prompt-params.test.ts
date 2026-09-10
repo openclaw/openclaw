@@ -2,11 +2,16 @@
 // root discovery from workspace, cwd, and explicit config.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
+
+vi.mock("./git-coauthor-prompt.js", () => ({
+  resolveSessionGitCoauthorPrompt: vi.fn(),
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,6 +37,10 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
 }
 
 describe("buildSystemPromptParams", () => {
+  beforeEach(() => {
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockReset();
+  });
+
   afterEach(() => {
     setActiveNodeContext(null);
     vi.useRealTimers();
@@ -50,6 +59,48 @@ describe("buildSystemPromptParams", () => {
 
     expect(utc.userDate).toBe("2026-01-05");
     expect(tokyo.userDate).toBe("2026-01-06");
+  });
+
+  describe("session Git co-author prompt", () => {
+    const prompt =
+      "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+      "Co-authored-by: ada <20+ada@users.noreply.github.com>";
+    const params = {
+      config: {},
+      agentId: "main",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+        sessionKey: "agent:main:main",
+      },
+    };
+
+    it("resolves credit only when no prepared value was supplied", () => {
+      vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue(prompt);
+      const { runtimeInfo } = buildSystemPromptParams(params);
+
+      expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.runtime.sessionKey,
+      });
+      expect(runtimeInfo.gitCoauthorPrompt).toBe(prompt);
+    });
+
+    it.each([
+      { name: "prepared credit", preparedGitCoauthorPrompt: prompt },
+      { name: "explicit undefined", preparedGitCoauthorPrompt: undefined },
+      { name: "explicit null", preparedGitCoauthorPrompt: null },
+    ])("preserves $name without repeating the lookup", ({ preparedGitCoauthorPrompt }) => {
+      vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue("unexpected second lookup");
+      const { runtimeInfo } = buildSystemPromptParams({ ...params, preparedGitCoauthorPrompt });
+
+      expect(runtimeInfo.gitCoauthorPrompt).toBe(preparedGitCoauthorPrompt ?? undefined);
+      expect(resolveSessionGitCoauthorPrompt).not.toHaveBeenCalled();
+    });
   });
 
   it("projects only the stable active-node identity", () => {
@@ -170,9 +221,16 @@ describe("buildSystemPromptParams", () => {
 
   it("carries session identity into runtime info", () => {
     const { runtimeInfo } = buildSystemPromptParams({
-      agentId: "main",
+      config: {
+        agents: {
+          entries: {
+            "Team Ops": { identity: { name: "\nOps\u200b Navigator\r" } },
+          },
+        },
+      },
+      agentId: "team-ops",
       runtime: {
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:team-ops:main",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
         host: "host",
         os: "os",
@@ -182,7 +240,102 @@ describe("buildSystemPromptParams", () => {
       },
     });
 
-    expect(runtimeInfo.sessionKey).toBe("agent:main:main");
+    expect(runtimeInfo.agentName).toBe("Ops Navigator");
+    expect(runtimeInfo.sessionKey).toBe("agent:team-ops:main");
     expect(runtimeInfo.sessionId).toBe("23ae7fce-3c27-4a51-b58e-d800d8ca091f");
+  });
+
+  it.each([
+    { name: "control-only names", identityName: "\n\u200b\r", expected: undefined },
+    {
+      name: "oversized names",
+      identityName: `${"x".repeat(128)}tail`,
+      expected: "x".repeat(128),
+    },
+    { name: "the technical agent id", identityName: "main", expected: undefined },
+  ])("omits or bounds $name before model context", ({ identityName, expected }) => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config: {
+        agents: {
+          list: [{ id: "main", identity: { name: identityName } }],
+        },
+      },
+      agentId: "main",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.agentName).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "an HTTPS public origin",
+      config: {
+        gateway: {
+          publicOrigin: "https://gateway.example",
+          controlUi: { basePath: "/control" },
+        },
+      },
+      expected:
+        "https://gateway.example/control/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+    },
+    {
+      name: "no public origin",
+      config: { gateway: {} },
+      expected: undefined,
+    },
+    {
+      name: "a disabled Control UI",
+      config: {
+        gateway: {
+          publicOrigin: "https://gateway.example",
+          controlUi: { enabled: false },
+        },
+      },
+      expected: undefined,
+    },
+    {
+      name: "an HTTP loopback origin",
+      config: { gateway: { publicOrigin: "http://127.0.0.1:18789" } },
+      expected: undefined,
+    },
+  ] as const)("publishes the current session URL with $name", ({ config, expected }) => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config,
+      agentId: "main",
+      runtime: {
+        sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.sessionUrl).toBe(expected);
+  });
+
+  it("omits oversized current session URLs from model context", () => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config: { gateway: { publicOrigin: "https://gateway.example" } },
+      agentId: "main",
+      runtime: {
+        sessionKey: `agent:main:dashboard:${"a".repeat(512)}`,
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.sessionUrl).toBeUndefined();
   });
 });

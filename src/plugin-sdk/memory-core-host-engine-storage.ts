@@ -10,6 +10,7 @@ export {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   cosineSimilarity,
+  createMemorySearchDeadlineControl,
   extractProjectKeysFromCuratedEntry,
   DEFAULT_MEMORY_READ_LINES,
   DEFAULT_MEMORY_READ_MAX_CHARS,
@@ -21,14 +22,18 @@ export {
   ensureMemoryPathFtsTriggers,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
+  isAutomaticMemoryEntryEligible,
+  isMemoryOriginEligibleForAutomaticInjection,
   isFileMissingError,
   isTransientMemoryReadError,
   listMemoryFiles,
   loadSqliteVecExtension,
   matchesExtraMemoryPathEntry,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
   MEMORY_CHUNKING_VERSION,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
@@ -48,7 +53,10 @@ export {
   retryTransientMemoryRead,
   remapChunkLines,
   requireNodeSqlite,
+  formatMemoryIndexRebuildGuidance,
   resolveMemoryBackendConfig,
+  resolveMemoryIndexIdentityDiagnostic,
+  resolveMemoryIndexIdentityReason,
   resolveMemorySearchStaleness,
   runWithConcurrency,
   splitCuratedMarkdownEntries,
@@ -67,6 +75,13 @@ export type {
   MemorySource,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
+export {
+  openOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentDatabaseReadOnlyOpenResult,
+  type OpenClawAgentReadOnlyDatabase,
+  type OpenClawAgentReadOnlyDatabaseHandle,
+} from "../state/openclaw-agent-db-readonly.js";
+
 /** Health probe result for embedding provider availability checks. */
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
@@ -80,8 +95,14 @@ export type MemoryEmbeddingProbeResult = {
 export type {
   MemoryChunk,
   MemoryFileEntry,
+  LegacyMemoryReadResult,
+  MemoryIndexIdentityDiagnostic,
+  MemoryIndexIdentityState,
   MemoryProviderStatus,
   MemoryReadResult,
+  MemorySearchDeadlineControl,
+  MemorySearchDeadlineControlAction,
+  MemorySearchDeadlineControlOptions,
   MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySyncProgressUpdate,

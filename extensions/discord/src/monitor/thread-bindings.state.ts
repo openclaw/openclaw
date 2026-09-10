@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveThreadBindingExpiry } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import type {
   PersistedThreadBindingRecord,
@@ -241,6 +242,37 @@ export function resolveThreadBindingMaxAgeMs(params: {
   return Math.max(0, Math.floor(params.defaultMaxAgeMs));
 }
 
+function resolveTimestampExpiry(timestamp: number, durationMs: number): number | undefined {
+  if (durationMs <= 0) {
+    return undefined;
+  }
+  const at = Math.floor(timestamp);
+  return Number.isFinite(at) && at > 0 ? at + durationMs : undefined;
+}
+
+export function resolvePreparedThreadBindingLifecycle(params: {
+  record: ThreadBindingRecord;
+  idleTimeoutMs: number;
+  maxAgeMs: number;
+}) {
+  const idleTimeoutMs = resolveThreadBindingIdleTimeoutMs({
+    record: params.record,
+    defaultIdleTimeoutMs: params.idleTimeoutMs,
+  });
+  const maxAgeMs = resolveThreadBindingMaxAgeMs({
+    record: params.record,
+    defaultMaxAgeMs: params.maxAgeMs,
+  });
+  return {
+    idleTimeoutMs,
+    maxAgeMs,
+    ...resolveThreadBindingExpiry({
+      inactivityExpiresAt: resolveTimestampExpiry(params.record.lastActivityAt, idleTimeoutMs),
+      maxAgeExpiresAt: resolveTimestampExpiry(params.record.boundAt, maxAgeMs),
+    }),
+  };
+}
+
 export function resolveThreadBindingInactivityExpiresAt(params: {
   record: Pick<ThreadBindingRecord, "lastActivityAt" | "idleTimeoutMs">;
   defaultIdleTimeoutMs: number;
@@ -249,14 +281,7 @@ export function resolveThreadBindingInactivityExpiresAt(params: {
     record: params.record,
     defaultIdleTimeoutMs: params.defaultIdleTimeoutMs,
   });
-  if (idleTimeoutMs <= 0) {
-    return undefined;
-  }
-  const lastActivityAt = Math.floor(params.record.lastActivityAt);
-  if (!Number.isFinite(lastActivityAt) || lastActivityAt <= 0) {
-    return undefined;
-  }
-  return lastActivityAt + idleTimeoutMs;
+  return resolveTimestampExpiry(params.record.lastActivityAt, idleTimeoutMs);
 }
 
 export function resolveThreadBindingMaxAgeExpiresAt(params: {
@@ -267,14 +292,7 @@ export function resolveThreadBindingMaxAgeExpiresAt(params: {
     record: params.record,
     defaultMaxAgeMs: params.defaultMaxAgeMs,
   });
-  if (maxAgeMs <= 0) {
-    return undefined;
-  }
-  const boundAt = Math.floor(params.record.boundAt);
-  if (!Number.isFinite(boundAt) || boundAt <= 0) {
-    return undefined;
-  }
-  return boundAt + maxAgeMs;
+  return resolveTimestampExpiry(params.record.boundAt, maxAgeMs);
 }
 
 function linkSessionBinding(targetSessionKey: string, bindingKey: string) {
@@ -386,7 +404,7 @@ function toPersistedBindingRecord(record: ThreadBindingRecord): PersistedThreadB
   if (!serialized) {
     return { ...record };
   }
-  return JSON.parse(serialized) as unknown as PersistedThreadBindingRecord;
+  return normalizePersistedBinding(record.threadId, JSON.parse(serialized)) ?? { ...record };
 }
 
 export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: number } = {}) {
@@ -488,20 +506,4 @@ export function resolveBindingIdsForSession(params: {
     out.push(bindingKey);
   }
   return out;
-}
-
-export function resetThreadBindingsForTests() {
-  for (const manager of MANAGERS_BY_ACCOUNT_ID.values()) {
-    manager.stop();
-  }
-  MANAGERS_BY_ACCOUNT_ID.clear();
-  BINDINGS_BY_THREAD_ID.clear();
-  BINDINGS_BY_SESSION_KEY.clear();
-  REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
-  TOKENS_BY_ACCOUNT_ID.clear();
-  PERSIST_BY_ACCOUNT_ID.clear();
-  THREAD_BINDINGS_STATE.loadedBindings = false;
-  THREAD_BINDINGS_STATE.loadedPersistentBindings = false;
-  THREAD_BINDINGS_STATE.persistenceAvailable = true;
-  THREAD_BINDINGS_STATE.lastPersistedAtMs = 0;
 }

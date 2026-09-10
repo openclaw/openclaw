@@ -51,6 +51,8 @@ export BASETEN_API_KEY=...
 
     </CodeGroup>
 
+    Onboarding saves the connection settings without copying the generated catalog into your config. Existing model rows stay unchanged. If you use `models.mode: "replace"`, onboarding also adds the bundled catalog because that mode disables implicit discovery.
+
   </Step>
   <Step title="Verify the live catalog">
     ```bash
@@ -140,7 +142,7 @@ Most setups only need the API key. To pin the provider explicitly:
 ```
 
 <Note>
-If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `BASETEN_API_KEY` is available to that process. A key exported only in an interactive shell is not visible to an already-running managed service.
+If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `BASETEN_API_KEY` is available to that process (for example, in `~/.openclaw/.env` or via `env.shellEnv`). A key exported only in an interactive shell is not visible to an already-running managed service.
 </Note>
 
 ## Related

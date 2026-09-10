@@ -23,7 +23,27 @@ title: "Usage tracking"
 - Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. Claude Code CLI (`claude-cli`) setups reuse the same Anthropic subscription usage.
 - macOS menu bar: a root "Usage" section appears below Context when provider usage snapshots are available. See [Menu bar](/platforms/mac/menu-bar).
 
-`openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
+Since v2026.5.7, `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
+
+`/usage cost` warns that the **Today** and **Last 30d** totals may be incomplete
+if their aggregate cache is refreshing, partial, or stale, and suggests running
+the command again later. The **Session** total is loaded separately. The CLI
+`openclaw gateway usage-cost` also reports the recorded cache state before its
+totals.
+
+## Usage date ranges
+
+The Gateway methods `usage.cost` and `sessions.usage` interpret date ranges in
+UTC by default. In `mode: "specific"`, use a valid IANA `timeZone`, such as
+`Europe/Vienna`, to follow local calendar days and daylight saving changes.
+It takes precedence over the legacy `utcOffset` field.
+
+Without a `timeZone`, a fixed `utcOffset` must be between `UTC-12:00` and
+`UTC+14:00`, inclusive (for example, `UTC+5:30`). An invalid, nonblank offset
+returns `INVALID_REQUEST` instead of silently using UTC. Omitting both fields
+uses UTC. `usage.cost` also treats a blank offset as omitted; `sessions.usage`
+requires any supplied offset to match the UTC offset format, so omit the field
+instead of sending a blank value.
 
 ## Anthropic and OpenAI cost history
 

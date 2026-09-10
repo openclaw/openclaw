@@ -97,9 +97,7 @@ export async function prepareLocalWorkspaceRsyncBoundary(
     throw new Error("test rsync transfer is missing its bundled receiver invocation");
   }
   const receiverEntry = path.join(remoteHome, invocation.receiverEntryPath);
-  const installRoot = path.join(remoteHome, ".openclaw-worker", BUNDLE_HASH);
   await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
-  await fs.writeFile(path.join(installRoot, "package.json"), '{"type":"module"}\n');
   const tsxApi = import.meta.resolve("tsx/esm/api");
   const sourceEntry = pathToFileURL(path.resolve("src/worker/workspace-rsync-receiver.ts")).href;
   await fs.writeFile(
@@ -202,6 +200,7 @@ class FakeProcess implements WorkerSshProcess {
   readonly ready = this.readyDeferred.promise;
   readonly exited = this.exitDeferred.promise;
   stopCount = 0;
+  private stopPromise?: Promise<void>;
   private stopBarrier: Promise<void> | undefined;
 
   becomeReady() {
@@ -213,24 +212,29 @@ class FakeProcess implements WorkerSshProcess {
     this.exitDeferred.resolve({ code, signal: null });
   }
 
-  exit(code = 1) {
-    this.exitDeferred.resolve({ code, signal: null });
+  exit(code = 1, stderrTail?: string) {
+    this.exitDeferred.resolve({ code, signal: null, ...(stderrTail ? { stderrTail } : {}) });
   }
 
   blockStopUntil(barrier: Promise<void>) {
     this.stopBarrier = barrier;
   }
 
-  async stop() {
-    this.stopCount += 1;
-    await this.stopBarrier;
-    this.readyDeferred.reject(new Error("stopped"));
-    this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
+  stop() {
+    return (this.stopPromise ??= (async () => {
+      this.stopCount += 1;
+      await this.stopBarrier;
+      this.readyDeferred.reject(new Error("stopped"));
+      this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
+    })());
   }
 }
 
 export function fakeRunner(
-  onRun?: (argv: string[], options: CommandOptions) => SpawnResult | undefined,
+  onRun?: (
+    argv: string[],
+    options: CommandOptions,
+  ) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
 ) {
   const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
   const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
@@ -242,7 +246,7 @@ export function fakeRunner(
     },
     async run(argv, options) {
       runs.push({ argv, options });
-      return onRun?.(argv, options) ?? success();
+      return (await onRun?.(argv, options)) ?? success();
     },
   };
   return { runner, runs, starts };
@@ -318,14 +322,6 @@ export function localWorkspaceRunner(
         return await runCommandWithTimeout(localArgv, options);
       }
       if (argv[0] === "ssh") {
-        if (
-          typeof options.input === "string" &&
-          options.input.includes("unsafe worker tunnel directory")
-        ) {
-          const result = success();
-          onCommandCompleted?.(argv, result);
-          return result;
-        }
         const remoteCommand = argv.at(-1);
         if (!remoteCommand) {
           throw new Error("missing test SSH remote command");
@@ -359,8 +355,7 @@ export async function waitForStarts(starts: unknown[], count: number) {
   await waitForFast(() => expect(starts).toHaveLength(count));
 }
 
-type TunnelTestFake = Pick<ReturnType<typeof fakeRunner>, "runner" | "starts">;
-type TunnelManagerOptions = NonNullable<Parameters<typeof createWorkerTunnelManager>[0]>;
+type TunnelTestFake = Pick<ReturnType<typeof fakeRunner>, "runner">;
 type TunnelManager = ReturnType<typeof createWorkerTunnelManager>;
 
 export function startTestTunnel(
@@ -376,7 +371,6 @@ export function startTestTunnel(
     bundleHash: BUNDLE_HASH,
     ssh,
     sharedHost,
-    gateway: { host: "127.0.0.1", port: 18789 },
     resolveIdentity,
   });
 }
@@ -388,21 +382,15 @@ export async function startConnectedTunnel(
   options: {
     ssh?: WorkerSshEndpoint;
     sharedHost?: boolean;
-    manager?: Omit<TunnelManagerOptions, "runner">;
-    beforeReady?: (start: TunnelTestFake["starts"][number]) => void;
   } = {},
 ) {
-  const manager = createWorkerTunnelManager({ ...options.manager, runner: fake.runner });
-  const starting = startTestTunnel(
+  const manager = createWorkerTunnelManager({ runner: fake.runner });
+  const handle = await startTestTunnel(
     manager,
     environmentId,
     ownerEpoch,
     options.ssh,
     options.sharedHost,
   );
-  await waitForStarts(fake.starts, 1);
-  const start = fake.starts[0]!;
-  options.beforeReady?.(start);
-  start.process.becomeReady();
-  return { manager, handle: await starting, start };
+  return { manager, handle };
 }

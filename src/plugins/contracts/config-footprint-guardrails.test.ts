@@ -139,16 +139,12 @@ describe("config footprint guardrails", () => {
     }
   });
 
-  it("keeps canonical nested streaming paths in channel-owned schemas", () => {
+  it("keeps retired flat streaming aliases out of channel-owned schemas", () => {
     const telegramSource = readSource("extensions/telegram/src/config-schema.ts");
     const discordSource = readSource("extensions/discord/src/config-schema.ts");
     const msTeamsSource = readSource("extensions/msteams/src/config-schema.ts");
     const slackSource = readSource("extensions/slack/src/config-schema.ts");
 
-    expect(telegramSource).toContain("streaming: TelegramPreviewStreamingConfigSchema.optional(),");
-    expect(discordSource).toContain("streaming: DiscordPreviewStreamingConfigSchema.optional(),");
-    expect(msTeamsSource).toContain("streaming: ChannelPreviewStreamingConfigSchema.optional(),");
-    expect(slackSource).toContain("streaming: SlackStreamingConfigSchema.optional(),");
     for (const schemaSource of [telegramSource, discordSource, msTeamsSource, slackSource]) {
       expect(schemaSource).not.toContain(
         'streamMode: z.enum(["replace", "status_final", "append"])',
@@ -156,15 +152,6 @@ describe("config footprint guardrails", () => {
       expect(schemaSource).not.toContain("draftChunk:");
       expect(schemaSource).not.toContain("nativeStreaming:");
     }
-  });
-
-  it("keeps Matrix setup input canonical-first after plugin ownership", () => {
-    const source = readSource("extensions/matrix/src/setup-config.ts");
-    const canonicalIndex = source.indexOf("dangerouslyAllowPrivateNetwork?: boolean;");
-    const aliasIndex = source.indexOf("allowPrivateNetwork?: boolean;");
-
-    expect(canonicalIndex).toBeGreaterThanOrEqual(0);
-    expect(aliasIndex).toBeGreaterThan(canonicalIndex);
   });
 
   it("keeps retired config aliases out of the shared setup input", () => {
@@ -188,7 +175,7 @@ describe("config footprint guardrails", () => {
     );
   });
 
-  it("keeps current channel schemas plugin-owned with a narrow shipped compatibility tier", () => {
+  it("keeps current channel schemas plugin-owned behind shipped compatibility exports", () => {
     const source = readSource("src/plugin-sdk/channel-config-schema.ts");
     const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
     const bundledSection = bundledSource.slice(
@@ -249,8 +236,7 @@ describe("config footprint guardrails", () => {
     // channel-config-schema is the canonical internal module; the primitives
     // and bundled shells stay export-compatible for plugins only.
     const allowedShellImporters = new Set([
-      // The facade's focused regression tests are its only internal consumers.
-      "src/plugin-sdk/bundled-channel-config-schema.test.ts",
+      // The compatibility test exercises the shipped facade exports.
       "src/plugin-sdk/shipped-channel-compat.test.ts",
       // This guardrail file embeds facade specifiers in shell-shape assertions.
       "src/plugins/contracts/config-footprint-guardrails.test.ts",

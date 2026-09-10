@@ -8,8 +8,9 @@ import {
   getMemorySearchManager,
 } from "./memory/index.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
+import { classifyWorkspaceMemoryPaths } from "./workspace-path-classifier.js";
 
-export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPluginRuntime {
+export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
   if (host.openKeyedStore) {
     configureMemoryCoreDreamingState(host.openKeyedStore);
   }
@@ -26,21 +27,16 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPlu
         error,
       };
     },
-    resolveMemoryBackendConfig(params) {
-      return resolveMemoryBackendConfig(params);
-    },
+    resolveMemoryBackendConfig,
     async authorizeSearchHits(params) {
       const { filterMemorySearchHitsBySessionVisibility } =
         await import("./session-search-visibility.js");
       return await filterMemorySearchHitsBySessionVisibility(params);
     },
-    async closeAllMemorySearchManagers() {
-      await closeAllMemorySearchManagers();
-    },
-    async closeMemorySearchManager(params) {
-      await closeMemorySearchManager(params);
-    },
-  };
+    classifyWorkspaceMemoryPaths,
+    closeAllMemorySearchManagers,
+    closeMemorySearchManager,
+  } satisfies MemoryPluginRuntime;
 }
 
 export const memoryRuntime = createMemoryRuntime();

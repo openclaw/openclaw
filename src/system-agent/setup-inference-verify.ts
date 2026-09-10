@@ -2,36 +2,36 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
-import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
+  type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
-import { redactSetupInferenceError } from "./setup-inference-activate.js";
 import {
   type ActivateSetupInferenceDeps,
   type BoundVerifySetupInferenceResult,
   type CompleteSetupInferenceResult,
   type VerifySetupInferenceResult,
   invalidSetupConfigError,
+  redactSetupInferenceError,
 } from "./setup-inference-core.js";
 import { revalidateStableSetupInferenceOwner } from "./setup-inference-owner.js";
 import {
   cleanupSetupInferenceTempDir,
   persistManualAuthProfiles,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import type { SetupInferenceTestPlan } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   hasCurrentSystemAgentOwnerPluginArtifacts,
@@ -87,6 +87,7 @@ export async function verifySetupInference(
   let verifiedBinding: SystemAgentVerifiedInferenceBinding | undefined;
   const verification = await verifySetupInferenceConfig({
     config: cfg,
+    configSnapshot: snapshot,
     runtime: params.runtime,
     requireExecutionOwner: params.bindSession === true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -94,10 +95,7 @@ export async function verifySetupInference(
     ...(params.deps ? { deps: params.deps } : {}),
     ...(params.bindSession
       ? {
-          onVerifiedExecution: (
-            _auth: AgentExecutionAuthBinding,
-            binding: SystemAgentVerifiedInferenceBinding,
-          ) => {
+          onVerifiedExecution: (binding: SystemAgentVerifiedInferenceBinding) => {
             verifiedBinding = binding;
           },
         }
@@ -125,7 +123,12 @@ export async function verifySetupInference(
   if (!params.bindSession) {
     return verification;
   }
-  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.agentId);
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+    cfg,
+    params.agentId,
+    {},
+    snapshot,
+  );
   if (!configuredRoute || !verifiedBinding) {
     return {
       ok: false,
@@ -151,7 +154,7 @@ export type ResolvePersistentApplyInferenceDeps = SystemAgentVerifiedInferenceDe
 };
 
 function executionRouteIdentity(route: SystemAgentConfiguredRoute): unknown {
-  const { runConfig: _runConfig, ...identity } = route;
+  const { runConfig: _runConfig, sourceConfig: _sourceConfig, ...identity } = route;
   return identity;
 }
 
@@ -214,6 +217,10 @@ export async function resolvePersistentApplyInference(params: {
 /** Live-test a staged default-agent route before any caller persists it. */
 export async function verifySetupInferenceConfig(params: {
   config: OpenClawConfig;
+  /** Present only when config is the unchanged runtime view from this read. */
+  configSnapshot?: SystemAgentConfigSnapshot;
+  /** Interactive candidate activation verifies managed tool-capable models before persistence. */
+  verifyAgentTools?: boolean;
   /** Candidate profiles staged in the isolated probe store, never the real agent store. */
   authProfiles?: ProviderAuthResult["profiles"];
   agentId?: string;
@@ -222,11 +229,8 @@ export async function verifySetupInferenceConfig(params: {
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
-  /** Internal session gate: capture only the final exact successful credential. */
-  onVerifiedExecution?: (
-    auth: AgentExecutionAuthBinding,
-    binding: SystemAgentVerifiedInferenceBinding,
-  ) => void;
+  /** Internal session gate: capture only the final verified execution binding. */
+  onVerifiedExecution?: (binding: SystemAgentVerifiedInferenceBinding) => void;
   /** Reject a successful turn unless its runner reports the exact execution owner. */
   requireExecutionOwner?: boolean;
 }): Promise<VerifySetupInferenceResult> {
@@ -235,7 +239,7 @@ export async function verifySetupInferenceConfig(params: {
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
   };
   const cfg = params.config;
-  const routeAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(cfg));
+  const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   if (!resolveAgentEffectiveModelPrimary(cfg, routeAgentId)) {
     return {
       ok: false,
@@ -251,6 +255,7 @@ export async function verifySetupInferenceConfig(params: {
       kind: "existing-model",
       cfg,
       sourceCfg: cfg,
+      configSnapshot: params.configSnapshot,
       workspaceDir: tempDir,
       pluginWorkspaceDir: tempDir,
       agentDir: path.join(tempDir, "agent"),
@@ -321,7 +326,7 @@ export async function verifySetupInferenceConfig(params: {
         if (!credential) {
           throw new Error("staged profile missing after verification");
         }
-        return { profileId: profile.profileId, credential };
+        return { ...profile, credential };
       });
     };
     const retainStagedAuthProfiles = () => {
@@ -346,7 +351,12 @@ export async function verifySetupInferenceConfig(params: {
     let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
     if (requiresExecutionOwner) {
       configuredRoute =
-        (await resolveSystemAgentConfiguredRouteFromConfig(cfg, routeAgentId)) ?? undefined;
+        (await resolveSystemAgentConfiguredRouteFromConfig(
+          cfg,
+          routeAgentId,
+          {},
+          params.configSnapshot,
+        )) ?? undefined;
       if (!configuredRoute) {
         return {
           ok: false,
@@ -362,12 +372,11 @@ export async function verifySetupInferenceConfig(params: {
           executionRoute: configuredRoute,
           deps,
         });
-      } catch {
+      } catch (error) {
         return {
           ok: false,
           status: "unavailable",
-          error:
-            "Could not bind the configured inference plugin runtime. Refresh or reinstall the plugin and retry.",
+          error: `Could not bind the configured inference plugin runtime. Refresh or reinstall the plugin and retry. (${await redactSetupInferenceError(error)})`,
         };
       }
     }
@@ -377,6 +386,7 @@ export async function verifySetupInferenceConfig(params: {
       deps,
       authProfileStateMode: "read-only",
       requireExecutionOwner: requiresExecutionOwner,
+      verifyAgentTools: params.verifyAgentTools,
     });
     let retained = retainStagedAuthProfiles();
     if (!retained.ok) {
@@ -403,6 +413,7 @@ export async function verifySetupInferenceConfig(params: {
           deps,
           authProfileStateMode: "read-only",
           requireExecutionOwner: true,
+          verifyAgentTools: params.verifyAgentTools,
         });
         retained = retainStagedAuthProfiles();
         if (!retained.ok) {
@@ -433,13 +444,12 @@ export async function verifySetupInferenceConfig(params: {
             stagedOwnerPluginArtifacts,
             deps,
           });
-          params.onVerifiedExecution?.(test.auth, binding);
-        } catch {
+          params.onVerifiedExecution?.(binding);
+        } catch (error) {
           return {
             ok: false,
             status: "auth",
-            error:
-              "The verified inference owner changed before validation completed. Retry the inference check.",
+            error: await redactSetupInferenceError(error),
             ...(authProfiles ? { authProfiles } : {}),
           };
         }
@@ -464,6 +474,7 @@ export async function verifySetupInferenceConfig(params: {
 /** Run one tool-free completion through the configured setup inference route. */
 export async function completeSetupInference(params: {
   prompt: string;
+  agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -480,7 +491,9 @@ export async function completeSetupInference(params: {
   }
   return await completeSetupInferenceConfig({
     config: snapshot.runtimeConfig ?? snapshot.config,
+    configSnapshot: snapshot,
     prompt: params.prompt,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     runtime: params.runtime,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.deps ? { deps: params.deps } : {}),
@@ -490,7 +503,9 @@ export async function completeSetupInference(params: {
 /** Config-injected variant used by setup clients and live provider tests. */
 export async function completeSetupInferenceConfig(params: {
   config: OpenClawConfig;
+  configSnapshot?: SystemAgentConfigSnapshot;
   prompt: string;
+  agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -499,7 +514,7 @@ export async function completeSetupInferenceConfig(params: {
     ...params.deps,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
   };
-  const routeAgentId = normalizeAgentId(resolveDefaultAgentId(params.config));
+  const routeAgentId = resolveAmbientOwnerAgentId(params.config, params.agentId);
   if (!resolveAgentEffectiveModelPrimary(params.config, routeAgentId)) {
     return { ok: false, status: "unavailable", error: "No agent model is configured." };
   }
@@ -511,6 +526,7 @@ export async function completeSetupInferenceConfig(params: {
       kind: "existing-model",
       cfg: params.config,
       sourceCfg: params.config,
+      configSnapshot: params.configSnapshot,
       workspaceDir: tempDir,
       pluginWorkspaceDir: tempDir,
       agentDir: path.join(tempDir, "agent"),

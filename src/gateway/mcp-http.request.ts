@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { getHeader } from "./http-utils.js";
 import {
   resolveAttachGrant,
@@ -22,11 +21,7 @@ import {
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
-const MAX_MCP_BODY_BYTES = 1_048_576;
 const DEFAULT_MCP_BODY_TIMEOUT_MS = 30_000;
-const MCP_HTTP_BODY_TOO_LARGE_CODE = "ETOOBIG";
-const MCP_HTTP_BODY_TIMEOUT_CODE = "ETIMEDOUT";
-const MCP_HTTP_BODY_CLOSED_CODE = "ECONNRESET";
 
 function readPositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -63,8 +58,7 @@ type McpLoopbackRequestAuth = {
   senderIsOwner: boolean;
   boundSessionKey?: string;
   boundAgentId?: string;
-  boundContext?: McpLoopbackRequestContext;
-  boundCaptureKey?: string;
+  boundClientGrant?: NonNullable<ReturnType<typeof resolveMcpLoopbackClientGrant>>;
   boundGrantToken?: string;
 };
 
@@ -143,8 +137,7 @@ function resolveMcpSender(params: {
   if (clientGrant) {
     return {
       senderIsOwner: clientGrant.context.senderIsOwner,
-      boundContext: clientGrant.context,
-      boundCaptureKey: clientGrant.captureKey,
+      boundClientGrant: clientGrant,
       boundGrantToken: grantToken,
     };
   }
@@ -281,113 +274,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return {
-    senderIsOwner: sender.senderIsOwner,
-    boundSessionKey: sender.boundSessionKey,
-    boundAgentId: sender.boundAgentId,
-    boundContext: sender.boundContext,
-    boundCaptureKey: sender.boundCaptureKey,
-    boundGrantToken: sender.boundGrantToken,
-  };
-}
-
-export async function readMcpHttpBody(
-  req: IncomingMessage,
-  options: { maxBytes?: number; timeoutMs?: number } = {},
-): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? MAX_MCP_BODY_BYTES));
-    const timeoutMs = resolveSafeTimeoutDelayMs(options.timeoutMs ?? DEFAULT_MCP_BODY_TIMEOUT_MS);
-    const chunks: Buffer[] = [];
-    let received = 0;
-    let settled = false;
-    // Remove listeners on every terminal path; oversized bodies keep the error
-    // listener briefly so Node can deliver the pause/error safely.
-    const cleanup = (cleanupOptions?: { keepErrorListener?: boolean }) => {
-      req.off("data", onData);
-      req.off("end", onEnd);
-      req.off("close", onClose);
-      if (cleanupOptions?.keepErrorListener !== true) {
-        req.off("error", onError);
-      }
-      clearTimeout(timeout);
-    };
-    const rejectOnce = (error: Error, rejectOptions?: { keepErrorListener?: boolean }) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup(rejectOptions);
-      reject(error);
-    };
-    const onData = (chunk: Buffer) => {
-      received += chunk.length;
-      if (received > maxBytes) {
-        req.pause();
-        rejectOnce(createMcpHttpBodyTooLargeError(maxBytes), { keepErrorListener: true });
-        return;
-      }
-      chunks.push(chunk);
-    };
-    const onEnd = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve(Buffer.concat(chunks).toString("utf-8"));
-    };
-    const onError = (error: Error) => {
-      rejectOnce(error);
-    };
-    const onClose = () => {
-      rejectOnce(createMcpHttpBodyClosedError());
-    };
-    const timeout = setTimeout(() => {
-      req.pause();
-      rejectOnce(createMcpHttpBodyTimeoutError(), { keepErrorListener: true });
-    }, timeoutMs);
-    timeout.unref?.();
-
-    req.on("data", onData);
-    req.on("end", onEnd);
-    req.on("close", onClose);
-    req.on("error", onError);
-  });
-}
-
-function createMcpHttpBodyTooLargeError(maxBytes: number): Error & { code: string } {
-  return Object.assign(new Error(`Request body exceeds ${maxBytes} bytes`), {
-    code: MCP_HTTP_BODY_TOO_LARGE_CODE,
-  });
-}
-
-function createMcpHttpBodyTimeoutError(): Error & { code: string } {
-  return Object.assign(new Error("Request body timed out"), {
-    code: MCP_HTTP_BODY_TIMEOUT_CODE,
-  });
-}
-
-function createMcpHttpBodyClosedError(): Error & { code: string } {
-  return Object.assign(new Error("Request body connection closed"), {
-    code: MCP_HTTP_BODY_CLOSED_CODE,
-  });
-}
-
-export function isMcpHttpBodyTooLargeError(error: unknown): error is Error & { code: string } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { code?: unknown }).code === MCP_HTTP_BODY_TOO_LARGE_CODE
-  );
-}
-
-export function isMcpHttpBodyTimeoutError(error: unknown): error is Error & { code: string } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { code?: unknown }).code === MCP_HTTP_BODY_TIMEOUT_CODE
-  );
+  return sender;
 }
 
 export function resolveMcpHttpBodyTimeoutMs(): number {
@@ -398,8 +285,8 @@ export function resolveMcpCliCaptureKey(
   req: IncomingMessage,
   auth: McpLoopbackRequestAuth,
 ): string | undefined {
-  if (auth.boundContext || auth.boundSessionKey) {
-    return auth.boundCaptureKey;
+  if (auth.boundClientGrant || auth.boundSessionKey) {
+    return auth.boundClientGrant?.captureKey;
   }
   return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
 }
@@ -416,11 +303,11 @@ export function resolveMcpRequestContext(
   cfg: OpenClawConfig,
   auth: McpLoopbackRequestAuth,
 ): McpRequestContext {
-  if (auth.boundContext) {
+  if (auth.boundClientGrant) {
     // Gateway-launched CLI clients receive an immutable context grant. The
     // child process can replay the token, but cannot scope-shop by rewriting
     // session, channel, capability, or ownership headers.
-    return structuredClone(auth.boundContext);
+    return structuredClone(auth.boundClientGrant.context);
   }
   // Grant-authenticated callers get only their server-bound session and optional
   // global-session agent owner; spoofable delivery/action headers stay reserved.

@@ -11,11 +11,6 @@ import { type FileLockOptions, withFileLock } from "../../../src/infra/file-lock
 import { getWindowsSystem32ExePath } from "../../../src/infra/windows-install-roots.js";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 
-type CommandResult = {
-  stdout: string;
-  stderr: string;
-};
-
 type PackageManifest = {
   name: string;
   version: string;
@@ -43,6 +38,7 @@ const SDK_PACKAGE_BUILD_LOCK_OPTIONS = {
 type PackedSdkConsumer = {
   root: string;
   run: (script: string) => Promise<void>;
+  typecheck: (source: string) => Promise<void>;
   cleanup: () => Promise<void>;
 };
 
@@ -105,7 +101,7 @@ function runCommand(
     SpawnOptionsWithoutStdio,
     "env" | "shell" | "windowsVerbatimArguments"
   >,
-): Promise<CommandResult> {
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -137,15 +133,14 @@ function runCommand(
     });
     child.once("exit", (code, signal) => {
       clearTimeout(timer);
-      const result = { stdout: stdout.join(""), stderr: stderr.join("") };
       if (code === 0) {
-        resolve(result);
+        resolve();
         return;
       }
       reject(
         new Error(
           `command failed (${String(code ?? signal)}): ${[command, ...args].join(" ")}\n` +
-            `--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`,
+            `--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`,
         ),
       );
     });
@@ -155,7 +150,7 @@ function runCommand(
 function runPnpmCommand(
   args: string[],
   options: { cwd: string; timeoutMs?: number },
-): Promise<CommandResult> {
+): Promise<void> {
   const spec = createPnpmRunnerSpawnSpec({
     cwd: options.cwd,
     env: createCommandEnv(),
@@ -174,7 +169,7 @@ function runPnpmCommand(
 function runNpmCommand(
   args: string[],
   options: { cwd: string; timeoutMs?: number },
-): Promise<CommandResult> {
+): Promise<void> {
   const env = createCommandEnv();
   const runner = resolveNpmRunner({ env, npmArgs: args });
   return runCommand(runner.command, runner.args, {
@@ -412,6 +407,30 @@ export async function createPackedSdkConsumer(): Promise<PackedSdkConsumer> {
       await runCommand(process.execPath, createNodeEvalArgs(script, { evalFlag: "-e" }), {
         cwd: root,
       });
+    },
+    typecheck: async (source) => {
+      const sourcePath = path.join(root, "consumer.ts");
+      const tsconfigPath = path.join(root, "tsconfig.json");
+      await fs.writeFile(sourcePath, source);
+      await fs.writeFile(
+        tsconfigPath,
+        JSON.stringify({
+          compilerOptions: {
+            module: "NodeNext",
+            moduleResolution: "NodeNext",
+            noEmit: true,
+            skipLibCheck: true,
+            strict: true,
+            types: [],
+          },
+          include: ["consumer.ts"],
+        }),
+      );
+      await runCommand(
+        process.execPath,
+        [path.join(repoRoot, "scripts", "run-tsgo.mjs"), "-p", tsconfigPath, "--pretty", "false"],
+        { cwd: repoRoot },
+      );
     },
     cleanup: () => fs.rm(root, { recursive: true, force: true }),
   };

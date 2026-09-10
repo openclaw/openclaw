@@ -1,41 +1,40 @@
 // Imessage plugin module implements approval reactions behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   addApprovalReactionHintToText,
   approvalReactionDecisionSetsMatch,
   buildApprovalReactionHint,
+  buildApprovalReactionDeliveredBindingMarker,
   createApprovalReactionTargetStore,
-  extractApprovalReactionPromptBinding,
-  hasApprovalReactionHintText,
+  readApprovalReactionTargetRecord,
+  settleApprovalReaction,
   listApprovalReactionBindings,
   normalizeApprovalReactionDecision,
   readApprovalReactionDeliveredBinding,
   readApprovalReactionPresentationBinding,
   resolveTypedApprovalReactionTarget,
-  type ApprovalReactionDecisionBinding,
   type ApprovalReactionDeliveryBinding,
   type ApprovalReactionTargetRecord,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  asDateTimestampMs,
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
+  clearIMessageApprovalReactionPollTargetsForTest,
+  deleteIMessageApprovalReactionPollTargets,
+  recordIMessageApprovalReactionPollTarget,
+} from "./approval-reaction-poll-targets.js";
+import {
   buildIMessageApprovalConversationKeyForInbound,
   buildIMessageApprovalConversationKeyForTarget,
   enumerateApprovalTargetKeys,
   normalizeConversationKey,
-  normalizeIMessageGuid,
   type IMessageApprovalConversationKey,
 } from "./approval-target-keys.js";
 import { resolveIMessageReactionContext } from "./monitor/reaction-context.js";
@@ -47,11 +46,9 @@ const PERSISTENT_NAMESPACE = "imessage.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
-type IMessageApprovalReactionBinding = ApprovalReactionDecisionBinding;
-
 type IMessageApprovalReactionResolution = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
 };
 type IMessageApprovalReactionHandleResult =
@@ -60,98 +57,19 @@ type IMessageApprovalReactionHandleResult =
   | {
       handled: true;
       stopPolling: true;
-      stopPollingReason: "resolved" | "not-found" | "resolver-error";
+      stopPollingReason: "resolved" | "not-found";
     };
 
 type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord & {
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 };
 
 export type { IMessageApprovalConversationKey } from "./approval-target-keys.js";
-
-export type PendingIMessageApprovalReactionPollTarget = {
-  accountId: string;
-  conversation: IMessageApprovalConversationKey;
-  messageId: string;
-  approvalId: string;
-  approvalKind: "exec" | "plugin";
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-  expiresAtMs: number;
-};
 
 const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
   () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
   (runtime) => runtime.resolveApprovalOverGateway,
 );
-const pendingReactionPollTargets = new Map<string, PendingIMessageApprovalReactionPollTarget>();
-
-function prunePendingReactionPollTargets(nowMs = Date.now()): void {
-  for (const [key, target] of pendingReactionPollTargets.entries()) {
-    if (!isFutureDateTimestampMs(target.expiresAtMs, { nowMs })) {
-      pendingReactionPollTargets.delete(key);
-    }
-  }
-}
-
-function resolvePendingReactionPollExpiry(
-  ttlMs: number | undefined,
-): { ttlMs: number; expiresAtMs: number } | undefined {
-  const nowMs = asDateTimestampMs(Date.now());
-  if (nowMs === undefined) {
-    return undefined;
-  }
-  const expiresAtMs =
-    resolveExpiresAtMsFromDurationMs(ttlMs ?? DEFAULT_REACTION_TARGET_TTL_MS, { nowMs }) ??
-    resolveExpiresAtMsFromDurationMs(DEFAULT_REACTION_TARGET_TTL_MS, { nowMs });
-  if (expiresAtMs === undefined) {
-    return undefined;
-  }
-  return {
-    ttlMs: expiresAtMs - nowMs,
-    expiresAtMs,
-  };
-}
-
-function mergePollTargetConversation(
-  left: IMessageApprovalConversationKey,
-  right: IMessageApprovalConversationKey,
-): IMessageApprovalConversationKey {
-  return {
-    chatGuid: left.chatGuid ?? right.chatGuid,
-    chatIdentifier: left.chatIdentifier ?? right.chatIdentifier,
-    chatId: left.chatId ?? right.chatId,
-    handle: left.handle ?? right.handle,
-  };
-}
-
-export function listPendingIMessageApprovalReactionPollTargets(params: {
-  accountId: string;
-}): PendingIMessageApprovalReactionPollTarget[] {
-  const accountId = params.accountId.trim();
-  if (!accountId) {
-    return [];
-  }
-  prunePendingReactionPollTargets();
-  const targetByApprovalAndMessage = new Map<string, PendingIMessageApprovalReactionPollTarget>();
-  for (const target of pendingReactionPollTargets.values()) {
-    if (target.accountId !== accountId) {
-      continue;
-    }
-    const key = `${target.approvalId}:${normalizeIMessageGuid(target.messageId)}`;
-    const existing = targetByApprovalAndMessage.get(key);
-    if (!existing) {
-      targetByApprovalAndMessage.set(key, target);
-      continue;
-    }
-    targetByApprovalAndMessage.set(key, {
-      ...existing,
-      conversation: mergePollTargetConversation(existing.conversation, target.conversation),
-      expiresAtMs: Math.max(existing.expiresAtMs, target.expiresAtMs),
-    });
-  }
-  return [...targetByApprovalAndMessage.values()];
-}
-
 const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
   getOptionalIMessageRuntime,
   "imessage",
@@ -178,31 +96,6 @@ function reportApprovalBindingCorrelationMismatch(binding: {
   }
 }
 
-function readPersistedTarget(value: unknown): IMessageApprovalReactionTarget | null {
-  const target = value as Partial<IMessageApprovalReactionTarget> | undefined;
-  if (
-    !target ||
-    typeof target.approvalId !== "string" ||
-    !Array.isArray(target.allowedDecisions) ||
-    (target.approvalKind !== "exec" && target.approvalKind !== "plugin")
-  ) {
-    return null;
-  }
-  const allowedDecisions = target.allowedDecisions
-    .map((valueValue) =>
-      typeof valueValue === "string" ? normalizeApprovalReactionDecision(valueValue) : null,
-    )
-    .filter((valueLocal): valueLocal is ExecApprovalReplyDecision => Boolean(valueLocal));
-  if (allowedDecisions.length === 0) {
-    return null;
-  }
-  return {
-    approvalId: target.approvalId,
-    approvalKind: target.approvalKind,
-    allowedDecisions,
-  };
-}
-
 const imessageApprovalReactionTargets =
   createApprovalReactionTargetStore<IMessageApprovalReactionTarget>({
     namespace: PERSISTENT_NAMESPACE,
@@ -210,41 +103,8 @@ const imessageApprovalReactionTargets =
     defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
     openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStore(params),
     logPersistentError: reportPersistentApprovalReactionError,
-    readPersistedTarget,
+    readPersistedTarget: readApprovalReactionTargetRecord,
   });
-
-function listIMessageApprovalReactionBindings(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): IMessageApprovalReactionBinding[] {
-  return listApprovalReactionBindings({ allowedDecisions });
-}
-
-export function buildIMessageApprovalReactionHint(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): string | null {
-  return buildApprovalReactionHint({ allowedDecisions });
-}
-
-export function addIMessageApprovalReactionHintToText(params: {
-  text: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  return addApprovalReactionHintToText(params);
-}
-
-export function appendIMessageApprovalReactionHintForOutboundMessage(text: string): string {
-  if (hasApprovalReactionHintText(text)) {
-    return text;
-  }
-  const binding = extractIMessageApprovalPromptBinding(text);
-  if (!binding) {
-    return text;
-  }
-  return addIMessageApprovalReactionHintToText({
-    text,
-    allowedDecisions: binding.allowedDecisions,
-  });
-}
 
 type IMessageApprovalDeliveryBinding = ApprovalReactionDeliveryBinding & {
   approvalSlug: string;
@@ -301,14 +161,14 @@ function visibleApprovalBindingMatches(
   if (!options.requireReactionHint) {
     return true;
   }
-  const hint = buildIMessageApprovalReactionHint(binding.allowedDecisions);
+  const hint = buildApprovalReactionHint({ allowedDecisions: binding.allowedDecisions });
   return Boolean(hint && text.includes(hint));
 }
 
 /** Preserve a validated typed approval binding until the iMessage GUID is known. */
 export function addIMessageApprovalReactionHintToStructuredPayload(params: {
   payload: ReplyPayload;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
 }): ReplyPayload | null {
   const metadata = readApprovalReactionPresentationBinding({
     payload: params.payload,
@@ -325,47 +185,42 @@ export function addIMessageApprovalReactionHintToStructuredPayload(params: {
   }
   return {
     ...params.payload,
-    text: addIMessageApprovalReactionHintToText({
+    text: addApprovalReactionHintToText({
       text,
       allowedDecisions: metadata.allowedDecisions,
     }),
     channelData: {
       ...params.payload.channelData,
-      [IMESSAGE_APPROVAL_DELIVERY_BINDING_KEY]: {
-        version: 1,
+      [IMESSAGE_APPROVAL_DELIVERY_BINDING_KEY]: buildApprovalReactionDeliveredBindingMarker({
         approvalId: metadata.approvalId,
         approvalSlug: metadata.approvalSlug,
         approvalKind: metadata.approvalKind,
         allowedDecisions: metadata.allowedDecisions,
-      },
+      }),
     },
   };
 }
 
 const APPROVE_COMMAND_LINE_RE = /\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i;
 
-export function extractIMessageApprovalPromptBinding(text: string): {
-  approvalId: string;
-  approvalKind: "exec" | "plugin";
-  allowedDecisions: ExecApprovalReplyDecision[];
-} | null {
-  return extractApprovalReactionPromptBinding({ text });
-}
-
 export function registerIMessageApprovalReactionTarget(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   messageId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): IMessageApprovalReactionTarget | null {
+  const accountId = params.accountId.trim();
+  const messageId = params.messageId.trim();
   const approvalId = params.approvalId.trim();
-  const allowedDecisions = listIMessageApprovalReactionBindings(params.allowedDecisions).map(
-    (binding) => binding.decision,
-  );
+  const allowedDecisions = listApprovalReactionBindings({
+    allowedDecisions: params.allowedDecisions,
+  }).map((binding) => binding.decision);
   if (
+    !accountId ||
+    !messageId ||
     !approvalId ||
     (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
     allowedDecisions.length === 0
@@ -373,10 +228,6 @@ export function registerIMessageApprovalReactionTarget(params: {
     return null;
   }
   const target = { approvalId, approvalKind: params.approvalKind, allowedDecisions };
-  const expiry = resolvePendingReactionPollExpiry(params.ttlMs);
-  if (!expiry) {
-    return null;
-  }
   // Register the binding under every key we can derive from the conversation
   // (chat_guid / chat_identifier / chat_id / handle). Inbound lookup precedence
   // can differ from outbound — e.g. send only sees `{handle: "+1..."}` for a
@@ -384,52 +235,30 @@ export function registerIMessageApprovalReactionTarget(params: {
   // Indexing under every available key keeps send/inbound symmetric without
   // forcing the caller to know which key the bridge will pick.
   const keys = enumerateApprovalTargetKeys({
-    accountId: params.accountId,
+    accountId,
     conversation: params.conversation,
-    messageId: params.messageId,
+    messageId,
   });
   if (keys.length === 0) {
     return null;
   }
+  const expiry = recordIMessageApprovalReactionPollTarget({
+    keys,
+    accountId,
+    conversation: params.conversation,
+    messageId,
+    approvalId,
+    approvalKind: params.approvalKind,
+    allowedDecisions,
+    ttlMs: params.ttlMs,
+  });
+  if (!expiry) {
+    return null;
+  }
   for (const key of keys) {
     imessageApprovalReactionTargets.register(key, target, { ttlMs: expiry.ttlMs });
-    pendingReactionPollTargets.set(key, {
-      accountId: params.accountId,
-      conversation: params.conversation,
-      messageId: params.messageId,
-      approvalId,
-      approvalKind: params.approvalKind,
-      allowedDecisions,
-      expiresAtMs: expiry.expiresAtMs,
-    });
   }
-  prunePendingReactionPollTargets();
   return target;
-}
-
-export function registerIMessageApprovalReactionTargetForOutboundMessage(params: {
-  accountId: string;
-  conversation: IMessageApprovalConversationKey;
-  messageId: string;
-  text: string;
-  approvalKind: "exec" | "plugin";
-  ttlMs?: number;
-}): boolean {
-  const binding = extractIMessageApprovalPromptBinding(params.text);
-  if (!binding || binding.approvalKind !== params.approvalKind) {
-    return false;
-  }
-  return Boolean(
-    registerIMessageApprovalReactionTarget({
-      accountId: params.accountId,
-      conversation: params.conversation,
-      messageId: params.messageId,
-      approvalId: binding.approvalId,
-      approvalKind: params.approvalKind,
-      allowedDecisions: binding.allowedDecisions,
-      ttlMs: params.ttlMs,
-    }),
-  );
 }
 
 export { buildIMessageApprovalConversationKeyForTarget };
@@ -522,8 +351,8 @@ export function unregisterIMessageApprovalReactionTarget(params: {
   const keys = enumerateApprovalTargetKeys(params);
   for (const key of keys) {
     imessageApprovalReactionTargets.delete(key);
-    pendingReactionPollTargets.delete(key);
   }
+  deleteIMessageApprovalReactionPollTargets(keys);
 }
 
 function resolveTarget(params: {
@@ -647,48 +476,27 @@ export async function handleIMessageApprovalReaction(params: {
   if (event.action === "removed") {
     return { handled: false, stopPolling: false };
   }
-  let target: IMessageApprovalReactionResolution | null = null;
+  let matchedTarget: IMessageApprovalReactionResolution | null = null;
   let matchedMessageId: string | null = null;
   for (const candidate of event.messageIdCandidates) {
-    target = await resolveIMessageApprovalReactionTargetWithPersistence({
+    matchedTarget = await resolveIMessageApprovalReactionTargetWithPersistence({
       accountId: params.accountId,
       conversation: event.conversation,
       messageId: candidate,
       reactionKey: event.reactionKey,
     });
-    if (target) {
+    if (matchedTarget) {
       matchedMessageId = candidate;
       break;
     }
   }
+  const target = matchedTarget;
   if (!target) {
     return { handled: false, stopPolling: false };
   }
 
-  const approvers = getIMessageApprovalApprovers({ cfg: params.cfg, accountId: params.accountId });
-  if (approvers.length === 0) {
-    params.logVerboseMessage?.(
-      `imessage: approval reaction denied id=${target.approvalId}; reactions require explicit approvers`,
-    );
-    return { handled: true, stopPolling: false };
-  }
-  const auth = imessageApprovalAuth.authorizeActorAction({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    senderId: event.actorHandle,
-    action: "approve",
-    approvalKind: target.approvalKind,
-  });
-  if (!auth.authorized) {
-    params.logVerboseMessage?.(
-      `imessage: approval reaction denied id=${target.approvalId} sender=${event.actorHandle}`,
-    );
-    return { handled: true, stopPolling: false };
-  }
-
-  const resolveApprovalOverGateway = await loadResolveApprovalOverGateway();
-  try {
-    const result = await resolveApprovalOverGateway({
+  const settlement = await settleApprovalReaction({
+    request: {
       cfg: params.cfg,
       approvalId: target.approvalId,
       approvalKind: target.approvalKind,
@@ -698,24 +506,12 @@ export async function handleIMessageApprovalReaction(params: {
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
-    });
-    // Every terminal result clears the binding. Losing surfaces receive applied:false
-    // without a new event, so retaining their controls would keep polling stale state.
-    // Iterate every GUID candidate so prefixed/unprefixed forms are both cleared.
-    for (const candidate of event.messageIdCandidates) {
-      unregisterIMessageApprovalReactionTarget({
-        accountId: params.accountId,
-        conversation: event.conversation,
-        messageId: candidate,
-      });
-    }
-    const outcome = result.applied ? "resolved" : "already resolved";
-    params.logVerboseMessage?.(
-      `imessage: approval reaction ${outcome} id=${target.approvalId} sender=${event.actorHandle} ${formatCanonicalApprovalTerminalState(result.approval)} via messageId=${matchedMessageId ?? event.messageId}`,
-    );
-    return { handled: true, stopPolling: true, stopPollingReason: "resolved" };
-  } catch (error) {
-    if (isApprovalNotFoundError(error)) {
+    },
+    approvers: getIMessageApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }),
+    authorizeActorAction: (input) => imessageApprovalAuth.authorizeActorAction(input),
+    loadResolver: loadResolveApprovalOverGateway,
+    clearTarget: () => {
+      // Retire every GUID alias and its poll target, including losing surfaces.
       for (const candidate of event.messageIdCandidates) {
         unregisterIMessageApprovalReactionTarget({
           accountId: params.accountId,
@@ -723,29 +519,31 @@ export async function handleIMessageApprovalReaction(params: {
           messageId: candidate,
         });
       }
+    },
+    onResolved: (result) => {
+      const outcome = result.applied ? "resolved" : "already resolved";
       params.logVerboseMessage?.(
-        `imessage: approval reaction ignored for expired approval id=${target.approvalId} sender=${event.actorHandle}`,
+        `imessage: approval reaction ${outcome} id=${target.approvalId} sender=${event.actorHandle} ${formatCanonicalApprovalTerminalState(result.approval)} via messageId=${matchedMessageId ?? event.messageId}`,
       );
-      return { handled: true, stopPolling: true, stopPollingReason: "not-found" };
-    }
-    // Surface non-NotFound errors at warn level so a gateway 5xx / network
-    // outage / auth failure is visible without OPENCLAW_LOG_LEVEL=debug.
-    try {
-      getOptionalIMessageRuntime()
-        ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-reactions" })
-        .warn("approval reaction failed", {
-          approvalId: target.approvalId,
-          senderId: event.actorHandle,
-          error: String(error),
-        });
-    } catch {
-      // Logger surface is optional in tests; never let logging mask the error.
-    }
-    params.logVerboseMessage?.(
-      `imessage: approval reaction failed id=${target.approvalId} sender=${event.actorHandle}: ${String(error)}`,
-    );
-    return { handled: true, stopPolling: true, stopPollingReason: "resolver-error" };
-  }
+    },
+    onError: (error) => {
+      try {
+        getOptionalIMessageRuntime()
+          ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-reactions" })
+          .warn("approval reaction failed", {
+            approvalId: target.approvalId,
+            senderId: event.actorHandle,
+            error: String(error),
+          });
+      } catch {
+        // Optional logging must not mask a replayable resolver failure.
+      }
+    },
+    logVerboseMessage: params.logVerboseMessage,
+  });
+  return settlement === "denied"
+    ? { handled: true, stopPolling: false }
+    : { handled: true, stopPolling: true, stopPollingReason: settlement };
 }
 
 export async function maybeResolveIMessageApprovalReaction(params: {
@@ -762,6 +560,6 @@ export async function maybeResolveIMessageApprovalReaction(params: {
 
 export function clearIMessageApprovalReactionTargetsForTest(): void {
   imessageApprovalReactionTargets.clearForTest();
-  pendingReactionPollTargets.clear();
+  clearIMessageApprovalReactionPollTargetsForTest();
   loadResolveApprovalOverGateway.clear();
 }

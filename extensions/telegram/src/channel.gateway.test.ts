@@ -1,13 +1,17 @@
 // Telegram tests cover channel.gateway plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { telegramPlugin } from "./channel.js";
@@ -24,7 +28,7 @@ import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 const probeTelegram = vi.fn();
 const monitorTelegramProvider = vi.fn();
 const sendMessageTelegram = vi.fn();
-const tempRoots: string[] = [];
+let testState: OpenClawTestState;
 
 const startupBotInfo: TelegramBotInfo = {
   id: 123456,
@@ -42,94 +46,11 @@ const startupBotInfo: TelegramBotInfo = {
   allows_users_to_create_topics: false,
 };
 
-async function useTempStateDir(): Promise<string> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-channel-"));
-  tempRoots.push(stateDir);
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  return stateDir;
-}
-
-type MemoryPluginStateEntry<T> = { key: string; value: T; createdAt: number; expiresAt?: number };
-
-function createMemoryPluginStateStore<T>(
-  maxEntries: number,
-  defaultTtlMs: number | undefined,
-  entries: Map<string, MemoryPluginStateEntry<unknown>>,
-) {
-  type Entry = { key: string; value: T; createdAt: number; expiresAt?: number };
-  const typedEntries = entries as Map<string, Entry>;
-  const readEntry = (key: string): Entry | undefined => {
-    const entry = typedEntries.get(key);
-    if (!entry) {
-      return undefined;
-    }
-    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
-      typedEntries.delete(key);
-      return undefined;
-    }
-    return entry;
-  };
-  const writeEntry = (key: string, value: T, opts?: { ttlMs?: number }): void => {
-    const createdAt = Date.now();
-    const entry: Entry = { key, value, createdAt };
-    const ttlMs = opts?.ttlMs ?? defaultTtlMs;
-    if (ttlMs !== undefined) {
-      entry.expiresAt = createdAt + ttlMs;
-    }
-    typedEntries.set(key, entry);
-    while (typedEntries.size > maxEntries) {
-      const oldestKey = typedEntries.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      typedEntries.delete(oldestKey);
-    }
-  };
-  return {
-    async register(key: string, value: T, opts?: { ttlMs?: number }) {
-      writeEntry(key, value, opts);
-    },
-    async registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }) {
-      if (readEntry(key)) {
-        return false;
-      }
-      writeEntry(key, value, opts);
-      return true;
-    },
-    async lookup(key: string) {
-      return readEntry(key)?.value;
-    },
-    async consume(key: string) {
-      const value = readEntry(key)?.value;
-      typedEntries.delete(key);
-      return value;
-    },
-    async delete(key: string) {
-      return typedEntries.delete(key);
-    },
-    async entries() {
-      return [...typedEntries.keys()]
-        .map((key) => readEntry(key))
-        .filter((entry): entry is Entry => Boolean(entry));
-    },
-    async clear() {
-      typedEntries.clear();
-    },
-  };
-}
-
 function installTelegramRuntime() {
-  const keyedStores = new Map<string, Map<string, MemoryPluginStateEntry<unknown>>>();
   const runtime = createPluginRuntimeMock({
     state: {
-      openKeyedStore: ((options) => {
-        let entries = keyedStores.get(options.namespace);
-        if (!entries) {
-          entries = new Map();
-          keyedStores.set(options.namespace, entries);
-        }
-        return createMemoryPluginStateStore(options.maxEntries, options.defaultTtlMs, entries);
-      }) as TelegramRuntime["state"]["openKeyedStore"],
+      openKeyedStore: <T>(options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0]) =>
+        createPluginStateKeyedStoreForTests<T>("telegram", { ...options, env: testState.env }),
     },
   });
   const telegramRuntime = {
@@ -147,14 +68,6 @@ function installTelegramRuntime() {
   } as unknown as TelegramRuntime;
   setTelegramRuntime(telegramRuntime);
   return telegramRuntime;
-}
-
-function createRuntimeEnvMock() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
 }
 
 function createTelegramConfig(
@@ -211,6 +124,7 @@ function startTelegramAccount(
 function latestMonitorOptions(): {
   token?: string;
   accountId?: string;
+  ownerAgentId?: string;
   useWebhook?: boolean;
   botInfo?: unknown;
 } {
@@ -255,8 +169,10 @@ async function releaseStartupProbeControls(releaseProbe: Array<() => void>) {
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.useRealTimers();
+  resetPluginStateStoreForTests();
+  testState = await createOpenClawTestState({ label: "telegram-channel" });
 });
 
 afterEach(async () => {
@@ -266,22 +182,12 @@ afterEach(async () => {
   probeTelegram.mockReset();
   monitorTelegramProvider.mockReset();
   sendMessageTelegram.mockReset();
+  resetPluginStateStoreForTests();
   vi.unstubAllEnvs();
-  await Promise.all(
-    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
+  await testState.cleanup();
 });
 
 describe("telegramPlugin gateway startup", () => {
-  it("routes message actions through the gateway", () => {
-    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
-      "gateway",
-    );
-    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
-      "gateway",
-    );
-  });
-
   it.each([401, 404] as const)(
     "stops before monitor startup when getMe rejects the token with %s",
     async (status) => {
@@ -330,6 +236,60 @@ describe("telegramPlugin gateway startup", () => {
     expect(monitorOptions.useWebhook).toBe(false);
   });
 
+  it("starts a multi-agent account with its routed owner", async () => {
+    installTelegramRuntime();
+    probeTelegram.mockResolvedValue({
+      ok: false,
+      status: 500,
+      error: "Bad Gateway",
+      elapsedMs: 12,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {}, research: {} },
+      },
+      channels: { telegram: { botToken: "123456:bad-token" } },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "*" } }],
+    } as OpenClawConfig;
+    const account = telegramPlugin.config.resolveAccount(cfg, "default");
+    const startAccount = telegramPlugin.gateway?.startAccount;
+    if (!startAccount) {
+      throw new Error("expected Telegram startAccount gateway handler");
+    }
+
+    await startAccount(createStartAccountContext({ account, cfg }));
+
+    expect(latestMonitorOptions()).toMatchObject({
+      accountId: "default",
+      ownerAgentId: "main",
+    });
+  });
+
+  it("rejects genuinely ambiguous multi-agent account ownership before startup", async () => {
+    installTelegramRuntime();
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {}, research: {} },
+      },
+      channels: { telegram: { botToken: "123456:bad-token" } },
+    } as OpenClawConfig;
+    const account = telegramPlugin.config.resolveAccount(cfg, "default");
+    const startAccount = telegramPlugin.gateway?.startAccount;
+    if (!startAccount) {
+      throw new Error("expected Telegram startAccount gateway handler");
+    }
+
+    await expect(startAccount(createStartAccountContext({ account, cfg }))).rejects.toMatchObject({
+      name: "AgentSelectionRequiredError",
+      code: "AGENT_SELECTION_REQUIRED",
+    });
+    expect(probeTelegram).not.toHaveBeenCalled();
+    expect(monitorTelegramProvider).not.toHaveBeenCalled();
+  });
+
   it("uses the getMe request guard for startup probe timeout", async () => {
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({
@@ -375,7 +335,6 @@ describe("telegramPlugin gateway startup", () => {
   });
 
   it("caches successful startup probe botInfo for later restarts", async () => {
-    await useTempStateDir();
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({
       ok: true,
@@ -402,7 +361,6 @@ describe("telegramPlugin gateway startup", () => {
   });
 
   it("refreshes cached startup botInfo before monitor startup", async () => {
-    await useTempStateDir();
     installTelegramRuntime();
     const refreshedBotInfo = {
       ...startupBotInfo,
@@ -441,7 +399,6 @@ describe("telegramPlugin gateway startup", () => {
   });
 
   it("falls back to cached startup botInfo when refresh fails without auth failure", async () => {
-    await useTempStateDir();
     installTelegramRuntime();
     await writeCachedTelegramBotInfo({
       accountId: "ops",
@@ -464,7 +421,6 @@ describe("telegramPlugin gateway startup", () => {
   });
 
   it("deletes cached startup botInfo when the account token changes", async () => {
-    await useTempStateDir();
     installTelegramRuntime();
     await writeCachedTelegramBotInfo({
       accountId: "ops",
@@ -476,7 +432,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
       nextCfg: createTelegramConfig("ops", { botToken: "123456:new-token" }),
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     await expect(
@@ -488,7 +444,6 @@ describe("telegramPlugin gateway startup", () => {
   });
 
   it("keeps cached startup botInfo when unrelated Telegram config changes", async () => {
-    await useTempStateDir();
     installTelegramRuntime();
     await writeCachedTelegramBotInfo({
       accountId: "ops",
@@ -500,7 +455,7 @@ describe("telegramPlugin gateway startup", () => {
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
       nextCfg: createTelegramConfig("ops", { timeoutSeconds: 60 }),
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     await expect(
@@ -512,7 +467,6 @@ describe("telegramPlugin gateway startup", () => {
   });
 
   it("deletes cached startup botInfo when the account is removed", async () => {
-    await useTempStateDir();
     installTelegramRuntime();
     await writeCachedTelegramBotInfo({
       accountId: "ops",
@@ -523,7 +477,7 @@ describe("telegramPlugin gateway startup", () => {
     await telegramPlugin.lifecycle?.onAccountRemoved?.({
       accountId: "ops",
       prevCfg: createTelegramConfig("ops"),
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
     await expect(
@@ -535,9 +489,10 @@ describe("telegramPlugin gateway startup", () => {
   });
 
   it("deletes cached startup botInfo when logout clears the account token", async () => {
-    await useTempStateDir();
-    installTelegramRuntime();
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const runtime = installTelegramRuntime();
     const cfg = createTelegramConfig("ops");
+    const original = structuredClone(cfg);
     const account = telegramPlugin.config.resolveAccount(cfg, "ops");
     await writeCachedTelegramBotInfo({
       accountId: "ops",
@@ -545,19 +500,63 @@ describe("telegramPlugin gateway startup", () => {
       botInfo: startupBotInfo,
     });
 
-    await telegramPlugin.gateway?.logoutAccount?.({
+    const result = await telegramPlugin.gateway?.logoutAccount?.({
       accountId: "ops",
       account,
       cfg,
-      runtime: createRuntimeEnvMock(),
+      runtime: createRuntimeSpies(),
     });
 
+    expect(result).toEqual({ cleared: true, envToken: false, loggedOut: true });
+    expect(runtime.config.replaceConfigFile).toHaveBeenCalledExactlyOnceWith({
+      nextConfig: {},
+      afterWrite: { mode: "auto" },
+    });
+    expect(cfg).toEqual(original);
     await expect(
       readCachedTelegramBotInfo({
         accountId: "ops",
         botToken: "123456:bad-token",
       }),
     ).resolves.toBeNull();
+  });
+
+  it("preserves token files and sibling config when logout clears an inline token", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const stateDir = testState.stateDir;
+    const runtime = installTelegramRuntime();
+    const remaining = { tokenFile: path.join(stateDir, "missing-token"), name: "Ops" };
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "root-token",
+          accounts: { ops: { ...remaining, botToken: "remove" }, other: { botToken: "keep" } },
+        },
+        line: { enabled: false },
+      },
+    };
+    const original = structuredClone(cfg);
+    const result = await telegramPlugin.gateway?.logoutAccount?.({
+      accountId: "ops",
+      account: telegramPlugin.config.resolveAccount(cfg, "ops"),
+      cfg,
+      runtime: createRuntimeSpies(),
+    });
+
+    expect(result).toEqual({ cleared: true, envToken: false, loggedOut: false });
+    expect(runtime.config.replaceConfigFile).toHaveBeenCalledExactlyOnceWith({
+      nextConfig: {
+        channels: {
+          telegram: {
+            botToken: "root-token",
+            accounts: { ops: remaining, other: { botToken: "keep" } },
+          },
+          line: { enabled: false },
+        },
+      },
+      afterWrite: { mode: "auto" },
+    });
+    expect(cfg).toEqual(original);
   });
 
   it("uses the built-in startup probe timeout", async () => {

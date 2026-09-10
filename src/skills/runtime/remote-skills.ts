@@ -3,8 +3,8 @@ import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js"
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
-import { computeSkillPromptVersion } from "../loading/skill-version.js";
 import type { ParsedSkillFrontmatter, SkillEntry } from "../types.js";
+import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
 type PreparedNodeSkill = NodeSkillDescriptor & {
@@ -59,21 +59,6 @@ function prepareNodeSkills(
   return prepared;
 }
 
-function sameSkills(
-  left: readonly PreparedNodeSkill[],
-  right: readonly PreparedNodeSkill[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (skill, index) =>
-        skill.name === right[index]?.name &&
-        skill.description === right[index]?.description &&
-        skill.content === right[index]?.content,
-    )
-  );
-}
-
 export function recordRemoteSkillNodeInfo(node: {
   nodeId: string;
   connId?: string;
@@ -111,7 +96,14 @@ export function replaceRemoteNodeSkills(params: {
   const changed =
     !existing?.connected ||
     existing.displayName !== params.displayName ||
-    !sameSkills(existing.skills, nextSkills);
+    !areOrderedArraysEqual(
+      existing.skills,
+      nextSkills,
+      (previous, next) =>
+        previous.name === next.name &&
+        previous.description === next.description &&
+        previous.content === next.content,
+    );
   remoteSkillNodes.set(params.nodeId, {
     nodeId: params.nodeId,
     connId: existing?.connId,
@@ -236,7 +228,6 @@ export function mergeRemoteNodeSkillEntries(
         readContent: skill.content,
         filePath,
         baseDir: filePath.slice(0, -"/SKILL.md".length),
-        promptVersion: computeSkillPromptVersion(skill.content),
         source: "openclaw-node",
         sourceInfo: createSyntheticSourceInfo(filePath, {
           source: "openclaw-node",

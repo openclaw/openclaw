@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -9,11 +8,13 @@ import {
 import {
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createAllowlistProviderGroupPolicyWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
+  setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 import {
@@ -87,16 +88,7 @@ function createWhatsAppSetupWizardProxy(
     resolveShouldPromptAccountIds: (params) => params.shouldPromptAccountIds,
     credentials: [],
     delegateFinalize: true,
-    disable: (cfg) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        whatsapp: {
-          ...cfg.channels?.whatsapp,
-          enabled: false,
-        },
-      },
-    }),
+    disable: (cfg) => setSetupChannelEnabled(cfg, WHATSAPP_CHANNEL, false),
     onAccountRecorded: (accountId, options) => {
       options?.onAccountId?.(WHATSAPP_CHANNEL, accountId);
     },
@@ -145,6 +137,12 @@ export function createWhatsAppPluginBase(params: {
         },
       }),
   });
+  const collectWhatsAppOpenGroupFindings = createConditionalWarningCollector.findings({
+    collectWarnings: collectWhatsAppSecurityWarnings,
+    checkId: "channels.whatsapp.groups.open",
+    severity: "critical",
+    title: "WhatsApp security warning",
+  });
   const base = createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
     meta: {
@@ -183,7 +181,7 @@ export function createWhatsAppPluginBase(params: {
         "channels.whatsapp.accounts",
         "channels.whatsapp.selfChatMode",
       ],
-      noopPrefixes: ["channels.whatsapp"],
+      noopPrefixes: ["channels.whatsapp", "messages.inbound", "messages.ackReactionScope"],
     },
     gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],
     configSchema: WhatsAppChannelConfigSchema,
@@ -209,7 +207,7 @@ export function createWhatsAppPluginBase(params: {
     security: {
       applyConfigFixes: applyWhatsAppSecurityConfigFixes,
       resolveDmPolicy: whatsappResolveDmPolicy,
-      collectWarnings: collectWhatsAppSecurityWarnings,
+      collectWarnings: collectWhatsAppOpenGroupFindings,
     },
     doctor: whatsappDoctor,
     setupContract: params.setupContract,

@@ -11,64 +11,58 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
 } from "../../agents/auth-profiles.js";
-import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store-runtime.js";
 import { buildExplicitSessionIdSessionKey } from "../../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../../agents/model-selection.js";
-import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import {
+  acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
 } from "../../agents/simple-completion-runtime.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { convertHeicToJpeg } from "../../media/media-services.js";
-import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   providerHasGenericConfig,
-  providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityAgentOption,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
   resolveTransport,
 } from "./shared.js";
 
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
-const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
+const HEIC_MODEL_RUN_MIMES = new Set([
+  "image/heic",
+  "image/heic-sequence",
+  "image/heif",
+  "image/heif-sequence",
+]);
 
-async function loadModelCatalogForInspection(cfg: OpenClawConfig) {
-  const prepared = await loadPreparedModelCatalog({ config: cfg, readOnly: true });
-  const metadataSnapshot = loadManifestMetadataSnapshot({ config: cfg, env: process.env });
-  const manifest = planEffectiveModelCatalogRows({
-    registry: metadataSnapshot.manifestRegistry,
-    config: cfg,
-  }).rows;
-  const entries = new Map<string, (typeof prepared)[number] | (typeof manifest)[number]>();
-  for (const entry of manifest) {
-    entries.set(`${entry.provider}\0${entry.id}`, entry);
-  }
-  for (const entry of prepared) {
-    entries.set(`${entry.provider}\0${entry.id}`, entry);
-  }
-  return [...entries.values()].toSorted(
+async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: string) {
+  const agentId =
+    rawAgentId === undefined ? undefined : resolveCapabilityProviderAgentId(cfg, rawAgentId);
+  const prepared = await readPreparedModelCatalog({ config: cfg, agentId, readOnly: true });
+  return prepared.toSorted(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
   );
 }
@@ -76,13 +70,15 @@ async function loadModelCatalogForInspection(cfg: OpenClawConfig) {
 async function canonicalizeModelRunRef(params: {
   raw: string | undefined;
   cfg: OpenClawConfig;
+  agentId: string;
   preserveAuthProfile: boolean;
 }): Promise<string | undefined> {
   return await canonicalizeCaseOnlyCatalogModelRef({
     cfg: params.cfg,
     raw: params.raw,
     defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () => loadPreparedModelCatalog({ config: params.cfg, readOnly: true }),
+    loadCatalog: () =>
+      readPreparedModelCatalog({ config: params.cfg, agentId: params.agentId, readOnly: true }),
     preserveAuthProfile: params.preserveAuthProfile,
   });
 }
@@ -168,6 +164,7 @@ async function runModelRun(params: {
   model?: string;
   thinking?: ThinkLevel;
   transport: CapabilityTransport;
+  agent?: string;
 }) {
   const explicitModelOverride = requireProviderModelOverride(params.model);
   const cfg =
@@ -177,10 +174,11 @@ async function runModelRun(params: {
           targetIds: getModelsCommandSecretTargetIds(),
         })
       : getRuntimeConfig();
-  const agentId = resolveDefaultAgentId(cfg);
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer model run");
   const modelRef = await canonicalizeModelRunRef({
     raw: params.model,
     cfg,
+    agentId,
     preserveAuthProfile: params.transport === "local",
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
@@ -197,79 +195,100 @@ async function runModelRun(params: {
         ]
       : params.prompt;
   if (params.transport === "local") {
-    const prepared = await prepareSimpleCompletionModelForAgent({
-      cfg,
-      agentId,
-      modelRef,
-      allowMissingApiKeyModes: ["aws-sdk"],
-      ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
-      skipAgentDiscovery: true,
-    });
-    if ("error" in prepared) {
-      throw new Error(prepared.error);
-    }
-    if (prepared.selection.provider === "codex") {
-      throw new Error(
-        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
-      );
-    }
-    const localModelRunSystemPrompt =
-      prepared.model.api === "openai-chatgpt-responses" ? LOCAL_MODEL_RUN_SYSTEM_PROMPT : undefined;
-    const result = await completeWithPreparedSimpleCompletionModel({
-      model: prepared.model,
-      auth: prepared.auth,
-      cfg,
-      context: {
-        ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
-        messages: [
-          {
-            role: "user",
-            content: messageContent,
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      options: {
-        maxTokens:
-          typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
-            ? prepared.model.maxTokens
-            : undefined,
-        ...(params.thinking ? { reasoning: params.thinking } : {}),
-      },
-    });
-    const text = collectModelRunText(result.content);
-    if (!text) {
-      const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
-      const detail =
-        typeof providerErrorMessage === "string" && providerErrorMessage.trim()
-          ? `: ${providerErrorMessage.trim()}`
-          : "";
-      throw new Error(
-        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
-      );
-    }
-    return {
-      ok: true,
-      capability: "model.run",
-      transport: "local" as const,
-      provider: prepared.selection.provider,
-      model: prepared.selection.modelId,
-      attempts: [],
-      ...(imageFiles.length > 0
-        ? {
-            inputs: imageFiles.map((image) => ({
-              path: image.path,
-              mimeType: image.mimeType,
-            })),
-          }
-        : {}),
-      outputs: [
-        {
-          text,
-          mediaUrl: null,
-        },
-      ],
-    } satisfies CapabilityEnvelope;
+    const callerResult = createDeferredCore<CapabilityEnvelope>();
+    const trackOwner = captureAsyncWorkTracker();
+    // Command completion can precede response callbacks and cancellation drainage.
+    void trackOwner(async () => {
+      const prepared = await acquireSimpleCompletionModelForAgent({
+        cfg,
+        agentId,
+        modelRef,
+        allowMissingApiKeyModes: ["aws-sdk"],
+        ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
+        skipAgentDiscovery: true,
+      });
+      if ("error" in prepared) {
+        throw new Error(prepared.error);
+      }
+      const work = new AsyncWorkScope();
+      try {
+        callerResult.resolve(
+          await work.track(async () => {
+            if (prepared.selection.provider === "codex") {
+              throw new Error(
+                'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+              );
+            }
+            const localModelRunSystemPrompt =
+              prepared.model.api === "openai-chatgpt-responses"
+                ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
+                : undefined;
+            const result = await completeWithPreparedSimpleCompletionModel({
+              model: prepared.model,
+              auth: prepared.auth,
+              cfg,
+              context: {
+                ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
+                messages: [
+                  {
+                    role: "user",
+                    content: messageContent,
+                    timestamp: Date.now(),
+                  },
+                ],
+              },
+              options: {
+                maxTokens:
+                  typeof prepared.model.maxTokens === "number" &&
+                  Number.isFinite(prepared.model.maxTokens)
+                    ? prepared.model.maxTokens
+                    : undefined,
+                ...(params.thinking ? { reasoning: params.thinking } : {}),
+              },
+            });
+            const text = collectModelRunText(result.content);
+            if (!text) {
+              const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
+              const detail =
+                typeof providerErrorMessage === "string" && providerErrorMessage.trim()
+                  ? `: ${providerErrorMessage.trim()}`
+                  : "";
+              throw new Error(
+                `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
+              );
+            }
+            return {
+              ok: true,
+              capability: "model.run",
+              transport: "local" as const,
+              provider: prepared.selection.provider,
+              model: prepared.selection.modelId,
+              attempts: [],
+              ...(imageFiles.length > 0
+                ? {
+                    inputs: imageFiles.map((image) => ({
+                      path: image.path,
+                      mimeType: image.mimeType,
+                    })),
+                  }
+                : {}),
+              outputs: [
+                {
+                  text,
+                  mediaUrl: null,
+                },
+              ],
+            } satisfies CapabilityEnvelope;
+          }),
+        );
+      } catch (error) {
+        callerResult.reject(error);
+      } finally {
+        await work.drain();
+        prepared.release();
+      }
+    }).catch((error: unknown) => callerResult.reject(error));
+    return await callerResult.promise;
   }
 
   const { provider, model } = requireProviderModelOverride(modelRef) ?? {};
@@ -342,11 +361,12 @@ async function runModelRun(params: {
   } satisfies CapabilityEnvelope;
 }
 
-async function buildModelProviders() {
+async function buildModelProviders(rawAgentId?: string) {
   const cfg = getRuntimeConfig();
-  const catalog = await loadModelCatalogForInspection(cfg);
+  const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
+  const catalog = await loadModelCatalogForInspection(cfg, agentId);
   const selectedProvider = resolveSelectedProviderFromModelRef(
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+    resolveAgentEffectiveModelPrimary(cfg, agentId),
   );
   const grouped = new Map<
     string,
@@ -368,6 +388,7 @@ async function buildModelProviders() {
       configured: providerHasGenericConfig({
         cfg,
         providerId: entry.provider,
+        agentId,
         envVars: getProviderEnvVars(entry.provider),
       }),
       selected: selectedProvider === entry.provider,
@@ -381,11 +402,11 @@ async function buildModelProviders() {
   return [...grouped.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-async function runModelAuthStatus() {
+async function runModelAuthStatus(agent: string) {
   const captured: string[] = [];
   const { modelsStatusCommand } = await import("../../commands/models/list.status-command.js");
   await modelsStatusCommand(
-    { json: true },
+    { json: true, agent },
     {
       log: (...args) => captured.push(args.join(" ")),
       error: (message) => {
@@ -400,10 +421,9 @@ async function runModelAuthStatus() {
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 }
 
-async function runModelAuthLogout(provider: string, agent?: string) {
+async function runModelAuthLogout(provider: string, agent: string) {
   const cfg = getRuntimeConfig();
-  const agentId = agent?.trim() || resolveDefaultAgentId(cfg);
-  const agentDir = resolveAgentDir(cfg, agentId);
+  const agentDir = resolveAgentDir(cfg, agent);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
   const updated = await updateAuthProfileStoreWithLock({
@@ -443,7 +463,8 @@ async function runModelAuthLogout(provider: string, agent?: string) {
 export function registerModelCapabilityCommands(capability: Command): void {
   const model = capability
     .command("model")
-    .description("Text inference and model catalog commands");
+    .description("Text inference and model catalog commands")
+    .option("--agent <id>", "Agent whose model and auth state should be used");
 
   model
     .command("run")
@@ -454,8 +475,12 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--thinking <level>", "Thinking level override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
+    .option(
+      "--agent <id>",
+      "Agent whose model and credentials own the run (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const prompt = requireModelRunPrompt(opts.prompt);
         const thinking = normalizeModelRunThinking(opts.thinking);
@@ -467,6 +492,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
         });
         const result = await runModelRun({
           prompt,
+          agent: resolveCapabilityAgentOption(command, opts.agent),
           files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
           thinking,
@@ -480,9 +506,12 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .command("list")
     .description("List known models")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await loadModelCatalogForInspection(getRuntimeConfig());
+        const result = await loadModelCatalogForInspection(
+          getRuntimeConfig(),
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
@@ -492,10 +521,13 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .description("Inspect one model catalog entry")
     .requiredOption("--model <provider/model>", "Model id")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
-        const catalog = await loadModelCatalogForInspection(getRuntimeConfig());
+        const catalog = await loadModelCatalogForInspection(
+          getRuntimeConfig(),
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
           catalog.find((candidate) => candidate.id === target);
@@ -511,28 +543,42 @@ export function registerModelCapabilityCommands(capability: Command): void {
   model
     .command("providers")
     .description("List model providers from the catalog")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await buildModelProviders();
+        const result = await buildModelProviders(resolveCapabilityAgentOption(command, opts.agent));
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
 
-  const modelAuth = model.command("auth").description("Provider auth helpers");
+  const modelAuth = model
+    .command("auth")
+    .description("Provider auth helpers")
+    .option("--agent <id>", "Agent id (default: configured default agent)");
+
+  const resolveModelAuthAgent = (command: Command, rawAgentId: unknown, surface: string) =>
+    resolveCapabilityProviderAgentId(
+      getRuntimeConfig(),
+      resolveCapabilityAgentOption(command, rawAgentId),
+      surface,
+    );
 
   modelAuth
     .command("login")
     .description("Run provider auth login")
     .requiredOption("--provider <id>", "Provider id")
     .option("--method <id>", "Provider auth method id")
-    .action(async (opts) => {
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const agent = resolveModelAuthAgent(command, opts.agent, "infer model auth login");
         const { modelsAuthLoginCommand } = await import("../../commands/models/auth.js");
         await modelsAuthLoginCommand(
           {
             provider: String(opts.provider),
             method: opts.method ? String(opts.method) : undefined,
+            agent,
           },
           defaultRuntime,
         );
@@ -543,13 +589,16 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .command("logout")
     .description("Remove saved auth profiles for one provider")
     .requiredOption("--provider <id>", "Provider id")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option(
+      "--agent <id>",
+      "Agent id (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runModelAuthLogout(
           String(opts.provider),
-          typeof opts.agent === "string" ? opts.agent : undefined,
+          resolveModelAuthAgent(command, opts.agent, "infer model auth logout"),
         );
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
           JSON.stringify(value, null, 2),
@@ -560,10 +609,13 @@ export function registerModelCapabilityCommands(capability: Command): void {
   modelAuth
     .command("status")
     .description("Show configured auth state")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runModelAuthStatus();
+        const result = await runModelAuthStatus(
+          resolveModelAuthAgent(command, opts.agent, "infer model auth status"),
+        );
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
           JSON.stringify(value, null, 2),
         );

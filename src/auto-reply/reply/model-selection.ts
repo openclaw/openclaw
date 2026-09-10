@@ -3,17 +3,16 @@ import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
   resolveAgentDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider-route.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import {
   type ModelAliasIndex,
-  buildConfiguredModelCatalog,
   legacyModelKey,
   modelKey,
   normalizeProviderId,
@@ -39,20 +38,25 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import * as storedModelOverrides from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.shared.js";
+import {
+  findSelectedCatalogEntry,
+  mergePreparedConfiguredCatalog,
+  normalizeRuntimeRef,
+  resolveRuntimeNormalization,
+} from "./model-runtime-normalization.js";
+import {
+  isStaleHeartbeatAutoFallbackOverride,
+  normalizeStoredRuntimeModelRef,
+} from "./stored-model-override.js";
 export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
 export { resolveContextTokens } from "./model-selection-context.js";
-import { normalizeRuntimeRef, resolveRuntimeNormalization } from "./model-runtime-normalization.js";
-import {
-  isStaleHeartbeatAutoFallbackOverride,
-  normalizeStoredRuntimeModelRef,
-  resolveDirectStoredModelOverride,
-  resolveStoredModelOverride,
-} from "./stored-model-override.js";
 
 type ModelCatalog = ModelCatalogEntry[];
 
@@ -66,6 +70,7 @@ type ModelSelectionState = {
   provider: string;
   model: string;
   requestedRouteResolution: ModelFallbackRouteResolution;
+  modelPolicy: ModelVisibilityPolicy;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
   policyAliasIndex: ModelAliasIndex;
@@ -74,11 +79,13 @@ type ModelSelectionState = {
   resetModelOverrideReason?: "disallowed" | "stale" | "temporarily-unavailable";
   modelPolicyConfigPath?: string;
   modelPolicyRepairConfigPath?: string;
-  resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
+  resolveThinkingCatalog: (
+    selection?: ThinkingDefaultSelection,
+  ) => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: (selection?: ThinkingDefaultSelection) => Promise<ThinkLevel>;
   hasConfiguredThinkingDefault?: boolean;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
-  resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
+  resolveDefaultReasoningLevel: (selection?: ThinkingDefaultSelection) => Promise<"on" | "off">;
   needsModelCatalog: boolean;
   modelContextWindow?: number;
   modelContextTokens?: number;
@@ -89,34 +96,6 @@ function resolveConfiguredModelThinkingDefault(raw: unknown): ThinkLevel | undef
     return "off";
   }
   return typeof raw === "string" ? normalizeThinkLevel(raw) : undefined;
-}
-
-/** Creates minimal model-selection state for fast test mode. */
-export function createFastTestModelSelectionState(params: {
-  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
-  provider: string;
-  model: string;
-}): ModelSelectionState {
-  return {
-    provider: params.provider,
-    model: params.model,
-    requestedRouteResolution: "resolved",
-    allowedModelKeys: new Set<string>(),
-    allowedModelCatalog: [],
-    policyAliasIndex: { byAlias: new Map(), byKey: new Map() },
-    resetModelOverride: false,
-    resetModelOverrideRef: undefined,
-    resetModelOverrideReason: undefined,
-    modelPolicyConfigPath: undefined,
-    modelPolicyRepairConfigPath: undefined,
-    resolveThinkingCatalog: async () => [],
-    resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
-    hasConfiguredThinkingDefault: params.agentCfg?.thinkingDefault !== undefined,
-    resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
-    modelContextWindow: undefined,
-    modelContextTokens: undefined,
-  };
 }
 
 const modelCatalogRuntimeLoader = createLazyImportLoader(
@@ -132,16 +111,6 @@ function loadPreparedModelCatalogRuntime() {
 
 function loadSessionPersistenceRuntime() {
   return sessionPersistenceRuntimeLoader.load();
-}
-
-function findSelectedCatalogEntry(params: {
-  catalog?: readonly ModelCatalogEntry[];
-  provider: string;
-  model: string;
-}): ModelCatalogEntry | undefined {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const selectedKey = modelKey(normalizedProvider, params.model);
-  return params.catalog?.find((entry) => modelKey(entry.provider, entry.id) === selectedKey);
 }
 
 /** Resolves provider/model, allowlist, catalog, and thinking defaults for a reply run. */
@@ -191,19 +160,16 @@ export async function createModelSelectionState(params: {
     defaultProvider,
     defaultModel,
   } = params;
-  const catalogAgentId = params.agentId ?? resolveDefaultAgentId(cfg);
-  const catalogScope = {
-    config: cfg,
-    agentId: catalogAgentId,
-    agentDir: resolveAgentDir(cfg, catalogAgentId),
-  };
   const loadRuntimeCatalogSnapshot = async (): Promise<ModelCatalogSnapshot> =>
     params.preparedModelCatalog ??
     (await (
       await loadPreparedModelCatalogRuntime()
-    ).loadPreparedModelCatalogSnapshot(catalogScope));
+    ).loadPreparedModelCatalogSnapshot({
+      config: cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      readOnly: true,
+    }));
   const runtimeModelNormalization = resolveRuntimeNormalization(cfg);
-  const { manifestPlugins } = runtimeModelNormalization;
 
   let provider = params.provider;
   let model = params.model;
@@ -230,7 +196,10 @@ export async function createModelSelectionState(params: {
     provider: defaultProvider,
     model: defaultModel,
   });
-  const configuredModelCatalog = buildConfiguredModelCatalog({ cfg, manifestPlugins });
+  const configuredModelCatalog = mergePreparedConfiguredCatalog({
+    configured: [...visibilityPolicy.configuredCatalog],
+    prepared: params.preparedModelCatalog?.entries,
+  });
   const needsModelCatalog =
     params.hasModelDirective ||
     (hasAllowlist && visibilityPolicy.hasProviderWildcards && !defaultModelVisibleByWildcard);
@@ -244,7 +213,7 @@ export async function createModelSelectionState(params: {
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
   let resetModelOverrideReason: "disallowed" | "stale" | "temporarily-unavailable" | undefined;
-  const directStoredModelOverride = resolveDirectStoredModelOverride({
+  const directStoredModelOverride = storedModelOverrides.resolveDirectStoredModelOverride({
     sessionEntry,
     defaultProvider,
   });
@@ -424,7 +393,7 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  const storedOverride = resolveStoredModelOverride({
+  const storedOverride = storedModelOverrides.resolveStoredModelOverride({
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -506,11 +475,16 @@ export async function createModelSelectionState(params: {
     sessionEntry.authProfileOverride
   ) {
     const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
-    const store = ensureAuthProfileStore(undefined, {
-      allowKeychainPrompt: false,
-    });
+    const store = ensureAuthProfileStore(
+      params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined,
+      {
+        allowKeychainPrompt: false,
+        profileId: sessionEntry.authProfileOverride,
+      },
+    );
     logStage("auth-profile-store-loaded", `profiles=${Object.keys(store.profiles).length}`);
     const profile = store.profiles[sessionEntry.authProfileOverride];
+    const authConfig = resolveModelProviderAuthConfig({ config: cfg, provider, modelId: model });
     const harnessPolicy = resolveAgentHarnessPolicy({
       provider,
       modelId: model,
@@ -523,22 +497,20 @@ export async function createModelSelectionState(params: {
       harnessRuntime: harnessPolicy.runtime,
       config: cfg,
     }).map(normalizeProviderId);
-    // Alias-aware eligibility: a stored credential can be valid for the run
-    // provider through provider-auth aliases (e.g. an `anthropic` credential
-    // serving a `claude-cli` run). A raw provider-string compare wrongly
-    // cleared such overrides, which then let auto-selection re-pick a
-    // different profile on a later turn — flapping the CLI session's auth
-    // profile and invalidating it. Mirror session-override.ts's check.
+    // Provider aliases must preserve the same credential across native and embedded runtimes.
     const overrideStillEligible =
       profile != null &&
       acceptedAuthProviders.some((accepted) =>
         isStoredCredentialCompatibleWithAuthProvider({
-          cfg,
+          cfg: authConfig,
           provider: accepted,
           credential: profile,
         }),
       );
-    if (!overrideStillEligible) {
+    // Admission rejects a missing personal account; clearing its pin here would bill the next participant.
+    const missingPersonalProfile =
+      !profile && isUserModelAuthProfileId(sessionEntry.authProfileOverride);
+    if (!overrideStillEligible && !missingPersonalProfile) {
       await clearSessionAuthProfileOverride({
         sessionEntry,
         sessionStore,
@@ -548,8 +520,6 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  let thinkingCatalog: ModelCatalog | undefined;
-  let manifestModelCatalog: ModelCatalog | null = null;
   const buildThinkingCatalog = (catalog: ModelCatalog): ModelCatalog =>
     createModelVisibilityPolicy({
       cfg,
@@ -559,68 +529,35 @@ export async function createModelSelectionState(params: {
       agentId: params.agentId,
       ...runtimeModelNormalization,
     }).allowedCatalog;
-  const loadManifestCatalog = async () => {
-    if (manifestModelCatalog) {
-      return manifestModelCatalog;
+  const thinkingCatalogs = new Map<string, ModelCatalog>();
+  const resolveThinkingCatalog = async (
+    selection: ThinkingDefaultSelection = { provider, model },
+  ) => {
+    const key = modelKey(selection.provider, selection.model);
+    const cached = thinkingCatalogs.get(key);
+    if (cached) {
+      return cached.length > 0 ? cached : undefined;
     }
-    const { loadManifestModelCatalog } = await loadPreparedModelCatalogRuntime();
-    manifestModelCatalog = loadManifestModelCatalog({
-      config: cfg,
-      fallbackToMetadataScan: false,
-    });
-    logStage("manifest-catalog-loaded", `entries=${manifestModelCatalog.length}`);
-    return manifestModelCatalog;
-  };
-  const resolveThinkingCatalog = async () => {
-    if (thinkingCatalog) {
-      return thinkingCatalog;
-    }
-    let catalogForThinking =
-      allowedModelCatalog.length > 0
-        ? allowedModelCatalog
-        : modelCatalog && modelCatalog.length > 0
-          ? buildThinkingCatalog(modelCatalog)
-          : [];
-    let selectedCatalogEntry = findSelectedCatalogEntry({
-      catalog: catalogForThinking,
-      provider,
-      model,
-    });
-    // Prefer static manifest rows before cold runtime discovery. Synthetic
-    // allowlist rows know only provider/id; manifest rows can prove reasoning
-    // support without opening the Pi auth-backed model registry.
-    if (!modelCatalog && selectedCatalogEntry?.reasoning === undefined) {
-      const manifestCatalog = buildThinkingCatalog(await loadManifestCatalog());
-      const manifestSelectedEntry = findSelectedCatalogEntry({
-        catalog: manifestCatalog,
-        provider,
-        model,
-      });
-      if (manifestSelectedEntry?.reasoning !== undefined) {
-        catalogForThinking = manifestCatalog;
-        selectedCatalogEntry = manifestSelectedEntry;
+    let catalog = allowedModelCatalog;
+    if (
+      findSelectedCatalogEntry({ catalog, provider: selection.provider, model: selection.model })
+        ?.reasoning === undefined
+    ) {
+      const { loadProviderScopedThinkingCatalog } = await loadPreparedModelCatalogRuntime();
+      const preparedCatalog = buildThinkingCatalog(
+        await loadProviderScopedThinkingCatalog({
+          config: cfg,
+          agentId: params.agentId,
+          provider: selection.provider,
+          model: selection.model,
+        }),
+      );
+      if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
+        catalog = preparedCatalog;
       }
     }
-    const shouldHydrateRuntimeCatalog =
-      !modelCatalog && (!selectedCatalogEntry || selectedCatalogEntry.reasoning === undefined);
-    if (shouldHydrateRuntimeCatalog) {
-      modelCatalog = (await loadRuntimeCatalogSnapshot()).entries;
-      logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
-      const runtimeCatalog = buildThinkingCatalog(modelCatalog);
-      const runtimeSelectedEntry = findSelectedCatalogEntry({
-        catalog: runtimeCatalog,
-        provider,
-        model,
-      });
-      catalogForThinking =
-        runtimeSelectedEntry || !catalogForThinking || catalogForThinking.length === 0
-          ? runtimeCatalog.length > 0
-            ? runtimeCatalog
-            : allowedModelCatalog
-          : allowedModelCatalog;
-    }
-    thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
-    return thinkingCatalog;
+    thinkingCatalogs.set(key, catalog);
+    return catalog.length > 0 ? catalog : undefined;
   };
 
   const defaultThinkingLevels = new Map<string, ThinkLevel>();
@@ -655,7 +592,7 @@ export async function createModelSelectionState(params: {
       defaultThinkingLevels.set(cacheKey, configuredThinkingDefault);
       return configuredThinkingDefault;
     }
-    const catalogForThinking = await resolveThinkingCatalog();
+    const catalogForThinking = await resolveThinkingCatalog(selection);
     const resolved = resolveThinkingDefault({
       cfg,
       provider: selectedProvider,
@@ -668,48 +605,14 @@ export async function createModelSelectionState(params: {
     return defaultThinkingLevel;
   };
 
-  let defaultReasoningLevel: "on" | "off" | undefined;
-  const resolveDefaultReasoningLevel = async (): Promise<"on" | "off"> => {
-    if (defaultReasoningLevel) {
-      return defaultReasoningLevel;
-    }
-    let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
-    let selectedReasoningEntry = findSelectedCatalogEntry({
-      catalog: catalogForReasoning,
-      provider,
-      model,
+  const resolveDefaultReasoningLevel = async (
+    selection: ThinkingDefaultSelection = { provider, model },
+  ): Promise<"on" | "off"> =>
+    resolveReasoningDefault({
+      provider: selection.provider,
+      model: selection.model,
+      catalog: await resolveThinkingCatalog(selection),
     });
-    if (!modelCatalog && selectedReasoningEntry?.reasoning === undefined) {
-      const manifestCatalog = await loadManifestCatalog();
-      const manifestReasoningCatalog =
-        hasAllowlist || hasConfiguredModels
-          ? buildThinkingCatalog(manifestCatalog)
-          : manifestCatalog;
-      const manifestSelectedEntry = findSelectedCatalogEntry({
-        catalog: manifestReasoningCatalog,
-        provider,
-        model,
-      });
-      if (manifestSelectedEntry?.reasoning !== undefined) {
-        catalogForReasoning = manifestReasoningCatalog;
-        selectedReasoningEntry = manifestSelectedEntry;
-      }
-    }
-    if (
-      (!catalogForReasoning || catalogForReasoning.length === 0) &&
-      selectedReasoningEntry?.reasoning === undefined
-    ) {
-      modelCatalog = (await loadRuntimeCatalogSnapshot()).entries;
-      logStage("catalog-loaded-for-reasoning", `entries=${modelCatalog.length}`);
-      catalogForReasoning = modelCatalog;
-    }
-    defaultReasoningLevel = resolveReasoningDefault({
-      provider,
-      model,
-      catalog: catalogForReasoning,
-    });
-    return defaultReasoningLevel;
-  };
   const selectedCatalogEntry = findSelectedCatalogEntry({
     catalog: modelCatalog ?? allowedModelCatalog,
     provider,
@@ -730,6 +633,7 @@ export async function createModelSelectionState(params: {
     provider,
     model,
     requestedRouteResolution,
+    modelPolicy: visibilityPolicy,
     allowedModelKeys,
     allowedModelCatalog,
     policyAliasIndex: visibilityPolicy.policyAliasIndex,

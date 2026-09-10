@@ -1,16 +1,18 @@
 // Upgrade Survivor Config Recipe tests cover upgrade survivor config recipe script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
@@ -22,67 +24,222 @@ import {
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
 } from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
+import { AgentsSchema } from "../../src/config/zod-schema.agents.js";
 
 const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 const RUN_PATH = "scripts/e2e/lib/upgrade-survivor/run.sh";
 const DOCKER_RUNNER_PATH = "scripts/e2e/upgrade-survivor-docker.sh";
 
-describe("upgrade survivor config recipe command resolution", () => {
-  it("uses trusted tsx or the candidate compiled config recipe entrypoint", () => {
-    const runner = readFileSync(RUN_PATH, "utf8");
-    const dockerRunner = readFileSync(DOCKER_RUNNER_PATH, "utf8");
-    expect(runner).toContain("OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT:-tsx");
-    expect(runner).toContain(
-      'node --import "$tsx_import" scripts/e2e/lib/upgrade-survivor/config-recipe.mts',
-    );
-    expect(runner).toContain(
-      "recipe_runner=(node scripts/e2e/lib/upgrade-survivor/config-recipe.mjs)",
-    );
-    expect(runner).toContain('"${recipe_runner[@]}" apply');
-    expect(dockerRunner).toContain(
-      'TRUSTED_TSX_IMPORT="$TRUSTED_TSX_NODE_MODULES/tsx/dist/loader.mjs"',
-    );
-  });
-
-  it("keeps trusted tsx dependencies resolvable at the Docker mount target", () => {
-    const dockerRunner = readFileSync(DOCKER_RUNNER_PATH, "utf8");
-    const loaderTarget = dockerRunner.match(
-      /OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT=(\/tmp\/\S+\/loader\.mjs)/u,
-    )?.[1];
-    const mountTarget = dockerRunner.match(
-      /-v "\$TRUSTED_TSX_NODE_MODULES:(\/tmp\/[^:"]+):ro"/u,
-    )?.[1];
-    expect(loaderTarget).toBeTruthy();
-    expect(mountTarget).toBeTruthy();
-    if (!loaderTarget || !mountTarget) {
-      return;
+function configLeafWrites(steps: ReturnType<typeof resolveUpgradeSurvivorConfigSteps>) {
+  return steps.flatMap((step): { path: string; value: unknown }[] => {
+    if (step.argv[0] !== "config" || step.argv[1] !== "set") {
+      return [];
     }
+    if (step.argv[2] === "--batch-json") {
+      return JSON.parse(step.argv[3] ?? "[]");
+    }
+    return step.argv[4] === "--strict-json"
+      ? [{ path: step.argv[2] ?? "", value: JSON.parse(step.argv[3] ?? "null") }]
+      : [];
+  });
+}
 
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-tsx-mount-"));
-    try {
-      const mountedNodeModules = join(root, mountTarget.slice(1));
-      mkdirSync(mountedNodeModules, { recursive: true });
-      for (const packageName of ["tsx", "esbuild", "@esbuild"]) {
-        cpSync(
-          join(process.cwd(), "node_modules", packageName),
-          join(mountedNodeModules, packageName),
-          {
-            dereference: true,
-            recursive: true,
-          },
-        );
+function runRecipeFixture(params: {
+  version: string | null;
+  scenario: string;
+  entrypoint?: string;
+  failPath?: string;
+}) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-recipe-"));
+  try {
+    const binDir = join(root, "bin");
+    const logPath = join(root, "openclaw-argv.jsonl");
+    const summaryPath = join(root, "summary.json");
+    const legacyMarker = join(root, "legacy-seeded");
+    mkdirSync(binDir);
+    writeFileSync(
+      join(binDir, "openclaw-log.js"),
+      `
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
+const failPath = process.env.RECIPE_FAIL_PATH;
+const failed = failPath && args[0] === "config" && args[1] === "set" &&
+  (args[2] === failPath || (args[2] === "--batch-json" &&
+    JSON.parse(args[3]).some((entry) => entry.path === failPath)));
+process.exit(failed ? 17 : 0);
+`,
+    );
+    writeFileSync(join(binDir, "openclaw"), `#!/usr/bin/env node\nrequire("./openclaw-log.js");\n`);
+    chmodSync(join(binDir, "openclaw"), 0o755);
+    writeFileSync(
+      join(binDir, "openclaw.cmd"),
+      `@echo off\r\n"${process.execPath}" "%~dp0openclaw-log.js" %*\r\n`,
+    );
+    let command = process.execPath;
+    let cwd = process.cwd();
+    let args = [
+      "--import",
+      "tsx",
+      RECIPE_PATH,
+      "apply",
+      "--summary",
+      summaryPath,
+      ...(params.version === null ? [] : ["--baseline-version", params.version]),
+    ];
+    if (params.entrypoint === "survivor shell") {
+      // Source mounts contain the recipe closure, but no host dependency tree.
+      for (const file of [
+        RECIPE_PATH,
+        "scripts/e2e/lib/upgrade-survivor/config-recipe",
+        "scripts/lib/release-version.mjs",
+        "scripts/windows-cmd-helpers.mjs",
+      ]) {
+        mkdirSync(dirname(join(root, file)), { recursive: true });
+        cpSync(file, join(root, file), { recursive: true });
       }
-
-      const loaderPath = join(root, loaderTarget.slice(1));
-      const result = spawnSync(process.execPath, ["--import", loaderPath, "-e", ""], {
-        cwd: root,
-        encoding: "utf8",
-      });
-      expect(result.status, result.stderr).toBe(0);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
+      const launcher = readFileSync(RUN_PATH, "utf8").match(
+        /^apply_baseline_config_recipe\(\) \{[\s\S]*?^\}/mu,
+      )?.[0];
+      expect(launcher).toBeTruthy();
+      const legacyStub =
+        params.scenario === "legacy-operator-state"
+          ? `
+node() {
+  test "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs
+  test "$2" = seed-legacy-operator
+  printf seeded > "$RECIPE_LEGACY_MARKER"
+}
+`
+          : "";
+      command = "bash";
+      cwd = root;
+      args = [
+        "-c",
+        `set -euo pipefail\nsource "$1"\n${legacyStub}\n${launcher}\nSCENARIO="$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO"\nCONFIG_COVERAGE_JSON="$2"\nbaseline_version="$3"\napply_baseline_config_recipe`,
+        "survivor-recipe",
+        join(process.cwd(), "scripts/lib/openclaw-e2e-instance.sh"),
+        summaryPath,
+        params.version ?? "",
+      ];
     }
+    const result = spawnSync(command, args, {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: root,
+        OPENCLAW_STATE_DIR: join(root, "state"),
+        OPENCLAW_CONFIG_PATH: join(root, "config.json"),
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL: "",
+        RECIPE_FAIL_PATH: params.failPath ?? "",
+        RECIPE_LEGACY_MARKER: legacyMarker,
+        PATH: [binDir, join(process.cwd(), "node_modules/.bin"), process.env.PATH ?? ""].join(
+          delimiter,
+        ),
+      },
+    });
+    const loggedArgs: string[][] = existsSync(logPath)
+      ? readFileSync(logPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+      : [];
+    return {
+      result,
+      loggedArgs,
+      summary: existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, "utf8")) : null,
+      legacySeeded: existsSync(legacyMarker),
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+describe("upgrade survivor config recipe command resolution", () => {
+  it("selects the prerelease update channel for the plugin registry", () => {
+    const runner = readFileSync(RUN_PATH, "utf8");
+    expect(runner).toContain('OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="beta"');
+    expect(runner).toContain("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "launches the published baseline with trusted sources and no host dependencies",
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-upgrade-docker-boundary-")));
+      const harnessRoot = realpathSync(process.cwd());
+      try {
+        const candidateRoot = join(root, "candidate");
+        const binDir = join(root, "bin");
+        const candidate = join(candidateRoot, "candidate.tgz");
+        const stateScript = "scripts/lib/openclaw-test-state.mts";
+        mkdirSync(join(candidateRoot, dirname(stateScript)), { recursive: true });
+        cpSync(stateScript, join(candidateRoot, stateScript));
+        writeFileSync(candidate, "unused by the Docker boundary stub");
+        mkdirSync(binDir);
+        writeFileSync(
+          join(binDir, "docker"),
+          `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  image) test "$2" = inspect ;;
+  run) printf '%s\\0' "$@" >"$TMPDIR/docker-args" ;;
+  *) echo "Unexpected Docker command: $1" >&2; exit 1 ;;
+esac
+`,
+          { mode: 0o755 },
+        );
+
+        const result = spawnSync("bash", [join(harnessRoot, DOCKER_RUNNER_PATH)], {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            HOME: root,
+            TMPDIR: root,
+            PATH: [binDir, dirname(process.execPath), process.env.PATH ?? ""].join(delimiter),
+            OPENCLAW_SKIP_DOCKER_BUILD: "1",
+            OPENCLAW_DOCKER_E2E_REPO_ROOT: candidateRoot,
+            OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR: join(root, "artifacts"),
+            OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "1",
+            OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
+            OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE: candidate,
+          },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        const args = readFileSync(join(root, "docker-args"), "utf8").split("\0").slice(0, -1);
+        const mounts = args.filter((_, index) => args[index - 1] === "-v");
+        expect(mounts.filter((mount) => mount.includes("node_modules"))).toEqual([]);
+        expect(args.some((arg) => arg.startsWith("OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT="))).toBe(
+          false,
+        );
+        expect(mounts).toEqual(
+          expect.arrayContaining([
+            `${harnessRoot}/scripts/e2e:/app/scripts/e2e:ro`,
+            `${harnessRoot}/scripts/lib:/app/scripts/lib:ro`,
+            `${harnessRoot}/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro`,
+            `${harnessRoot}/${RUN_PATH}:/tmp/openclaw-upgrade-survivor-run.sh:ro`,
+            `${candidate}:/tmp/openclaw-current.tgz:ro`,
+          ]),
+        );
+        expect(mounts.filter((mount) => mount.startsWith(`${candidateRoot}/`))).toEqual([
+          `${candidate}:/tmp/openclaw-current.tgz:ro`,
+        ]);
+        expect(args).toContain(
+          "OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC=/tmp/openclaw-current.tgz",
+        );
+        expect(args.slice(-5)).toEqual([
+          "timeout",
+          "--kill-after=30s",
+          "1200s",
+          "bash",
+          "/tmp/openclaw-upgrade-survivor-run.sh",
+        ]);
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("compares baseline versions with the shared release parser", () => {
     expect(isReleaseBefore("2026.3.31", "2026.4.0")).toBe(true);
@@ -146,10 +303,115 @@ describe("upgrade survivor config recipe command resolution", () => {
     ]);
   });
 
+  it.each([
+    ["base", undefined, "stable"],
+    ["base", "beta", "beta"],
+    ["prerelease-plugin-registry", undefined, "beta"],
+  ])(
+    "keeps the %s scenario on the %s override update channel",
+    (scenario, channel, expectedChannel) => {
+      const updateChannels = resolveUpgradeSurvivorConfigSteps(scenario, channel)
+        .filter((step) => step.argv.slice(0, 3).join(" ") === "config set update.channel")
+        .map((step) => step.argv[3]);
+
+      expect(updateChannels.at(-1)).toBe(expectedChannel);
+    },
+  );
+
   it("inserts scenario config before final validation", () => {
     const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
+    const gateway = JSON.parse(steps.find((step) => step.id === "gateway")?.argv[3] ?? "{}");
+    expect(gateway.reload).toEqual({ mode: "off" });
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
     expect(steps.find((step) => step.id === "channels-feishu")).toBeDefined();
+    expect(steps.at(-1)?.id).toBe("validate");
+  });
+
+  it("keeps the watch direct-node recipe isolated from unrelated plugin fixtures", () => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("watchos-direct-node", "2026.6.34");
+    const intents = steps.map((step) => step.intent);
+
+    expect(intents).toEqual(["update", "gateway", "validate"]);
+    expect(steps.at(-1)?.id).toBe("validate");
+  });
+
+  it("uses password auth for mobile pairing reconnect coverage", () => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline(
+      "mobile-pairing-reconnect",
+      "2026.6.34",
+    );
+    const gateway = JSON.parse(steps.find((step) => step.id === "gateway")?.argv[3] ?? "{}");
+
+    expect(steps.map((step) => step.intent)).toEqual(["update", "gateway", "validate"]);
+    expect(gateway.auth).toEqual({
+      mode: "password",
+      password: {
+        source: "env",
+        provider: "default",
+        id: "GATEWAY_AUTH_PASSWORD_REF",
+      },
+    });
+    expect(gateway.auth).not.toHaveProperty("token");
+  });
+
+  it("composes configured plugin installs into the SQLite volume scenario", () => {
+    expect(resolveScenarioConfigSteps("sqlite-volume")).toEqual(
+      resolveScenarioConfigSteps("configured-plugin-installs"),
+    );
+  });
+
+  it.each([
+    { version: "2026.3.13", legacy: true },
+    { version: "2026.7.1-2", legacy: true },
+    { version: "2026.8.1-beta.1", legacy: true },
+    { version: "2026.8.1-beta.2", legacy: false },
+    { version: "2026.8.1", legacy: false },
+    { version: null, legacy: false },
+  ])("authors one version-correct recovery roster for $version", ({ version, legacy }) => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("recovery-cleanup", version);
+    const agentSteps = steps.filter(
+      (step) =>
+        step.argv[0] === "config" && step.argv[1] === "set" && step.argv[2]?.startsWith("agents"),
+    );
+    expect(agentSteps).toHaveLength(1);
+    expect(agentSteps[0]?.argv.slice(0, 3)).toEqual(["config", "set", "agents"]);
+    const agents = JSON.parse(agentSteps[0]?.argv[3] ?? "{}");
+    const ids = legacy
+      ? agents.list.map((agent: { id: string }) => agent.id)
+      : Object.keys(agents.entries);
+    expect(ids).toEqual(["main", "ops", "recovery-clean", "recovery-protected"]);
+    const ops = legacy
+      ? agents.list.find((agent: { id: string }) => agent.id === "ops")
+      : agents.entries.ops;
+    expect(ops.fastModeDefault).toBe(version === "2026.3.13" ? undefined : true);
+    expect(agents.defaults.heartbeat.every).toBe("0m");
+    if (legacy) {
+      expect(agents.ownership).toBeUndefined();
+      expect(agents.list.filter((agent: { default?: boolean }) => agent.default)).toEqual([
+        expect.objectContaining({ id: "main" }),
+      ]);
+    } else {
+      expect(agents.ownership).toBe("explicit");
+      expect(AgentsSchema.safeParse(agents).success).toBe(true);
+    }
+    const baseStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+      (step) => step.id === "agents",
+    );
+    const baseAgents = JSON.parse(baseStep?.argv[3] ?? "{}");
+    expect(
+      legacy
+        ? baseAgents.list.map((agent: { id: string }) => agent.id)
+        : Object.keys(baseAgents.entries),
+    ).toEqual(["main", "ops"]);
+    expect(configLeafWrites(steps)).toContainEqual({
+      path: "channels.whatsapp",
+      value: JSON.parse(
+        readFileSync(
+          "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-whatsapp.json",
+          "utf8",
+        ),
+      ),
+    });
     expect(steps.at(-1)?.id).toBe("validate");
   });
 
@@ -158,6 +420,98 @@ describe("upgrade survivor config recipe command resolution", () => {
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
     expect(steps.find((step) => step.id === "channels-feishu")).toBeUndefined();
     expect(steps.at(-1)?.id).toBe("validate");
+  });
+
+  it.each([null, "2026.8.1-beta.2", "2026.8.1"])(
+    "authors a schema-valid explicit agent roster for baseline %s",
+    (version) => {
+      const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+        (step) => step.id === "agents",
+      );
+      const agents = JSON.parse(agentStep?.argv[3] ?? "{}");
+      expect(AgentsSchema.safeParse(agents).success).toBe(true);
+      expect(agents.ownership).toBe("explicit");
+      expect(agents.defaults.heartbeat.every).toBe("0m");
+      expect(Object.keys(agents.entries)).toEqual(["main", "ops"]);
+      expect(agents.entries.ops.fastModeDefault).toBe(true);
+    },
+  );
+
+  it.each(["2026.3.13", "2026.4.1", "2026.8.1-beta.1"])(
+    "preserves the legacy agent contract for baseline %s",
+    (version) => {
+      const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+        (step) => step.id === "agents",
+      );
+      const agents = JSON.parse(agentStep?.argv[3] ?? "{}");
+      expect(agents.ownership).toBeUndefined();
+      expect(agents.entries).toBeUndefined();
+      expect(agents.list.map((agent: { id: string }) => agent.id)).toEqual(["main", "ops"]);
+      expect(agents.list.filter((agent: { default?: boolean }) => agent.default)).toEqual([
+        expect.objectContaining({ id: "main" }),
+      ]);
+      expect(agents.list[1].fastModeDefault).toBe(version === "2026.3.13" ? undefined : true);
+    },
+  );
+
+  it.each([
+    { version: null, batched: false },
+    { version: "unknown", batched: false },
+    { version: "2026.3.22", batched: false },
+    { version: "2026.6.33", batched: false },
+    { version: "2026.6.34-beta.1", batched: false },
+    { version: "2026.7.1-beta.1", batched: false },
+    { version: "2026.7.1-alpha.1", batched: false },
+    { version: "2026.6.34-1", batched: false },
+    { version: "2026.6.34junk", batched: false },
+    { version: "2026.13.1", batched: false },
+    { version: "2026.6.9007199254740993", batched: false },
+    { version: "2026.6.34", batched: true },
+    { version: "2026.7.2", batched: true },
+  ])("batches only supported final baselines: $version", ({ version, batched }) => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("base", version);
+    expect(steps).toHaveLength(batched ? 8 : 10);
+    expect(steps.filter((step) => step.argv[2] === "--batch-json")).toHaveLength(batched ? 1 : 0);
+    expect(configLeafWrites(steps).filter((entry) => entry.path.startsWith("channels."))).toEqual([
+      expect.objectContaining({ path: "channels.discord" }),
+      expect.objectContaining({ path: "channels.telegram" }),
+      expect.objectContaining({ path: "channels.whatsapp" }),
+    ]);
+    expect(steps.flatMap((step) => step.intents ?? [step.intent])).toEqual([
+      "update",
+      "gateway",
+      "models",
+      "agents",
+      "skills",
+      "plugins",
+      "discord-channel",
+      "telegram-channel",
+      "whatsapp-channel",
+      "validate",
+    ]);
+  });
+
+  it.each([
+    { version: "2026.6.34", legacyDm: true },
+    { version: "2026.7.2", legacyDm: false },
+  ])("batches the adapted channel fixtures for $version", ({ version, legacyDm }) => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("base", version);
+    const expected = ["discord", "telegram", "whatsapp"].map((channel) => ({
+      path: `channels.${channel}`,
+      value: JSON.parse(
+        readFileSync(
+          `scripts/e2e/lib/upgrade-survivor/config-recipe/channels-${channel}.json`,
+          "utf8",
+        ),
+      ),
+    }));
+    if (legacyDm) {
+      const { dmPolicy, allowFrom, ...discord } = expected[0]!.value;
+      expected[0]!.value = { ...discord, dm: { policy: dmPolicy, allowFrom } };
+    }
+    const batch = steps.find((step) => step.id === "channels");
+    expect(batch?.argv.slice(0, 3)).toEqual(["config", "set", "--batch-json"]);
+    expect(JSON.parse(batch?.argv[3] ?? "[]")).toEqual(expected);
   });
 
   it("bounds baseline config commands and reports spawn errors", () => {
@@ -208,59 +562,19 @@ describe("upgrade survivor config recipe command resolution", () => {
     });
   });
 
-  it("skips ACPX bridge config on baselines before the bridge field existed", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-recipe-acpx-"));
-    try {
-      const binDir = join(root, "bin");
-      const logPath = join(root, "openclaw-argv.jsonl");
-      const summaryPath = join(root, "summary.json");
-      mkdirSync(binDir, { recursive: true });
-      const openclawLogPath = join(binDir, "openclaw-log.js");
-      const openclawPath = join(binDir, "openclaw");
-      const openclawCmdPath = join(binDir, "openclaw.cmd");
-      writeFileSync(
-        openclawLogPath,
-        `
-const fs = require("node:fs");
-fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");
-process.exit(0);
-`,
-      );
-      writeFileSync(openclawPath, `#!/usr/bin/env node\nrequire("./openclaw-log.js");\n`);
-      chmodSync(openclawPath, 0o755);
-      writeFileSync(
-        openclawCmdPath,
-        `@echo off\r\n"${process.execPath}" "%~dp0openclaw-log.js" %*\r\n`,
-      );
-
-      execFileSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          RECIPE_PATH,
-          "apply",
-          "--summary",
-          summaryPath,
-          "--baseline-version",
-          "2026.4.21",
-        ],
-        {
-          env: {
-            ...process.env,
-            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
-            PATH: `${binDir}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`,
-          },
-          stdio: "pipe",
-        },
-      );
-
-      const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
-      const loggedArgs = readFileSync(logPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+  it.each(process.platform === "win32" ? ["recipe CLI"] : ["recipe CLI", "survivor shell"])(
+    "skips unsupported ACPX bridge config through the %s",
+    (entrypoint) => {
+      const { result, summary, loggedArgs } = runRecipeFixture({
+        entrypoint,
+        scenario: "acpx-openclaw-tools-bridge",
+        version: "2026.4.21",
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(summary.skippedIntents).toContain("acpx-openclaw-tools-bridge");
+      expect(summary.acceptedIntents).not.toContain("acpx-openclaw-tools-bridge");
+      expect(summary.baselineVersion).toBe("2026.4.21");
+      expect(loggedArgs.at(-1)).toEqual(["config", "validate"]);
       expect(loggedArgs).not.toContainEqual(
         expect.arrayContaining([
           "set",
@@ -268,8 +582,144 @@ process.exit(0);
           expect.stringContaining("openClawToolsMcpBridge"),
         ]),
       );
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    },
+  );
+
+  it("records one successful batch before overrides and final validation", () => {
+    const scenario = "configured-plugin-installs";
+    const version = "2026.6.34";
+    const { result, summary, loggedArgs } = runRecipeFixture({ scenario, version });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline(scenario, version);
+    expect(loggedArgs).toEqual(steps.map((step) => step.argv));
+    expect(summary.steps.map((step: { id: string }) => step.id)).toEqual([
+      "update-channel",
+      "gateway",
+      "models-openai",
+      "agents",
+      "skills",
+      "plugins",
+      "channels",
+      "plugins-configured-installs",
+      "channels-whatsapp-unset",
+      "channels-matrix",
+      "validate",
+    ]);
+    expect(summary.steps[6]).toMatchObject({
+      id: "channels",
+      ok: true,
+      status: 0,
+      intents: ["discord-channel", "telegram-channel", "whatsapp-channel"],
+    });
+    expect(summary.acceptedIntents).toEqual([
+      "update",
+      "gateway",
+      "models",
+      "agents",
+      "skills",
+      "plugins",
+      "discord-channel",
+      "telegram-channel",
+      "whatsapp-channel",
+      "configured-plugin-installs",
+      "validate",
+    ]);
+    expect(summary.skippedIntents).toEqual([]);
+  });
+
+  it.each([
+    { version: "2026.6.34", batched: true },
+    { version: "2026.3.22", batched: false },
+  ])(
+    "preserves failure receipts and aborts without fallback for $version",
+    ({ version, batched }) => {
+      const { result, summary, loggedArgs } = runRecipeFixture({
+        scenario: "configured-plugin-installs",
+        version,
+        failPath: "channels.telegram",
+      });
+      expect(result.status).toBe(1);
+      const previousIds = [
+        "update-channel",
+        "gateway",
+        "models-openai",
+        "agents",
+        "skills",
+        "plugins",
+      ];
+      expect(summary.steps.map((step: { id: string }) => step.id)).toEqual([
+        ...previousIds,
+        ...(batched ? ["channels"] : ["channels-discord", "channels-telegram"]),
+      ]);
+      expect(summary.steps.slice(0, -1).every((step: { ok: boolean }) => step.ok)).toBe(true);
+      expect(summary.steps.at(-1)).toMatchObject({
+        id: batched ? "channels" : "channels-telegram",
+        ok: false,
+        status: 17,
+      });
+      expect(summary.acceptedIntents).toEqual([
+        "update",
+        "gateway",
+        "models",
+        "agents",
+        "skills",
+        "plugins",
+        ...(batched ? [] : ["discord-channel"]),
+      ]);
+      expect(summary.skippedIntents).toEqual(
+        version === "2026.3.22" ? ["agent-modern-preferences", "memory-plugin-allow"] : [],
+      );
+      const steps = resolveUpgradeSurvivorConfigStepsForBaseline(
+        "configured-plugin-installs",
+        version,
+      );
+      expect(loggedArgs).toEqual(steps.slice(0, batched ? 7 : 8).map((step) => step.argv));
+      expect(result.stderr).toContain(
+        `baseline config recipe failed at ${batched ? "channels" : "channels-telegram"}: 17`,
+      );
+    },
+  );
+
+  it.each([
+    {
+      failPath: "models.providers.openai",
+      failedStep: "models-openai",
+      launches: 3,
+      accepted: ["update", "gateway"],
+      skipped: [],
+    },
+    {
+      failPath: "plugins",
+      failedStep: "plugins",
+      launches: 6,
+      accepted: ["update", "gateway", "models", "agents", "skills"],
+      skipped: ["agent-modern-preferences", "memory-plugin-allow"],
+    },
+  ])(
+    "preserves March failure at $failPath without future receipts",
+    ({ failPath, failedStep, launches, accepted, skipped }) => {
+      const { result, summary, loggedArgs } = runRecipeFixture({
+        scenario: "acpx-openclaw-tools-bridge",
+        version: "2026.3.22",
+        failPath,
+      });
+      expect(result.status).toBe(1);
+      expect(loggedArgs).toHaveLength(launches);
+      expect(summary.steps.at(-1)).toMatchObject({ id: failedStep, ok: false, status: 17 });
+      expect(summary.acceptedIntents).toEqual(accepted);
+      expect(summary.skippedIntents).toEqual(skipped);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("preserves the operator-state recipe bypass", () => {
+    const { result, summary, loggedArgs, legacySeeded } = runRecipeFixture({
+      entrypoint: "survivor shell",
+      scenario: "legacy-operator-state",
+      version: "2026.6.34",
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(legacySeeded).toBe(true);
+    expect(summary).toBeNull();
+    expect(loggedArgs).toEqual([]);
   });
 });

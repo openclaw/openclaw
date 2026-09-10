@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
@@ -18,14 +17,14 @@ import type { HeartbeatConfig } from "./heartbeat-runner-config.js";
 
 export function resolveHeartbeatSessionKey(
   cfg: OpenClawConfig,
-  agentId?: string,
+  agentId: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
+  const resolvedAgentId = normalizeAgentId(agentId);
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
@@ -120,7 +119,7 @@ export function resolveHeartbeatSessionKey(
 
 export function resolveHeartbeatSession(
   cfg: OpenClawConfig,
-  agentId?: string,
+  agentId: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -129,6 +128,7 @@ export function resolveHeartbeatSession(
   return {
     ...resolved,
     entry: loadSessionEntry({
+      agentId,
       storePath: resolved.storePath,
       sessionKey: resolved.sessionKey,
       env,
@@ -136,7 +136,7 @@ export function resolveHeartbeatSession(
   };
 }
 
-export function resolveIsolatedHeartbeatSessionKey(params: {
+function resolveIsolatedHeartbeatSessionKey(params: {
   agentId: string;
   sessionKey: string;
   configuredSessionKey: string;
@@ -197,6 +197,51 @@ export function resolveIsolatedHeartbeatSessionKey(params: {
   };
 }
 
+/** Selects the event queue, execution key and descriptive conversation before delivery. */
+export function resolveHeartbeatSessionSelection(
+  cfg: OpenClawConfig,
+  agentId: string,
+  heartbeat?: HeartbeatConfig,
+  forcedSessionKey?: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const session = resolveHeartbeatSession(cfg, agentId, heartbeat, forcedSessionKey, env);
+  if (heartbeat?.isolatedSession !== true) {
+    return {
+      ...session,
+      run: { kind: "shared", sessionKey: session.sessionKey },
+      conversationEntry: session.entry,
+      inspectsRunQueue: true,
+    } as const;
+  }
+  const configured = resolveHeartbeatSessionKey(cfg, agentId, heartbeat, undefined, env);
+  const { isolatedSessionKey, isolatedBaseSessionKey } = resolveIsolatedHeartbeatSessionKey({
+    agentId,
+    sessionKey: session.sessionKey,
+    configuredSessionKey: configured.sessionKey,
+    sessionEntry: session.entry,
+  });
+  return {
+    ...session,
+    run: {
+      kind: "isolated",
+      sessionKey: isolatedSessionKey,
+      baseSessionKey: isolatedBaseSessionKey,
+    },
+    conversationEntry:
+      isolatedBaseSessionKey === session.sessionKey
+        ? session.entry
+        : loadSessionEntry({
+            agentId,
+            storePath: session.storePath,
+            sessionKey: isolatedBaseSessionKey,
+            env,
+          }),
+    // Legacy isolated queues retain their route after the execution key is canonicalized.
+    inspectsRunQueue: session.sessionKey !== isolatedBaseSessionKey,
+  } as const;
+}
+
 export function resolveStaleHeartbeatIsolatedSessionKey(params: {
   sessionKey: string;
   isolatedSessionKey: string;
@@ -217,33 +262,26 @@ export function resolveStaleHeartbeatIsolatedSessionKey(params: {
 }
 
 export async function restoreHeartbeatUpdatedAt(params: {
+  agentId: string;
   storePath: string;
   sessionKey: string;
   updatedAt?: number;
 }) {
-  const { storePath, sessionKey, updatedAt } = params;
+  const { updatedAt, ...scope } = params;
   if (typeof updatedAt !== "number") {
     return;
   }
-  const entry = loadSessionEntry({ storePath, sessionKey });
-  if (!entry) {
-    return;
-  }
-  const nextUpdatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
-  if (entry.updatedAt === nextUpdatedAt) {
+  const entry = loadSessionEntry(scope);
+  if (!entry || entry.updatedAt === Math.max(entry.updatedAt ?? 0, updatedAt)) {
     return;
   }
   await patchSessionEntryCore(
-    { storePath, sessionKey },
+    scope,
     (nextEntry, context) => {
-      if (!context.existingEntry) {
-        return null;
-      }
       const resolvedUpdatedAt = Math.max(nextEntry.updatedAt ?? 0, updatedAt);
-      if (nextEntry.updatedAt === resolvedUpdatedAt) {
-        return null;
-      }
-      return { ...nextEntry, updatedAt: resolvedUpdatedAt };
+      return context.existingEntry && nextEntry.updatedAt !== resolvedUpdatedAt
+        ? { ...nextEntry, updatedAt: resolvedUpdatedAt }
+        : null;
     },
     { replaceEntry: true },
   );

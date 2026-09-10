@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { AgentSelect, type AgentSelectOption } from "./agent-select.ts";
 
@@ -10,8 +11,14 @@ const AGENT_SELECT_TEST_TAG = `test-openclaw-agent-select-${crypto.randomUUID()}
 
 customElements.define(AGENT_SELECT_TEST_TAG, class extends AgentSelect {});
 
+beforeEach(() => {
+  setAvatarGatewayOrigin(globalThis.location.origin);
+});
+
 afterEach(async () => {
   document.body.replaceChildren();
+  setAvatarGatewayOrigin(null);
+  vi.restoreAllMocks();
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
@@ -22,7 +29,6 @@ type AgentSelectElement = HTMLElement & {
   value: string;
   accessibleLabel: string;
   identityById: Record<string, AgentIdentityResult>;
-  authToken: string | null;
   disabled: boolean;
   onSelect: (value: string) => void;
   onCreateAgent: (() => void) | null;
@@ -147,6 +153,37 @@ it("preserves complete grapheme clusters in emoji avatar fallback", async () => 
   }
 });
 
+it("keeps a failed avatar on its fallback until the image changes", async () => {
+  const invalidAvatar = "data:image/gif;base64,bm90LWFuLWltYWdl";
+  const replacementAvatar = "data:image/png;base64,cmVwbGFjZW1lbnQ=";
+  const element = await createAgentSelect({
+    identityById: { alpha: createIdentity("alpha", { avatar: invalidAvatar }) },
+  });
+  const failedImage = element.querySelector<HTMLImageElement>("img.agent-select__avatar");
+  expect(failedImage).not.toBeNull();
+  failedImage?.dispatchEvent(new Event("error"));
+  await element.updateComplete;
+  expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+  expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+    "A",
+  );
+
+  element.accessibleLabel = "Choose another agent";
+  await element.updateComplete;
+  expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+
+  element.identityById = { alpha: createIdentity("alpha", { avatar: replacementAvatar }) };
+  await element.updateComplete;
+  expect(element.querySelector("img.agent-select__avatar")?.getAttribute("src")).toBe(
+    replacementAvatar,
+  );
+  failedImage?.dispatchEvent(new Event("error"));
+  await element.updateComplete;
+  expect(element.querySelector("img.agent-select__avatar")?.getAttribute("src")).toBe(
+    replacementAvatar,
+  );
+});
+
 it("fetches local avatars with the bearer credential when token auth is active", async () => {
   const createObjectURL = vi.fn(() => "blob:agent-avatar");
   const revokeObjectURL = vi.fn();
@@ -159,12 +196,12 @@ it("fetches local avatars with the bearer credential when token auth is active",
   );
   const fetchMock = vi.fn().mockResolvedValue({
     ok: true,
-    blob: async () => new Blob(["avatar"]),
+    blob: async () => new Blob(["avatar"], { type: "image/png" }),
   });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
+  setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
   const element = await createAgentSelect({
-    authToken: "tok",
     identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
   });
 
@@ -173,7 +210,8 @@ it("fetches local avatars with the bearer credential when token auth is active",
     expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
       "A",
     );
-    expect(fetchMock).toHaveBeenCalledWith("/avatar/alpha", {
+    expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+      credentials: "include",
       headers: { Authorization: "Bearer tok" },
       signal: expect.any(AbortSignal),
     });
@@ -186,7 +224,9 @@ it("fetches local avatars with the bearer credential when token auth is active",
     expect(createObjectURL).toHaveBeenCalledTimes(1);
 
     element.remove();
-    await waitForFast(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:agent-avatar"));
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    setAvatarGatewayOrigin(null);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:agent-avatar");
   } finally {
     element.remove();
     vi.unstubAllGlobals();
@@ -204,11 +244,11 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
   const fetchMock = vi
     .fn()
     .mockResolvedValueOnce({ ok: false })
-    .mockResolvedValue({ ok: true, blob: async () => new Blob(["avatar"]) });
+    .mockResolvedValue({ ok: true, blob: async () => new Blob(["avatar"], { type: "image/png" }) });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
+  setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
   const element = await createAgentSelect({
-    authToken: "tok",
     identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
   });
 
@@ -216,11 +256,12 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(element.querySelector("img.agent-select__avatar")).toBeNull();
 
-    element.authToken = "tok2";
+    setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
     await element.updateComplete;
 
     await waitForFast(() => {
-      expect(fetchMock).toHaveBeenLastCalledWith("/avatar/alpha", {
+      expect(fetchMock).toHaveBeenLastCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+        credentials: "include",
         headers: { Authorization: "Bearer tok2" },
         signal: expect.any(AbortSignal),
       });
@@ -259,16 +300,17 @@ it("aborts the stale request on auth rotation without duplicating the current fe
     });
   });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-  const avatarCalls = () => fetchMock.mock.calls.filter(([url]) => url === "/avatar/alpha");
+  const avatarCalls = () =>
+    fetchMock.mock.calls.filter(([url]) => url === `${globalThis.location.origin}/avatar/alpha`);
 
+  setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
   const element = await createAgentSelect({
-    authToken: "tok",
     identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
   });
 
   try {
     expect(avatarCalls()).toHaveLength(1);
-    element.authToken = "tok2";
+    setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
     await element.updateComplete;
     await waitForFast(() => expect(avatarCalls()).toHaveLength(2));
 
@@ -286,7 +328,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
 
     pending[1]?.resolve({
       ok: true,
-      blob: async () => new Blob(["avatar"]),
+      blob: async () => new Blob(["avatar"], { type: "image/png" }),
     } as Response);
     await waitForFast(() => {
       expect(
@@ -301,6 +343,11 @@ it("aborts the stale request on auth rotation without duplicating the current fe
 
 it("aborts a stalled local avatar fetch after the request deadline", async () => {
   vi.useFakeTimers();
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), milliseconds);
+    return controller.signal;
+  });
   const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     const signal = init?.signal;
     if (!signal) {
@@ -318,8 +365,8 @@ it("aborts a stalled local avatar fetch after the request deadline", async () =>
   });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
+  setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
   const element = await createAgentSelect({
-    authToken: "tok",
     identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
   });
 
@@ -353,6 +400,11 @@ it("aborts a stalled local avatar fetch after the request deadline", async () =>
 
 it("aborts a stalled local avatar body after the request deadline", async () => {
   vi.useFakeTimers();
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), milliseconds);
+    return controller.signal;
+  });
   const blob = vi.fn<() => Promise<Blob>>();
   const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     const signal = init?.signal;
@@ -371,8 +423,8 @@ it("aborts a stalled local avatar body after the request deadline", async () => 
   });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
+  setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
   const element = await createAgentSelect({
-    authToken: "tok",
     identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
   });
 
@@ -408,16 +460,16 @@ it("fetches a local avatar image without a header when token auth is not active"
   );
   const fetchMock = vi.fn().mockResolvedValue({
     ok: true,
-    blob: async () => new Blob(["avatar"]),
+    blob: async () => new Blob(["avatar"], { type: "image/png" }),
   });
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   const element = await createAgentSelect({
-    authToken: null,
     identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
   });
 
   try {
-    expect(fetchMock).toHaveBeenCalledWith("/avatar/alpha", {
+    expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+      credentials: "include",
       signal: expect.any(AbortSignal),
     });
     await waitForFast(() => {
@@ -441,16 +493,21 @@ it("renders the agent picker as a Web Awesome dropdown", async () => {
   try {
     const dropdown = element.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
     const items = Array.from(
-      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
+      element.querySelectorAll<HTMLElement & { value: string }>(
         "wa-dropdown-item[data-agent-option]",
       ),
     );
     expect(dropdown).not.toBeNull();
     expect(items).toHaveLength(2);
-    expect(items[0]?.checked).toBe(true);
-    expect(items[1]?.checked).toBe(false);
+    await waitForFast(() => {
+      expect(items[0]?.getAttribute("role")).toBe("menuitemradio");
+      expect(items[0]?.getAttribute("aria-checked")).toBe("true");
+      expect(items[1]?.getAttribute("aria-checked")).toBe("false");
+    });
     expect(items[0]?.value).toBe("alpha");
     expect(items[1]?.value).toBe("beta");
+    expect(items[0]?.querySelector(".agent-select__option-check")).not.toBeNull();
+    expect(items[1]?.querySelector(".agent-select__option-check")).toBeNull();
     expect(items[1]?.querySelector(".agent-select__badge")?.textContent?.trim()).toBe("default");
     expect(dropdown?.shadowRoot?.querySelector('[role="menu"]')).not.toBeNull();
   } finally {
@@ -495,11 +552,13 @@ it("shows an unmatched selected value instead of the first option", async () => 
     expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
       "S",
     );
-    expect(
-      Array.from(
-        element.querySelectorAll<HTMLElement & { checked: boolean }>("[data-agent-option]"),
-      ).some((item) => item.checked),
-    ).toBe(false);
+    await waitForFast(() => {
+      expect(
+        Array.from(element.querySelectorAll<HTMLElement>("[data-agent-option]")).map((item) =>
+          item.getAttribute("aria-checked"),
+        ),
+      ).toEqual(["false", "false"]);
+    });
   } finally {
     element.remove();
   }
@@ -588,9 +647,7 @@ it("selects a different agent and ignores the already-selected agent", async () 
 
   try {
     const items = Array.from(
-      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
-        "[data-agent-option]",
-      ),
+      element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
     );
     const beta = items.find((item) => item.value === "beta");
     const alpha = items.find((item) => item.value === "alpha");
@@ -615,7 +672,8 @@ it("selects a different agent and ignores the already-selected agent", async () 
 
     expect(onSelect).toHaveBeenCalledOnce();
     expect(repeatedSelection.defaultPrevented).toBe(true);
-    expect(alpha.checked).toBe(true);
+    expect(alpha.getAttribute("aria-checked")).toBe("true");
+    expect(alpha.querySelector(".agent-select__option-check")).not.toBeNull();
     expect(document.activeElement).toBe(element.querySelector(".agent-select__trigger"));
   } finally {
     element.remove();
@@ -632,9 +690,7 @@ it("selects an empty-string special option and exposes radio semantics", async (
 
   try {
     const items = Array.from(
-      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
-        "[data-agent-option]",
-      ),
+      element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
     );
     const allAgents = items.find((item) => item.value === "");
     if (!allAgents) {

@@ -47,8 +47,13 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata.mts";
+import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  previousReleaseInventory,
+  writeUpdateCompatibilityBuildFixture,
+} from "./update-compat-chunks.test-support.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
@@ -188,7 +193,6 @@ function makeFixture(options?: { includeSeed?: boolean }) {
 function writeBuild(mirror: string) {
   mkdirSync(path.join(mirror, "dist/control-ui"), { recursive: true });
   const head = git(mirror, "rev-parse", "HEAD");
-  writeFileSync(path.join(mirror, "dist/build-info.json"), `${JSON.stringify({ commit: head })}\n`);
   const gatewayEntrypoint = path.join(mirror, "dist/index.js");
   writeFileSync(gatewayEntrypoint, "// built\n");
   // Snapshot ownership rejects group-writable executables, so fixtures must
@@ -206,11 +210,20 @@ function writeBuild(mirror: string) {
     path.join(mirror, "dist", RUNTIME_POSTBUILD_STAMP_FILE),
     `${JSON.stringify({ head })}\n`,
   );
+  writeUpdateCompatibilityBuildFixture(mirror);
+  writeUpdateCompatibilityChunks({
+    distDir: path.join(mirror, "dist"),
+    sourceDir: mirror,
+    inventory: previousReleaseInventory,
+  });
   for (const relativePath of listCoreRuntimePostBuildOutputs({ rootDir: mirror })) {
     const outputPath = path.join(mirror, relativePath);
     mkdirSync(path.dirname(outputPath), { recursive: true });
-    writeFileSync(outputPath, "// runtime postbuild\n");
+    if (!existsSync(outputPath)) {
+      writeFileSync(outputPath, "// runtime postbuild\n");
+    }
   }
+  writeFileSync(path.join(mirror, "dist/build-info.json"), `${JSON.stringify({ commit: head })}\n`);
 }
 
 function fakeCommands(mirror: string) {
@@ -244,6 +257,28 @@ function passGatewayRestartVerification({ timing }: { timing: Record<string, unk
 
 function managedTimeoutError() {
   return Object.assign(new Error("managed timeout"), { code: "ETIMEDOUT" });
+}
+
+function createManagedLaunchAgentFixture(root: string, mirror: string) {
+  const lockPath = path.join(root, "maintenance.lock");
+  const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+  const entrypoint = path.join(mirror, "dist/index.js");
+  writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+  return {
+    lockPath,
+    plistPath,
+    deployment: {
+      configPath: path.join(root, "openclaw.json"),
+      entrypoint,
+      entrypointIndex: 1,
+      executable: process.execPath,
+      invocationPrefix: [entrypoint],
+      label: "ai.openclaw.gateway",
+      plistPath,
+      port: 18789,
+      runtime: process.execPath,
+    },
+  };
 }
 
 function createGatewaySuspensionCliStub(
@@ -311,7 +346,7 @@ describe("openclaw live updater", () => {
     }
   });
 
-  describe.sequential("fixture cleanup boundary", () => {
+  describe("fixture cleanup boundary", { concurrent: false }, () => {
     test("creates a disposable clone fixture", () => {
       cleanupProbeRoot = makeFixture().root;
       expect(existsSync(cleanupProbeRoot)).toBe(true);
@@ -1537,7 +1572,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
   });
 
   test("accepts only the delayed exact target bundle process", () => {
-    const executable = "/Users/steipete/openclaw/dist/OpenClaw.app/Contents/MacOS/OpenClaw";
+    const executable = "/fixture/live-checkout/dist/OpenClaw.app/Contents/MacOS/OpenClaw";
     const foreign = "41 /tmp/agent/OpenClaw.app/Contents/MacOS/OpenClaw";
     expect(findExactMacTarget(foreign, executable)).toBeNull();
     expect(findExactMacTarget(`${foreign}\n42 ${executable} --attach-only`, executable)).toEqual({
@@ -1859,20 +1894,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
   test("recovers the previous service after a post-stop install timeout", async () => {
     const { root, mirror } = makeFixture();
     writeBuild(mirror);
-    const lockPath = path.join(root, "maintenance.lock");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
-    const deployment = {
-      configPath: path.join(root, "openclaw.json"),
-      entrypoint: path.join(mirror, "dist/index.js"),
-      entrypointIndex: 1,
-      executable: process.execPath,
-      invocationPrefix: [path.join(mirror, "dist/index.js")],
-      label: "ai.openclaw.gateway",
-      plistPath,
-      port: 18789,
-      runtime: process.execPath,
-    };
+    const { deployment, lockPath, plistPath } = createManagedLaunchAgentFixture(root, mirror);
     const events: string[] = [];
 
     await expect(
@@ -1945,20 +1967,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     async () => {
       const { root, mirror } = makeFixture();
       writeBuild(mirror);
-      const lockPath = path.join(root, "maintenance.lock");
-      const plistPath = path.join(root, "ai.openclaw.gateway.plist");
-      writeFileSync(plistPath, "plist\n", { mode: 0o600 });
-      const deployment = {
-        configPath: path.join(root, "openclaw.json"),
-        entrypoint: path.join(mirror, "dist/index.js"),
-        entrypointIndex: 1,
-        executable: process.execPath,
-        invocationPrefix: [path.join(mirror, "dist/index.js")],
-        label: "ai.openclaw.gateway",
-        plistPath,
-        port: 18789,
-        runtime: process.execPath,
-      };
+      const { deployment, lockPath } = createManagedLaunchAgentFixture(root, mirror);
       const blocker = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
         detached: true,
         stdio: "ignore",
@@ -2048,20 +2057,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
   test("retains a manual-recovery lock when Windows timeout cleanup is unverified", async () => {
     const { root, mirror } = makeFixture();
     writeBuild(mirror);
-    const lockPath = path.join(root, "maintenance.lock");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
-    const deployment = {
-      configPath: path.join(root, "openclaw.json"),
-      entrypoint: path.join(mirror, "dist/index.js"),
-      entrypointIndex: 1,
-      executable: process.execPath,
-      invocationPrefix: [path.join(mirror, "dist/index.js")],
-      label: "ai.openclaw.gateway",
-      plistPath,
-      port: 18789,
-      runtime: process.execPath,
-    };
+    const { deployment, lockPath } = createManagedLaunchAgentFixture(root, mirror);
     const events: string[] = [];
 
     await expect(
@@ -3436,7 +3432,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     });
   });
 
-  test("keeps successful CLI stdout as one machine-readable JSON object", () => {
+  test("defaults to the current standalone checkout without a machine-specific path", () => {
     const { root, mirror, origin } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
@@ -3453,14 +3449,19 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     chmodSync(pnpm, 0o755);
     chmodSync(gitShim, 0o755);
 
-    const result = spawnSync(process.execPath, [script, "--checkout", mirror], {
+    const result = spawnSync(process.execPath, [script], {
+      cwd: mirror,
       encoding: "utf8",
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
     });
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, updated: false });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      checkout: realpathSync(mirror),
+      updated: false,
+    });
     expect(result.stderr).toContain("child-output");
   });
 
@@ -3669,57 +3670,34 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     }
   });
 
-  test("treats an owner file creation race as a normal overlap", () => {
-    const { root, mirror } = makeFixture();
-    const lockPath = path.join(root, "maintenance.lock");
-    mkdirSync(lockPath);
-    const owner = { pid: process.pid, checkout: mirror, startedAt: "racing" };
-    const writer = spawn(
-      "sh",
-      ["-c", 'sleep 0.03; printf "%s\\n" "$OWNER_JSON" > "$LOCK_PATH/owner.json"'],
-      {
-        env: { ...process.env, LOCK_PATH: lockPath, OWNER_JSON: JSON.stringify(owner) },
-        stdio: "ignore",
-      },
-    );
-
-    try {
-      expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
-        acquired: false,
-        owner,
+  test.each(["missing", "empty"])(
+    "treats a %s owner file creation race as a normal overlap",
+    (initialState) => {
+      const { root, mirror } = makeFixture();
+      const lockPath = path.join(root, "maintenance.lock");
+      const ownerPath = path.join(lockPath, "owner.json");
+      mkdirSync(lockPath);
+      if (initialState === "empty") {
+        writeFileSync(ownerPath, "");
+      }
+      const owner = { pid: process.pid, checkout: mirror, startedAt: "racing" };
+      // Publish after the first incomplete read, without racing child startup
+      // against the lock's bounded creation window.
+      const wait = vi.spyOn(Atomics, "wait").mockImplementationOnce(() => {
+        writeFileSync(ownerPath, `${JSON.stringify(owner)}\n`);
+        return "timed-out";
       });
-    } finally {
-      writer.kill();
-    }
-  });
 
-  test("re-reads an empty owner file left by a racing writer's creation window", () => {
-    const { root, mirror } = makeFixture();
-    const lockPath = path.join(root, "maintenance.lock");
-    mkdirSync(lockPath);
-    // Freeze writeFileSync's open-truncate window (the #109140 flake class):
-    // owner.json exists but is still empty when the reader first sees it, and
-    // the racing writer publishes the owner content shortly after.
-    writeFileSync(path.join(lockPath, "owner.json"), "");
-    const owner = { pid: process.pid, checkout: mirror, startedAt: "racing" };
-    const writer = spawn(
-      "sh",
-      ["-c", 'sleep 0.03; printf "%s\\n" "$OWNER_JSON" > "$LOCK_PATH/owner.json"'],
-      {
-        env: { ...process.env, LOCK_PATH: lockPath, OWNER_JSON: JSON.stringify(owner) },
-        stdio: "ignore",
-      },
-    );
-
-    try {
-      expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
-        acquired: false,
-        owner,
-      });
-    } finally {
-      writer.kill();
-    }
-  });
+      try {
+        expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
+          acquired: false,
+          owner,
+        });
+      } finally {
+        wait.mockRestore();
+      }
+    },
+  );
 
   test("refuses dirty work without moving HEAD", () => {
     const { mirror } = makeFixture();

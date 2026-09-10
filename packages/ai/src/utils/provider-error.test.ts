@@ -1,7 +1,111 @@
+import { APIError } from "openai/core/error";
 import { describe, expect, it } from "vitest";
 import { configureProviderErrorRedactor, projectProviderError } from "./provider-error.js";
 
 describe("projectProviderError", () => {
+  it.each([
+    ["", "[2 ordinary lines remain] token=<redacted>"],
+    ["=short-secret", "[Malformed diagnostic JSON redacted]"],
+  ])("requires a complete redaction marker before preserving prose (%s)", (suffix, expected) => {
+    expect(
+      projectProviderError(`[2 ordinary lines remain] token=<redacted>${suffix}`).errorMessage,
+    ).toBe(expected);
+  });
+
+  it.each([
+    '[true-story,"sk-synthetic-secret-value"]',
+    '[false-positive,"sk-synthetic-secret-value"]',
+    '[null-value,"sk-synthetic-secret-value"]',
+    "[1 note token=short-secret]",
+    "[1 note token=1234]",
+    "[1 note b64_json=QUJDRA==]",
+    "[1 note image=QUJDRA==]",
+    "[1 note type=image data=QUJDRA==]",
+    "[1 note data=QUJDRA== type=image]",
+    "[1 note status=token=short-secret]",
+    "[1 note status=b64_json=QUJDRA==]",
+    "[1 note token==short-secret]",
+    "[1 note b64_json==QUJDRA==]",
+    "[1 note type==image data=QUJDRA==]",
+    "[1 note token= =short-secret]",
+    '[[2 ordinary lines remain],"sk-synthetic-secret-value"]',
+    '[ [2 ordinary lines remain],"sk-synthetic-secret-value"]',
+    '[note [2 ordinary lines remain],"sk-synthetic-secret-value"]',
+  ])("keeps structured admission around prose: %s", (error) => {
+    expect(projectProviderError(error).errorMessage).toBe("[Malformed diagnostic JSON redacted]");
+  });
+
+  it("preserves an ordinary comparison alongside numeric prose", () => {
+    const value = "count == 3\n[2 ordinary lines remain]";
+    expect(projectProviderError(value).errorMessage).toBe(value);
+  });
+
+  it.each([
+    '[note "-----BEGIN PRIVATE KEY-----\\nQUJDRA==\\n-----END PRIVATE KEY-----"] {"ok":true}',
+    '[note "sk-synthetic-secret-value"] {"ok":true}',
+    '[note "\\u002d\\u002d\\u002d\\u002d\\u002dBEGIN PRIVATE KEY-----QUJDRA=="] {"ok":true}',
+    '[note -----BEGIN PRIVATE KEY-----\nQUJDRA==\n-----END PRIVATE KEY-----] {"ok":true}',
+    '[note token=short-secret] {"ok":true}',
+  ])("fails closed for nonnumeric structured fragments: %s", (error) => {
+    expect(projectProviderError(error).errorMessage).toBe("[Malformed diagnostic JSON redacted]");
+  });
+
+  it.each([
+    "\nQUJDRA==\n-----END PRIVATE KEY-----",
+    "QUJDRA==-----END PRIVATE KEY-----",
+    "QUJDRA==",
+    "",
+  ])("fails closed for numeric prose containing a raw private key (%j)", (body) => {
+    const error = `[1 note -----BEGIN RSA PRIVATE KEY-----${body}]`;
+    expect(projectProviderError(error).errorMessage).toBe("[Malformed diagnostic JSON redacted]");
+  });
+
+  it.each(["-", "01", "1e+", "1x", "1x words", "1 words"])(
+    "redacts malformed numeric array %s without host strengthening",
+    (prefix) => {
+      const error = `[${prefix},"-----BEGIN PRIVATE KEY-----\\nQUJDRA==\\n-----END PRIVATE KEY-----"]`;
+      expect(projectProviderError(error)).toEqual({
+        stopReason: "error",
+        errorMessage: "[Malformed diagnostic JSON redacted]",
+      });
+    },
+  );
+
+  it.each([
+    ["335", 7],
+    ["8500", 8.5],
+  ])(
+    "preserves SDK retry timing without exposing unrelated headers (%s ms)",
+    (milliseconds, seconds) => {
+      const error = new APIError(
+        429,
+        { message: "rate limited" },
+        undefined,
+        new Headers({
+          "retry-after": "7",
+          "retry-after-ms": milliseconds,
+          authorization: "Bearer synthetic-credential",
+        }),
+      );
+      const projection = projectProviderError(error);
+      expect(projection.errorMessage).toContain(`Retry-After: ${seconds} seconds`);
+      expect(projection.errorBody).toBe('{"message":"rate limited"}');
+      expect(JSON.stringify(projection)).not.toContain("synthetic-credential");
+    },
+  );
+
+  it("reserves room for retry timing after truncating a long SDK message", () => {
+    const error = new APIError(
+      429,
+      undefined,
+      "x".repeat(5000),
+      new Headers({ "retry-after": "7" }),
+    );
+    const projection = projectProviderError(error);
+    expect(projection.errorMessage).toHaveLength(4096);
+    expect(projection.errorMessage).toMatch(/; Retry-After: 7 seconds$/);
+  });
+
   it.each([
     {
       name: "JSON body",
@@ -298,11 +402,12 @@ describe("projectProviderError", () => {
     expect(JSON.stringify(projected)).not.toContain(leaked);
   });
 
-  it("preserves a harmless JSON response-body string byte-for-byte", () => {
-    const body = '{"message": "safe", "nested": [1, 2]}';
-
-    expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
-  });
+  it.each(['{"message": "safe", "nested": [1, 2]}', 'prefix "notjson[1]" middle {"a":1} suffix'])(
+    "preserves harmless diagnostic JSON byte-for-byte: %s",
+    (body) => {
+      expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
+    },
+  );
 
   it.each([
     {
@@ -408,7 +513,6 @@ describe("projectProviderError", () => {
 
     expect(projected.stopReason).toBe("error");
     expect(projected.errorMessage).toBe("[Unserializable]");
-    expect(projected.errorMessage.length).toBeLessThanOrEqual(4096);
   });
 
   it("caps descriptor reads from hostile objects", () => {

@@ -9,6 +9,7 @@ export type TypingMode = "never" | "instant" | "thinking" | "message";
 export type SessionScope = "per-sender" | "global";
 /** DM session-key granularity across peers, channels, and accounts. */
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+export type GroupScope = "main" | "per-group";
 /** Which source messages outbound replies should thread or quote against. */
 export type ReplyToMode = "off" | "first" | "all" | "batched";
 /** Group-chat admission policy for channels with allowlists. */
@@ -62,8 +63,6 @@ export type ChannelStreamingProgressConfig = {
   maxLines?: number;
   /** Maximum characters per compact progress line before truncation. Default: 120. */
   maxLineChars?: number;
-  /** Progress draft renderer. "text" is the portable fallback; "rich" lets supported channels use structured UI. */
-  render?: "text" | "rich";
   /** Include compact tool/task progress in the draft. Default: true. */
   toolProgress?: boolean;
   /** Command/exec progress detail in the draft. "raw" opts into command text; "status" shows only the tool label. Default: "status". */
@@ -191,12 +190,12 @@ export type SessionThreadBindingsConfig = {
   enabled?: boolean;
   /**
    * Inactivity window for thread-bound sessions (hours).
-   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
+   * Binding expires after this amount of idle time. Set to 0 to disable. Default: 24.
    */
   idleHours?: number;
   /**
    * Optional hard max age for thread-bound sessions (hours).
-   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
+   * Binding expires once this age is reached even if active. Set to 0 to disable. Default: 0.
    */
   maxAgeHours?: number;
   /**
@@ -225,6 +224,8 @@ export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
   dmScope?: DmScope;
+  /** Group/channel session scoping (default: "per-group"). */
+  groupScope?: GroupScope;
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
@@ -249,10 +250,14 @@ export type SessionMaintenanceMode = "enforce" | "warn";
 export type SessionMaintenanceConfig = {
   /** Whether to enforce maintenance or warn only. Default: "enforce". */
   mode?: SessionMaintenanceMode;
-  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
+  /** Archive eligible conversations and remove disposable entries older than this duration. Default: "30d". */
   pruneAfter?: string | number;
-  /** Maximum number of session entries to keep. Default: 500. */
+  /** Archive inactive dashboard sessions after this duration. Default: "7d"; false or 0 disables. */
+  archiveDashboardAfter?: string | number | false;
+  /** Maximum unarchived entries when protection permits; durable overflow is archived. Default: 5000. */
   maxEntries?: number;
+  /** Protect interactive sessions active within this duration. Default and false: disabled. */
+  preserveRecent?: string | number | false;
   /**
    * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
    * `*.deleted.<timestamp>`). Default and `false`: keep archives until the
@@ -260,14 +265,15 @@ export type SessionMaintenanceConfig = {
    */
   resetArchiveRetention?: string | number | false;
   /**
-   * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "10gb".
-   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
-   * (mode=enforce). Set `false`, `0`, or `"0"` to disable the budget entirely.
+   * Per-agent physical budget for SQLite main/WAL and counted session-directory artifacts. Default: "10gb".
+   * Warn mode reports pressure; enforce mode applies oldest-first cleanup.
+   * Protected data may exceed the target. Set `false`, `0`, or `"0"` to disable.
    */
   maxDiskBytes?: number | string | false;
   /**
    * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
-   * Default: 80% of maxDiskBytes.
+   * Default: 80% of maxDiskBytes. A value that resolves to zero falls back to
+   * the default instead of clearing history; negative values are invalid.
    */
   highWaterBytes?: number | string;
 };

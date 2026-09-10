@@ -132,7 +132,7 @@ runtime modes at runtime.
 The explicit mode contract used by `video_generate`, contract tests, and
 the shared live sweep:
 
-| Provider   | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes today                                                                                                                 |
+| Provider   | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes                                                                                                                       |
 | ---------- | :--------: | :------------: | :------------: | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Alibaba    |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | BytePlus   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
@@ -141,7 +141,7 @@ the shared live sweep:
 | fal        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                                  |
 | Google     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input |
 | MiniMax    |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| OpenAI     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path currently needs provider-side video edit access   |
+| OpenAI     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path needs provider-side video edit access             |
 | OpenRouter |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
 | Qwen       |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
@@ -286,20 +286,20 @@ aggregated error includes the skip reason for each.
 
 ## Model selection
 
-OpenClaw resolves the model in this order:
+For `video_generate`, OpenClaw resolves the model in this order:
 
-1. **`model` tool parameter** - if the agent specifies one in the call.
+1. **`model` tool parameter** - when set, only this model is tried.
 2. **`agents.defaults.mediaModels.video.primary`** from config.
 3. **`agents.defaults.mediaModels.video.fallbacks`** in order.
-4. **Auto-detection** - providers that have valid auth, starting with the
-   current default provider, then remaining providers in alphabetical
-   order.
+4. **Auto-detection** - only when neither a primary nor fallback model is
+   configured, using configured provider defaults. The current default provider
+   comes first, then remaining providers in alphabetical order.
 
 If a provider fails, the next candidate is tried automatically. If all
 candidates fail, the error includes details from each attempt.
 
-Automatic fallback across authenticated providers is always enabled. A per-call
-`model` remains authoritative.
+Explicit video model configuration limits fallback to the configured list;
+OpenClaw does not append auto-detected providers.
 
 ```json5
 {
@@ -516,8 +516,8 @@ transform modes the shared sweep can exercise safely with local media:
   provider/model accepts buffer-backed local video input in the shared
   sweep.
 
-Today the shared `videoToVideo` live lane covers `runway` only when you
-select `runway/gen4_aleph`.
+In the shared sweep, buffer-backed `videoToVideo` runs for `runway` only with
+`runway/gen4_aleph`, and for `fal` only with a `reference-to-video` model.
 
 ## Configuration
 
@@ -556,9 +556,11 @@ openclaw config set agents.defaults.mediaModels.video.primary "qwen/wan2.6-t2v"
 - [MiniMax](/providers/minimax)
 - [Models](/concepts/models)
 - [OpenAI](/providers/openai)
+- [OpenRouter](/providers/openrouter)
 - [Qwen](/providers/qwen)
 - [Runway](/providers/runway)
 - [Together AI](/providers/together)
 - [Tools overview](/tools)
 - [Vydra](/providers/vydra)
 - [xAI](/providers/xai)
+- [Media overview](/tools/media-overview) - how the media tools fit together

@@ -4,7 +4,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseReleaseVersion } from "../../../lib/release-version.mjs";
+import {
+  compareReleaseVersions,
+  parsePinnedReleaseVersion,
+  parseReleaseVersion,
+} from "../../../lib/release-version.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -15,7 +19,9 @@ export const CONFIG_COMMAND_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 type ConfigStep = {
   id: string;
   intent: string;
+  intents?: string[];
   argv: string[];
+  prepublishPluginPackages?: string[];
 };
 
 type BaselineAdaptationSummary = { skippedIntents: string[] };
@@ -131,6 +137,8 @@ function configSetJsonFile(
 
 const representativeConfigSteps: ConfigStep[] = [
   configSetJsonFile("models-openai", "models", "models.providers.openai", "models-openai.json"),
+  // Keep the migration specimen idle while baseline and candidate services run:
+  // a heartbeat refreshes its skills snapshot before inference, even when auth fails.
   configSetJsonFile("agents", "agents", "agents", "agents.json"),
   configSetJsonFile("skills", "skills", "skills", "skills.json"),
   configSetJsonFile("plugins", "plugins", "plugins", "plugins.json"),
@@ -154,16 +162,40 @@ const representativeConfigSteps: ConfigStep[] = [
   ),
 ];
 
+const configuredPluginInstallSteps = [
+  configSetJsonFile(
+    "plugins-configured-installs",
+    "configured-plugin-installs",
+    "plugins",
+    "plugins-configured-installs.json",
+  ),
+  {
+    id: "channels-whatsapp-unset",
+    intent: "configured-plugin-installs",
+    argv: ["config", "unset", "channels.whatsapp"],
+  },
+  configSetJsonFile(
+    "channels-matrix",
+    "configured-plugin-installs",
+    "channels.matrix",
+    "channels-matrix.json",
+  ),
+];
+
 const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
     "acpx-openclaw-tools-bridge",
     [
-      configSetJsonFile(
-        "plugins-acpx-openclaw-tools-bridge",
-        "acpx-openclaw-tools-bridge",
-        "plugins",
-        "plugins-acpx-openclaw-tools-bridge.json",
-      ),
+      {
+        ...configSetJsonFile(
+          "plugins-acpx-openclaw-tools-bridge",
+          "acpx-openclaw-tools-bridge",
+          "plugins",
+          "plugins-acpx-openclaw-tools-bridge.json",
+        ),
+        // The candidate externalizes this runtime even when the baseline bundles it.
+        prepublishPluginPackages: ["@openclaw/acpx"],
+      },
     ],
   ],
   [
@@ -188,28 +220,8 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
       },
     ],
   ],
-  [
-    "configured-plugin-installs",
-    [
-      configSetJsonFile(
-        "plugins-configured-installs",
-        "configured-plugin-installs",
-        "plugins",
-        "plugins-configured-installs.json",
-      ),
-      {
-        id: "channels-whatsapp-unset",
-        intent: "configured-plugin-installs",
-        argv: ["config", "unset", "channels.whatsapp"],
-      },
-      configSetJsonFile(
-        "channels-matrix",
-        "configured-plugin-installs",
-        "channels.matrix",
-        "channels-matrix.json",
-      ),
-    ],
-  ],
+  ["configured-plugin-installs", configuredPluginInstallSteps],
+  ["sqlite-volume", configuredPluginInstallSteps],
   [
     "codex-allowlist-survival",
     [
@@ -232,12 +244,7 @@ export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
   return scenarioConfigSteps.get(scenario) ?? [];
 }
 
-const recipe: ConfigStep[] = [
-  {
-    id: "update-channel",
-    intent: "update",
-    argv: ["config", "set", "update.channel", "stable"],
-  },
+const sharedRecipe: ConfigStep[] = [
   configSetJsonFile("gateway", "gateway", "gateway", "gateway.json"),
   ...representativeConfigSteps,
   {
@@ -247,10 +254,51 @@ const recipe: ConfigStep[] = [
   },
 ];
 
-export function resolveUpgradeSurvivorConfigSteps(scenario = "base"): ConfigStep[] {
-  const validateStep = recipe.at(-1);
+const connectionOnlySharedIntents = new Set(["gateway"]);
+const connectionOnlyScenarios = new Set(["mobile-pairing-reconnect", "watchos-direct-node"]);
+
+export function resolveUpgradeSurvivorConfigSteps(
+  scenario = "base",
+  configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
+): ConfigStep[] {
+  const validateStep = sharedRecipe.at(-1);
+  const updateChannel =
+    configuredUpdateChannel || (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
+  if (updateChannel !== "stable" && updateChannel !== "beta") {
+    throw new Error(`invalid upgrade survivor update channel: ${updateChannel}`);
+  }
+  const sharedSteps = sharedRecipe
+    .slice(0, -1)
+    .filter(
+      (step) =>
+        !connectionOnlyScenarios.has(scenario) || connectionOnlySharedIntents.has(step.intent),
+    )
+    .map((step) => {
+      if (scenario === "mobile-pairing-reconnect" && step.id === "gateway") {
+        return configSetJsonFile("gateway", "gateway", "gateway", "gateway-password.json");
+      }
+      if (scenario !== "recovery-cleanup" || step.id !== "agents") {
+        return step;
+      }
+      const agentsJson = step.argv[3];
+      if (agentsJson === undefined) {
+        throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+      }
+      // Extend the canonical roster before the baseline adapter chooses entries or legacy list.
+      // A second agents.list write bypasses that version contract and can lose ownership defaults.
+      const agents = JSON.parse(agentsJson);
+      agents.entries["recovery-clean"] = { workspace: "~/workspace/recovery-clean" };
+      agents.entries["recovery-protected"] = { workspace: "~/workspace/recovery-protected" };
+      const argv = [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)];
+      return Object.assign({}, step, { argv });
+    });
   return [
-    ...recipe.slice(0, -1),
+    {
+      id: "update-channel",
+      intent: "update",
+      argv: ["config", "set", "update.channel", updateChannel],
+    },
+    ...sharedSteps,
     ...resolveScenarioConfigSteps(scenario),
     ...(validateStep ? [validateStep] : []),
   ];
@@ -274,6 +322,56 @@ function adaptStepForBaseline(
     }
     return null;
   }
+  if (step.id === "agents") {
+    const agentsJson = step.argv[3];
+    if (agentsJson === undefined) {
+      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+    }
+    const agents = JSON.parse(agentsJson);
+    // Explicit ownership was introduced in beta.2; beta.1 requires a
+    // legacy default marker, so this boundary must compare prereleases too.
+    if (compareReleaseVersions(baselineVersion ?? "", "2026.8.1-beta.2") === -1) {
+      agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) => {
+        entry.id = id;
+        if (id === "main") {
+          entry.default = true;
+        }
+        return entry;
+      });
+      delete agents.entries;
+      delete agents.ownership;
+    }
+    if (isReleaseBefore(baselineVersion, "2026.4.0")) {
+      delete agents.defaults?.skills;
+      for (const agent of agents.list) {
+        delete agent.thinkingDefault;
+        delete agent.fastModeDefault;
+        delete agent.skills;
+      }
+      summary.skippedIntents.push("agent-modern-preferences");
+    }
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
+    };
+  }
+  if (
+    step.id === "channels-discord" &&
+    compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
+  ) {
+    const discordJson = step.argv[3];
+    if (discordJson === undefined) {
+      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+    }
+    // beta.4 retired nested DM policy. Older baselines retain the shipped
+    // specimen so candidate Doctor must migrate it without changing access.
+    const { dmPolicy, allowFrom, ...discord } = JSON.parse(discordJson);
+    discord.dm = { policy: dmPolicy, allowFrom };
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify(discord), ...step.argv.slice(4)],
+    };
+  }
   if (!isReleaseBefore(baselineVersion, "2026.4.0")) {
     return step;
   }
@@ -282,24 +380,6 @@ function adaptStepForBaseline(
       summary.skippedIntents.push("feishu-channel");
     }
     return null;
-  }
-  if (step.id === "agents") {
-    const agentsJson = step.argv[3];
-    if (agentsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
-    const agents = JSON.parse(agentsJson);
-    delete agents.defaults?.skills;
-    for (const agent of agents.list ?? []) {
-      delete agent.thinkingDefault;
-      delete agent.fastModeDefault;
-      delete agent.skills;
-    }
-    summary.skippedIntents.push("agent-modern-preferences");
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
-    };
   }
   if (step.intent === "plugins") {
     const pluginsJson = step.argv[3];
@@ -320,14 +400,68 @@ function adaptStepForBaseline(
   return step;
 }
 
+function* adaptRecipeForBaseline(
+  steps: ConfigStep[],
+  baselineVersion: string | null,
+  summary: BaselineAdaptationSummary,
+): Generator<ConfigStep> {
+  // Older and suffixed releases retain their existing command and receipt contract.
+  const pinnedVersion = parsePinnedReleaseVersion(baselineVersion ?? "");
+  const comparison = pinnedVersion ? compareReleaseVersions(pinnedVersion, "2026.6.34") : null;
+  const batchChannels = comparison !== null && comparison >= 0;
+  let batchedThrough = -1;
+  // Adapt only reached steps so an earlier failure cannot report future skipped intents.
+  for (const [index, step] of steps.entries()) {
+    if (index <= batchedThrough) {
+      continue;
+    }
+    if (
+      batchChannels &&
+      step.id === "channels-discord" &&
+      steps[index + 1]?.id === "channels-telegram" &&
+      steps[index + 2]?.id === "channels-whatsapp"
+    ) {
+      const channels = steps.slice(index, index + 3).map((channel) => {
+        const adapted = adaptStepForBaseline(channel, baselineVersion, summary);
+        if (!adapted || adapted.argv[3] === undefined) {
+          throw new Error(`config recipe step ${channel.id} is missing its JSON value`);
+        }
+        return {
+          intent: adapted.intent,
+          path: adapted.argv[2],
+          value: JSON.parse(adapted.argv[3]),
+        };
+      });
+      yield {
+        id: "channels",
+        intent: "channels",
+        intents: channels.map((channel) => channel.intent),
+        argv: [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify(channels.map((channel) => ({ path: channel.path, value: channel.value }))),
+        ],
+      };
+      batchedThrough = index + 2;
+      continue;
+    }
+    const adapted = adaptStepForBaseline(step, baselineVersion, summary);
+    if (adapted) {
+      yield adapted;
+    }
+  }
+}
+
 export function resolveUpgradeSurvivorConfigStepsForBaseline(
   scenario = "base",
   baselineVersion: string | null = null,
 ): ConfigStep[] {
-  const summary: BaselineAdaptationSummary = { skippedIntents: [] };
-  return resolveUpgradeSurvivorConfigSteps(scenario)
-    .map((step) => adaptStepForBaseline(step, baselineVersion, summary))
-    .filter((step): step is ConfigStep => step !== null);
+  return [
+    ...adaptRecipeForBaseline(resolveUpgradeSurvivorConfigSteps(scenario), baselineVersion, {
+      skippedIntents: [],
+    }),
+  ];
 }
 
 export function resolveUpgradeSurvivorOpenClawCommand(
@@ -375,6 +509,7 @@ export function runUpgradeSurvivorOpenClawStep(step: ConfigStep, params: ConfigC
   return {
     id: step.id,
     intent: step.intent,
+    intents: step.intents,
     command: invocation.commandLabel,
     status: result.status,
     signal: result.signal,
@@ -390,7 +525,7 @@ function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
   const scenario = selectedScenario();
-  const scenarioSteps = resolveScenarioConfigSteps(scenario);
+  const recipeSteps = resolveUpgradeSurvivorConfigSteps(scenario);
   const summary: {
     source: string;
     recipe: string;
@@ -404,29 +539,21 @@ function applyRecipe() {
     recipe: "upgrade-survivor-v1",
     baselineVersion,
     scenario,
-    acceptedIntents: [
-      "update",
-      "gateway",
-      "models",
-      "agents",
-      "skills",
-      "plugins",
-      "discord-channel",
-      "telegram-channel",
-      "whatsapp-channel",
-      ...scenarioSteps.map((step) => step.intent),
-    ],
+    acceptedIntents: [],
     skippedIntents: [],
     steps: [],
   };
 
-  for (const step of resolveUpgradeSurvivorConfigSteps(scenario)) {
-    const adaptedStep = adaptStepForBaseline(step, baselineVersion, summary);
-    if (!adaptedStep) {
-      continue;
-    }
-    const outcome = runUpgradeSurvivorOpenClawStep(adaptedStep);
+  for (const step of adaptRecipeForBaseline(recipeSteps, baselineVersion, summary)) {
+    const outcome = runUpgradeSurvivorOpenClawStep(step);
     summary.steps.push(outcome);
+    if (outcome.ok) {
+      for (const intent of step.intents ?? [step.intent]) {
+        if (!summary.acceptedIntents.includes(intent)) {
+          summary.acceptedIntents.push(intent);
+        }
+      }
+    }
     writeJson(summaryPath, summary);
     if (!outcome.ok) {
       const detail = outcome.errorCode ?? outcome.signal ?? outcome.status ?? "unknown";

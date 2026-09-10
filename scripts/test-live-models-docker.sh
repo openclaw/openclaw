@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -64,11 +68,7 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
-if [[ -f scripts/test-live.mjs ]]; then
-  node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts
-else
-  node --import tsx scripts/test-live.mts -- src/agents/models.profiles.live.test.ts
-fi
+openclaw_live_run_staged_script scripts/test-live -- src/agents/models.profiles.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"

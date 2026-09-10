@@ -137,6 +137,20 @@ OpenClaw can automatically discover Bedrock models that support **streaming**
 and **text output**. Discovery uses `bedrock:ListFoundationModels` and
 `bedrock:ListInferenceProfiles`, and results are cached (default: 1 hour).
 
+Both lists, including every inference-profile page, must succeed before OpenClaw
+caches the result. A failed refresh reports unavailable or rejected catalog access
+and preserves compatible last-good models. Restore access to both list operations
+and refresh again. A successful empty list clears discovered membership.
+
+At startup without a compatible previous catalog, a failed inference-profile
+list also prevents foundation-only inventory. Grant both list permissions or
+use an explicit `models.providers["amazon-bedrock"].models` list.
+
+Programmatic callers of the plugin's public discovery helpers keep the advisory
+defaults from v2026.9.2. Pass `discoveryMode: "strict"` to propagate acquisition
+failures and retain successful empty provider results, as the bundled catalog
+hooks do. Advisory partial results are not cached as complete inventory.
+
 How the implicit provider is enabled:
 
 - If `plugins.entries.amazon-bedrock.config.discovery.enabled` is `true`,
@@ -487,6 +501,12 @@ openclaw models list
   </Card>
   <Card title="Memory config reference" href="/reference/memory-config#bedrock-embedding-config" icon="database">
     Full Bedrock embedding model list and dimension options.
+  </Card>
+  <Card title="Bedrock Mantle" href="/providers/bedrock-mantle" icon="layer-group">
+    Bedrock Mantle OpenAI-compatible and Claude Messages models.
+  </Card>
+  <Card title="Prompt caching" href="/reference/prompt-caching" icon="database">
+    How prompt caching works across providers.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
     General troubleshooting and FAQ.

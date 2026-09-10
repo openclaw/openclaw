@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 
 const BOARD_EVENT_MAX_BYTES = 8 * 1024;
@@ -36,16 +37,17 @@ function formatNotice(widget: string, summary: string): string {
 
 export function appendBoardEventNotice(params: {
   sessionKey: string;
+  agentId?: string;
   widget: string;
   payload: unknown;
-  now?: number;
 }): boolean {
   const summary = serializePayload(params.payload);
   if (Buffer.byteLength(summary, "utf8") > BOARD_EVENT_MAX_BYTES) {
     throw new BoardEventPayloadError(`board event payload exceeds ${BOARD_EVENT_MAX_BYTES} bytes`);
   }
-  const now = params.now ?? Date.now();
-  const key = `${params.sessionKey}\0${params.widget}`;
+  const now = Date.now();
+  // Global session keys and widget names can coincide across different owners.
+  const key = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.widget}`;
   const recent = recentNotices.get(key);
   if (recent?.summary === summary && now - recent.at < BOARD_EVENT_DEDUPE_MS) {
     return false;
@@ -56,10 +58,14 @@ export function appendBoardEventNotice(params: {
       recentNotices.delete(candidate);
     }
   }
-  return enqueueSystemEvent(formatNotice(params.widget, summary), {
+  const options = {
     sessionKey: params.sessionKey,
     contextKey: `dashboard:${params.widget}:${now}`,
-  });
+  };
+  return enqueueSystemEvent(
+    formatNotice(params.widget, summary),
+    params.agentId ? withSystemEventOwner(options, params.agentId) : options,
+  );
 }
 
 export function resetBoardEventNoticeStateForTest(): void {

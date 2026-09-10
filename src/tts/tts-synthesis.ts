@@ -2,14 +2,15 @@ import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabili
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { transcodeAudioBuffer } from "../media/media-services.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
 import type { TtsResult, TtsSynthesisResult } from "./tts-runtime-types.js";
 import {
   executeTtsProviderAttempts,
-  resolveTtsRequestSetup,
   sanitizeTtsErrorForLog,
+  withOwnedTtsRequest,
 } from "./tts-synthesis-support.js";
 
 export type TtsAudioPersistence = (params: {
@@ -204,7 +205,7 @@ async function maybePreTranscodeForVoiceDelivery(params: {
   };
 }
 
-export async function synthesizeSpeech(params: {
+type SpeechSynthesisParams = {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
@@ -214,54 +215,75 @@ export async function synthesizeSpeech(params: {
   timeoutMs?: number;
   agentId?: string;
   accountId?: string;
-}): Promise<TtsSynthesisResult> {
-  assertSpeechRuntimeAvailable();
-  const setup = resolveTtsRequestSetup({
-    text: params.text,
-    cfg: params.cfg,
-    prefsPath: params.prefsPath,
-    providerOverride: params.overrides?.provider,
-    disableFallback: params.disableFallback,
-    agentId: params.agentId,
-    channelId: params.channel,
-    accountId: params.accountId,
-  });
-  if ("error" in setup) {
-    return { success: false, error: setup.error };
-  }
+};
 
-  const { cfg, config, persona, providers } = setup;
-  const target = resolveTtsSynthesisTarget(params.channel);
-  return await executeTtsProviderAttempts({
-    cfg,
-    config,
-    persona,
-    providers,
-    synthesisText: normalizeSpeechText(params.text),
-    providerOverrides: params.overrides?.providerOverrides,
-    timeoutMs: params.timeoutMs,
-    target,
-    logLabel: "TTS",
-    selectOperation: ({ resolvedProvider }) => ({
-      kind: "ready",
-      synthesize: ({ prepared, cfg: runtimeCfg, target: synthesisTarget, timeoutMs }) =>
-        resolvedProvider.provider.synthesize({
-          text: prepared.text,
-          cfg: runtimeCfg,
-          providerConfig: prepared.providerConfig,
-          target: synthesisTarget,
-          providerOverrides: prepared.providerOverrides,
-          timeoutMs,
+export async function synthesizeSpeech(params: SpeechSynthesisParams): Promise<TtsSynthesisResult> {
+  assertSpeechRuntimeAvailable();
+  return synthesizeSpeechInternal(params);
+}
+
+/** Host-only Talk synthesis retains its own capability boundary instead of bypassing public TTS. */
+export async function synthesizeTalkSpeech(
+  params: SpeechSynthesisParams,
+): Promise<TtsSynthesisResult> {
+  assertSecretOwnerAvailable("capability", "talk:speech");
+  return synthesizeSpeechInternal(params);
+}
+
+async function synthesizeSpeechInternal(
+  params: SpeechSynthesisParams,
+): Promise<TtsSynthesisResult> {
+  return await withOwnedTtsRequest(
+    {
+      text: params.text,
+      cfg: params.cfg,
+      prefsPath: params.prefsPath,
+      providerOverride: params.overrides?.provider,
+      disableFallback: params.disableFallback,
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    },
+    async (setup) => {
+      if ("error" in setup) {
+        return { success: false, error: setup.error };
+      }
+
+      const { cfg, config, persona, providers } = setup;
+      const target = resolveTtsSynthesisTarget(params.channel);
+      return await executeTtsProviderAttempts({
+        cfg,
+        config,
+        persona,
+        providers,
+        synthesisText: normalizeSpeechText(params.text),
+        providerOverrides: params.overrides?.providerOverrides,
+        timeoutMs: params.timeoutMs,
+        target,
+        logLabel: "TTS",
+        prepareProviderRegistry: setup.prepareProviderRegistry,
+        selectOperation: ({ resolvedProvider }) => ({
+          kind: "ready",
+          synthesize: ({ prepared, cfg: runtimeCfg, target: synthesisTarget, timeoutMs }) =>
+            resolvedProvider.provider.synthesize({
+              text: prepared.text,
+              cfg: runtimeCfg,
+              providerConfig: prepared.providerConfig,
+              target: synthesisTarget,
+              providerOverrides: prepared.providerOverrides,
+              timeoutMs,
+            }),
         }),
-    }),
-    buildSuccess: ({ synthesis, ...metadata }) => ({
-      success: true,
-      ...metadata,
-      audioBuffer: synthesis.audioBuffer,
-      outputFormat: synthesis.outputFormat,
-      voiceCompatible: synthesis.voiceCompatible,
-      fileExtension: synthesis.fileExtension,
-      target,
-    }),
-  });
+        buildSuccess: ({ synthesis, ...metadata }) => ({
+          success: true,
+          ...metadata,
+          audioBuffer: synthesis.audioBuffer,
+          outputFormat: synthesis.outputFormat,
+          voiceCompatible: synthesis.voiceCompatible,
+          fileExtension: synthesis.fileExtension,
+          target,
+        }),
+      });
+    },
+  );
 }

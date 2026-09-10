@@ -135,7 +135,7 @@ openclaw agent --agent ops --message-file ./task.md
 # Exact session key
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
 
-# Legacy key scoped to an agent
+# Bare key scoped to an agent
 openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
 
 # Deliver to a different channel than the session
@@ -156,5 +156,8 @@ openclaw agent --agent ops --message "Alert" --deliver --reply-channel telegram 
   </Card>
   <Card title="Slash commands" href="/tools/slash-commands" icon="slash">
     Native command catalog used inside agent sessions.
+  </Card>
+  <Card title="ACP agents" href="/tools/acp-agents" icon="robot">
+    External agents reachable over ACP.
   </Card>
 </CardGroup>

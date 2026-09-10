@@ -19,9 +19,11 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
   evaluateSkillInstallPolicy: vi.fn(async () => undefined),
 }));
 
-vi.mock("../loading/workspace-skill-loader.js", () => ({
-  loadWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
-}));
+vi.mock("../loading/workspace-skill-loader.js", () => {
+  return {
+    loadWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
+  };
+});
 
 let installSkill: typeof import("./install.js").installSkill;
 let resolveInstallerKindReadiness: typeof import("./install.js").resolveInstallerKindReadiness;

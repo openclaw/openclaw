@@ -22,7 +22,6 @@ export function getOAuthProviderRuntimeMocks() {
 }
 
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -40,6 +39,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
       ? { status: "available", credential, apiKey: credential.access }
       : { status: "unhandled" };
   },
+  resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
 vi.mock("./doctor.js", () => ({
@@ -53,12 +53,13 @@ vi.mock("./external-cli-sync.js", () => ({
     credential.access.trim().length > 0 &&
     Number.isFinite(credential.expires) &&
     credential.expires - now > 5 * 60 * 1000,
-  isSafeToUseExternalCliCredential: () => true,
+  isPersistedExternalCliAuthProfile: (params: { profileId: string; credential: OAuthCredential }) =>
+    params.profileId === "minimax-portal:minimax-cli" &&
+    params.credential.provider === "minimax-portal" &&
+    params.credential.authFlow === "external-cli",
   readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
   shouldBootstrapFromExternalCliCredential: () => false,
-  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
-    existing !== incoming,
 }));
 
 afterAll(() => {

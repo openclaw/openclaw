@@ -23,31 +23,55 @@ You can answer from any supported conversation surface:
   multi-question prompts, the panel shows one question at a time and advances
   through a short stepper. After resolution, the panel closes and the chat
   keeps only a compact answer summary.
-- Telegram, Discord, and Slack render native buttons for a single-choice,
-  single-question prompt.
-- A plain-text reply works on any channel. Reply with a number, an option label,
-  or your own answer.
+- The TUI shows a question prompt in both Gateway and local modes. Use arrow
+  keys or number keys to choose an option, **Other…** to type an answer, or
+  **Skip**. Multi-select prompts let you toggle choices before confirming;
+  multi-question prompts advance one question at a time. Press Esc to return
+  to the composer without answering, then `/question` to reopen the prompt.
+- Telegram renders each choice as a full-width native button for one
+  single-select question. **Other…** switches to Telegram's reply input without
+  resolving the question.
+- Discord and Slack render native buttons for a single-choice, single-question
+  prompt.
+- For a question created by an active OpenClaw run, a plain-text reply works on
+  any channel when your current permissions match the creator's. Reply with a
+  number, an option label, or your own answer. For multi-select questions,
+  separate choices with commas.
+
+Questions from a standalone [attached MCP client](/cli/attach) do not carry an
+OpenClaw run's creator binding. Answer those using the question controls in the
+Control UI, TUI, or native app, not an ordinary channel message.
 
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
+Never answer `ask_user` with a credential. When the agent needs an API key it
+uses the [`secrets` tool](/tools/secrets), whose masked prompt stores the value
+without it entering the chat, the transcript, or the model's context.
+
 ## Platform behavior
 
-Answers work on every supported conversation surface. The web Control UI uses a
-docked stepper that replaces the composer while expanded; collapsing it restores
-the full composer beneath a slim question bar. iOS, macOS, and Android show
+Answers work on every supported conversation surface. The web Control UI and
+TUI show one question at a time; collapsing the prompt restores the composer
+with a slim pending-question indicator. The TUI's `/question` command reopens
+it, and a plain reply still answers an eligible pending question. iOS, macOS, and Android show
 inline cards; multiple questions stay stacked as an intentional touch-friendly
-idiom. Every platform keeps the question-to-answer summary in the active chat
-timeline without timed eviction, and **Skip** is available everywhere.
+idiom. The TUI keeps a compact resolution notice in the chat; other platforms
+keep the question-to-answer summary without timed eviction. **Skip** is
+available everywhere and declines the entire prompt.
 
-Prompts that cannot use native buttons, including multi-question and
-multi-select prompts, degrade to readable text on channels. The Control UI
-keeps the full structured stepper.
+Multi-question and multi-select prompts degrade to readable text on messaging
+channels. The Control UI and TUI keep the full structured stepper. The TUI shows
+the time remaining, dismisses expired prompts, and restores pending questions
+for the selected session after reconnecting or switching sessions. Local mode
+keeps questions in the running process; they do not survive exiting the TUI.
 
 ## Timeout and no answer
 
 The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
-30 through 3600 seconds.
+30 through 3600 seconds. This is a maximum human wait, subject to earlier agent
+run cancellation or the overall run timeout. A pending question does not extend
+an explicit run budget.
 
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
@@ -92,12 +116,19 @@ Example answered result:
 }
 ```
 
+The outer `answers` is the protocol's `QuestionAnswers` envelope; its inner
+`answers` map is keyed by `questionId`, with an array of selected values per
+question.
+
 ## Model guidance
 
 The model-facing contract tells the agent to:
 
 - ask only when blocked on a genuinely user-owned decision;
-- prefer one question and use no more than three;
+- ask exactly one question per call unless several answers must be submitted
+  together, because one-question prompts can use native messaging controls;
+- put every selectable choice in `options`, never only in question prose;
+- use `multiSelect` only when several choices can be selected at once;
 - put the recommended option first and suffix its label with `(Recommended)`;
 - omit an authored `Other` option because free text is added automatically;
 - continue with best judgment after `no_answer`.

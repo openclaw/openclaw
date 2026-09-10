@@ -5,38 +5,44 @@ import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import {
-  approveNodePairing,
-  requestNodePairing,
-  updatePairedNodeBins,
-} from "./device-pairing-node.js";
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import {
+  loadDeviceAuthToken,
+  loadOriginDeviceToken,
+  storeDeviceAuthToken,
+  storeOriginDeviceToken,
+} from "./device-auth-store.js";
+import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
+import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
+import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
 import {
   loadDevicePairingStoreState,
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
 } from "./device-pairing-store.js";
 import {
-  approveBootstrapDevicePairing,
-  approveControlUiDeviceAuthMigrationPairing,
-  approveDevicePairing,
   ensureDeviceToken,
+  revokeDeviceToken,
+  rotateDeviceToken,
+  verifyDeviceToken,
+} from "./device-pairing-tokens.js";
+import {
   getPairedDevice,
+  hasPairedCardRenderer,
   hasEffectivePairedDeviceRole,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
-  onEffectiveOperatorDevicePaired,
   removePairedDevice,
   requestDevicePairing,
   rejectDevicePairing,
   resolveNodePairingGeneration,
-  revokeDeviceToken,
-  rotateDeviceToken,
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
-  verifyDeviceToken,
   withPairedDeviceRecords,
   type PairedDevice,
 } from "./device-pairing.js";
@@ -202,108 +208,42 @@ async function makeDevicePairingDir(): Promise<string> {
   return suiteBaseDir;
 }
 
+async function setupLegacyNodeTokenRecovery() {
+  const baseDir = await suiteRootTracker.make("legacy-node-recovery");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
+  const request = await requestDevicePairing(
+    {
+      deviceId: "device-1",
+      publicKey: "public-key-1",
+      displayName: "Workshop device",
+      roles: ["operator", "node", "observer"],
+      scopes: ["operator.read"],
+    },
+    baseDir,
+  );
+  await approveDevicePairing(
+    request.request.requestId,
+    { callerScopes: ["operator.admin"] },
+    baseDir,
+  );
+  // Unit fixture only: released upgrade production is covered by the public CLI proof.
+  await mutatePairedDevice(baseDir, "device-1", (device) => {
+    device.operatorLabel = "Workshop";
+    requireValue(device.tokens?.node, "expected node token").scopes = ["operator.read"];
+  });
+  const before = requireValue(await getPairedDevice("device-1", baseDir), "expected paired device");
+  const token = requireToken(before.tokens?.node?.token);
+  const cached = storeDeviceAuthToken({
+    deviceId: "device-1",
+    role: "node",
+    token,
+    scopes: ["operator.read"],
+    env,
+  });
+  return { baseDir, env, before, token, cached };
+}
+
 describe("device pairing tokens", () => {
-  test("notifies effective-operator listeners for owner and bootstrap approvals", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const pairedDevices: Array<{ deviceId: string; publicKey: string; scopes: string[] }> = [];
-    const unsubscribe = onEffectiveOperatorDevicePaired((device) => {
-      pairedDevices.push(device);
-    });
-    try {
-      const nodeRequest = await requestDevicePairing(
-        {
-          deviceId: "listener-node",
-          publicKey: "listener-node-key",
-          role: "node",
-          scopes: [],
-        },
-        baseDir,
-      );
-      await approveDevicePairing(nodeRequest.request.requestId, { callerScopes: [] }, baseDir);
-
-      const ownerRequest = await requestDevicePairing(
-        {
-          deviceId: "listener-owner",
-          publicKey: "listener-owner-key",
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-        baseDir,
-      );
-      await approveDevicePairing(
-        ownerRequest.request.requestId,
-        { callerScopes: ["operator.read"] },
-        baseDir,
-      );
-
-      const bootstrapRequest = await requestDevicePairing(
-        {
-          deviceId: "listener-bootstrap",
-          publicKey: "listener-bootstrap-key",
-          role: "operator",
-          scopes: ["operator.read"],
-          silent: true,
-        },
-        baseDir,
-      );
-      await approveBootstrapDevicePairing(
-        bootstrapRequest.request.requestId,
-        FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        baseDir,
-      );
-
-      expect(pairedDevices).toEqual([
-        {
-          deviceId: "listener-owner",
-          publicKey: "listener-owner-key",
-          scopes: ["operator.read"],
-        },
-        {
-          deviceId: "listener-bootstrap",
-          publicKey: "listener-bootstrap-key",
-          scopes: ["operator.read"],
-        },
-      ]);
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  test("allows migration approval when existing operators cannot manage pairings", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const readOnlyRequest = await requestDevicePairing(
-      {
-        deviceId: "read-only-owner",
-        publicKey: "read-only-owner-key",
-        role: "operator",
-        scopes: ["operator.read"],
-      },
-      baseDir,
-    );
-    await approveDevicePairing(
-      readOnlyRequest.request.requestId,
-      { callerScopes: ["operator.read"] },
-      baseDir,
-    );
-    const migrationRequest = await requestDevicePairing(
-      {
-        deviceId: "migration-owner",
-        publicKey: "migration-owner-key",
-        role: "operator",
-        scopes: ["operator.pairing"],
-      },
-      baseDir,
-    );
-
-    await expect(
-      approveControlUiDeviceAuthMigrationPairing(
-        migrationRequest.request.requestId,
-        { callerScopes: ["operator.pairing"] },
-        baseDir,
-      ),
-    ).resolves.toMatchObject({ status: "approved" });
-  });
-
   beforeAll(async () => {
     suiteBaseDir = await suiteRootTracker.setup();
   });
@@ -1127,6 +1067,15 @@ describe("device pairing tokens", () => {
     await expect(updatePairedNodeBins("node-1", ["retired-bin"], original, baseDir)).resolves.toBe(
       true,
     );
+    await expect(
+      updatePairedNodeSessionHost({
+        nodeId: "node-1",
+        sessionHost: true,
+        expectedPairingGeneration: original,
+        isConnectionCurrent: () => true,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
 
     const rotated = await rotateDeviceToken({
       deviceId: "node-1",
@@ -1148,6 +1097,7 @@ describe("device pairing tokens", () => {
     ).resolves.toBe(false);
     const paired = await getPairedDevice("node-1", baseDir);
     expect(paired?.nodeSurface?.bins).toBeUndefined();
+    expect(paired?.nodeSurface?.sessionHost).toBeUndefined();
     expect(paired?.lastSeenAtMs).toBeUndefined();
     expect(paired?.lastSeenReason).toBeUndefined();
   });
@@ -1300,6 +1250,142 @@ describe("device pairing tokens", () => {
     paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
   });
+
+  test("recovers legacy node scopes and retires only its matching cached bearer", async () => {
+    const { baseDir, env, before, token, cached } = await setupLegacyNodeTokenRecovery();
+
+    await expect(
+      rotateDeviceToken({ deviceId: "device-1", role: "node", baseDir }),
+    ).resolves.toEqual({ ok: false, reason: "scope-outside-approved-baseline" });
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env })).toEqual(cached);
+
+    const entry = requireRotatedEntry(
+      await rotateDeviceToken({ deviceId: "device-1", role: "node", scopes: [], baseDir }),
+    );
+
+    expect(entry.scopes).toEqual([]);
+    expect(entry.token).not.toBe(token);
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env })).toBeNull();
+    expect(await getPairedDevice("device-1", baseDir)).toEqual({
+      ...before,
+      tokens: { ...before.tokens, node: entry },
+    });
+    await expect(
+      verifyDeviceToken({ deviceId: "device-1", role: "node", token, scopes: [], baseDir }),
+    ).resolves.toEqual({ ok: false, reason: "token-mismatch" });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        role: "node",
+        token: entry.token,
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  test("legacy node recovery preserves refreshed and unrelated cached credentials", async () => {
+    const { baseDir, env, token } = await setupLegacyNodeTokenRecovery();
+    const refreshed = storeDeviceAuthToken({
+      deviceId: "device-1",
+      role: "node",
+      token: "refreshed-node-bearer",
+      scopes: [],
+      env,
+      expectedToken: token,
+    });
+    const operator = storeDeviceAuthToken({ deviceId: "device-1", role: "operator", token, env });
+    const otherDevice = storeDeviceAuthToken({ deviceId: "device-2", role: "node", token, env });
+    const gatewayScope = "wss://other-gateway.example/rpc";
+    const origin = storeOriginDeviceToken({
+      gatewayScope,
+      deviceId: "device-1",
+      role: "node",
+      token,
+      env,
+    });
+    const otherEnv = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: await suiteRootTracker.make("other-profile"),
+    };
+    const otherProfile = storeDeviceAuthToken({
+      deviceId: "device-1",
+      role: "node",
+      token,
+      env: otherEnv,
+    });
+
+    requireRotatedEntry(
+      await rotateDeviceToken({ deviceId: "device-1", role: "node", scopes: [], baseDir }),
+    );
+
+    expect(refreshed).not.toBeNull();
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env })).toEqual(refreshed);
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toEqual(operator);
+    expect(loadDeviceAuthToken({ deviceId: "device-2", role: "node", env })).toEqual(otherDevice);
+    expect(
+      loadOriginDeviceToken({ gatewayScope, deviceId: "device-1", role: "node", env }),
+    ).toEqual(origin);
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env: otherEnv })).toEqual(
+      otherProfile,
+    );
+  });
+
+  test("rolls back legacy node rotation when matching cache cleanup fails", async () => {
+    const { baseDir, env, before, cached } = await setupLegacyNodeTokenRecovery();
+    const { db } = openOpenClawStateDatabase({ env });
+    db.exec(`
+      CREATE TEMP TRIGGER reject_node_cache_cleanup BEFORE DELETE ON device_auth_tokens
+      WHEN OLD.device_id = 'device-1' AND OLD.role = 'node'
+      BEGIN SELECT RAISE(ABORT, 'node cache cleanup refused'); END;
+    `);
+    try {
+      await expect(
+        rotateDeviceToken({ deviceId: "device-1", role: "node", scopes: [], baseDir }),
+      ).rejects.toThrow("node cache cleanup refused");
+      expect(await getPairedDevice("device-1", baseDir)).toEqual(before);
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env })).toEqual(cached);
+    } finally {
+      db.exec("DROP TRIGGER reject_node_cache_cleanup");
+    }
+
+    requireRotatedEntry(
+      await rotateDeviceToken({ deviceId: "device-1", role: "node", scopes: [], baseDir }),
+    );
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env })).toBeNull();
+  });
+
+  test.each([
+    { name: "omitted scopes", scopes: undefined, expectedScopes: ["node.exec"] },
+    { name: "explicit empty scopes", scopes: [], expectedScopes: [] },
+  ])(
+    "valid node rotation with $name does not apply legacy cache cleanup",
+    async ({ scopes, expectedScopes }) => {
+      const baseDir = await suiteRootTracker.make("valid-node-rotation");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
+      const request = await requestDevicePairing(
+        { deviceId: "node-1", publicKey: "node-key", role: "node", scopes: ["node.exec"] },
+        baseDir,
+      );
+      await approveDevicePairing(request.request.requestId, baseDir);
+      const before = requireValue(await getPairedDevice("node-1", baseDir), "expected paired node");
+      const cached = storeDeviceAuthToken({
+        deviceId: "node-1",
+        role: "node",
+        token: requireToken(before.tokens?.node?.token),
+        scopes: ["node.exec"],
+        env,
+      });
+
+      const entry = requireRotatedEntry(
+        await rotateDeviceToken({ deviceId: "node-1", role: "node", scopes, baseDir }),
+      );
+
+      expect(entry.scopes).toEqual(expectedScopes);
+      expect(loadDeviceAuthToken({ deviceId: "node-1", role: "node", env })).toEqual(cached);
+      expect((await getPairedDevice("node-1", baseDir))?.approvedScopes).toEqual(["node.exec"]);
+    },
+  );
 
   test("preserves existing token scopes when approving a repair without requested scopes", async () => {
     const baseDir = await makeDevicePairingDir();
@@ -2313,60 +2399,117 @@ describe("device pairing tokens", () => {
     await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
   });
 
-  test("clears APNs only when a node reapproval changes installation identity", async () => {
+  test.each([
+    { clientId: "openclaw-control-ui", platform: undefined, expected: true },
+    { clientId: "webchat-ui", platform: undefined, expected: true },
+    { clientId: "openclaw-ios", platform: undefined, expected: true },
+    { clientId: "openclaw-android", platform: undefined, expected: true },
+    { clientId: "openclaw-macos", platform: undefined, expected: true },
+    { clientId: "cli", platform: "web", expected: true },
+    { clientId: "cli", platform: "ios", expected: true },
+    { clientId: "cli", platform: "android", expected: true },
+    { clientId: "cli", platform: "macos", expected: true },
+    { clientId: "cli", platform: "darwin", expected: true },
+    { clientId: "cli", platform: "linux", expected: false },
+  ])(
+    "detects paired card renderer client=$clientId platform=$platform",
+    async ({ clientId, platform, expected }) => {
+      const baseDir = await suiteRootTracker.make("renderer-case");
+      await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
+      const request = await requestDevicePairing(
+        {
+          deviceId: "renderer-device",
+          publicKey: "renderer-public-key",
+          clientId,
+          platform,
+          role: "operator",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+
+      await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(expected);
+    },
+  );
+
+  test("invalidates the card renderer cache when removing a paired device", async () => {
     const baseDir = await makeDevicePairingDir();
-    await setupPairedNodeDevice(baseDir);
-    const nodePairing = await requestNodePairing({ nodeId: "node-1" }, baseDir);
-    await approveNodePairing(
-      nodePairing.request.requestId,
-      { callerScopes: ["operator.pairing"] },
-      baseDir,
-    );
-    await registerApnsRegistration({
-      nodeId: "node-1",
-      transport: "direct",
-      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      baseDir,
-    });
+    await setupPairedBrowserOperatorDevice(baseDir);
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(true);
 
-    const sameInstallationRepair = await requestDevicePairing(
-      {
-        deviceId: "node-1",
-        publicKey: "public-key-node-1",
-        role: "node",
-        scopes: [],
-      },
-      baseDir,
-    );
-    await expect(
-      approveDevicePairing(sameInstallationRepair.request.requestId, { callerScopes: [] }, baseDir),
-    ).resolves.toMatchObject({
-      status: "approved",
-      nodePairingGenerationChanged: true,
-    });
-    await expect(loadApnsRegistration("node-1", baseDir)).resolves.toMatchObject({
-      token: "abcd1234abcd1234abcd1234abcd1234",
-    });
+    await removePairedDevice("browser-device-1", baseDir);
 
-    const replacementRepair = await requestDevicePairing(
-      {
-        deviceId: "node-1",
-        publicKey: "public-key-node-1-replacement",
-        role: "node",
-        scopes: [],
-      },
-      baseDir,
-    );
-    await expect(
-      approveDevicePairing(replacementRepair.request.requestId, { callerScopes: [] }, baseDir),
-    ).resolves.toMatchObject({
-      status: "approved",
-      nodePairingGenerationChanged: true,
-    });
-    await expect(loadApnsRegistration("node-1", baseDir)).resolves.toBeNull();
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
   });
+
+  test.each(["owner", "bootstrap"] as const)(
+    "clears APNs only when a $approval reapproval changes installation identity",
+    async (approval) => {
+      const baseDir = await makeDevicePairingDir();
+      await setupPairedNodeDevice(baseDir);
+      const nodePairing = await requestNodePairing({ nodeId: "node-1" }, baseDir);
+      await approveNodePairing(
+        nodePairing.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      );
+      await registerApnsRegistration({
+        nodeId: "node-1",
+        transport: "direct",
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        baseDir,
+      });
+      const approve = async (requestId: string) =>
+        approval === "owner"
+          ? await approveDevicePairing(requestId, { callerScopes: [] }, baseDir)
+          : await approveBootstrapDevicePairing(
+              requestId,
+              PAIRING_SETUP_BOOTSTRAP_PROFILE,
+              baseDir,
+            );
+
+      const sameInstallationRepair = await requestDevicePairing(
+        {
+          deviceId: "node-1",
+          publicKey: "public-key-node-1",
+          role: "node",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await expect(approve(sameInstallationRepair.request.requestId)).resolves.toMatchObject({
+        status: "approved",
+        nodePairingGenerationChanged: true,
+      });
+      expect(
+        (await listDevicePairing(baseDir)).pending.map((request) => request.requestId),
+      ).not.toContain(sameInstallationRepair.request.requestId);
+      await expect(loadApnsRegistration("node-1", baseDir)).resolves.toMatchObject({
+        token: "abcd1234abcd1234abcd1234abcd1234",
+      });
+
+      const replacementRepair = await requestDevicePairing(
+        {
+          deviceId: "node-1",
+          publicKey: "public-key-node-1-replacement",
+          role: "node",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await expect(approve(replacementRepair.request.requestId)).resolves.toMatchObject({
+        status: "approved",
+        nodePairingGenerationChanged: true,
+      });
+      expect(
+        (await listDevicePairing(baseDir)).pending.map((request) => request.requestId),
+      ).not.toContain(replacementRepair.request.requestId);
+      await expect(loadApnsRegistration("node-1", baseDir)).resolves.toBeNull();
+    },
+  );
 
   test("clears generation-owned node bins on public-key replacement", async () => {
     const baseDir = await makeDevicePairingDir();

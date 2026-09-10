@@ -24,6 +24,8 @@ vi.mock("../tts/tts.js", () => ({
   synthesizeSpeech: synthesizeSpeechMock,
 }));
 
+vi.mock("../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: synthesizeSpeechMock }));
+
 type SpeechProvider = Parameters<typeof withSpeechProviders>[0][number]["provider"];
 
 const ALIAS_STUB_VOICE_ID = "VoiceAlias1234567890";
@@ -181,6 +183,24 @@ describe("gateway talk runtime", () => {
         expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
           Buffer.from([7, 8, 9]).toString("base64"),
         );
+      },
+    );
+  });
+
+  it.each(["```printf```", "> ```\n> x"])("preserves talk.speak prose after %s", async (prefix) => {
+    await setAcmeTalkConfig();
+    const text = `${prefix}\n\nThis explanation is ordinary prose and should be spoken in full.`;
+    await withAcmeSpeechProvider(
+      async () => ({
+        audioBuffer: Buffer.from([7, 8, 9]),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      }),
+      async () => {
+        const res = await invokeTalkSpeakDirect({ text });
+        expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
+        expect(expectSingleSynthesizeSpeechCall().text).toBe(text);
       },
     );
   });

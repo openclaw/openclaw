@@ -1,19 +1,7 @@
 // Tests pending tool task drain ordering, settlement, and failure handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
-
-function deferredTask() {
-  let resolve: (() => void) | undefined;
-  let reject: ((error: Error) => void) | undefined;
-  const promise = new Promise<void>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred task callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function flushPromises() {
   await Promise.resolve();
@@ -32,8 +20,8 @@ describe("drainPendingToolTasks", () => {
   });
 
   it("waits for all pending tasks to settle", async () => {
-    const first = deferredTask();
-    const second = deferredTask();
+    const first = createDeferred();
+    const second = createDeferred();
     const tasks = new Set([first.promise, second.promise]);
 
     const drain = drainPendingToolTasks({ tasks, idleTimeoutMs: 1_000 });
@@ -48,8 +36,8 @@ describe("drainPendingToolTasks", () => {
 
   it("resets the idle timeout after each completed task", async () => {
     vi.useFakeTimers();
-    const first = deferredTask();
-    const second = deferredTask();
+    const first = createDeferred();
+    const second = createDeferred();
     const onTimeout = vi.fn();
     const tasks = new Set([first.promise, second.promise]);
 
@@ -66,9 +54,24 @@ describe("drainPendingToolTasks", () => {
     expect(onTimeout).not.toHaveBeenCalled();
   });
 
+  it("drains tasks added after the initial snapshot", async () => {
+    const first = createDeferred();
+    const second = createDeferred();
+    const tasks = new Set([first.promise]);
+
+    const drain = drainPendingToolTasks({ tasks, idleTimeoutMs: 1_000 });
+    tasks.add(second.promise);
+    first.resolve();
+    await flushPromises();
+    expect(tasks).toEqual(new Set([second.promise]));
+
+    second.resolve();
+    await expect(drain).resolves.toEqual({ kind: "settled" });
+  });
+
   it("returns timeout when no pending task settles before the idle window", async () => {
     vi.useFakeTimers();
-    const stuck = deferredTask();
+    const stuck = createDeferred();
     const onTimeout = vi.fn();
     const tasks = new Set([stuck.promise]);
 
@@ -83,8 +86,8 @@ describe("drainPendingToolTasks", () => {
   });
 
   it("treats rejected tasks as drained progress", async () => {
-    const failed = deferredTask();
-    const later = deferredTask();
+    const failed = createDeferred();
+    const later = createDeferred();
     const tasks = new Set([failed.promise, later.promise]);
 
     const drain = drainPendingToolTasks({ tasks, idleTimeoutMs: 1_000 });

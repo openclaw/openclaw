@@ -8,19 +8,28 @@ import type {
   PageState,
   PendingObservedDialog,
 } from "./pw-session-contracts.js";
-import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
-import { OBSERVED_DIALOG_TIMEOUT_MS, MAX_RECENT_DIALOGS } from "./pw-session-contracts.js";
+import {
+  BrowserObservedDialogBlockedError,
+  OBSERVED_DIALOG_TIMEOUT_MS,
+  MAX_RECENT_DIALOGS,
+} from "./pw-session-contracts.js";
 
 export function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
   const parsed = parseFiniteNumber(timeoutMs);
   return Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
 }
 
-export function appendRecentDialog(state: PageState, record: BrowserObservedDialogRecord): void {
+export function recordClosedDialog(
+  state: PageState,
+  dialog: BrowserObservedDialogRecord,
+  closedBy: NonNullable<BrowserObservedDialogRecord["closedBy"]>,
+): BrowserObservedDialogRecord {
+  const record = { ...serializeDialogRecord(dialog), closedAt: new Date().toISOString(), closedBy };
   state.recentDialogs.push(record);
   while (state.recentDialogs.length > MAX_RECENT_DIALOGS) {
     state.recentDialogs.shift();
   }
+  return record;
 }
 
 function serializeDialogRecord(dialog: BrowserObservedDialogRecord): BrowserObservedDialogRecord {
@@ -35,14 +44,10 @@ function serializeDialogRecord(dialog: BrowserObservedDialogRecord): BrowserObse
   };
 }
 
-function serializePendingDialog(dialog: PendingObservedDialog): BrowserObservedDialogRecord {
-  return serializeDialogRecord(dialog);
-}
-
 export function serializeObservedBrowserState(state: PageState): BrowserObservedState {
   return {
     dialogs: {
-      pending: state.pendingDialogs.map(serializePendingDialog),
+      pending: state.pendingDialogs.map(serializeDialogRecord),
       recent: state.recentDialogs.map(serializeDialogRecord),
     },
   };
@@ -55,11 +60,11 @@ export function clearArmedDialogResponse(state: PageState): void {
   state.armedDialogResponse = undefined;
 }
 
-function abortActionsBlockedByDialog(state: PageState): void {
+function abortActionsBlockedByDialog(state: PageState, reason?: unknown): void {
   if (state.dialogAbortControllers.size === 0) {
     return;
   }
-  const err = new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state));
+  const err = reason ?? new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state));
   for (const controller of state.dialogAbortControllers) {
     if (!controller.signal.aborted) {
       controller.abort(err);
@@ -92,25 +97,12 @@ export async function settleObservedDialog(params: {
     }
   } catch (err) {
     if (!isNoDialogShowingError(err)) {
-      if (params.closedBy === "agent") {
-        state.pendingDialogs.push(pending);
-      }
       throw err;
     }
     closedBy = "remote";
   }
 
-  const record: BrowserObservedDialogRecord = {
-    id: pending.id,
-    type: pending.type,
-    message: pending.message,
-    ...(pending.defaultValue !== undefined ? { defaultValue: pending.defaultValue } : {}),
-    openedAt: pending.openedAt,
-    closedAt: new Date().toISOString(),
-    closedBy,
-  };
-  appendRecentDialog(state, record);
-  return record;
+  return recordClosedDialog(state, pending, closedBy);
 }
 
 export function observeDialog(pageState: PageState, dialog: Dialog): void {
@@ -136,7 +128,7 @@ export function observeDialog(pageState: PageState, dialog: Dialog): void {
       accept: armed.accept,
       ...(armed.promptText !== undefined ? { promptText: armed.promptText } : {}),
       closedBy: "armed",
-    }).catch(() => {});
+    }).catch((err: unknown) => abortActionsBlockedByDialog(pageState, err));
     return;
   }
   if (armed) {

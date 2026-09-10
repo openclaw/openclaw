@@ -2,8 +2,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 /**
  * Enforces source-managed provider secret ownership rules.
  */
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
 import {
   resolveNonEnvSecretRefApiKeyMarker,
@@ -11,7 +11,7 @@ import {
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { normalizeProviderMapKeys } from "./models-config.merge.js";
-import type { ProviderConfig, SecretDefaults } from "./models-config.providers.secrets.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 /**
  * Reapplies source-managed secret markers to normalized provider config.
@@ -21,28 +21,37 @@ import type { ProviderConfig, SecretDefaults } from "./models-config.providers.s
  */
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
-function normalizeSourceProviderLookup(
+type SourceProviderEntry = { providerKey: string; providerConfig: ProviderConfig };
+
+export function normalizeSourceProviderLookup(
   providers: ModelsConfig["providers"] | undefined,
-): Record<string, ProviderConfig> {
+): ReadonlyMap<string, SourceProviderEntry> {
   if (!providers) {
-    return {};
+    return new Map();
   }
   const validProviders = Object.fromEntries(
-    Object.entries(providers).filter(([, provider]) => isRecord(provider)),
-  ) as Record<string, ProviderConfig>;
+    Object.entries(providers)
+      .filter(([, provider]) => isRecord(provider))
+      .map(([providerKey, providerConfig]): [string, SourceProviderEntry] => [
+        providerKey,
+        { providerKey, providerConfig },
+      ]),
+  );
   // Use the merge boundary's collision rule so a case alias cannot displace the
   // canonical SecretRef owner and expose its resolved runtime value to models.json.
-  return normalizeProviderMapKeys(validProviders);
+  return new Map(Object.entries(normalizeProviderMapKeys(validProviders)));
 }
 
 function resolveSourceManagedApiKeyMarker(params: {
-  sourceProvider: ProviderConfig | undefined;
-  sourceSecretDefaults: SecretDefaults | undefined;
+  sourceProvider: SourceProviderEntry;
+  sourceConfig: OpenClawConfig | undefined;
 }): string | undefined {
-  const sourceApiKeyRef = resolveSecretInputRef({
-    value: params.sourceProvider?.apiKey,
-    defaults: params.sourceSecretDefaults,
-  }).ref;
+  const sourceApiKeyRef = resolveConfigSecretRef({
+    config: params.sourceConfig,
+    path: `models.providers.${params.sourceProvider.providerKey}.apiKey`,
+    value: params.sourceProvider.providerConfig.apiKey,
+    defaults: params.sourceConfig?.secrets?.defaults,
+  });
   if (!sourceApiKeyRef || !sourceApiKeyRef.id.trim()) {
     return undefined;
   }
@@ -52,21 +61,23 @@ function resolveSourceManagedApiKeyMarker(params: {
 }
 
 function resolveSourceManagedHeaderMarkers(params: {
-  sourceProvider: ProviderConfig | undefined;
-  sourceSecretDefaults: SecretDefaults | undefined;
+  sourceProvider: SourceProviderEntry;
+  sourceConfig: OpenClawConfig | undefined;
 }): Record<string, string> {
-  const sourceHeaders = isRecord(params.sourceProvider?.headers)
-    ? (params.sourceProvider.headers as Record<string, unknown>)
+  const sourceHeaders = isRecord(params.sourceProvider.providerConfig.headers)
+    ? params.sourceProvider.providerConfig.headers
     : undefined;
   if (!sourceHeaders) {
     return {};
   }
   const markers: Record<string, string> = {};
   for (const [headerName, headerValue] of Object.entries(sourceHeaders)) {
-    const sourceHeaderRef = resolveSecretInputRef({
+    const sourceHeaderRef = resolveConfigSecretRef({
+      config: params.sourceConfig,
+      path: `models.providers.${params.sourceProvider.providerKey}.headers.${headerName}`,
       value: headerValue,
-      defaults: params.sourceSecretDefaults,
-    }).ref;
+      defaults: params.sourceConfig?.secrets?.defaults,
+    });
     if (!sourceHeaderRef || !sourceHeaderRef.id.trim()) {
       continue;
     }
@@ -81,16 +92,17 @@ function resolveSourceManagedHeaderMarkers(params: {
 /** Preserves source-managed apiKey/header markers from the original provider config. */
 export function enforceSourceManagedProviderSecrets(params: {
   providers: ModelsConfig["providers"];
-  sourceProviders: ModelsConfig["providers"] | undefined;
-  sourceSecretDefaults?: SecretDefaults;
+  sourceConfigForSecrets: OpenClawConfig | undefined;
   secretRefManagedProviders?: Set<string>;
 }): ModelsConfig["providers"] {
   const { providers } = params;
   if (!providers) {
     return providers;
   }
-  const sourceProvidersByKey = normalizeSourceProviderLookup(params.sourceProviders);
-  if (Object.keys(sourceProvidersByKey).length === 0) {
+  const sourceProvidersByKey = normalizeSourceProviderLookup(
+    params.sourceConfigForSecrets?.models?.providers,
+  );
+  if (sourceProvidersByKey.size === 0) {
     return providers;
   }
 
@@ -100,21 +112,19 @@ export function enforceSourceManagedProviderSecrets(params: {
       continue;
     }
     const canonicalProviderKey = normalizeProviderId(providerKey);
-    const sourceProvider = sourceProvidersByKey[canonicalProviderKey];
+    const sourceProvider = sourceProvidersByKey.get(canonicalProviderKey);
     if (!sourceProvider) {
       continue;
     }
     let nextProvider = provider;
-    let providerMutated = false;
 
     const sourceApiKeyMarker = resolveSourceManagedApiKeyMarker({
       sourceProvider,
-      sourceSecretDefaults: params.sourceSecretDefaults,
+      sourceConfig: params.sourceConfigForSecrets,
     });
     if (sourceApiKeyMarker) {
       params.secretRefManagedProviders?.add(canonicalProviderKey);
       if (nextProvider.apiKey !== sourceApiKeyMarker) {
-        providerMutated = true;
         nextProvider = {
           ...nextProvider,
           apiKey: sourceApiKeyMarker,
@@ -124,40 +134,26 @@ export function enforceSourceManagedProviderSecrets(params: {
 
     const sourceHeaderMarkers = resolveSourceManagedHeaderMarkers({
       sourceProvider,
-      sourceSecretDefaults: params.sourceSecretDefaults,
+      sourceConfig: params.sourceConfigForSecrets,
     });
-    if (Object.keys(sourceHeaderMarkers).length > 0) {
-      const currentHeaders = isRecord(nextProvider.headers)
-        ? (nextProvider.headers as Record<string, unknown>)
-        : undefined;
+    const currentHeaders = isRecord(nextProvider.headers) ? nextProvider.headers : undefined;
+    if (
+      Object.entries(sourceHeaderMarkers).some(
+        ([headerName, marker]) => currentHeaders?.[headerName] !== marker,
+      )
+    ) {
       // Merge marker headers over normalized headers so auth metadata remains managed while
       // unrelated provider headers survive normalization.
-      const nextHeaders = {
-        ...(currentHeaders as Record<string, NonNullable<ProviderConfig["headers"]>[string]>),
+      nextProvider = {
+        ...nextProvider,
+        headers: { ...currentHeaders, ...sourceHeaderMarkers },
       };
-      let headersMutated = !currentHeaders;
-      for (const [headerName, marker] of Object.entries(sourceHeaderMarkers)) {
-        if (nextHeaders[headerName] === marker) {
-          continue;
-        }
-        headersMutated = true;
-        nextHeaders[headerName] = marker;
-      }
-      if (headersMutated) {
-        providerMutated = true;
-        nextProvider = {
-          ...nextProvider,
-          headers: nextHeaders,
-        };
-      }
     }
 
-    if (!providerMutated) {
+    if (nextProvider === provider) {
       continue;
     }
-    if (!nextProviders) {
-      nextProviders = { ...providers };
-    }
+    nextProviders ??= { ...providers };
     nextProviders[providerKey] = nextProvider;
   }
 

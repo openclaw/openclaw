@@ -1,6 +1,14 @@
 // Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cloneConfigWithResolutionFacts,
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  getConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "./resolution-facts.js";
+import {
+  createRuntimeConfigReader,
   finalizeRuntimeSnapshotWrite,
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
@@ -18,8 +26,10 @@ import {
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
   setRuntimeConfigAppliedHash,
+  setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
+import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import type { OpenClawConfig } from "./types.js";
 
 function resetRuntimeConfigState(): void {
@@ -53,31 +63,43 @@ describe("runtime snapshot state", () => {
   });
 
   it("returns the source snapshot when runtime snapshot is active", () => {
-    const sourceConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "sk-runtime-resolved",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = createProviderConfigFixture();
+    const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
 
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
+  });
+
+  it("publishes and replaces same-byte resolution facts with the source snapshot", () => {
+    const runtimeConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
+    };
+    const unresolvedSource = structuredClone(runtimeConfig);
+    setConfigResolutionFacts(
+      unresolvedSource,
+      createConfigResolutionFacts(
+        [{ configPath: "gateway.auth.token", varName: "GATEWAY_TOKEN" }],
+        new Map([["gateway.auth.token", "GATEWAY_TOKEN"]]),
+      ),
+    );
+    setRuntimeConfigSnapshot(runtimeConfig, unresolvedSource);
+    expect([...(getConfigResolutionFacts(getRuntimeConfigSnapshot()) ?? [])]).toEqual([
+      "gateway.auth.token",
+    ]);
+    expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")?.id).toBe(
+      "GATEWAY_TOKEN",
+    );
+
+    const literalSource = structuredClone(runtimeConfig);
+    setConfigResolutionFacts(literalSource, createConfigResolutionFacts([]));
+    expect(
+      setRuntimeConfigSourceSnapshotIfCurrent({
+        expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? -1,
+        sourceConfig: literalSource,
+      }),
+    ).toBe(true);
+    expect(getConfigResolutionFacts(getRuntimeConfigSnapshot())?.size).toBe(0);
+    expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")).toBeNull();
   });
 
   it("tracks snapshot metadata and cache keys across runtime refreshes", () => {
@@ -119,51 +141,110 @@ describe("runtime snapshot state", () => {
     expect(hashRuntimeConfigValue({ logging: { level: "info" } })).toBe(first);
   });
 
-  it("selects runtime config only when input still matches the runtime source", () => {
-    const sourceConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
+  it.each([false, true])(
+    "selects and retains only matching runtime sources (resolution facts: %s)",
+    (withFacts) => {
+      const sourceConfig = createProviderConfigFixture();
+      if (withFacts) {
+        setConfigResolutionFacts(sourceConfig, createConfigResolutionFacts([]));
+      }
+      const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
+      const scopedResolvedConfig: OpenClawConfig = {
+        ...runtimeConfig,
+        tools: {
+          updatePlan: true,
         },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "sk-runtime-resolved",
-            models: [],
-          },
-        },
-      },
-    };
-    const scopedResolvedConfig: OpenClawConfig = {
-      ...runtimeConfig,
-      tools: {
-        updatePlan: true,
-      },
-    };
+      };
 
-    expect(
-      selectApplicableRuntimeConfig({
-        inputConfig: structuredClone(sourceConfig),
-        runtimeConfig,
-        runtimeSourceConfig: sourceConfig,
-      }),
-    ).toBe(runtimeConfig);
-    expect(
-      selectApplicableRuntimeConfig({
-        inputConfig: scopedResolvedConfig,
-        runtimeConfig,
-        runtimeSourceConfig: sourceConfig,
-      }),
-    ).toBe(scopedResolvedConfig);
+      const readUnbound = createRuntimeConfigReader(scopedResolvedConfig);
+
+      expect(
+        selectApplicableRuntimeConfig({
+          inputConfig: cloneConfigWithResolutionFacts(sourceConfig),
+          runtimeConfig,
+          runtimeSourceConfig: sourceConfig,
+        }),
+      ).toBe(runtimeConfig);
+      expect(
+        selectApplicableRuntimeConfig({
+          inputConfig: scopedResolvedConfig,
+          runtimeConfig,
+          runtimeSourceConfig: sourceConfig,
+        }),
+      ).toBe(scopedResolvedConfig);
+      const foreignConfig = cloneConfigWithResolutionFacts(sourceConfig);
+      setConfigResolutionFacts(
+        foreignConfig,
+        createConfigResolutionFacts(
+          [],
+          new Map([["models.providers.openai.apiKey", "OTHER_PROVIDER_KEY"]]),
+        ),
+      );
+      expect(
+        selectApplicableRuntimeConfig({
+          inputConfig: foreignConfig,
+          runtimeConfig,
+          runtimeSourceConfig: sourceConfig,
+        }),
+      ).toBe(foreignConfig);
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+      const readRuntime = createRuntimeConfigReader(cloneConfigWithResolutionFacts(sourceConfig));
+      const readScoped = createRuntimeConfigReader(scopedResolvedConfig);
+      const readForeign = createRuntimeConfigReader(foreignConfig);
+      const nextConfig = { ...runtimeConfig, messages: { ackReactionScope: "all" as const } };
+      setRuntimeConfigSnapshot(nextConfig, nextConfig);
+      expect(readRuntime()).toBe(nextConfig);
+      expect(readScoped()).toBe(scopedResolvedConfig);
+      expect(readForeign()).toBe(foreignConfig);
+      expect(readUnbound()).toBe(scopedResolvedConfig);
+    },
+  );
+
+  it("matches independently loaded config with equivalent resolution facts", () => {
+    const source = createProviderConfigFixture();
+    const freshRead = structuredClone(source);
+    const facts = () =>
+      createConfigResolutionFacts(
+        [],
+        new Map([["models.providers.openai.apiKey", "PROVIDER_KEY"]]),
+      );
+    setConfigResolutionFacts(source, facts());
+    setConfigResolutionFacts(freshRead, facts());
+    const runtime = createProviderConfigFixture("synthetic-runtime-key");
+    setRuntimeConfigSnapshot(runtime, source);
+
+    expect(getConfigResolutionFacts(freshRead)).not.toBe(getConfigResolutionFacts(source));
+    expect(createRuntimeConfigReader(freshRead)()).toBe(runtime);
   });
+
+  it.each(["absent", "empty", "different-ref", "different-provider", "resolved", "unresolved"])(
+    "does not reuse runtime for same-byte config with %s resolution facts",
+    (kind) => {
+      const source = createProviderConfigFixture();
+      const input = structuredClone(source);
+      const refs = new Map([["models.providers.openai.apiKey", "PROVIDER_KEY"]]);
+      setConfigResolutionFacts(source, createConfigResolutionFacts([], refs));
+      if (kind !== "absent") {
+        setConfigResolutionFacts(
+          input,
+          createConfigResolutionFacts(
+            kind === "unresolved"
+              ? [{ configPath: "models.providers.openai.apiKey", varName: "PROVIDER_KEY" }]
+              : [],
+            kind === "resolved" || kind === "empty"
+              ? new Map()
+              : kind === "different-ref"
+                ? new Map([["models.providers.openai.apiKey", "OTHER_KEY"]])
+                : refs,
+            kind === "different-provider" ? "other" : "default",
+            kind === "resolved" ? refs : new Map(),
+          ),
+        );
+      }
+      setRuntimeConfigSnapshot(createProviderConfigFixture("synthetic-runtime-key"), source);
+      expect(createRuntimeConfigReader(input)()).toBe(input);
+    },
+  );
 
   it("clears runtime source snapshot when runtime snapshot is cleared", () => {
     setRuntimeConfigSnapshot({ gateway: { port: 18789 } }, { gateway: { port: 18789 } });
@@ -180,31 +261,10 @@ describe("runtime snapshot state", () => {
     }));
     const nextSourceConfig: OpenClawConfig = {
       gateway: { auth: { mode: "token" } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
+      ...createProviderConfigFixture(),
     };
 
-    setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
-              models: [],
-            },
-          },
-        },
-      },
-      nextSourceConfig,
-    );
+    setRuntimeConfigSnapshot(createProviderConfigFixture("sk-runtime-resolved"), nextSourceConfig);
 
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig,
@@ -255,28 +315,8 @@ describe("runtime snapshot state", () => {
     });
 
     setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
-              models: [],
-            },
-          },
-        },
-      },
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
-      },
+      createProviderConfigFixture("sk-runtime-resolved"),
+      createProviderConfigFixture(),
     );
     setRuntimeConfigSnapshotRefreshHandler({
       refresh: async ({ sourceConfig }) => {
@@ -289,15 +329,7 @@ describe("runtime snapshot state", () => {
     const writePromise = finalizeRuntimeSnapshotWrite({
       nextSourceConfig: {
         gateway: { auth: { mode: "token" } },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
+        ...createProviderConfigFixture(),
       },
       hadRuntimeSnapshot: true,
       hadBothSnapshots: true,

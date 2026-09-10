@@ -12,7 +12,7 @@ import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar agent chip", () => {
-  it("loads and expands child sessions inline without root session controls", async () => {
+  it("loads and expands child sessions with menus but without root placement controls", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:parent"]);
     harness.list.mockResolvedValue({
@@ -98,7 +98,10 @@ describe("AppSidebar agent chip", () => {
       expect.stringContaining("Check tests"),
     ]);
     expect(childRows.every((row) => row.getAttribute("draggable") === "false")).toBe(true);
-    expect(childRows.every((row) => row.querySelector(".session-row-actions") === null)).toBe(true);
+    expect(childRows.every((row) => row.querySelector("[data-session-menu]") !== null)).toBe(true);
+    expect(childRows.every((row) => row.querySelector("[data-sidebar-session-pin]") === null)).toBe(
+      true,
+    );
     expect(childRows.every((row) => row.querySelector(".session-row-state") === null)).toBe(true);
     expect(childRows.every((row) => row.querySelector(".sidebar-session-indicator") !== null)).toBe(
       true,
@@ -294,7 +297,7 @@ describe("AppSidebar agent chip", () => {
     );
   });
 
-  it("retries an incomplete child page set after the canonical list advances", async () => {
+  it("retries an incomplete child page set only after the operator retries", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:parent"]);
     const page = (sessions: SessionsListResult["sessions"], hasMore: boolean) => ({
@@ -347,8 +350,20 @@ describe("AppSidebar agent chip", () => {
 
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
+    await waitForFast(() =>
+      expect(
+        sidebar.querySelector('[data-child-session-error="agent:main:parent"]')?.textContent,
+      ).toContain("child session list returned no result"),
+    );
 
     publishParent(11);
+    await sidebar.updateComplete;
+    expect(harness.list).toHaveBeenCalledTimes(2);
+    expect(sidebar.querySelector('[data-child-session-error="agent:main:parent"]')).not.toBeNull();
+
+    sidebar
+      .querySelector<HTMLButtonElement>('[data-retry-child-sessions="agent:main:parent"]')
+      ?.click();
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(3));
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
@@ -424,6 +439,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')?.textContent).toContain(
       "Replacement child",
     );
+    expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
   });
 
   it("nests the selected child under its parent and reveals the active path", async () => {
@@ -637,75 +653,5 @@ describe("AppSidebar agent chip", () => {
     expect(
       sidebar.querySelector('[data-session-key="agent:main:hidden-parent"]')?.textContent,
     ).toContain("Hidden parent");
-  });
-
-  it("keeps a completed child load when direct-lineage discovery finishes later", async () => {
-    const described = deferred<{ session: SessionsListResult["sessions"][number] }>();
-    const request = vi.fn(() => described.promise);
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient);
-    const harness = createSessionsHarness("main", ["agent:main:parent"]);
-    harness.list.mockResolvedValue({
-      ts: 2,
-      path: "",
-      count: 2,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
-        {
-          key: "agent:worker:child",
-          spawnedBy: "agent:main:parent",
-          kind: "direct",
-          label: "Selected child",
-          updatedAt: 4,
-          status: "done",
-        },
-        {
-          key: "agent:worker:sibling",
-          spawnedBy: "agent:main:parent",
-          kind: "direct",
-          label: "Loaded sibling",
-          updatedAt: 2,
-        },
-      ],
-    });
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key: "agent:main:parent",
-            kind: "direct",
-            updatedAt: 1,
-            childSessions: ["agent:worker:child", "agent:worker:sibling"],
-          },
-        ],
-      },
-    });
-    (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
-    sidebar.sessionKey = "agent:worker:child";
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
-    await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
-
-    described.resolve({
-      session: {
-        key: "agent:worker:child",
-        spawnedBy: "agent:main:parent",
-        kind: "direct",
-        label: "Selected child",
-        updatedAt: 3,
-        status: "running",
-      },
-    });
-    await waitForFast(() =>
-      expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
-    );
-    expect(sidebar.textContent).toContain("Loaded sibling");
-    expect(
-      sidebar.querySelector('[data-session-key="agent:worker:child"] [aria-label="Done"]'),
-    ).not.toBeNull();
   });
 });

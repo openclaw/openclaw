@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 
 set -euo pipefail
 
@@ -172,6 +176,28 @@ if [[ "${mirror_auth_requirement}" == "required" && -z "${mirror_auth_token}" ]]
   exit 1
 fi
 
+verify_release_tooling_identity() {
+  if [[ "${OPENCLAW_RELEASE_TOOLING_IDENTITY_REQUIRED:-}" != "true" ]]; then
+    return 0
+  fi
+  identity_args=(
+    verify
+    --repository "${OPENCLAW_RELEASE_TOOLING_REPOSITORY:-}"
+    --workflow-ref "${OPENCLAW_RELEASE_TOOLING_REF:-}"
+    --workflow-full-ref "${OPENCLAW_RELEASE_TOOLING_FULL_REF:-}"
+    --workflow-sha "${OPENCLAW_RELEASE_TOOLING_SHA:-}"
+    --release-publish-run-id "${OPENCLAW_RELEASE_PUBLISH_RUN_ID:-}"
+    --release-publish-run-attempt "${OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT:-}"
+    --release-publish-ref "${OPENCLAW_RELEASE_PUBLISH_REF:-}"
+    --release-publish-full-ref "${OPENCLAW_RELEASE_PUBLISH_FULL_REF:-}"
+    --release-publish-parent-state-policy "${OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY:-}"
+  )
+  if [[ "${OPENCLAW_RELEASE_TOOLING_ALLOW_PREVALIDATED_REF:-}" == "true" ]]; then
+    identity_args+=(--allow-prevalidated-ref)
+  fi
+  node "${tooling_root}/scripts/release-tooling-identity.mjs" "${identity_args[@]}"
+}
+
 if [[ "${mode}" == "--pack" || "${mode}" == "--pack-dry-run" ]]; then
   {
     printf 'Publish command:'
@@ -212,7 +238,7 @@ fi
 
 (
   cleanup_files=()
-  trap 'rm -f "${cleanup_files[@]}"' EXIT
+  trap 'rm -f ${cleanup_files[@]+"${cleanup_files[@]}"}' EXIT
   run_with_manifest_overlay() {
     (
       cd "${repo_root}"
@@ -228,6 +254,9 @@ fi
     cleanup_files+=("${publish_userconfig}")
     chmod 0600 "${publish_userconfig}"
     printf '%s\n' "//registry.npmjs.org/:_authToken=${publish_auth_token}" > "${publish_userconfig}"
+  fi
+  verify_release_tooling_identity
+  if [[ -n "${publish_auth_token}" ]]; then
     NPM_CONFIG_USERCONFIG="${publish_userconfig}" run_with_manifest_overlay "${publish_cmd[@]}"
   else
     run_with_manifest_overlay "${publish_cmd[@]}"
@@ -243,6 +272,7 @@ fi
     for dist_tag in "${mirror_dist_tags[@]}"; do
       [[ -n "${dist_tag}" ]] || continue
       echo "Mirroring ${package_name}@${package_version} onto dist-tag ${dist_tag}"
+      verify_release_tooling_identity
       if ! NPM_CONFIG_USERCONFIG="${mirror_userconfig}" \
         npm dist-tag add "${package_name}@${package_version}" "${dist_tag}"; then
         if [[ "${mirror_auth_requirement}" == "required" ]]; then

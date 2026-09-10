@@ -5,15 +5,17 @@ import {
   PresenceUpdateStatus,
 } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/discord.js";
-import { clearPresences } from "./presence-cache.js";
+import type { DiscordLivePolicy } from "./live-policy.js";
+import { clearPresences, getPresence } from "./presence-cache.js";
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 
 const mocks = vi.hoisted(() => ({
   canViewDiscordGuildChannel: vi.fn(async () => true),
-  enqueueSystemEvent: vi.fn(() => true),
+  enqueueSystemEvent: vi.fn((_text: unknown, _options: Record<string, unknown>) => true),
   requestHeartbeat: vi.fn(),
   resolveAgentRoute: vi.fn(() => ({
     agentId: "molty",
@@ -26,7 +28,16 @@ vi.mock("openclaw/plugin-sdk/heartbeat-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/routing", () => ({ resolveAgentRoute: mocks.resolveAgentRoute }));
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { agentId: unknown; sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) =>
+    mocks.enqueueSystemEvent(text, {
+      ...options,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+    }),
 }));
 vi.mock("../send.permissions.js", () => ({
   canViewDiscordGuildChannel: mocks.canViewDiscordGuildChannel,
@@ -45,7 +56,7 @@ function presence(status: "online" | "offline", userId = "user-1"): GatewayPrese
 }
 
 function guildSnapshot(
-  presences: GatewayPresenceUpdate[],
+  presences: Array<Omit<GatewayPresenceUpdate, "guild_id">>,
   memberCount = 100,
 ): GatewayGuildCreateDispatchData {
   return {
@@ -106,6 +117,26 @@ function createPresenceListener({
   });
 }
 
+function livePresencePolicy(users?: string[]): DiscordLivePolicy {
+  const guildEntries = {
+    "guild-1": { presenceEvents: { channelId: "channel-1", users } },
+  };
+  return {
+    isCurrent: () => true,
+    cfg: {},
+    accountId: "molty",
+    discordConfig: { guilds: guildEntries },
+    guildEntries,
+    allowFrom: [],
+    dmPolicy: "pairing",
+    groupPolicy: "allowlist",
+    dmEnabled: true,
+    groupDmEnabled: false,
+    groupDmChannels: [],
+    allowNameMatching: false,
+  };
+}
+
 describe("DiscordPresenceListener", () => {
   let humanClient: Client;
 
@@ -136,6 +167,7 @@ describe("DiscordPresenceListener", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining('user_id="user-1"'),
       expect.objectContaining({
+        agentId: "molty",
         sessionKey: "agent:molty:discord:channel:channel-1",
         deliveryContext: {
           channel: "discord",
@@ -236,7 +268,7 @@ describe("DiscordPresenceListener", () => {
   it("uses the guild snapshot to classify the first live presence update", async () => {
     const listener = createPresenceListener();
 
-    listener.seedGuildSnapshot(guildSnapshot([presence("online", "already-online")]));
+    await listener.seedGuildSnapshot(guildSnapshot([presence("online", "already-online")]));
     await listener.handle(presence("online", "already-online"), humanClient);
     await listener.handle(presence("online", "came-online"), humanClient);
 
@@ -252,10 +284,170 @@ describe("DiscordPresenceListener", () => {
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["unconfigured", "disabled", "filtered"] as const)(
+    "caches snapshot status and activities when presence events are %s",
+    async (mode) => {
+      const listener = createPresenceListener({
+        guildEntries:
+          mode === "unconfigured"
+            ? undefined
+            : {
+                "guild-1": {
+                  presenceEvents: {
+                    channelId: "channel-1",
+                    enabled: mode !== "disabled",
+                    users: [],
+                  },
+                },
+              },
+      });
+      const snapshotPresence = {
+        user: { id: "user-1" },
+        status: PresenceUpdateStatus.Online,
+        activities: [{ id: "activity-1", name: "Chess", type: 0, created_at: 0 }],
+        client_status: {},
+      } satisfies Omit<GatewayPresenceUpdate, "guild_id">;
+
+      await listener.seedGuildSnapshot(guildSnapshot([snapshotPresence]));
+
+      expect(getPresence("molty", "user-1")).toEqual({
+        ...snapshotPresence,
+        guild_id: "guild-1",
+      });
+      expect(getPresence("other-account", "user-1")).toBeUndefined();
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    },
+  );
+
+  it("orders a presence event after its pending live-policy guild seed", async () => {
+    const policy = livePresencePolicy();
+    const ready = createDeferred<DiscordLivePolicy>();
+    const readPolicy = vi.fn().mockReturnValueOnce(ready.promise).mockResolvedValue(policy);
+    const listener = createPresenceListener({ readPolicy });
+    const seed = listener.seedGuildSnapshot(guildSnapshot([presence("offline")]));
+    expect(getPresence("molty", "user-1")?.status).toBe("offline");
+    const event = listener.handle(presence("online"), humanClient);
+    expect(getPresence("molty", "user-1")?.status).toBe("online");
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    ready.resolve(policy);
+    await Promise.all([seed, event]);
+    expect(getPresence("molty", "user-1")?.status).toBe("online");
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restore cached presence when READY follows a pending snapshot and update", async () => {
+    const policy = livePresencePolicy();
+    const ready = createDeferred<DiscordLivePolicy>();
+    const listener = createPresenceListener({ readPolicy: () => ready.promise });
+    const seed = listener.seedGuildSnapshot(guildSnapshot([presence("offline")]));
+    const event = listener.handle(presence("online"), humanClient);
+    // Queue READY after policy resolution, before the pending update can resume.
+    ready.resolve(policy);
+    await ready.promise;
+    listener.resetGatewaySession();
+    await Promise.all([seed, event]);
+
+    expect(getPresence("molty", "user-1")).toBeUndefined();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps snapshot caching bounded and leaves unreported members unknown", async () => {
+    const listener = createPresenceListener({ guildEntries: undefined });
+    await listener.seedGuildSnapshot(
+      guildSnapshot(
+        Array.from({ length: 5_001 }, (_, i) => presence("online", `user-${i}`)),
+        75_001,
+      ),
+    );
+
+    expect(getPresence("molty", "user-0")).toBeUndefined();
+    expect(getPresence("molty", "user-1")?.status).toBe("online");
+    expect(getPresence("molty", "user-5000")?.status).toBe("online");
+    expect(getPresence("molty", "unreported")).toBeUndefined();
+    await listener.seedGuildSnapshot({ id: "guild-1", unavailable: true });
+    expect(getPresence("molty", "user-5000")?.status).toBe("online");
+  });
+
+  it.each(["delete", "reset", "replace"] as const)(
+    "does not revive a pending guild seed after %s",
+    async (operation) => {
+      const policy = livePresencePolicy();
+      const ready = createDeferred<DiscordLivePolicy>();
+      const readPolicy = vi.fn().mockReturnValueOnce(ready.promise).mockResolvedValue(policy);
+      const listener = createPresenceListener({ readPolicy });
+      const seed = listener.seedGuildSnapshot(guildSnapshot([]));
+      if (operation === "delete") {
+        listener.invalidateGuild("guild-1");
+      } else if (operation === "reset") {
+        listener.resetGatewaySession();
+      } else {
+        await listener.seedGuildSnapshot(guildSnapshot([], 75_001));
+      }
+      ready.resolve(policy);
+      await seed;
+      nowMs += 10 * 60_000;
+      await listener.handle(presence("online"), humanClient);
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["disabled", "excluded", "retargeted"] as const)(
+    "does not enqueue or consume cooldown when presence is %s during permission lookup",
+    async (change) => {
+      let policy = livePresencePolicy(["user-1"]);
+      const store = cooldownStore();
+      const listener = createPresenceListener({
+        readPolicy: async () => {
+          const current = policy;
+          return { ...current, isCurrent: () => current === policy };
+        },
+        cooldownStore: store,
+      });
+      await listener.handle(presence("offline"), humanClient);
+      const permission = createDeferred<boolean>();
+      mocks.canViewDiscordGuildChannel.mockReturnValueOnce(permission.promise);
+      const pending = listener.handle(presence("online"), humanClient);
+      await vi.waitFor(() => expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(1));
+      policy = livePresencePolicy(change === "excluded" ? ["user-2"] : ["user-1"]);
+      const config = policy.guildEntries!["guild-1"]!.presenceEvents!;
+      if (change === "disabled") {
+        config.enabled = false;
+      }
+      if (change === "retargeted") {
+        config.channelId = "channel-2";
+      }
+      permission.resolve(true);
+      await pending;
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(store.entries()).toEqual([]);
+      policy = livePresencePolicy(["user-1"]);
+      await listener.handle(presence("online"), humanClient);
+      expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("applies current presence audience policy on the existing listener", async () => {
+    let policy = livePresencePolicy(["user-1"]);
+    const listener = createPresenceListener({ readPolicy: async () => policy });
+    await listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.handle(presence("offline", "user-1"), humanClient);
+    policy = livePresencePolicy(["user-2"]);
+    await listener.handle(presence("online", "user-1"), humanClient);
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    await listener.handle(presence("offline", "user-2"), humanClient);
+    await listener.handle(presence("online", "user-2"), humanClient);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('user_id="user-2"'),
+      expect.anything(),
+    );
+  });
+
   it("requires an explicit offline update after an incomplete large-guild snapshot", async () => {
     const listener = createPresenceListener();
 
-    listener.seedGuildSnapshot(guildSnapshot([], 75_001));
+    await listener.seedGuildSnapshot(guildSnapshot([], 75_001));
     await listener.handle(presence("online", "large-guild-member"), humanClient);
     await listener.handle(presence("offline", "large-guild-member"), humanClient);
     await listener.handle(presence("online", "large-guild-member"), humanClient);
@@ -269,7 +461,7 @@ describe("DiscordPresenceListener", () => {
       presenceBaseline: new DiscordPresenceBaselineCache(1),
     });
 
-    listener.seedGuildSnapshot(
+    await listener.seedGuildSnapshot(
       guildSnapshot([presence("online", "first"), presence("online", "second")]),
     );
     await listener.handle(presence("online", "unknown"), humanClient);
@@ -289,8 +481,8 @@ describe("DiscordPresenceListener", () => {
       presenceBaseline: new DiscordPresenceBaselineCache(1),
     });
 
-    listener.seedGuildSnapshot(guildSnapshot([]));
-    listener.seedGuildSnapshot({ ...guildSnapshot([], 75_001), id: "guild-2" });
+    await listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot({ ...guildSnapshot([], 75_001), id: "guild-2" });
     await listener.handle({ ...presence("online", "busy-1"), guild_id: "guild-2" }, humanClient);
     await listener.handle({ ...presence("online", "busy-2"), guild_id: "guild-2" }, humanClient);
     await listener.handle(presence("online", "quiet-arrival"), humanClient);
@@ -314,11 +506,11 @@ describe("DiscordPresenceListener", () => {
       );
       const partialOnline = { ...presence("online"), user: { id: "user-1" } };
 
-      listener.seedGuildSnapshot(guildSnapshot([]));
+      await listener.seedGuildSnapshot(guildSnapshot([]));
       const pending = listener.handle(partialOnline, { fetchUser } as unknown as Client);
       await vi.waitFor(() => expect(fetchUser).toHaveBeenCalledTimes(1));
-      listener.seedGuildSnapshot({ id: "guild-1", unavailable: true } as APIUnavailableGuild);
-      listener.seedGuildSnapshot(guildSnapshot([presence("online")]));
+      await listener.seedGuildSnapshot({ id: "guild-1", unavailable: true } as APIUnavailableGuild);
+      await listener.seedGuildSnapshot(guildSnapshot([presence("online")]));
       resolveFetch?.({ bot });
       await pending;
     }
@@ -338,10 +530,10 @@ describe("DiscordPresenceListener", () => {
     );
     const partialOnline = { ...presence("online"), user: { id: "user-1" } };
 
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     const stale = listener.handle(partialOnline, { fetchUser } as unknown as Client);
     await vi.waitFor(() => expect(fetchUser).toHaveBeenCalledTimes(1));
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     const current = listener.handle(partialOnline, { fetchUser } as unknown as Client);
     await vi.waitFor(() => expect(fetchUser).toHaveBeenCalledTimes(2));
 
@@ -368,11 +560,11 @@ describe("DiscordPresenceListener", () => {
     );
     const partialOnline = { ...presence("online"), user: { id: "user-1" } };
 
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     const stale = listener.handle(partialOnline, { fetchUser } as unknown as Client);
     await vi.waitFor(() => expect(fetchUser).toHaveBeenCalledTimes(1));
     listener.resetGatewaySession();
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     const current = listener.handle(partialOnline, { fetchUser } as unknown as Client);
     await vi.waitFor(() => expect(fetchUser).toHaveBeenCalledTimes(2));
 
@@ -396,7 +588,7 @@ describe("DiscordPresenceListener", () => {
     );
     const partialOnline = { ...presence("online"), user: { id: "user-1" } };
 
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     const pending = listener.handle(partialOnline, { fetchUser } as unknown as Client);
     await vi.waitFor(() => expect(fetchUser).toHaveBeenCalledTimes(1));
     new DiscordPresenceGuildDeleteListener(listener).handle({ id: "guild-1" });
@@ -413,7 +605,7 @@ describe("DiscordPresenceListener", () => {
       presenceBaseline: new DiscordPresenceBaselineCache(1),
     });
 
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     await listener.handle(presence("online", "excluded-1"), humanClient);
     await listener.handle(presence("online", "excluded-2"), humanClient);
     await listener.handle(presence("online", "allowed"), humanClient);
@@ -430,7 +622,7 @@ describe("DiscordPresenceListener", () => {
       presenceBaseline: new DiscordPresenceBaselineCache(1),
     });
 
-    listener.seedGuildSnapshot(guildSnapshot([], 75_001));
+    await listener.seedGuildSnapshot(guildSnapshot([], 75_001));
     await listener.handle(presence("offline", "target"), humanClient);
     await listener.handle(presence("online", "churn-1"), humanClient);
     await listener.handle(presence("online", "churn-2"), humanClient);
@@ -495,7 +687,7 @@ describe("DiscordPresenceListener", () => {
 
     nowMs = 30_000;
     listener.resetGatewaySession();
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     nowMs += 1000;
     await listener.handle(presence("online", "replayed-1"), humanClient);
     await listener.handle(presence("online", "replayed-2"), humanClient);
@@ -528,7 +720,7 @@ describe("DiscordPresenceListener", () => {
 
     nowMs = 30_000;
     listener.resetGatewaySession();
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     nowMs += 1000;
     await listener.handle(presence("online", "came-online"), humanClient);
 
@@ -545,7 +737,7 @@ describe("DiscordPresenceListener", () => {
     const lookupClient = { fetchUser } as unknown as Client;
 
     nowMs = 30_000;
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     for (const userId of ["burst-1", "burst-2", "burst-3", "burst-4"]) {
       nowMs += 100;
       await listener.handle(presence("online", userId), lookupClient);
@@ -577,7 +769,7 @@ describe("DiscordPresenceListener", () => {
       presenceEvents: { burstLimit: 1 },
     });
 
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     const unrelated = listener.handle(presence("online", "unrelated"), humanClient);
     await vi.waitFor(() => expect(mocks.canViewDiscordGuildChannel).toHaveBeenCalledTimes(1));
 
@@ -607,8 +799,8 @@ describe("DiscordPresenceListener", () => {
       },
     });
 
-    listener.seedGuildSnapshot(guildSnapshot([]));
-    listener.seedGuildSnapshot({ ...guildSnapshot([]), id: "guild-2" });
+    await listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot({ ...guildSnapshot([]), id: "guild-2" });
     for (const [guildId, userId] of [
       ["guild-1", "guild-1-first"],
       ["guild-2", "guild-2-first"],
@@ -643,7 +835,7 @@ describe("DiscordPresenceListener", () => {
       presenceEvents: { burstLimit: 1, burstWindowSeconds: 60 },
     });
 
-    listener.seedGuildSnapshot(guildSnapshot([]));
+    await listener.seedGuildSnapshot(guildSnapshot([]));
     const delayed = listener.handle({ ...presence("online", "delayed"), user: { id: "delayed" } }, {
       fetchUser,
     } as unknown as Client);

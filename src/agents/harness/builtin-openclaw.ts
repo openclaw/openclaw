@@ -7,7 +7,7 @@
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-runtime.js";
+import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
 import type {
   AgentHarness,
@@ -46,11 +46,16 @@ function buildRestrictedFinalizationAttempt(
     onExecutionPhase: attempt.onExecutionPhase,
     onLaneWait: attempt.onLaneWait,
     onRunProgress: attempt.onRunProgress,
+    // The caller owns terminal publication across the failed and finalizing attempts.
+    onAgentEvent: attempt.onAgentEvent,
+    deferTerminalLifecycle: attempt.deferTerminalLifecycle,
     onAttemptTimeoutArmed: attempt.onAttemptTimeoutArmed,
+    onAttemptDeadlineChanged: attempt.onAttemptDeadlineChanged,
     onAttemptTimeout: attempt.onAttemptTimeout,
     onAttemptAbort: attempt.onAttemptAbort,
     preparedModelRuntime: attempt.preparedModelRuntime,
     sessionFile: attempt.sessionFile,
+    prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     contextTokenBudget: attempt.contextTokenBudget,
     contextWindowInfo: attempt.contextWindowInfo,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -73,6 +78,7 @@ function buildRestrictedFinalizationAttempt(
     disableTools: true,
     disableTrajectory: true,
     skipPreparedUserTurnMessage: true,
+    suppressNextUserMessagePersistence: true,
     initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
   };
 }
@@ -85,29 +91,7 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
     contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: (params) => runEmbeddedAttempt(params as EmbeddedRunAttemptParams),
-    runIsolatedCompletion: async (params) => {
-      const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
-      const signal = params.abortSignal
-        ? AbortSignal.any([params.abortSignal, timeoutSignal])
-        : timeoutSignal;
-      const assistant = await completeWithPreparedSimpleCompletionModel({
-        model: params.model,
-        auth: params.auth,
-        cfg: params.config,
-        context: {
-          systemPrompt: params.systemPrompt,
-          messages: [{ role: "user", content: params.prompt, timestamp: Date.now() }],
-          tools: [],
-        },
-        options: {
-          maxTokens: params.streamParams?.maxTokens,
-          temperature: params.streamParams?.temperature,
-          reasoning: params.thinkLevel,
-          signal,
-        },
-      });
-      return { assistant };
-    },
+    runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
     finalizeSettledTurn: async ({ attempt }) => {
       // Preserve only transcript/model transport state. The operation-specific
       // runner path suppresses every ambient prompt and capability contributor.

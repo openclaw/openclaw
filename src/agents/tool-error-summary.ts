@@ -4,7 +4,6 @@
  * Stores failure metadata used by transcripts, retry behavior, and mutation recovery logic.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { FileTarget } from "./tool-mutation.js";
 
 export type ProcessTerminalDiagnostic = {
   kind: "process";
@@ -20,6 +19,7 @@ export type ProcessTerminalDiagnostic = {
 
 export type ToolErrorSummary = {
   toolName: string;
+  executionStarted?: boolean;
   meta?: string;
   errorCode?: string;
   error?: string;
@@ -27,8 +27,6 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
-  actionFingerprint?: string;
-  fileTarget?: FileTarget;
   terminalDiagnostic?: ProcessTerminalDiagnostic;
 };
 
@@ -41,7 +39,7 @@ export function isExecLikeToolName(toolName: string): boolean {
 
 const MAX_ABORT_SUMMARY_LENGTH = 160;
 
-function hasUnsafeSummaryCharacter(value: string): boolean {
+export function hasTerminalControlCharacter(value: string): boolean {
   for (const char of value) {
     const code = char.charCodeAt(0);
     if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
@@ -57,7 +55,11 @@ export function readToolValidationErrorSummary(value: unknown): string | undefin
     return undefined;
   }
   const summary = value.trim();
-  if (!summary || summary.length > MAX_ABORT_SUMMARY_LENGTH || hasUnsafeSummaryCharacter(summary)) {
+  if (
+    !summary ||
+    summary.length > MAX_ABORT_SUMMARY_LENGTH ||
+    hasTerminalControlCharacter(summary)
+  ) {
     return undefined;
   }
   return summary;
@@ -65,7 +67,7 @@ export function readToolValidationErrorSummary(value: unknown): string | undefin
 
 /** Builds a static diagnostic from typed pre-execution validation provenance. */
 export function createToolValidationErrorSummary(toolName: string): string | undefined {
-  if (hasUnsafeSummaryCharacter(toolName)) {
+  if (hasTerminalControlCharacter(toolName)) {
     return undefined;
   }
   const normalizedToolName = toolName.replace(/\s+/g, " ").trim();

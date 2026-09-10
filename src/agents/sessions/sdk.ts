@@ -6,14 +6,14 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
-import {
-  resolveThinkingDefaultForModel,
-  type ThinkingCatalogEntry,
-} from "../../auto-reply/thinking.js";
+import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
+import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { getAgentDir } from "../config.js";
+import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
 import {
   Agent,
   type AgentMessage,
@@ -44,35 +44,7 @@ import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
-import {
-  createCodingTools,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-  type ToolName,
-} from "./tools/index.js";
-
-type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
-
-function projectThinkingCatalogCompat(compat: Model["compat"]) {
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  const record = compat as Record<string, unknown>;
-  const projected: ThinkingCatalogCompat = {};
-  if (typeof record.thinkingFormat === "string") {
-    projected.thinkingFormat = record.thinkingFormat;
-  }
-  if (record.supportedReasoningEfforts === null) {
-    projected.supportedReasoningEfforts = null;
-  } else if (
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
-  ) {
-    projected.supportedReasoningEfforts = record.supportedReasoningEfforts;
-  }
-  return Object.keys(projected).length > 0 ? projected : undefined;
-}
+import type { ToolName } from "./tools/index.js";
 
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
@@ -150,8 +122,6 @@ export type {
   ExtensionFactory,
   ToolDefinition,
 } from "./extensions/index.js";
-
-export { createCodingTools, createReadTool, createEditTool, createWriteTool };
 
 // Helper Functions
 
@@ -311,7 +281,7 @@ async function createAgentSessionImpl(
 
   // Use provided or create AuthStorage and ModelRegistry
   const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
-  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir);
+  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, getRuntimeConfig());
   const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
@@ -372,7 +342,7 @@ async function createAgentSessionImpl(
   // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
   // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
   const modelThinkingProvider = model?.api === "ollama" ? "ollama" : model?.provider;
-  const modelThinkingCompat = model ? projectThinkingCatalogCompat(model.compat) : undefined;
+  const modelThinkingCompat = model ? projectModelThinkingCompat(model.compat) : undefined;
   const resolvedProviderDefault =
     model && modelThinkingProvider
       ? resolveThinkingDefaultForModel({
@@ -489,7 +459,6 @@ async function createAgentSessionImpl(
         ...optionsLocal,
         apiKey: auth.apiKey,
         timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-        maxRetries: optionsLocal?.maxRetries ?? providerRetrySettings.maxRetries,
         maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
         headers:
           attributionHeaders || auth.headers || optionsLocal?.headers
@@ -545,7 +514,7 @@ async function createAgentSessionImpl(
 
   // Restore messages if session has existing data
   if (hasExistingSession) {
-    agent.state.messages = existingSession.messages;
+    agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
     if (!hasThinkingEntry) {
       sessionManager.appendThinkingLevelChange(thinkingLevel);
     }

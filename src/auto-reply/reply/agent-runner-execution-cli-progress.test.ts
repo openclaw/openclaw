@@ -1,12 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createCliJsonlStreamingParser } from "../../agents/cli-output-stream.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  initialFallbackAttemptOptions,
+  runInitialFallbackAttempt,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -14,13 +18,13 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: CLI progress bridging", () => {
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-6"),
+      result: await runInitialFallbackAttempt(params, "claude-cli", "claude-opus-4-6"),
       provider: "claude-cli",
       model: "claude-opus-4-6",
       attempts: [],
@@ -62,18 +66,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       } as unknown as TemplateContext,
       opts: { onPartialReply },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     const partialTexts = onPartialReply.mock.calls.map((call) => call[0].text);
@@ -83,7 +76,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("serializes and drains bridged CLI assistant previews before completing (#76869)", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-6"),
+      result: await runInitialFallbackAttempt(params, "claude-cli", "claude-opus-4-6"),
       provider: "claude-cli",
       model: "claude-opus-4-6",
       attempts: [],
@@ -140,18 +133,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       } as unknown as TemplateContext,
       opts: { onPartialReply },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     await firstPreviewPromise;
@@ -169,7 +151,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("bridges CLI tool agent events into onToolStart for live preview", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-6"),
+      result: await runInitialFallbackAttempt(params, "claude-cli", "claude-opus-4-6"),
       provider: "claude-cli",
       model: "claude-opus-4-6",
       attempts: [],
@@ -216,18 +198,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onToolStart },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -243,7 +214,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("starts CLI assistant progress before a later tool while typing is slow", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-6"),
+      result: await runInitialFallbackAttempt(params, "claude-cli", "claude-opus-4-6"),
       provider: "claude-cli",
       model: "claude-opus-4-6",
       attempts: [],
@@ -280,6 +251,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     const typingSignals = createMockTypingSignaler();
     vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typingPending);
     const callbackOrder: string[] = [];
+    const toolStarted = createDeferred();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
@@ -295,27 +267,19 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         },
         onToolStart: () => {
           callbackOrder.push("tool");
+          toolStarted.resolve();
         },
       },
       typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
+    });
+    onTestFinished(async () => {
+      releaseTyping?.();
+      await runPromise;
     });
 
     try {
-      await vi.waitFor(() => {
-        expect(callbackOrder).toContain("tool");
-      });
+      await Promise.race([toolStarted.promise, runPromise]);
       expect(callbackOrder).toEqual([
         "partial:answer before tool",
         "partial:answer before tool 2",
@@ -330,7 +294,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("starts CLI tool progress before later assistant text while typing is slow", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-6"),
+      result: await runInitialFallbackAttempt(params, "claude-cli", "claude-opus-4-6"),
       provider: "claude-cli",
       model: "claude-opus-4-6",
       attempts: [],
@@ -372,6 +336,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     const typingSignals = createMockTypingSignaler();
     vi.mocked(typingSignals.signalToolStart).mockReturnValue(typingPending);
     const callbackOrder: string[] = [];
+    const partialReplyStarted = createDeferred();
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
@@ -384,30 +349,22 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         preserveProgressCallbackStartOrder: true,
         onPartialReply: (payload) => {
           callbackOrder.push(`partial:${payload.text}`);
+          partialReplyStarted.resolve();
         },
         onToolStart: (payload) => {
           callbackOrder.push(`tool:${payload.phase}`);
         },
       },
       typingSignals,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
+    });
+    onTestFinished(async () => {
+      releaseTyping?.();
+      await runPromise;
     });
 
     try {
-      await vi.waitFor(() => {
-        expect(callbackOrder).toContain("partial:answer after tool");
-      });
+      await Promise.race([partialReplyStarted.promise, runPromise]);
       expect(callbackOrder).toEqual(["tool:start", "tool:update", "partial:answer after tool"]);
     } finally {
       releaseTyping?.();
@@ -418,7 +375,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("bridges CLI preambles for progress headlines when commentary is disabled", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-6"),
+      result: await runInitialFallbackAttempt(params, "claude-cli", "claude-opus-4-6"),
       provider: "claude-cli",
       model: "claude-opus-4-6",
       attempts: [],
@@ -457,18 +414,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         progressPreambleEnabled: true,
       },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -484,7 +430,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("does not emit CLI preambles when both progress lanes are disabled", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-6"),
+      result: await runInitialFallbackAttempt(params, "claude-cli", "claude-opus-4-6"),
       provider: "claude-cli",
       model: "claude-opus-4-6",
       attempts: [],
@@ -514,18 +460,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         progressPreambleEnabled: false,
       },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
@@ -535,7 +470,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("does not bridge CLI tool deltas when silentExpected is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-6"),
+      result: await runInitialFallbackAttempt(params, "claude-cli", "claude-opus-4-6"),
       provider: "claude-cli",
       model: "claude-opus-4-6",
       attempts: [],
@@ -570,18 +505,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onToolStart },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -593,7 +517,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("does not bridge CLI assistant deltas when silentExpected is set (#76869)", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-6"),
+      result: await runInitialFallbackAttempt(params, "claude-cli", "claude-opus-4-6"),
       provider: "claude-cli",
       model: "claude-opus-4-6",
       attempts: [],
@@ -630,18 +554,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onPartialReply },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -653,7 +566,11 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("bridges CLI thinking agent events into onReasoningStream with the reasoning opt-in gate", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-7"),
+      result: await params.run(
+        "claude-cli",
+        "claude-opus-4-7",
+        initialFallbackAttemptOptions(params),
+      ),
       provider: "claude-cli",
       model: "claude-opus-4-7",
       attempts: [],
@@ -697,18 +614,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       } as unknown as TemplateContext,
       opts: { onReasoningStream },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onReasoningStream.mock.calls.map((call) => call[0])).toEqual([
@@ -728,7 +634,11 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("bridges tagged Claude CLI reasoning separately from its visible answer", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-7"),
+      result: await params.run(
+        "claude-cli",
+        "claude-opus-4-7",
+        initialFallbackAttemptOptions(params),
+      ),
       provider: "claude-cli",
       model: "claude-opus-4-7",
       attempts: [],
@@ -797,18 +707,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onPartialReply, onReasoningStream },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
 
     expect(onReasoningStream.mock.calls.map(([payload]) => payload.text)).toEqual([
@@ -820,7 +719,11 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("does not bridge CLI thinking events to onReasoningStream when silentExpected is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "claude-opus-4-7"),
+      result: await params.run(
+        "claude-cli",
+        "claude-opus-4-7",
+        initialFallbackAttemptOptions(params),
+      ),
       provider: "claude-cli",
       model: "claude-opus-4-7",
       attempts: [],
@@ -857,18 +760,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onReasoningStream },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -880,7 +772,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("does not bridge non-Claude CLI assistant events to onReasoningStream", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.5"),
+      result: await params.run("codex-cli", "gpt-5.5", initialFallbackAttemptOptions(params)),
       provider: "codex-cli",
       model: "gpt-5.5",
       attempts: [],
@@ -911,18 +803,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onReasoningStream },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);
@@ -934,7 +815,11 @@ describe("executeAgentTurn: CLI progress bridging", () => {
   it("does not double-fire onReasoningStream from the bridge when the API/native runtime path is active", async () => {
     state.isCliProviderMock.mockReturnValue(false);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude-sonnet-4-7"),
+      result: await params.run(
+        "anthropic",
+        "claude-sonnet-4-7",
+        initialFallbackAttemptOptions(params),
+      ),
       provider: "anthropic",
       model: "claude-sonnet-4-7",
       attempts: [],
@@ -969,18 +854,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onReasoningStream, runId: "api-run" },
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      ...createAgentTurnExecutionDefaults(),
     });
     await new Promise((resolve) => {
       setImmediate(resolve);

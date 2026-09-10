@@ -166,6 +166,14 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
         : undefined;
     return includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
   }
+  if (method === "environments.list") {
+    const runtimeId =
+      params && typeof params === "object" && !Array.isArray(params) && "runtimeId" in params
+        ? params.runtimeId
+        : undefined;
+    // Match the handler: every nonempty runtime ID needs command eligibility access.
+    return typeof runtimeId === "string" && runtimeId ? [WRITE_SCOPE] : [READ_SCOPE];
+  }
   if (method === "channels.pairing.approve") {
     const bootstrapCommandOwner =
       params && typeof params === "object" && !Array.isArray(params)
@@ -190,6 +198,12 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "sessions.create") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }
+  if (method === "sessions.dispatch") {
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
+  }
+  if (method === "sessions.move") {
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
+  }
   if (method === "sessions.delete") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? ADMIN_SCOPE];
   }
@@ -200,9 +214,9 @@ function findMissingOperatorScope(
   requiredScopes: readonly OperatorScope[],
   scopes: readonly string[],
 ): OperatorScope | undefined {
-  return requiredScopes.find((scope) => {
-    return !scopes.includes(scope) && !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE));
-  });
+  return requiredScopes.find(
+    (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
+  );
 }
 
 /** Returns the narrowest known operator scopes needed to call a gateway method. */

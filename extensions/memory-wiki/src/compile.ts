@@ -30,11 +30,19 @@ import {
 } from "./claim-health.js";
 import {
   createMemoryWikiCompiledCachePublicationId,
+  readMemoryWikiDashboardState,
   resolveMemoryWikiCompiledCacheGeneration,
+  setMemoryWikiDashboardState,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
+  type MemoryWikiImportInsightItem,
+  type MemoryWikiOverviewItem,
 } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import {
+  buildMemoryWikiImportInsights,
+  projectMemoryWikiImportInsight,
+} from "./import-insights.js";
 import {
   appendMemoryWikiLog,
   loadMemoryWikiValidatedVaultIdentity,
@@ -57,8 +65,10 @@ import {
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
+import { isPersonLikePage } from "./person-page.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
+import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
   { kind: "source", dir: "sources", heading: "Sources" },
@@ -84,6 +94,21 @@ type DashboardPageDefinition = {
   }) => string;
 };
 
+function renderCountedList(
+  label: string,
+  lines: string[],
+  emptyText: string,
+  separator = "\n\n",
+): string {
+  return lines.length === 0
+    ? `- ${emptyText}`
+    : [`- ${label}: ${lines.length}`, lines.join("\n")].join(separator);
+}
+
+function renderReportSection(heading: string, lines: string[]): string[] {
+  return lines.length > 0 ? ["", `### ${heading}`, ...lines] : [];
+}
+
 const DASHBOARD_PAGES: DashboardPageDefinition[] = [
   {
     id: "report.open-questions",
@@ -91,22 +116,14 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
     relativePath: "reports/open-questions.md",
     buildBody: ({ config, pages, sourceRelativeTo }) => {
       const matches = pages.filter((page) => page.questions.length > 0);
-      if (matches.length === 0) {
-        return "- No open questions right now.";
-      }
-      return [
-        `- Pages with open questions: ${matches.length}`,
-        "",
-        ...matches.map(
+      return renderCountedList(
+        "Pages with open questions",
+        matches.map(
           (page) =>
-            `- ${formatWikiLink({
-              renderMode: config.vault.renderMode,
-              relativePath: page.relativePath,
-              sourceRelativeTo,
-              title: page.title,
-            })}: ${page.questions.join(" | ")}`,
+            `- ${formatPageLink(config, page, sourceRelativeTo)}: ${page.questions.join(" | ")}`,
         ),
-      ].join("\n");
+        "No open questions right now.",
+      );
     },
   },
   {
@@ -119,23 +136,22 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       if (pageClusters.length === 0 && claimClusters.length === 0) {
         return "- No contradictions flagged right now.";
       }
-      const lines = [
+      return [
         `- Contradiction note clusters: ${pageClusters.length}`,
         `- Competing claim clusters: ${claimClusters.length}`,
-      ];
-      if (pageClusters.length > 0) {
-        lines.push("", "### Page Notes");
-        for (const cluster of pageClusters) {
-          lines.push(formatPageContradictionClusterLine(config, cluster, sourceRelativeTo));
-        }
-      }
-      if (claimClusters.length > 0) {
-        lines.push("", "### Claim Clusters");
-        for (const cluster of claimClusters) {
-          lines.push(formatClaimContradictionClusterLine(config, cluster, sourceRelativeTo));
-        }
-      }
-      return lines.join("\n");
+        ...renderReportSection(
+          "Page Notes",
+          pageClusters.map((cluster) =>
+            formatPageContradictionClusterLine(config, cluster, sourceRelativeTo),
+          ),
+        ),
+        ...renderReportSection(
+          "Claim Clusters",
+          claimClusters.map((cluster) =>
+            formatClaimContradictionClusterLine(config, cluster, sourceRelativeTo),
+          ),
+        ),
+      ].join("\n");
     },
   },
   {
@@ -152,25 +168,23 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       if (pageMatches.length === 0 && claimMatches.length === 0) {
         return "- No low-confidence pages or claims right now.";
       }
-      const lines = [
+      return [
         `- Low-confidence pages: ${pageMatches.length}`,
         `- Low-confidence claims: ${claimMatches.length}`,
-      ];
-      if (pageMatches.length > 0) {
-        lines.push("", "### Pages");
-        for (const page of pageMatches) {
-          lines.push(
-            `- ${formatPageLink(config, page, sourceRelativeTo)}: confidence ${(page.confidence ?? 0).toFixed(2)}`,
-          );
-        }
-      }
-      if (claimMatches.length > 0) {
-        lines.push("", "### Claims");
-        for (const claim of claimMatches) {
-          lines.push(`- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
-        }
-      }
-      return lines.join("\n");
+        ...renderReportSection(
+          "Pages",
+          pageMatches.map(
+            (page) =>
+              `- ${formatPageLink(config, page, sourceRelativeTo)}: confidence ${(page.confidence ?? 0).toFixed(2)}`,
+          ),
+        ),
+        ...renderReportSection(
+          "Claims",
+          claimMatches.map(
+            (claim) => `- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`,
+          ),
+        ),
+      ].join("\n");
     },
   },
   {
@@ -191,30 +205,16 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       ) {
         return "- No claim health issues right now.";
       }
-      const lines = [
+      const claimLines = (claims: WikiClaimHealth[]) =>
+        claims.map((claim) => `- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
+      return [
         `- Claims missing evidence: ${missingEvidence.length}`,
         `- Contested claims: ${contestedClaims.length}`,
         `- Stale or unknown claims: ${staleClaims.length}`,
-      ];
-      if (missingEvidence.length > 0) {
-        lines.push("", "### Missing Evidence");
-        for (const claim of missingEvidence) {
-          lines.push(`- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
-        }
-      }
-      if (contestedClaims.length > 0) {
-        lines.push("", "### Contested Claims");
-        for (const claim of contestedClaims) {
-          lines.push(`- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
-        }
-      }
-      if (staleClaims.length > 0) {
-        lines.push("", "### Stale Claims");
-        for (const claim of staleClaims) {
-          lines.push(`- ${formatClaimHealthLine(config, claim, sourceRelativeTo)}`);
-        }
-      }
-      return lines.join("\n");
+        ...renderReportSection("Missing Evidence", claimLines(missingEvidence)),
+        ...renderReportSection("Contested Claims", claimLines(contestedClaims)),
+        ...renderReportSection("Stale Claims", claimLines(staleClaims)),
+      ].join("\n");
     },
   },
   {
@@ -242,17 +242,14 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
           return [{ page, freshness }];
         })
         .toSorted((left, right) => left.page.title.localeCompare(right.page.title));
-      if (matches.length === 0) {
-        return `- No aging or stale pages older than ${WIKI_AGING_DAYS} days.`;
-      }
-      return [
-        `- Stale pages: ${matches.length}`,
-        "",
-        ...matches.map(
+      return renderCountedList(
+        "Stale pages",
+        matches.map(
           ({ page, freshness }) =>
             `- ${formatPageLink(config, page, sourceRelativeTo)}: ${formatFreshnessLabel(freshness)}`,
         ),
-      ].join("\n");
+        `No aging or stale pages older than ${WIKI_AGING_DAYS} days.`,
+      );
     },
   },
   {
@@ -263,15 +260,15 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       const matches = pages
         .filter((page) => page.kind !== "report" && isPersonLikePage(page))
         .toSorted((left, right) => left.title.localeCompare(right.title));
-      if (matches.length === 0) {
-        return "- No person-like entity pages with agent cards yet.";
-      }
-      const lines = [`- People with routing metadata: ${matches.length}`];
-      for (const page of matches) {
-        const freshness = assessPageFreshness(page, now);
-        lines.push(`- ${formatPersonDirectoryLine(config, page, freshness, sourceRelativeTo)}`);
-      }
-      return lines.join("\n");
+      return renderCountedList(
+        "People with routing metadata",
+        matches.map(
+          (page) =>
+            `- ${formatPersonDirectoryLine(config, page, assessPageFreshness(page, now), sourceRelativeTo)}`,
+        ),
+        "No person-like entity pages with agent cards yet.",
+        "\n",
+      );
     },
   },
   {
@@ -288,17 +285,14 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
             `${right.page.title} ${rightTitle}`,
           );
         });
-      if (relationships.length === 0) {
-        return "- No structured relationships yet.";
-      }
-      return [
-        `- Structured relationships: ${relationships.length}`,
-        "",
-        ...relationships.map(
+      return renderCountedList(
+        "Structured relationships",
+        relationships.map(
           ({ page, relationship }) =>
             `- ${formatRelationshipLine(config, page, relationship, sourceRelativeTo)}`,
         ),
-      ].join("\n");
+        "No structured relationships yet.",
+      );
     },
   },
   {
@@ -325,25 +319,19 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       const sourceCounts = countBy(
         evidenceEntries.map(({ evidence }) => evidence.sourceId ?? evidence.path ?? "inline"),
       );
-      const lines = [
+      return [
         `- Evidence entries: ${evidenceEntries.length}`,
         `- Claims missing evidence: ${missingEvidence.length}`,
-        "",
-        "### Evidence Classes",
-        ...formatCountLines(kindCounts),
-        "",
-        "### Top Evidence Sources",
-        ...formatCountLines(sourceCounts).slice(0, 20),
-      ];
-      if (missingEvidence.length > 0) {
-        lines.push("", "### Missing Evidence");
-        for (const { page, claim } of missingEvidence) {
-          lines.push(
-            `- ${formatPageLink(config, page, sourceRelativeTo)}: ${formatClaimIdentityForPage(claim)}`,
-          );
-        }
-      }
-      return lines.join("\n");
+        ...renderReportSection("Evidence Classes", formatCountLines(kindCounts)),
+        ...renderReportSection("Top Evidence Sources", formatCountLines(sourceCounts).slice(0, 20)),
+        ...renderReportSection(
+          "Missing Evidence",
+          missingEvidence.map(
+            ({ page, claim }) =>
+              `- ${formatPageLink(config, page, sourceRelativeTo)}: ${formatClaimIdentityForPage(claim)}`,
+          ),
+        ),
+      ].join("\n");
     },
   },
   {
@@ -352,10 +340,11 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
     relativePath: "reports/privacy-review.md",
     buildBody: ({ config, pages, sourceRelativeTo }) => {
       const entries = collectPrivacyReviewEntries(config, pages, sourceRelativeTo);
-      if (entries.length === 0) {
-        return "- No non-public privacy tiers flagged right now.";
-      }
-      return [`- Privacy review entries: ${entries.length}`, "", ...entries].join("\n");
+      return renderCountedList(
+        "Privacy review entries",
+        entries,
+        "No non-public privacy tiers flagged right now.",
+      );
     },
   },
 ];
@@ -371,9 +360,25 @@ export type CompileMemoryWikiResult = {
 
 export type RefreshMemoryWikiIndexesResult = {
   refreshed: boolean;
-  reason: "auto-compile-disabled" | "no-import-changes" | "missing-indexes" | "import-changed";
+  reason:
+    | "auto-compile-disabled"
+    | "no-import-changes"
+    | "missing-indexes"
+    | "missing-compiled-cache"
+    | "import-changed";
   compile?: CompileMemoryWikiResult;
 };
+
+type CompileMemoryWikiOptions = {
+  sourcePageWrites?: "update" | "preserve";
+  signal?: AbortSignal;
+};
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
 
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
   const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
@@ -384,22 +389,43 @@ async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promi
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-async function readPageSummaries(rootDir: string): Promise<{
+async function readPageSummaries(
+  rootDir: string,
+  signal?: AbortSignal,
+): Promise<{
   pages: WikiPageSummary[];
   frontmatterErrors: WikiPageFrontmatterError[];
+  importInsights: MemoryWikiImportInsightItem[];
+  overviewItems: MemoryWikiOverviewItem[];
 }> {
   const filePaths = (
     await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
   ).flat();
+  signal?.throwIfAborted();
 
   const readResult = await runTasksWithConcurrency({
     tasks: filePaths.map((relativePath) => async () => {
+      signal?.throwIfAborted();
       const absolutePath = path.join(rootDir, relativePath);
       const raw = await retryTransientMemoryRead(
         () => fs.readFile(absolutePath, "utf8"),
         `read wiki page ${absolutePath}`,
       );
-      return scanWikiPageSummary({ absolutePath, relativePath, raw });
+      signal?.throwIfAborted();
+      // Large imported pages are parsed off the request path, but the compiler
+      // still yields between pages so background recovery cannot starve Gateway ticks.
+      await yieldToEventLoop();
+      signal?.throwIfAborted();
+      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw });
+      if (scan.status !== "valid") {
+        return { scan, importInsight: null, overviewItem: null };
+      }
+      const parsed = parseWikiMarkdown(raw);
+      return {
+        scan,
+        importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
+        overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
+      };
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -407,24 +433,21 @@ async function readPageSummaries(rootDir: string): Promise<{
   if (readResult.hasError) {
     throw readResult.firstError;
   }
+  signal?.throwIfAborted();
 
   return {
     pages: readResult.results
-      .flatMap((result) => (result.status === "valid" ? [result.page] : []))
+      .flatMap(({ scan }) => (scan.status === "valid" ? [scan.page] : []))
       .toSorted((left, right) => left.title.localeCompare(right.title)),
-    frontmatterErrors: readResult.results.flatMap((result) =>
-      result.status === "invalid-frontmatter" ? [result.error] : [],
+    frontmatterErrors: readResult.results.flatMap(({ scan }) =>
+      scan.status === "invalid-frontmatter" ? [scan.error] : [],
     ),
-  };
-}
-
-function buildPageCounts(pages: WikiPageSummary[]): Record<WikiPageKind, number> {
-  return {
-    entity: pages.filter((page) => page.kind === "entity").length,
-    concept: pages.filter((page) => page.kind === "concept").length,
-    source: pages.filter((page) => page.kind === "source").length,
-    synthesis: pages.filter((page) => page.kind === "synthesis").length,
-    report: pages.filter((page) => page.kind === "report").length,
+    importInsights: readResult.results.flatMap(({ importInsight }) =>
+      importInsight ? [importInsight] : [],
+    ),
+    overviewItems: readResult.results.flatMap(({ overviewItem }) =>
+      overviewItem ? [overviewItem] : [],
+    ),
   };
 }
 
@@ -465,18 +488,6 @@ function formatListPreview(values: readonly string[], maxItems = 3): string | nu
 
 function formatMaybeDetail(label: string, value: string | null | undefined): string | null {
   return value ? `${label} ${value}` : null;
-}
-
-function isPersonLikePage(page: WikiPageSummary): boolean {
-  const entityType = normalizeLowercaseStringOrEmpty(page.entityType);
-  const pageType = normalizeLowercaseStringOrEmpty(page.pageType);
-  return (
-    Boolean(page.personCard) ||
-    entityType === "person" ||
-    entityType === "maintainer" ||
-    pageType === "person" ||
-    pageType === "maintainer"
-  );
 }
 
 function formatPersonDirectoryLine(
@@ -727,15 +738,7 @@ function renderWikiPageLinks(params: {
   sourceRelativeTo?: string;
 }): string {
   return params.pages
-    .map(
-      (page) =>
-        `- ${formatWikiLink({
-          renderMode: params.config.vault.renderMode,
-          relativePath: page.relativePath,
-          sourceRelativeTo: params.sourceRelativeTo,
-          title: page.title,
-        })}`,
-    )
+    .map((page) => `- ${formatPageLink(params.config, page, params.sourceRelativeTo)}`)
     .join("\n");
 }
 
@@ -818,35 +821,22 @@ function buildRelatedBlockBody(params: {
   ).slice(0, MAX_RELATED_PAGES_PER_SECTION);
 
   const sections: string[] = [];
-  if (sourcePages.length > 0) {
-    sections.push(
-      "### Sources",
-      renderWikiPageLinks({
-        config: params.config,
-        pages: sourcePages,
-        sourceRelativeTo: params.page.relativePath,
-      }),
-    );
-  }
-  if (backlinkPages.length > 0) {
-    sections.push(
-      "### Referenced By",
-      renderWikiPageLinks({
-        config: params.config,
-        pages: backlinkPages,
-        sourceRelativeTo: params.page.relativePath,
-      }),
-    );
-  }
-  if (relatedPages.length > 0) {
-    sections.push(
-      "### Related Pages",
-      renderWikiPageLinks({
-        config: params.config,
-        pages: relatedPages,
-        sourceRelativeTo: params.page.relativePath,
-      }),
-    );
+  const groups: Array<[string, WikiPageSummary[]]> = [
+    ["Sources", sourcePages],
+    ["Referenced By", backlinkPages],
+    ["Related Pages", relatedPages],
+  ];
+  for (const [heading, pages] of groups) {
+    if (pages.length > 0) {
+      sections.push(
+        `### ${heading}`,
+        renderWikiPageLinks({
+          config: params.config,
+          pages,
+          sourceRelativeTo: params.page.relativePath,
+        }),
+      );
+    }
   }
   if (sections.length === 0) {
     return "- No related pages yet.";
@@ -857,6 +847,7 @@ function buildRelatedBlockBody(params: {
 async function refreshPageRelatedBlocks(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
+  signal?: AbortSignal;
 }): Promise<string[]> {
   if (!params.config.render.createBacklinks) {
     return [];
@@ -864,10 +855,12 @@ async function refreshPageRelatedBlocks(params: {
   const root = await fsRoot(params.config.vault.path);
   const updatedFiles: string[] = [];
   for (const page of params.pages) {
+    params.signal?.throwIfAborted();
     if (page.kind === "report") {
       continue;
     }
     const original = await root.readText(page.relativePath);
+    params.signal?.throwIfAborted();
     if (original.trim().length === 0) {
       continue;
     }
@@ -888,6 +881,7 @@ async function refreshPageRelatedBlocks(params: {
       continue;
     }
     await root.write(page.relativePath, updated);
+    params.signal?.throwIfAborted();
     updatedFiles.push(page.absolutePath);
   }
   return updatedFiles;
@@ -902,17 +896,7 @@ function renderSectionList(params: {
   if (params.pages.length === 0) {
     return `- ${params.emptyText}`;
   }
-  return params.pages
-    .map(
-      (page) =>
-        `- ${formatWikiLink({
-          renderMode: params.config.vault.renderMode,
-          relativePath: page.relativePath,
-          sourceRelativeTo: params.sourceRelativeTo,
-          title: page.title,
-        })}`,
-    )
-    .join("\n");
+  return renderWikiPageLinks(params);
 }
 
 async function writeManagedMarkdownFile(params: {
@@ -922,9 +906,12 @@ async function writeManagedMarkdownFile(params: {
   startMarker: string;
   endMarker: string;
   body: string;
+  signal?: AbortSignal;
 }): Promise<boolean> {
+  params.signal?.throwIfAborted();
   const root = await fsRoot(params.rootDir);
   const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
+  params.signal?.throwIfAborted();
   // Generated indexes bypass page discovery. Parse existing content here so
   // managed-block updates cannot rewrite malformed frontmatter.
   parseWikiMarkdown(original);
@@ -940,6 +927,7 @@ async function writeManagedMarkdownFile(params: {
     return false;
   }
   await root.write(params.relativePath, rendered);
+  params.signal?.throwIfAborted();
   return true;
 }
 
@@ -983,41 +971,28 @@ async function writeDashboardPage(params: {
     typeof parsed.frontmatter.updatedAt === "string" && parsed.frontmatter.updatedAt.trim()
       ? parsed.frontmatter.updatedAt
       : params.now.toISOString();
-  const stableRendered = withTrailingNewline(
-    renderWikiMarkdown({
-      frontmatter: {
-        ...parsed.frontmatter,
-        pageType: "report",
-        id: params.definition.id,
-        title: params.definition.title,
-        status:
-          typeof parsed.frontmatter.status === "string" && parsed.frontmatter.status.trim()
-            ? parsed.frontmatter.status
-            : "active",
-        updatedAt: preservedUpdatedAt,
-      },
-      body: updatedBody,
-    }),
-  );
+  const renderWithUpdatedAt = (updatedAt: string) =>
+    withTrailingNewline(
+      renderWikiMarkdown({
+        frontmatter: {
+          ...parsed.frontmatter,
+          pageType: "report",
+          id: params.definition.id,
+          title: params.definition.title,
+          status:
+            typeof parsed.frontmatter.status === "string" && parsed.frontmatter.status.trim()
+              ? parsed.frontmatter.status
+              : "active",
+          updatedAt,
+        },
+        body: updatedBody,
+      }),
+    );
+  const stableRendered = renderWithUpdatedAt(preservedUpdatedAt);
   if (stableRendered === original) {
     return false;
   }
-  const rendered = withTrailingNewline(
-    renderWikiMarkdown({
-      frontmatter: {
-        ...parsed.frontmatter,
-        pageType: "report",
-        id: params.definition.id,
-        title: params.definition.title,
-        status:
-          typeof parsed.frontmatter.status === "string" && parsed.frontmatter.status.trim()
-            ? parsed.frontmatter.status
-            : "active",
-        updatedAt: params.now.toISOString(),
-      },
-      body: updatedBody,
-    }),
-  );
+  const rendered = renderWithUpdatedAt(params.now.toISOString());
   await root.write(params.definition.relativePath, rendered);
   return true;
 }
@@ -1027,6 +1002,7 @@ async function refreshDashboardPages(params: {
   managedImportedSourcePagePaths: Set<string>;
   rootDir: string;
   pages: WikiPageSummary[];
+  signal?: AbortSignal;
 }): Promise<string[]> {
   if (!params.config.render.createDashboards) {
     return [];
@@ -1034,6 +1010,7 @@ async function refreshDashboardPages(params: {
   const now = new Date();
   const updatedFiles: string[] = [];
   for (const definition of DASHBOARD_PAGES) {
+    params.signal?.throwIfAborted();
     if (
       await writeDashboardPage({
         config: params.config,
@@ -1046,6 +1023,7 @@ async function refreshDashboardPages(params: {
     ) {
       updatedFiles.push(path.join(params.rootDir, definition.relativePath));
     }
+    params.signal?.throwIfAborted();
   }
   return updatedFiles;
 }
@@ -1125,8 +1103,9 @@ function sortClaims(page: WikiPageSummary): WikiClaim[] {
 }
 
 function buildCompiledCacheSnapshot(
-  pagesInput: WikiPageSummary[],
+  scan: Awaited<ReturnType<typeof readPageSummaries>>,
 ): MemoryWikiCompiledCacheSnapshot {
+  const pagesInput = scan.pages;
   const pages = [...pagesInput]
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
     .map((page) => {
@@ -1218,18 +1197,26 @@ function buildCompiledCacheSnapshot(
       pages,
     },
     claims,
+    dashboards: {
+      importInsights: buildMemoryWikiImportInsights(scan.importInsights),
+      overview: buildMemoryWikiOverview(scan.pages, scan.overviewItems),
+    },
   };
 }
 
 async function compileMemoryWikiVaultUnlocked(
   config: ResolvedMemoryWikiConfig,
-  options?: { sourcePageWrites?: "update" | "preserve" },
+  options?: CompileMemoryWikiOptions,
 ): Promise<CompileMemoryWikiResult> {
   if (options?.sourcePageWrites === "preserve") {
-    await activateExistingMemoryWikiVault(config);
+    await activateExistingMemoryWikiVault(config, options.signal);
   } else {
-    await initializeMemoryWikiVault(config);
+    await initializeMemoryWikiVault(
+      config,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
   }
+  options?.signal?.throwIfAborted();
   const rootDir = config.vault.path;
   const compiledInputIdentity = await loadMemoryWikiVaultIdentity(rootDir);
   if (!compiledInputIdentity.vaultGeneration) {
@@ -1256,14 +1243,18 @@ async function compileMemoryWikiVaultUnlocked(
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
-  let scan = await readPageSummaries(rootDir);
+  let scan = await readPageSummaries(rootDir, options?.signal);
   let pages = scan.pages;
   const updatedFiles =
     options?.sourcePageWrites === "preserve"
       ? []
-      : await refreshPageRelatedBlocks({ config, pages });
+      : await refreshPageRelatedBlocks({
+          config,
+          pages,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        });
   if (updatedFiles.length > 0) {
-    scan = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir, options?.signal);
     pages = scan.pages;
   }
   const dashboardUpdatedFiles = await refreshDashboardPages({
@@ -1271,14 +1262,15 @@ async function compileMemoryWikiVaultUnlocked(
     managedImportedSourcePagePaths,
     rootDir,
     pages,
+    ...(options?.signal ? { signal: options.signal } : {}),
   });
   updatedFiles.push(...dashboardUpdatedFiles);
   if (dashboardUpdatedFiles.length > 0) {
-    scan = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir, options?.signal);
     pages = scan.pages;
   }
-  const counts = buildPageCounts(pages);
-  const compiledSnapshot = buildCompiledCacheSnapshot(pages);
+  const compiledSnapshot = buildCompiledCacheSnapshot(scan);
+  const counts = compiledSnapshot.dashboards.overview.pageCounts;
   const compiledCacheGeneration = resolveMemoryWikiCompiledCacheGeneration(compiledSnapshot);
   const compiledCachePublicationId = createMemoryWikiCompiledCachePublicationId();
   let compiledCacheSourceGeneration: string | undefined;
@@ -1292,6 +1284,7 @@ async function compileMemoryWikiVaultUnlocked(
       startMarker: "<!-- openclaw:wiki:index:start -->",
       endMarker: "<!-- openclaw:wiki:index:end -->",
       body: buildRootIndexBody({ config, pages, counts }),
+      ...(options?.signal ? { signal: options.signal } : {}),
     })
   ) {
     updatedFiles.push(rootIndexPath);
@@ -1308,6 +1301,7 @@ async function compileMemoryWikiVaultUnlocked(
         startMarker: `<!-- openclaw:wiki:${group.dir}:index:start -->`,
         endMarker: `<!-- openclaw:wiki:${group.dir}:index:end -->`,
         body: buildDirectoryIndexBody({ config, pages, group }),
+        ...(options?.signal ? { signal: options.signal } : {}),
       })
     ) {
       updatedFiles.push(filePath);
@@ -1316,6 +1310,7 @@ async function compileMemoryWikiVaultUnlocked(
 
   // Persist an immutable candidate, then commit its causal publication. A stale
   // compiler cannot overwrite the accepted row or activate before validation.
+  options?.signal?.throwIfAborted();
   await writeMemoryWikiCompiledCache(
     config,
     compiledSnapshot,
@@ -1323,6 +1318,7 @@ async function compileMemoryWikiVaultUnlocked(
     compiledCachePublicationId,
     compiledInputIdentity.compiledCachePublicationId,
     async () => {
+      options?.signal?.throwIfAborted();
       const currentIdentity = await loadMemoryWikiVaultIdentity(rootDir);
       if (
         currentIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
@@ -1333,9 +1329,9 @@ async function compileMemoryWikiVaultUnlocked(
         throw new Error("Memory Wiki vault changed while its compiled cache was being built.");
       }
       const sourceGenerationBeforeScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
-      const verifiedScan = await readPageSummaries(rootDir);
+      const verifiedScan = await readPageSummaries(rootDir, options?.signal);
       const verifiedGeneration = resolveMemoryWikiCompiledCacheGeneration(
-        buildCompiledCacheSnapshot(verifiedScan.pages),
+        buildCompiledCacheSnapshot(verifiedScan),
       );
       const sourceGenerationAfterScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
       if (
@@ -1354,8 +1350,10 @@ async function compileMemoryWikiVaultUnlocked(
       ) {
         throw new Error("Memory Wiki vault changed while its compiled cache was being verified.");
       }
+      options?.signal?.throwIfAborted();
     },
     async () => {
+      options?.signal?.throwIfAborted();
       if (!compiledCacheSourceGeneration) {
         throw new Error("Memory Wiki compiled cache source generation is missing.");
       }
@@ -1369,6 +1367,7 @@ async function compileMemoryWikiVaultUnlocked(
           compiledCacheSourceGeneration,
         },
       });
+      options?.signal?.throwIfAborted();
     },
     () => loadMemoryWikiValidatedVaultIdentity(rootDir),
   );
@@ -1393,11 +1392,21 @@ async function compileMemoryWikiVaultUnlocked(
 
 export async function compileMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
-  options?: { sourcePageWrites?: "update" | "preserve" },
+  options?: CompileMemoryWikiOptions,
 ): Promise<CompileMemoryWikiResult> {
-  return await withMemoryWikiVaultMutation(config.vault.path, () =>
-    compileMemoryWikiVaultUnlocked(config, options),
-  );
+  try {
+    options?.signal?.throwIfAborted();
+    return await withMemoryWikiVaultMutation(config.vault.path, () => {
+      options?.signal?.throwIfAborted();
+      setMemoryWikiDashboardState(config, { state: "rebuilding" });
+      return compileMemoryWikiVaultUnlocked(config, options);
+    });
+  } catch (error) {
+    if (!options?.signal?.aborted) {
+      setMemoryWikiDashboardState(config, { state: "failed" });
+    }
+    throw error;
+  }
 }
 
 async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
@@ -1420,29 +1429,40 @@ async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
 export async function refreshMemoryWikiIndexesAfterImport(params: {
   config: ResolvedMemoryWikiConfig;
   syncResult: { importedCount: number; updatedCount: number; removedCount: number };
+  signal?: AbortSignal;
 }): Promise<RefreshMemoryWikiIndexesResult> {
-  await initializeMemoryWikiVault(params.config);
-  if (!params.config.ingest.autoCompile) {
-    return {
-      refreshed: false,
-      reason: "auto-compile-disabled",
-    };
-  }
+  params.signal?.throwIfAborted();
   const importChanged =
     params.syncResult.importedCount > 0 ||
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
-  const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
-  if (!importChanged && !missingIndexes) {
-    return {
-      refreshed: false,
-      reason: "no-import-changes",
-    };
+  const dashboardState = await readMemoryWikiDashboardState(params.config);
+  params.signal?.throwIfAborted();
+  const dashboardNeedsCompile = dashboardState.state !== "ready";
+  if (!params.config.ingest.autoCompile) {
+    if (importChanged || dashboardNeedsCompile) {
+      setMemoryWikiDashboardState(params.config, { state: "compile-required" });
+    }
+    return { refreshed: false, reason: "auto-compile-disabled" };
   }
-  const compile = await compileMemoryWikiVault(params.config);
+
+  const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
+  params.signal?.throwIfAborted();
+  if (!importChanged && !missingIndexes && !dashboardNeedsCompile) {
+    return { refreshed: false, reason: "no-import-changes" };
+  }
+
+  const compile = await compileMemoryWikiVault(
+    params.config,
+    params.signal ? { signal: params.signal } : undefined,
+  );
   return {
     refreshed: true,
-    reason: missingIndexes && !importChanged ? "missing-indexes" : "import-changed",
+    reason: importChanged
+      ? "import-changed"
+      : missingIndexes
+        ? "missing-indexes"
+        : "missing-compiled-cache",
     compile,
   };
 }

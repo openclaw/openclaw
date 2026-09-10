@@ -2,10 +2,11 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveCliName } from "../cli/cli-name.js";
+import { CLI_NAME } from "../cli/cli-name.js";
 import {
   completionCacheExists,
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
+  findCompletionProfileWriteError,
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
@@ -17,9 +18,7 @@ import {
   type CompletionShell,
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { isErrno } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
@@ -32,17 +31,8 @@ export type CompletionCacheGenerationOptions = ShellCompletionStatusOptions & {
   generationMode: "core-only" | "full";
 };
 
-const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
-
-function findProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
-  if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
-    return err;
-  }
-  return err instanceof Error ? findProfileWriteError(err.cause) : undefined;
-}
-
 async function installCompletionForDoctor(
-  shell: CompletionShell,
+  { shell, cachePath }: ShellCompletionStatus,
   cliName: string,
   action: "installed" | "upgraded",
 ): Promise<void> {
@@ -55,13 +45,14 @@ async function installCompletionForDoctor(
     );
   } catch (err) {
     // Completion is optional, but only profile permission failures are safe to downgrade.
-    const writeError = findProfileWriteError(err);
+    const writeError = findCompletionProfileWriteError(err);
     if (!writeError) {
       throw err;
     }
-    const profilePath = writeError.path ?? resolveCompletionProfilePath(shell);
+    const failedPath = writeError.path ?? resolveCompletionProfilePath(shell);
+    const command = formatCompletionReloadCommand(shell, cachePath);
     note(
-      `Shell completion not ${action}: ${profilePath} is not writable. Run \`${cliName} completion --install\` against a writable profile file.`,
+      `Shell completion could not be ${action} (permission or read-only error at ${failedPath}). For this ${shell} session only, run:\n${command}`,
       "Shell completion",
     );
   }
@@ -204,12 +195,10 @@ type DoctorCompletionOptions = {
  * cache regenerate it; missing completion prompts unless non-interactive mode is active.
  */
 export async function doctorShellCompletion(
-  _runtime: RuntimeEnv,
   prompter: DoctorPrompter,
   options: DoctorCompletionOptions = {},
 ): Promise<void> {
-  const cliName = resolveCliName();
-  const status = await checkShellCompletionStatus(cliName);
+  const status = await checkShellCompletionStatus(CLI_NAME);
 
   // Slow dynamic completion runs the CLI during shell startup; cache it to keep login shells fast.
   if (status.usesSlowPattern) {
@@ -222,14 +211,14 @@ export async function doctorShellCompletion(
       const generated = await generateCompletionCache({ generationMode: "core-only" });
       if (!generated) {
         note(
-          `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
+          `Failed to generate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
           "Shell completion",
         );
         return;
       }
     }
 
-    await installCompletionForDoctor(status.shell, cliName, "upgraded");
+    await installCompletionForDoctor(status, CLI_NAME, "upgraded");
     return;
   }
 
@@ -243,7 +232,7 @@ export async function doctorShellCompletion(
       note(`Completion cache regenerated at ${status.cachePath}`, "Shell completion");
     } else {
       note(
-        `Failed to regenerate completion cache. Run \`${cliName} completion --write-state\` manually.`,
+        `Failed to regenerate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
         "Shell completion",
       );
     }
@@ -256,7 +245,7 @@ export async function doctorShellCompletion(
     }
 
     const shouldInstall = await prompter.confirm({
-      message: `Enable ${status.shell} shell completion for ${cliName}?`,
+      message: `Enable ${status.shell} shell completion for ${CLI_NAME}?`,
       initialValue: true,
     });
 
@@ -264,13 +253,13 @@ export async function doctorShellCompletion(
       const generated = await generateCompletionCache({ generationMode: "core-only" });
       if (!generated) {
         note(
-          `Failed to generate completion cache. Run \`${cliName} completion --write-state\` manually.`,
+          `Failed to generate completion cache. Run \`${CLI_NAME} completion --write-state\` manually.`,
           "Shell completion",
         );
         return;
       }
 
-      await installCompletionForDoctor(status.shell, cliName, "installed");
+      await installCompletionForDoctor(status, CLI_NAME, "installed");
     }
   }
 }

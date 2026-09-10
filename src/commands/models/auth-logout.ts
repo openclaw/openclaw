@@ -56,7 +56,7 @@ export async function modelsAuthLogoutCommand(
   }
 
   const cfg = await loadModelsConfig({ commandName: "models auth logout", runtime });
-  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind: "mutation" });
   // External CLI overlays (Claude/Codex CLI) are not ours to delete, so the
   // removable set is exactly the persisted store.
   const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
@@ -100,14 +100,18 @@ export async function modelsAuthLogoutCommand(
     logConfigUpdated(runtime);
   }
 
-  const removed = await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] });
+  const removed = await removeAuthProfilesAcrossOwnerStores({
+    cfg,
+    agentDir,
+    profileIds: [profileId],
+  });
   if (!removed) {
     throw new Error(
       `Failed to remove auth profile "${profileId}"; the auth store lock may be busy. Wait a moment and retry.`,
     );
   }
 
-  await refreshRunningGatewayAuthState();
+  await refreshRunningGatewayAuthState(agentId, runtime);
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Removed auth profile: ${description}`);

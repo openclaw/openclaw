@@ -77,6 +77,40 @@ function createHost() {
 }
 
 describe("GatewayPageController", () => {
+  it("notifies availability recovery once without changing the connection epoch", () => {
+    const client = {} as GatewayBrowserClient;
+    const connected = snapshot(client, "connected");
+    const source = createGateway({ ...connected, suspensionPhase: "draining" });
+    const host = createHost();
+    const onSnapshot = vi.fn();
+    const ensureInitialData = vi.fn();
+    const controller = new GatewayPageController(host.host, {
+      getGateway: () => source.gateway,
+      onSnapshot,
+      ensureInitialData,
+    });
+    host.connect();
+    const scope = controller.capture();
+    source.publish({ ...connected, suspensionPhase: "accepting" });
+    expect(onSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ becameAvailable: true, becameConnected: false }),
+    );
+    source.publish({ ...connected, suspensionPhase: "accepting", assistantAgentId: "main" });
+    expect(onSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ becameAvailable: false }),
+    );
+    source.publish({ ...connected, restartPending: true });
+    expect(onSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ becameAvailable: false }),
+    );
+    source.publish({ ...connected, restartPending: false });
+    expect(onSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ becameAvailable: true, becameConnected: false }),
+    );
+    expect(scope && controller.isCurrent(scope)).toBe(true);
+    expect(ensureInitialData).toHaveBeenCalledTimes(1);
+  });
+
   it("binds the current source and retires work across same-client reconnects", () => {
     const client = {} as GatewayBrowserClient;
     const source = createGateway(snapshot(client, "connected"));
@@ -151,6 +185,31 @@ describe("GatewayPageController", () => {
         gatewaySnapshot: { ...current.gateway.snapshot },
       }),
     ).toBe(false);
+  });
+
+  it("keeps route data current through metadata clones within one hello epoch", () => {
+    const client = {} as GatewayBrowserClient;
+    const hello = {} as NonNullable<ApplicationGatewaySnapshot["hello"]>;
+    const firstSnapshot = { ...snapshot(client, "connected"), hello };
+    const current = createGateway(firstSnapshot);
+    const host = createHost();
+    const controller = new GatewayPageController(host.host, {
+      getGateway: () => current.gateway,
+    });
+    host.connect();
+    const routeData = {
+      gateway: current.gateway,
+      gatewaySnapshot: firstSnapshot,
+    };
+
+    current.publish({ ...firstSnapshot });
+    expect(controller.isRouteDataCurrent(routeData)).toBe(true);
+
+    current.publish({
+      ...firstSnapshot,
+      hello: {} as NonNullable<ApplicationGatewaySnapshot["hello"]>,
+    });
+    expect(controller.isRouteDataCurrent(routeData)).toBe(false);
   });
 
   it("can reconnect after the host detaches", () => {

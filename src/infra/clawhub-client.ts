@@ -2,22 +2,30 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictNonNegativeInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retryClawHubRead } from "./clawhub-retry.js";
-import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
-import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
+import { isTruthyEnvValue } from "./env.js";
+import { isErrno } from "./errno.js";
+import {
+  cancelUnreadResponseBody,
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "./http-body.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const CLAWHUB_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
-export const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
 export type ClawHubFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-type ClawHubRequestParams = {
+export type ClawHubRequestParams = {
   baseUrl?: string;
   path?: string;
   url?: string;
@@ -111,6 +119,12 @@ function extractTokenFromClawHubConfig(value: unknown): string | undefined {
   );
 }
 
+function resolveClawHubConfigPathsIn(configHome: string): string[] {
+  return ["clawhub", "clawdhub"].map((directory) =>
+    path.join(configHome, directory, "config.json"),
+  );
+}
+
 function resolveClawHubConfigPaths(): string[] {
   const explicit =
     normalizeOptionalString(process.env.CLAWHUB_CONFIG_PATH) ||
@@ -122,16 +136,21 @@ function resolveClawHubConfigPaths(): string[] {
   const xdgConfigHome = normalizeOptionalString(process.env.XDG_CONFIG_HOME);
   const configHome =
     xdgConfigHome && xdgConfigHome.length > 0 ? xdgConfigHome : path.join(os.homedir(), ".config");
-  const xdgPath = path.join(configHome, "clawhub", "config.json");
+  const configPaths = resolveClawHubConfigPathsIn(configHome);
 
   if (process.platform === "darwin") {
     return [
-      path.join(os.homedir(), "Library", "Application Support", "clawhub", "config.json"),
-      xdgPath,
+      ...resolveClawHubConfigPathsIn(path.join(os.homedir(), "Library", "Application Support")),
+      ...configPaths,
     ];
   }
 
-  return [xdgPath];
+  const appData = normalizeOptionalString(process.env.APPDATA);
+  if (process.platform === "win32" && !xdgConfigHome && appData) {
+    return [...resolveClawHubConfigPathsIn(appData), ...configPaths];
+  }
+
+  return configPaths;
 }
 
 export async function resolveClawHubAuthToken(): Promise<string | undefined> {
@@ -145,12 +164,11 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
   for (const configPath of resolveClawHubConfigPaths()) {
     try {
       const raw = await fs.readFile(configPath, "utf8");
-      const token = extractTokenFromClawHubConfig(JSON.parse(raw));
-      if (token) {
-        return token;
+      return extractTokenFromClawHubConfig(JSON.parse(raw));
+    } catch (error) {
+      if (!isErrno(error) || error.code !== "ENOENT") {
+        return undefined;
       }
-    } catch {
-      // Try the next candidate path.
     }
   }
   return undefined;
@@ -183,40 +201,56 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
   return url;
 }
 
-export async function requestClawHub(
-  params: ClawHubRequestParams,
-): Promise<{ response: Response; url: URL; hasToken: boolean }> {
+type ClawHubResponse = {
+  response: Response;
+  url: URL;
+  hasToken: boolean;
+  /** Successful archives keep only their chunk-idle timeout while streaming. */
+  releaseDeadline: () => void;
+};
+
+async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResponse> {
   const url = buildUrl(params);
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
+  const headers = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
+    ...params.headers,
+  };
+  const init: RequestInit = {};
+  if (params.method) {
+    init.method = params.method;
+  }
+  if (Object.keys(headers).length > 0) {
+    init.headers = headers;
+  }
+  if (params.json !== undefined) {
+    init.body = JSON.stringify(params.json);
+  }
   const request = async () => {
     const controller = new AbortController();
-    const timeout = setTimeout(
+    let timeout: ReturnType<typeof setTimeout> | undefined = setTimeout(
       () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
       timeoutMs,
     );
-    const headers = {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
-      ...params.headers,
+    const releaseDeadline = () => {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
     };
-    const init: RequestInit = { signal: controller.signal };
-    if (params.method) {
-      init.method = params.method;
-    }
-    if (Object.keys(headers).length > 0) {
-      init.headers = headers;
-    }
-    if (params.json !== undefined) {
-      init.body = JSON.stringify(params.json);
-    }
     try {
-      const response = await (params.fetchImpl ?? fetch)(url, init);
-      return { response, url, hasToken: Boolean(token) };
-    } finally {
-      clearTimeout(timeout);
+      const response = await (params.fetchImpl ?? fetch)(url, {
+        ...init,
+        signal: controller.signal,
+      });
+      return { response, url, hasToken: Boolean(token), releaseDeadline };
+    } catch (error) {
+      releaseDeadline();
+      throw error;
     }
   };
 
@@ -226,10 +260,25 @@ export async function requestClawHub(
     return await request();
   }
   return await retryClawHubRead(request, {
-    disposeRetry: async ({ response }) => {
-      await response.body?.cancel().catch(() => undefined);
+    disposeRetry: async ({ response, releaseDeadline }) => {
+      releaseDeadline();
+      await cancelUnreadResponseBody(response);
     },
   });
+}
+
+export async function withClawHubResponse<T>(
+  params: ClawHubRequestParams,
+  consume: (result: ClawHubResponse) => Promise<T>,
+): Promise<T> {
+  const result = await requestClawHub(params);
+  try {
+    // Body failures must not replay a request that already returned headers.
+    return await consume(result);
+  } finally {
+    result.releaseDeadline();
+    await cancelUnreadResponseBody(result.response);
+  }
 }
 
 async function readErrorBody(response: Response, timeoutMs?: number): Promise<string> {
@@ -294,11 +343,12 @@ export function decodeClawHubResponseBody(buffer: Uint8Array): string {
 }
 
 export async function fetchClawHubJson<T>(params: ClawHubRequestParams): Promise<T> {
-  const { response, url, hasToken } = await requestClawHub(params);
-  if (!response.ok) {
-    throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  return parseClawHubJsonBody<T>(response, url, params.timeoutMs);
+  return await withClawHubResponse(params, async ({ response, url, hasToken }) => {
+    if (!response.ok) {
+      throw await createClawHubError(response, url, hasToken, params.timeoutMs);
+    }
+    return parseClawHubJsonBody<T>(response, url, params.timeoutMs);
+  });
 }
 
 export async function parseClawHubJsonBody<T>(
@@ -464,5 +514,5 @@ export function isClawHubTelemetryDisabled(): boolean {
   if (!raw) {
     return false;
   }
-  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+  return isTruthyEnvValue(raw);
 }

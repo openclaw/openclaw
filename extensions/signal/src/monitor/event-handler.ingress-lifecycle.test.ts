@@ -16,13 +16,19 @@ type DispatchParams = {
 const { dispatchInboundMessageMock, recordInboundSessionMock, dispatchCapture, dispatchBehavior } =
   vi.hoisted(() => {
     const captured: DispatchParams[] = [];
-    const behavior = { adoptDuringDispatch: true };
+    const behavior = {
+      adoptDuringDispatch: true,
+      failBeforeAdoption: undefined as Error | undefined,
+    };
     return {
       dispatchCapture: captured,
       dispatchBehavior: behavior,
       recordInboundSessionMock: vi.fn(),
       dispatchInboundMessageMock: vi.fn(async (params: DispatchParams) => {
         captured.push(params);
+        if (behavior.failBeforeAdoption) {
+          throw behavior.failBeforeAdoption;
+        }
         if (behavior.adoptDuringDispatch) {
           // Mirror the real reply lane: adoption fires while dispatch runs.
           await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
@@ -47,48 +53,18 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",
   );
-  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
-    runChannelInboundEvent: async (params: RunParams) => {
-      const input = await params.adapter.ingest(params.raw);
-      if (!input) {
-        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
-      }
-      const eventClass = (await params.adapter.classify?.(input)) ?? {
-        kind: "message" as const,
-        canStartAgentTurn: true,
-      };
-      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
-      const resolved = await params.adapter.resolveTurn(
-        input,
-        eventClass,
-        "kind" in preflight ? { admission: preflight } : preflight,
-      );
-      if (!("route" in resolved) || !("delivery" in resolved)) {
-        throw new Error("expected assembled Signal channel turn plan");
-      }
-      const result = await actual.runPreparedInboundReply({
-        channel: resolved.channel,
-        accountId: resolved.accountId,
-        routeSessionKey: resolved.route.sessionKey,
-        storePath: "/tmp/openclaw/signal-sessions.json",
-        ctxPayload: resolved.ctxPayload,
-        recordInboundSession: recordInboundSessionMock,
-        afterRecord: resolved.afterRecord,
-        record: resolved.record,
-        history: resolved.history,
-        admission: resolved.admission,
-        botLoopProtection: resolved.botLoopProtection,
-        runDispatch: async () =>
-          await dispatchInboundMessageMock({
-            ctx: resolved.ctxPayload,
-            replyOptions: resolved.replyOptions,
-          }),
-      });
-      await params.adapter.onFinalize?.(result);
-      return result;
-    },
+    runChannelInboundEvent: createSignalPreparedDispatchRunner(
+      actual.runChannelInboundEvent,
+      recordInboundSessionMock,
+      async (resolved) =>
+        await dispatchInboundMessageMock({
+          ctx: resolved.ctxPayload,
+          replyOptions: resolved.replyOptions,
+        }),
+    ),
   };
 });
 
@@ -102,9 +78,11 @@ beforeAll(async () => {
 function createTrackedLifecycle(): SignalIngressLifecycle & {
   adoptedCount: () => number;
   abandonedCount: () => number;
+  failedCount: () => number;
 } {
   let adopted = 0;
   let abandoned = 0;
+  let failed = 0;
   return {
     abortSignal: new AbortController().signal,
     onAdopted: async () => {
@@ -112,11 +90,15 @@ function createTrackedLifecycle(): SignalIngressLifecycle & {
     },
     onDeferred: () => {},
     onAdoptionFinalizing: () => {},
+    onFailed: () => {
+      failed += 1;
+    },
     onAbandoned: () => {
       abandoned += 1;
     },
     adoptedCount: () => adopted,
     abandonedCount: () => abandoned,
+    failedCount: () => failed,
   };
 }
 
@@ -133,6 +115,7 @@ describe("signal drain claim ownership", () => {
   beforeEach(() => {
     dispatchCapture.length = 0;
     dispatchBehavior.adoptDuringDispatch = true;
+    dispatchBehavior.failBeforeAdoption = undefined;
     dispatchInboundMessageMock.mockClear();
   });
 
@@ -178,6 +161,36 @@ describe("signal drain claim ownership", () => {
       },
       { timeout: 5_000 },
     );
+  });
+
+  it("fails every constituent claim when a merged dispatch rejects before adoption", async () => {
+    dispatchBehavior.failBeforeAdoption = new Error("merged dispatch failed");
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: { messages: { inbound: { debounceMs: 40 } } },
+      }),
+    );
+    const first = createTrackedLifecycle();
+    const second = createTrackedLifecycle();
+
+    const results = [
+      await handler(createDataEvent({ timestamp: 1700000003500, message: "part one" }), first),
+      await handler(createDataEvent({ timestamp: 1700000003600, message: "part two" }), second),
+    ];
+    expect(results).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
+
+    await vi.waitFor(
+      () => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        expect(first.failedCount()).toBe(1);
+        expect(second.failedCount()).toBe(1);
+      },
+      { timeout: 5_000 },
+    );
+    expect(first.adoptedCount()).toBe(0);
+    expect(second.adoptedCount()).toBe(0);
+    expect(first.abandonedCount()).toBe(0);
+    expect(second.abandonedCount()).toBe(0);
   });
 
   it("settles the claim for a turn that finishes without adoption", async () => {
