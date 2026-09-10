@@ -201,7 +201,9 @@ export function buildBackgroundTasksMock(baseTime: number) {
             "Checking the narrow panel layout and history paging before reporting the result.",
             baseTime + 40 * 60_000 + 20_000,
           ),
-        ].map((message, index) => ({ ...message, messageId: `mock-task-message-${index}` })),
+        ].map((message, index) =>
+          Object.assign(message, { messageId: `mock-task-message-${index}` }),
+        ),
         thinkingLevel: null,
       },
     },
@@ -215,6 +217,7 @@ function installBackgroundTasksMock(seed: ReturnType<typeof buildBackgroundTasks
     return;
   }
   const tasks = new Map(seed.tasks.map((task) => [task.id, task]));
+  const transcripts = new Map(Object.entries(seed.sessionTranscripts));
   gateway.setRequestHandler("tasks.list", ({ params: input, respond }) => {
     const params = (input ?? {}) as TasksListParams;
     const statuses = typeof params.status === "string" ? [params.status] : params.status;
@@ -238,7 +241,7 @@ function installBackgroundTasksMock(seed: ReturnType<typeof buildBackgroundTasks
     const params = input as TasksHistoryParams;
     const task = tasks.get(params.taskId);
     const messages = task?.childSessionKey
-      ? (seed.sessionTranscripts[task.childSessionKey]?.messages ?? [])
+      ? (transcripts.get(task.childSessionKey)?.messages ?? [])
       : [];
     const end = params.cursor ? Number(params.cursor) : messages.length;
     // Keep one earlier page visible even when the client requests its full limit.

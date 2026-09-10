@@ -198,7 +198,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           content,
           host: state,
           layout: sidebarLayout,
-          transcript: this.taskSidebarTranscript,
         }),
       digest: observerDigest,
       activeRunId: observerRunId,

@@ -259,12 +259,11 @@ export function projectChatTranscript(
     props.userId,
   );
   const isDirectThread = defaultAvatarPlacement === "footer";
-  // Precedence: explicit prop, subagent classification/key → none, direct → footer, else gutter.
+  // Subagent sessions omit avatars; direct chats use the footer, others the gutter.
   const avatarPlacement =
-    props.avatarPlacement ??
-    (activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
+    activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"
-      : defaultAvatarPlacement);
+      : defaultAvatarPlacement;
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;

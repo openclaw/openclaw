@@ -352,6 +352,20 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
 
 let nextPreviewRevision = 0;
 
+export function isToolCallContentBlock(item: {
+  type?: unknown;
+  name?: unknown;
+  arguments?: unknown;
+  args?: unknown;
+  input?: unknown;
+}): boolean {
+  return (
+    isToolCallContentType(item.type) ||
+    (typeof item.name === "string" &&
+      (item.arguments != null || item.args != null || item.input != null))
+  );
+}
+
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
@@ -380,11 +394,7 @@ function extractToolCards(message: unknown): ToolCard[] {
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
-    const isToolCall =
-      isToolCallContentType(item.type) ||
-      (typeof item.name === "string" &&
-        (item.arguments != null || item.args != null || item.input != null));
-    if (isToolCall) {
+    if (isToolCallContentBlock(item)) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
       const callId = resolveToolCallId(item, m);
       const details = item.details ?? m.details;
