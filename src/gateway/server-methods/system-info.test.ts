@@ -42,6 +42,7 @@ describe("system.info", () => {
     sampleTime += 10_001;
     vi.spyOn(Date, "now").mockReturnValue(sampleTime);
     vi.spyOn(os, "platform").mockReturnValue("darwin");
+    vi.spyOn(process, "availableMemory").mockReturnValue(4096);
     mocks.runCommandWithTimeout.mockReset().mockImplementation(mountedVolumeOutput);
   });
   afterEach(() => vi.restoreAllMocks());
@@ -76,6 +77,7 @@ describe("system.info", () => {
     }
     expect(payload.cpuCount).toBeGreaterThanOrEqual(1);
     expect(payload.memoryTotalBytes).toBeGreaterThan(0);
+    expect(payload.memoryFreeBytes).toBe(4096);
     expect(payload.processInstanceId).toBe(getGatewayProcessInstanceId());
     expect(payload.uptimeMs).toBeGreaterThanOrEqual(0);
     expect(payload.defaultAgentUtilityModel).toEqual({ status: "unavailable" });

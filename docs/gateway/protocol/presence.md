@@ -55,7 +55,9 @@ encoding in `payloadJSON`):
 1-, 5-, and 15-minute averages, each finite and between 0 and 100000. Windows
 has no load average; hosts omit the field when all three readings are zero.
 Memory and disk values are non-negative integer bytes, with free or available
-bytes no greater than their total. Disk fields appear together only when the
+bytes no greater than their total. `memoryFreeBytes` counts free plus reclaimable
+memory (Node's available-memory reading), so idle file cache on macOS is not
+reported as used. Disk fields appear together only when the
 host can read capacity for the volume containing its home directory, independent
 of the worker's current directory.
 

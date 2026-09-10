@@ -18,7 +18,7 @@ it("bounds OS readings and reports available space on the home volume", () => {
   vi.spyOn(os, "cpus").mockReturnValue([]);
   vi.spyOn(os, "loadavg").mockReturnValue([1.25, -1, 100_001]);
   vi.spyOn(os, "totalmem").mockReturnValue(100.4);
-  vi.spyOn(os, "freemem").mockReturnValue(200);
+  vi.spyOn(process, "availableMemory").mockReturnValue(40);
   const disk = vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
     targetPath: os.homedir(),
     checkedPath: os.homedir(),
@@ -31,12 +31,18 @@ it("bounds OS readings and reports available space on the home volume", () => {
     cpuCount: 1,
     loadAverage: [1.25, 0, 100_000],
     memoryTotalBytes: 100,
-    memoryFreeBytes: 100,
+    memoryFreeBytes: 40,
     diskTotalBytes: 500,
     diskAvailableBytes: 500,
   });
   expect(disk).toHaveBeenCalledWith(os.homedir());
   expect(validateNodeHostStatsPayload(stats)).toBe(true);
+});
+
+it("falls back to free memory where the runtime cannot read available memory", () => {
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
+  vi.spyOn(os, "freemem").mockReturnValue(4096);
+  expect(sampleNodeHostStats().memoryFreeBytes).toBe(4096);
 });
 
 it.each([
