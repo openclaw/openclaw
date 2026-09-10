@@ -299,9 +299,9 @@ describe("groupCatalogSessionsByProject", () => {
       session("nested", nested),
       { ...session("custom", `${root}${separator}zhc-custom`), customGroup: "Release" },
     ]);
-    expect(result.groups.map((group) => group.label)).toEqual([
+    expect(result.groups.map((group) => group.labelKey ?? group.label)).toEqual([
       "Release",
-      "Tests/Temporary",
+      "chat.sidebar.catalogTemporaryProjects",
       "my-project",
       "zhc-user-project",
     ]);
@@ -351,7 +351,7 @@ describe("groupCatalogSessionsByProject", () => {
       legacySectionKey: cwd,
       title: cwd,
     });
-    expect(result.groups[0]?.label).not.toBe("Tests/Temporary");
+    expect(result.groups[0]?.labelKey).toBeUndefined();
   });
 
   it.each([

@@ -5254,6 +5254,7 @@ export const en: TranslationMap & {
       showSessionSection: "Show",
       catalogGroupByProject: "Project",
       catalogGroupByPerson: "Person",
+      catalogTemporaryProjects: "Tests/Temporary",
       openSessionMenu: "Open session menu",
       sortBy: "Sort by",
       sortCreated: "Created",

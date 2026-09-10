@@ -1,9 +1,90 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { i18n } from "../../i18n/index.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar project session activity", () => {
+  it("localizes temporary project headings without changing section or session identity", async () => {
+    await i18n.setLocale("en");
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.sessionData.sessionCatalogs = [
+      {
+        id: "codex",
+        label: "Codex",
+        capabilities: { continueSession: true, archive: true },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Local Codex",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "temporary-thread",
+                name: "Temporary session",
+                cwd: "/tmp/zhc-probe/src",
+                status: "idle",
+                archived: false,
+                canContinue: true,
+                canArchive: true,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+
+    const heading = sidebar.querySelector<HTMLButtonElement>(
+      '[data-session-catalog-project="temporary:tests"]',
+    );
+    const label = heading?.querySelector(".sidebar-session-catalog-project__label");
+    const row = sidebar.querySelector('[data-session-key*="temporary-thread"]');
+    const link = row?.querySelector("a");
+    const sessionKey = row?.getAttribute("data-session-key");
+    const href = link?.getAttribute("href");
+    expect(heading).not.toBeNull();
+    expect(row).not.toBeNull();
+    expect(href).toBeTruthy();
+    expect(label?.textContent).toBe("Tests/Temporary");
+    expect(heading?.title).toBe("Tests/Temporary");
+    expect(row?.closest('[role="list"]')?.getAttribute("aria-label")).toBe(
+      "Local Codex: Tests/Temporary",
+    );
+
+    const translate = i18n.t.bind(i18n);
+    const translation = vi
+      .spyOn(i18n, "t")
+      .mockImplementation((key, params) =>
+        key === "chat.sidebar.catalogTemporaryProjects"
+          ? "Temporary projects translated"
+          : translate(key, params),
+      );
+    try {
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
+      expect(label?.textContent).toBe("Temporary projects translated");
+      expect(heading?.title).toBe("Temporary projects translated");
+      expect(row?.closest('[role="list"]')?.getAttribute("aria-label")).toBe(
+        "Local Codex: Temporary projects translated",
+      );
+      expect(sidebar.querySelector('[data-session-key*="temporary-thread"]')).toBe(row);
+      expect(row?.getAttribute("data-session-key")).toBe(sessionKey);
+      expect(link?.getAttribute("href")).toBe(href);
+      heading?.click();
+      await sidebar.updateComplete;
+      expect(heading?.getAttribute("aria-expanded")).toBe("false");
+      expect(
+        JSON.parse(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections") ?? "[]"),
+      ).toContain("catalog-project:codex:gateway:local:temporary:tests");
+    } finally {
+      translation.mockRestore();
+    }
+  });
+
   it("preserves collapsed project sections stored by earlier versions", async () => {
     localStorage.setItem(
       "openclaw:sidebar:sessions:collapsed-sections",

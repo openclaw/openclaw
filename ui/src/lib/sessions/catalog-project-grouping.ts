@@ -136,6 +136,7 @@ type CatalogProjectGroup = {
   // Collapse ids predate the group-kind namespace. Read the old suffix until
   // the next toggle migrates that section to its canonical id.
   legacySectionKey?: string;
+  labelKey?: "chat.sidebar.catalogTemporaryProjects";
   label: string;
   title: string;
   sessions: SessionCatalogSession[];
@@ -221,8 +222,9 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         temporaryGroup = {
           kind: "project",
           key: "temporary:tests",
-          label: "Tests/Temporary",
-          title: "Tests/Temporary",
+          labelKey: "chat.sidebar.catalogTemporaryProjects",
+          label: "",
+          title: "",
           sessions: [],
         };
         projectGroups.push(temporaryGroup);
