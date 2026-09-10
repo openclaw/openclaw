@@ -43,7 +43,8 @@ async function captureWriteError(write: () => Promise<void>): Promise<FsSafeErro
   return caught;
 }
 
-describe("pinned write errno reporting", () => {
+// fs-safe's Windows write fallback does not invoke this fault hook.
+describe.skipIf(process.platform === "win32")("pinned write errno reporting", () => {
   it.each(Object.entries(writeRoutes))(
     "preserves the permission cause and classification through %s",
     async (_name, write) => {
