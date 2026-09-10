@@ -122,6 +122,10 @@
   display: none;
 }
 
+.chat-position-rail__item {
+  display: contents;
+}
+
 .chat-position-rail__marker {
   position: relative;
   z-index: 1;
@@ -162,29 +166,29 @@
 }
 
 /* The wave is pointer-only; resting and keyboard-focused marks stay uniform. */
-.chat-position-rail__marker:has(
-    + .chat-position-rail__marker + .chat-position-rail__marker + .chat-position-rail__marker:hover
+.chat-position-rail__item:has(
+    + .chat-position-rail__item + .chat-position-rail__item + .chat-position-rail__item:hover
   )
   .chat-position-rail__tick,
-.chat-position-rail__marker:hover
-  + .chat-position-rail__marker
-  + .chat-position-rail__marker
-  + .chat-position-rail__marker
+.chat-position-rail__item:hover
+  + .chat-position-rail__item
+  + .chat-position-rail__item
+  + .chat-position-rail__item
   .chat-position-rail__tick {
   width: 12px;
 }
 
-.chat-position-rail__marker:has(+ .chat-position-rail__marker + .chat-position-rail__marker:hover)
+.chat-position-rail__item:has(+ .chat-position-rail__item + .chat-position-rail__item:hover)
   .chat-position-rail__tick,
-.chat-position-rail__marker:hover
-  + .chat-position-rail__marker
-  + .chat-position-rail__marker
+.chat-position-rail__item:hover
+  + .chat-position-rail__item
+  + .chat-position-rail__item
   .chat-position-rail__tick {
   width: 16px;
 }
 
-.chat-position-rail__marker:has(+ .chat-position-rail__marker:hover) .chat-position-rail__tick,
-.chat-position-rail__marker:hover + .chat-position-rail__marker .chat-position-rail__tick {
+.chat-position-rail__item:has(+ .chat-position-rail__item:hover) .chat-position-rail__tick,
+.chat-position-rail__item:hover + .chat-position-rail__item .chat-position-rail__tick {
   width: 24px;
 }
 

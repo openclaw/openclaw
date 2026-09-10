@@ -311,6 +311,13 @@ change to stored history. Live turns, search results, and turns without an answe
 stay expanded. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
 
+On wide desktop panes, the conversation position rail provides keyboard shortcuts
+to messages. Tab enters at the current message, or the first marker if no message
+is current. ArrowUp and ArrowDown move focus; Home and End go to the first and last
+markers. Enter or Space jumps to the focused message. Tab or Shift+Tab leaves the
+rail in one step, and Escape closes the preview and returns focus to the transcript.
+Focusing a marker also shows its preview without jumping to the message.
+
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
 
 Images and video previews in your own messages appear above any accompanying text, without a surrounding bubble background. Videos use a still frame with a play icon; select the preview to open the video in the Files panel. If a preview cannot load, the attachment card remains available. Hovering media leaves that layout unchanged, and the text keeps its normal bubble color, including any per-identity tint. Assistant videos retain their inline player.
