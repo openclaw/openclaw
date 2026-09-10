@@ -1261,6 +1261,10 @@ async function withMatrixQaIsolatedE2eeDriverRoom<T>(
       context,
       scenarioId,
     });
+    await ensureMatrixQaE2eeOwnDeviceVerified({
+      client,
+      label: `${scenarioId} isolated driver`,
+    });
     await Promise.all([
       client.waitForJoinedMember({
         roomId,

@@ -2154,7 +2154,23 @@ describe("matrix live qa scenarios", () => {
         };
       });
       const stop = vi.fn().mockResolvedValue(undefined);
+      const bootstrapOwnDeviceVerification = vi.fn().mockImplementation(async () => {
+        callOrder.push("bootstrap-driver");
+        return {
+          crossSigning: { published: true },
+          success: true,
+          verification: {
+            backupVersion: "1",
+            crossSigningVerified: true,
+            recoveryKeyStored: true,
+            signedByOwner: true,
+            verified: true,
+          },
+        };
+      });
       createMatrixQaE2eeScenarioClient.mockResolvedValue({
+        bootstrapOwnDeviceVerification,
+        getRecoveryKey: vi.fn().mockResolvedValue("isolated-driver-recovery-key"),
         prime: vi.fn().mockResolvedValue("driver-sync-start"),
         sendTextMessage,
         stop,
@@ -2251,6 +2267,7 @@ describe("matrix live qa scenarios", () => {
         "observer-join",
         "sut-join",
         "hard-restart",
+        "bootstrap-driver",
         "send:before",
         "restart",
         "send:after",
@@ -2272,6 +2289,9 @@ describe("matrix live qa scenarios", () => {
       });
       expect(waitGatewayAccountReady).not.toHaveBeenCalled();
       expect(stop).toHaveBeenCalledTimes(1);
+      expect(bootstrapOwnDeviceVerification).toHaveBeenCalledWith({
+        allowAutomaticCrossSigningReset: false,
+      });
       expect(createPrivateRoom).toHaveBeenCalledWith({
         encrypted: true,
         inviteUserIds: ["@observer:matrix-qa.test", "@sut:matrix-qa.test"],
