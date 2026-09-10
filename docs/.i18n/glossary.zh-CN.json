@@ -52,6 +52,10 @@
     "target": "密钥管理"
   },
   {
+    "source": "Secrets CLI",
+    "target": "密钥 CLI"
+  },
+  {
     "source": "SecretRef credential surface",
     "target": "SecretRef 凭据覆盖面"
   },

@@ -19,7 +19,7 @@ At a glance:
 | Failed auth (token/password/device) | 10 failures / 60s, 5 min lockout | IP + credential scope            | `gateway.auth.rateLimit` |
 | Browser-origin WS auth failures     | same, loopback **not** exempt    | IP, or page origin from loopback | `gateway.auth.rateLimit` |
 | Webhook (`/hooks`) auth failures    | 20 failures / 60s, 60s lockout   | IP                               | no                       |
-| Control-plane write RPCs            | 30 requests / 60s per method     | method + device + IP             | no                       |
+| Control-plane write RPCs            | 30 requests / 60s per method     | method + device + IP (see below) | no                       |
 | ACP session creation                | 120 sessions / 10s               | translator instance              | internal                 |
 | Gateway restart cycles              | 30s cooldown between restarts    | process                          | no                       |
 
@@ -147,6 +147,11 @@ Write-side admin RPCs (`config.apply`, `config.patch`, `plugins.install`,
 `gateway.restart.request`, ...) are additionally rate-limited **after**
 authorization: 30 requests per 60 seconds, per method, per
 `deviceId+clientIp`.
+
+WebSocket clients supply both parts of that key. Admin HTTP controllers carry no
+device id, so their bucket is the resolved client IP alone, and controllers
+behind one proxy share a budget. See [External apps](/gateway/external-apps) for
+the controller-side view.
 
 This is not a security boundary — callers already hold `operator.admin` — it
 is a backstop that bounds runaway client or agent loops hammering expensive

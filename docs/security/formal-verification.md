@@ -7,7 +7,7 @@ read_when:
 permalink: /security/formal-verification/
 ---
 
-OpenClaw's formal security models (TLA+/TLC today) give a machine-checked argument that specific highest-risk paths — authorization, session isolation, tool gating, and misconfiguration safety — enforce their intended policy, under explicit stated assumptions.
+OpenClaw's formal security models (TLA+/TLC today) cover specific highest-risk paths: authorization, session isolation, tool gating, and misconfiguration safety. For each path, the models give a machine-checked argument that it enforces its intended policy, under explicit stated assumptions.
 
 > Note: some older links may refer to the previous project name.
 
@@ -38,13 +38,13 @@ That repository is currently unreachable (GitHub returns "Repository not found" 
 
 Reproduction instructions are unavailable while the previously documented models repository is not publicly reachable. Ask in the OpenClaw maintainer channels for a verified current location before attempting the targets below.
 
-There is no CI integration back into this repo yet; a future iteration could add CI-run models with public artifacts (counterexample traces, run logs) or a hosted "run this model" workflow for small bounded checks.
+There is no CI integration back into this repo yet. A future iteration could add CI-run models with public artifacts such as counterexample traces and run logs. It could also add a hosted "run this model" workflow for small bounded checks.
 
 ## Claims and targets
 
 ### Gateway exposure and open gateway misconfiguration
 
-**Claim:** binding beyond loopback without auth can make remote compromise possible and increases exposure; a token/password blocks unauthenticated attackers, per the model's assumptions.
+**Claim:** binding beyond loopback without auth can make remote compromise possible and increases exposure. A token/password blocks unauthenticated attackers, per the model's assumptions.
 
 | Result         | Targets                                                          |
 | -------------- | ---------------------------------------------------------------- |
@@ -55,7 +55,7 @@ See also `docs/gateway-exposure-matrix.md` in the models repo.
 
 ### Node exec pipeline (highest-risk capability)
 
-**Claim:** `exec host=node` requires (a) a node command allowlist plus declared commands and (b) live approval when configured; approvals are tokenized to prevent replay, in the model.
+**Claim:** `exec host=node` requires (a) a node command allowlist plus declared commands and (b) live approval when configured. Approvals are tokenized to prevent replay, in the model.
 
 | Result         | Targets                                                         |
 | -------------- | --------------------------------------------------------------- |
@@ -104,7 +104,7 @@ Follow-on models that tighten fidelity around real-world failure modes: non-atom
 
 ### Ingress trace correlation and idempotency
 
-**Claim:** ingestion preserves trace correlation across fan-out and is idempotent under provider retries. When one external event becomes multiple internal messages, every part keeps the same trace/event identity; retries do not double-process; if provider event IDs are missing, dedupe falls back to a safe key (for example trace ID) to avoid dropping distinct events.
+**Claim:** ingestion preserves trace correlation across fan-out and is idempotent under provider retries. When one external event becomes multiple internal messages, every part keeps the same trace/event identity. Retries do not double-process. If provider event IDs are missing, dedupe falls back to a safe key (for example trace ID) to avoid dropping distinct events.
 
 | Result         | Targets                                                                                                                                     |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -113,7 +113,7 @@ Follow-on models that tighten fidelity around real-world failure modes: non-atom
 
 ### Routing dmScope precedence and identityLinks
 
-**Claim:** `dmScope` precedence and identity links behave deterministically: the default `main` scope shares one rolling session across a single owner's DMs (the personal-agent default), while any configured isolating scope (`per-peer`, `per-channel-peer`, `per-account-channel-peer`) keeps DM sessions strictly separated. Channel-specific `dmScope` overrides win over global defaults; `identityLinks` collapse sessions only within explicit linked groups, not across unrelated peers. Multi-user inboxes are expected to opt into an isolating scope (the runtime security audit recommends this when it detects multi-user DM traffic).
+**Claim:** `dmScope` precedence and identity links behave deterministically. The default `main` scope shares one rolling session across a single owner's DMs (the personal-agent default). Any configured isolating scope (`per-peer`, `per-channel-peer`, `per-account-channel-peer`) keeps DM sessions strictly separated. Channel-specific `dmScope` overrides win over global defaults. `identityLinks` collapse sessions only within explicit linked groups, not across unrelated peers. Multi-user inboxes are expected to opt into an isolating scope (the runtime security audit recommends this when it detects multi-user DM traffic).
 
 | Result         | Targets                                                                   |
 | -------------- | ------------------------------------------------------------------------- |

@@ -190,4 +190,5 @@ These credentials are minted, rotated, session-bearing, or OAuth-durable classes
 ## Related
 
 - [Secrets management](/gateway/secrets)
+- [Secrets CLI](/cli/secrets)
 - [Auth credential semantics](/auth-credential-semantics)

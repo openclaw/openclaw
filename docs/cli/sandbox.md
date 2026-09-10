@@ -75,13 +75,13 @@ Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses
 
 ## Common triggers
 
-| Change                                                                                                                                                         | Command                                                             |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Container sandbox image update (`agents.defaults.sandbox.docker.image`)                                                                                        | `openclaw sandbox recreate --all`                                   |
-| Sandbox config (`agents.defaults.sandbox.*`)                                                                                                                   | `openclaw sandbox recreate --all`                                   |
-| SSH target/auth (`agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`) | `openclaw sandbox recreate --all`                                   |
-| OpenShell source/policy/mode (`plugins.entries.openshell.config.{from,mode,policy}`)                                                                           | `openclaw sandbox recreate --all`                                   |
-| `setupCommand`                                                                                                                                                 | `openclaw sandbox recreate --all` (or `--agent <id>` for one agent) |
+Run `openclaw sandbox recreate --all` after any of these changes:
+
+- Container sandbox image update: `agents.defaults.sandbox.docker.image`
+- Sandbox config: `agents.defaults.sandbox.*`
+- SSH target/auth: `agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`
+- OpenShell source/policy/mode: `plugins.entries.openshell.config.{from,mode,policy}`
+- `setupCommand` — `--agent <id>` recreates one agent instead of all
 
 <Note>
 Runtimes are automatically recreated when the agent is next used.
