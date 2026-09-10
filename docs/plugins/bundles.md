@@ -269,7 +269,13 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
     Two detection modes:
 
     - **Manifest-based:** `.claude-plugin/plugin.json`
-    - **Manifestless:** default Claude layout (`skills/`, `commands/`, `agents/`, `output-styles/`, `hooks/`, `.mcp.json`, `.lsp.json`, `settings.json`)
+    - **Manifestless:** default Claude layout (`skills/`, `commands/`, `agents/`, `hooks/`, `.mcp.json`, `.lsp.json`, `settings.json`)
+
+    `output-styles/` is not a detection marker. A bundle whose only content is
+    `output-styles/` is not recognized as a Claude bundle. Add
+    `.claude-plugin/plugin.json`, or one of the markers above, so detection
+    succeeds. Detection runs before manifest loading, so an undetected
+    directory never reaches the component paths below.
 
     Claude-specific behavior:
 
