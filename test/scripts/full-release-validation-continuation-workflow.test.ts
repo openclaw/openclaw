@@ -45,6 +45,16 @@ function checkoutPath(checkout: Record<string, unknown>) {
 }
 
 describe("full release metadata checkouts", () => {
+  it("selects frozen admission with a Node runtime that supports trusted TypeScript modules", () => {
+    const steps = workflow.jobs.resolve_target!.steps;
+    const setup = step("resolve_target", "Setup admission Node.js");
+    const plan = step("resolve_target", "Plan frozen source admission");
+
+    expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(plan));
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+    expect(String(setup.run)).toContain("openclaw_ensure_node");
+  });
+
   it.each([
     {
       job: "resolve_target",
