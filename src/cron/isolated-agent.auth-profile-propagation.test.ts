@@ -1,5 +1,7 @@
 // Auth profile propagation tests cover isolated agent auth profile forwarding.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { AuthProfileFailurePolicy } from "../agents/embedded-agent-runner/run/auth-profile-failure-policy.types.js";
@@ -8,6 +10,7 @@ import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../agents/test-helpers/model-fallback-runner.test-support.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   makeIsolatedAgentJobFixture,
   makeIsolatedAgentParamsFixture,
@@ -25,6 +28,8 @@ import {
 } from "./isolated-agent/run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function getEmbeddedAgentParams(): {
   authProfileId?: string;
@@ -50,8 +55,34 @@ function getCliAgentParams(): {
   return params as { authProfileId?: string; provider?: string };
 }
 
+function setupClaudeCliBackend(): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+    ],
+    resolvePluginSetupCliBackend: () => undefined,
+  });
+}
+
 describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", () => {
   setupRunCronIsolatedAgentTurnSuite();
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = tempDirs.make("openclaw-cron-auth-");
+    vi.mocked(resolveAgentDir).mockReturnValue(agentDir);
+  });
+
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+    closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
+    closeOpenClawAgentDatabasesForTest(agentDir);
+  });
 
   it("uses transient-local auth cooldown policy for cron throttling failures", async () => {
     mockRunCronFallbackPassthrough();
@@ -59,6 +90,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
         job: makeIsolatedAgentJobFixture({
+          agentId: "main",
           delivery: { mode: "none" },
           payload: { kind: "agentTurn", message: "check status" },
         }),
@@ -100,6 +132,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
           },
         },
         job: makeIsolatedAgentJobFixture({
+          agentId: "main",
           delivery: { mode: "none" },
           payload: {
             kind: "agentTurn",
@@ -119,10 +152,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     });
   });
 
-  afterEach(() => {
-    cliBackendsTesting.resetDepsForTest();
-  });
-
   it("passes resolved authProfileId to runCliAgent when CLI execution provider is active (#144047)", async () => {
     isCliProviderMock.mockReturnValue(true);
     mockRunCronFallbackPassthrough();
@@ -130,17 +159,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       payloads: [{ text: "cli done" }],
       meta: { agentMeta: {} },
     });
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
+    setupClaudeCliBackend();
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "claude-cli",
       model: "claude-opus-4-8",
@@ -162,7 +181,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
           },
         },
       },
-      "/tmp/agent-dir",
+      agentDir,
     );
 
     const result = await runCronIsolatedAgentTurn(
@@ -173,6 +192,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
           },
         },
         job: makeIsolatedAgentJobFixture({
+          agentId: "main",
           delivery: { mode: "none" },
           payload: { kind: "agentTurn", message: "check status" },
         }),
@@ -192,17 +212,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
 
   it("resolves and forwards ordered CLI auth profile on fallback to Claude CLI (#144047)", async () => {
     isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
+    setupClaudeCliBackend();
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "anthropic",
       model: "claude-opus-4-6",
@@ -229,7 +239,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
           },
         },
       },
-      "/tmp/agent-dir",
+      agentDir,
     );
     runCliAgentMock.mockImplementation(async (request) => {
       request.userTurnTranscriptRecorder?.markBlocked();
@@ -273,6 +283,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
           },
         },
         job: makeIsolatedAgentJobFixture({
+          agentId: "main",
           delivery: { mode: "none" },
           payload: { kind: "agentTurn", message: "check status" },
         }),
@@ -293,17 +304,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
   it("fails closed when user-locked auth profile cannot be used by CLI backend (#144047)", async () => {
     isCliProviderMock.mockReturnValue(true);
     mockRunCronFallbackPassthrough();
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
+    setupClaudeCliBackend();
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "claude-cli",
       model: "claude-opus-4-8",
@@ -323,13 +324,14 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
           },
         },
       },
-      "/tmp/agent-dir",
+      agentDir,
     );
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
         cfg: {},
         job: makeIsolatedAgentJobFixture({
+          agentId: "main",
           delivery: { mode: "none" },
           payload: { kind: "agentTurn", message: "check status" },
         }),
@@ -346,17 +348,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
 
   it("defaults undefined authProfileIdSource to auto and allows fallback to Claude CLI (#144047)", async () => {
     isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
+    setupClaudeCliBackend();
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "anthropic",
       model: "claude-opus-4-6",
@@ -384,7 +376,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
           },
         },
       },
-      "/tmp/agent-dir",
+      agentDir,
     );
     runCliAgentMock.mockImplementation(async (request) => {
       request.userTurnTranscriptRecorder?.markBlocked();
@@ -428,6 +420,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
           },
         },
         job: makeIsolatedAgentJobFixture({
+          agentId: "main",
           delivery: { mode: "none" },
           payload: { kind: "agentTurn", message: "check status" },
         }),
