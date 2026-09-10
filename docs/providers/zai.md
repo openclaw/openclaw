@@ -164,7 +164,7 @@ listing can show known GLM rows without loading provider runtime:
 openclaw models list --all --provider zai
 ```
 
-The manifest-backed catalog currently includes:
+The manifest-backed catalog includes:
 
 | Model ref           | Notes                                              |
 | ------------------- | -------------------------------------------------- |

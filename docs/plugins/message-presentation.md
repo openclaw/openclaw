@@ -613,8 +613,8 @@ Current bundled renderers:
 | Telegram        | Text plus inline keyboards                | Buttons/selects require inline button capability for the target surface; otherwise text fallback is used.                                                                                               |
 | Plain channels  | Text fallback                             | Channels without a renderer still get readable output.                                                                                                                                                  |
 
-Provider-native payload compatibility is a transition affordance for existing
-reply producers. New native fields require the explicit exception review above.
+Provider-native payload compatibility is kept for existing reply producers only.
+New native fields require the explicit exception review above.
 
 ## Presentation vs InteractiveReply
 
@@ -684,7 +684,9 @@ Non-deprecated helpers worth knowing:
   data block as deterministic text for channel-specific fallback paths.
 
 The legacy `InteractiveReply*` types and conversion helpers are marked
-`@deprecated` in the SDK:
+`@deprecated` in the SDK. The compatibility registry records them as
+`message-presentation-legacy-bridges`, deprecated on 2026-07-25 with a
+`removeAfter` date of 2026-10-01:
 
 - `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`, and
   `InteractiveReplyOption`

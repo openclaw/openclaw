@@ -305,7 +305,7 @@ installation or profile. Since 2026.9.2 the deprecated
 `core/doctor/legacy-plugin-dependencies` selector is informational only; it no
 longer scans shared roots for removal.
 
-Older npm installs also used a shared `~/.openclaw/npm/node_modules` root.
-Current install, update, uninstall, and doctor flows still recognize that
-legacy flat root for recovery and cleanup only. New npm installs create
-per-plugin project roots instead.
+A shared `~/.openclaw/npm/node_modules` root was the npm install layout before
+2026.5.28. Install, update, uninstall, and doctor flows still recognize that
+legacy flat root for recovery and cleanup only. Installs from 2026.5.28 onward
+create per-plugin project roots instead.

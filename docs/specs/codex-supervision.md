@@ -552,7 +552,7 @@ The standalone legacy MCP adapter resolves these same tools from the official
 plugin and is the only path that honors the retained legacy policy environment
 variables.
 
-The July catalog UI, Gateway method, node capability, and CLI registration had
+The 2026.8.1 catalog UI, Gateway method, node capability, and CLI registration had
 not shipped under the old plugin id. They move directly to `codex` ownership
 without a second runtime facade.
 

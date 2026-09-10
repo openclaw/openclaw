@@ -31,6 +31,7 @@ managed-worktree session with an authorized operator connection:
 
 ```bash
 openclaw gateway call sessions.dispatch \
+  --timeout 1500000 \
   --params '{"key":"agent:main:device-work","deviceId":"<paired-device-id>"}'
 ```
 

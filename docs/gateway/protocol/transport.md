@@ -13,10 +13,10 @@ What the wire looks like before any method call: the published packages, the fra
 
 ## npm packages
 
-The verified stable package release is `2026.8.1`. Follow
-[Install the packages](/gateway/clients#install-the-packages) for exact-version
-commands and compatibility guidance. Package release versions are separate from
-the wire protocol version and the root `openclaw` CLI release.
+Follow [Install the packages](/gateway/clients#install-the-packages) for the
+verified stable release, exact-version commands, and compatibility guidance.
+Package release versions are separate from the wire protocol version and the
+root `openclaw` CLI release.
 
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   publishes the schemas, validators, TypeScript types, lightweight frame and error

@@ -131,6 +131,9 @@ A failed selected import stops the operation instead of silently starting a diff
     are the two required fields. `minGatewayVersion` falls back to
     `openclaw.install.minHostVersion` when omitted).
 
+    The version strings in the sample manifests are placeholders. Pin them to
+    the OpenClaw release your plugin builds and tests against.
+
   </Step>
 
   <Step title="Register the provider">

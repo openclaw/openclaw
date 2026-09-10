@@ -40,6 +40,6 @@ a stale launch is refused. Each attempt owns an isolated Gateway app-server clie
 remote environment registration retires with that attempt. Disconnect ends the
 active attempt and its remote processes; reconnect allows only a fresh
 attempt. Normal Codex turns work, but `/btw` side questions fail closed because
-they are not yet placement-bound. The placement workspace does not confine
+they are not placement-bound. The placement workspace does not confine
 execution: process and filesystem access remain bounded only by the node's
 operating system account.

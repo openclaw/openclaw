@@ -52,10 +52,15 @@ Commands may also declare a bounded client presentation action for parsed no-arg
 invocations:
 
 ```ts
-clientPresentation: {
-  when: "no-arguments",
-  action: { kind: "device-pairing" },
-}
+api.registerCommand({
+  name: "pair",
+  description: "Pair a device",
+  clientPresentation: {
+    when: "no-arguments",
+    action: { kind: "device-pairing" },
+  },
+  handler: async () => ({ text: "ok" }),
+});
 ```
 
 The action union is closed and intentionally does not accept routes, callbacks,

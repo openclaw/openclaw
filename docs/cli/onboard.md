@@ -421,6 +421,21 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```
 
+Arcee AI. The `arcee` provider plugin supplies both choices and their flags, so
+install it before running onboarding non-interactively:
+
+```bash
+# Direct (chat.arcee.ai)
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice arceeai-api-key \
+  --arceeai-api-key "$ARCEEAI_API_KEY"
+
+# Via OpenRouter
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice arceeai-openrouter \
+  --openrouter-api-key "$OPENROUTER_API_KEY"
+```
+
 ### Additional non-interactive flags
 
 Token-based model auth (used with `--auth-choice token`):

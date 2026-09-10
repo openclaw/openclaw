@@ -212,8 +212,8 @@ For remote gateways, use `openclaw logs --follow` instead (see
 
 ## Notes
 
-- If `logging.level` is set higher than `warn`, flag-gated logs may be
-  suppressed. Default `info` is fine.
+- If `logging.level` is set to `error`, `fatal`, or `silent`, flag-gated logs
+  may be suppressed. Default `info` is fine.
 - `brave.http` logs Brave Search request URLs/query params, response
   status/timing, and cache hit/miss/write events. It does not log the API key
   (sent as a request header) or response bodies, but search queries can be

@@ -43,7 +43,9 @@ instead of the broad `config-runtime` compatibility barrel.
 `openclaw/plugin-sdk/channel-lifecycle`, small channel helper facades,
 `openclaw/plugin-sdk/config-runtime`, and `openclaw/plugin-sdk/infra-runtime`
 are deprecated compatibility shims for older plugins. New code should import
-narrower generic primitives instead.
+narrower generic primitives instead. The compatibility registry records a
+`removeAfter` date of 2026-10-01 for the `config-runtime`, `infra-runtime`,
+and `channel-lifecycle` subpaths.
 </Info>
 
 Repo-internal entry points (per bundled plugin package root):
