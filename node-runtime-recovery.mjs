@@ -314,7 +314,7 @@ function isCwdNode(nodePath) {
 }
 
 // Do not pass preload hooks, native-library overrides, or application secrets to probes.
-export function isUsableNode(nodePath, { allowCwd = false } = {}) {
+export function isUsableNode(nodePath, { allowCwd = false, env = process.env } = {}) {
   if (!path.isAbsolute(nodePath)) {
     return false;
   }
@@ -329,10 +329,10 @@ export function isUsableNode(nodePath, { allowCwd = false } = {}) {
   if (!allowCwd && (isCwdNode(nodePath) || isCwdNode(resolved))) {
     return false;
   }
-  const env = { NODE_NO_WARNINGS: "1" };
-  for (const [key, value] of Object.entries(process.env)) {
+  const probeEnv = { NODE_NO_WARNINGS: "1" };
+  for (const [key, value] of Object.entries(env)) {
     if (/^(SystemRoot|WINDIR|TEMP|TMP|TMPDIR)$/i.test(key)) {
-      env[key] = value;
+      probeEnv[key] = value;
     }
   }
   const result = spawnSync(
@@ -343,7 +343,7 @@ export function isUsableNode(nodePath, { allowCwd = false } = {}) {
     ],
     {
       encoding: "utf8",
-      env,
+      env: probeEnv,
       timeout: 5_000,
       killSignal: "SIGKILL",
       maxBuffer: 65_536,
@@ -390,8 +390,7 @@ function windowsServiceNode(text) {
   return null;
 }
 
-function managedServiceNode(homeDir) {
-  const env = process.env;
+function managedServiceNode(homeDir, env) {
   let profile = env.OPENCLAW_PROFILE?.trim();
   const args = process.argv.slice(2);
   for (let index = 0; index < args.length;) {
@@ -498,29 +497,29 @@ function resolveNvmDefault(root) {
   return null;
 }
 
-// Absolute roots from PATH and manager env vars are user configuration and trusted
-// like PATH; anything relative or under cwd is never probed. The explicit absolute
-// PATH directory opt-in below retains its cwd exception.
-function* availableNodeCandidates(homeDir) {
-  yield [managedServiceNode(homeDir), "managed Gateway service"];
+// Only inherited environment roots are trusted like PATH; dotenv values must never
+// select an executable. Relative/cwd candidates remain excluded except when an
+// inherited absolute PATH directory explicitly opts into cwd.
+function* availableNodeCandidates(homeDir, env) {
+  yield [managedServiceNode(homeDir, env), "managed Gateway service"];
   const pathKey =
     process.platform === "win32"
-      ? Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") || "PATH"
+      ? Object.keys(env).find((key) => key.toUpperCase() === "PATH") || "PATH"
       : "PATH";
   const binary = process.platform === "win32" ? "node.exe" : "node";
-  for (const directory of (process.env[pathKey] || "").split(path.delimiter)) {
+  for (const directory of (env[pathKey] || "").split(path.delimiter)) {
     if (path.isAbsolute(directory)) {
       yield [path.join(directory, binary), "PATH"];
     }
   }
-  const managerHome = process.env.HOME?.trim() || process.env.USERPROFILE?.trim() || homeDir;
-  for (const root of new Set([process.env.NVM_DIR, path.join(managerHome, ".nvm")])) {
+  const managerHome = env.HOME?.trim() || env.USERPROFILE?.trim() || homeDir;
+  for (const root of new Set([env.NVM_DIR, path.join(managerHome, ".nvm")])) {
     if (root) {
       yield [resolveNvmDefault(root), "nvm default"];
     }
   }
   for (const root of new Set([
-    process.env.FNM_DIR,
+    env.FNM_DIR,
     path.join(managerHome, ".fnm"),
     path.join(managerHome, ".local", "share", "fnm"),
     ...(process.platform === "darwin"
@@ -540,7 +539,7 @@ function* availableNodeCandidates(homeDir) {
       ];
     }
   }
-  for (const root of new Set([process.env.VOLTA_HOME, path.join(managerHome, ".volta")])) {
+  for (const root of new Set([env.VOLTA_HOME, path.join(managerHome, ".volta")])) {
     if (!root) {
       continue;
     }
@@ -575,10 +574,14 @@ function* availableNodeCandidates(homeDir) {
 }
 
 /** Recover only at CLI startup, before reading config or state. */
-export async function recoverNodeRuntime({ homeDir, allowInstall = false } = {}) {
+export async function recoverNodeRuntime({
+  homeDir,
+  allowInstall = false,
+  env = process.env,
+} = {}) {
   if (
     process.versions.bun ||
-    process.env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
+    env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
     !process.argv[1] ||
     isForegroundGmailRunInvocation(process.argv) ||
     (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) ||
@@ -586,17 +589,18 @@ export async function recoverNodeRuntime({ homeDir, allowInstall = false } = {})
   ) {
     return false;
   }
-  const osHome = process.env.HOME?.trim() || process.env.USERPROFILE?.trim() || os.homedir();
-  const configuredHome = process.env.OPENCLAW_HOME?.trim() || osHome;
+  // userInfo reads the account home without consulting the mutable process environment.
+  const osHome = env.HOME?.trim() || env.USERPROFILE?.trim() || os.userInfo().homedir;
+  const configuredHome = env.OPENCLAW_HOME?.trim() || osHome;
   const recoveryHome =
     homeDir ?? path.resolve(configuredHome.replace(/^~(?=$|[\\/])/, () => osHome));
   const { resolveUpdatedNodeRuntime } = await import("./node-runtime-update.mjs");
-  let nodePath = await resolveUpdatedNodeRuntime(recoveryHome, { allowInstall: false });
+  let nodePath = await resolveUpdatedNodeRuntime(recoveryHome, { allowInstall: false, env });
   let reason = "cached OpenClaw runtime";
   const currentNode = realNodePath(process.execPath);
   if (!nodePath) {
     const seen = new Set([currentNode]);
-    for (const [candidate, source] of availableNodeCandidates(recoveryHome)) {
+    for (const [candidate, source] of availableNodeCandidates(recoveryHome, env)) {
       if (!candidate || !path.isAbsolute(candidate)) {
         continue;
       }
@@ -611,7 +615,7 @@ export async function recoverNodeRuntime({ homeDir, allowInstall = false } = {})
         continue;
       }
       seen.add(realPath);
-      if (isUsableNode(realPath, { allowCwd })) {
+      if (isUsableNode(realPath, { allowCwd, env })) {
         nodePath = realPath;
         reason = source;
         break;
@@ -619,21 +623,19 @@ export async function recoverNodeRuntime({ homeDir, allowInstall = false } = {})
     }
   }
   if (!nodePath && allowInstall) {
-    nodePath = await resolveUpdatedNodeRuntime(recoveryHome);
+    nodePath = await resolveUpdatedNodeRuntime(recoveryHome, { env });
     reason = "private OpenClaw runtime";
   }
   if (!nodePath) {
     return false;
   }
-  const env = { ...process.env, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" };
   process.stderr.write(
     `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
   );
-  runRespawnedChild(
-    nodePath,
-    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
-    env,
-  );
+  runRespawnedChild(nodePath, [...process.execArgv, process.argv[1], ...process.argv.slice(2)], {
+    ...env,
+    OPENCLAW_NODE_UPDATE_RESPAWNED: "1",
+  });
   // The original CLI must not continue while the replacement owns the invocation.
   return await new Promise(() => {});
 }

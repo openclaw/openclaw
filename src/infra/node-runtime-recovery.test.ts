@@ -159,6 +159,29 @@ async function expectRecoveryStarted(home: string) {
 }
 
 describe("runtime recovery discovery", () => {
+  it("uses inherited PATH and probe settings after process env changes", async () => {
+    await withRecoveryHome(async (home) => {
+      const inheritedNode = await writeFixture(path.join(home, "inherited/bin/node"));
+      const workspaceNode = await writeFixture(path.join(home, "workspace/bin/node"));
+      const env = { ...process.env, PATH: path.dirname(inheritedNode), TEMP: home };
+      vi.stubEnv("PATH", path.dirname(workspaceNode));
+      vi.stubEnv("TEMP", path.join(home, "workspace"));
+      vi.stubEnv("FNM_DIR", path.join(home, "workspace-fnm"));
+      mocks.admissible.add(inheritedNode);
+      mocks.admissible.add(workspaceNode);
+
+      void recoverNodeRuntime({ homeDir: home, env });
+      await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledOnce());
+
+      expect(mocks.probe.mock.calls.map(([file]) => file)).toEqual([inheritedNode]);
+      expect(mocks.probe.mock.calls[0]?.[2].env).toMatchObject({ TEMP: home });
+      expect(mocks.spawn.mock.calls[0]?.[2].env).toEqual({
+        ...env,
+        OPENCLAW_NODE_UPDATE_RESPAWNED: "1",
+      });
+    });
+  });
+
   it.each([
     ["unquoted", "C:\\Node24\\node.exe", "utf-8", false, "cmd"],
     ["quoted", "C:\\Program Files\\Node24\\node.exe", "utf-8", false, "cmd"],

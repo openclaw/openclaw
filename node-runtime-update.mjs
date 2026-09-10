@@ -35,8 +35,11 @@ function confirmNodeUpdate() {
 }
 
 /** Returns a verified private runtime, or null when recovery was declined/unavailable. */
-export async function resolveUpdatedNodeRuntime(homeDir, { allowInstall = true } = {}) {
-  if (process.env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1") {
+export async function resolveUpdatedNodeRuntime(
+  homeDir,
+  { allowInstall = true, env = process.env } = {},
+) {
+  if (env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1") {
     return null;
   }
   const prefix = path.join(homeDir, ".openclaw", "tools", "cli-node");
@@ -47,14 +50,14 @@ export async function resolveUpdatedNodeRuntime(homeDir, { allowInstall = true }
       : path.join(nodeRoot, "bin", "node");
 
   // An earlier explicit opt-in is durable, but an incompatible cache is never trusted.
-  if (isUsableNode(nodePath)) {
+  if (isUsableNode(nodePath, { env })) {
     return nodePath;
   }
   if (
     !allowInstall ||
     !process.stdin.isTTY ||
     !process.stderr.isTTY ||
-    process.env.CI ||
+    env.CI ||
     process.argv.some((arg) => ["--non-interactive", "--json", "--yes"].includes(arg)) ||
     !canInstallPrivateNode()
   ) {
@@ -74,7 +77,7 @@ export async function resolveUpdatedNodeRuntime(homeDir, { allowInstall = true }
     new URL(windows ? "./scripts/install.ps1" : "./scripts/install-cli.sh", import.meta.url),
   );
   const command = windows
-    ? (await import("./scripts/windows-cmd-helpers.mjs")).resolveWindowsPowerShellPath()
+    ? (await import("./scripts/windows-cmd-helpers.mjs")).resolveWindowsPowerShellPath(env)
     : process.platform === "darwin"
       ? "/bin/bash"
       : "bash";
@@ -91,8 +94,8 @@ export async function resolveUpdatedNodeRuntime(homeDir, { allowInstall = true }
         nodeRoot,
       ]
     : [installer, "--node-only", "--prefix", prefix];
-  const result = spawnSync(command, args, { stdio: "inherit" });
-  if (result.status !== 0 || !isUsableNode(nodePath)) {
+  const result = spawnSync(command, args, { stdio: "inherit", env });
+  if (result.status !== 0 || !isUsableNode(nodePath, { env })) {
     process.stderr.write(
       "openclaw: Node.js update failed; install a compatible Node.js manually.\n",
     );

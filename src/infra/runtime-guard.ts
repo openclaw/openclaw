@@ -215,6 +215,7 @@ export async function assertSupportedRuntime(
   details: RuntimeDetails = detectRuntime(),
   argv?: readonly string[],
   emitDiagnosticWarning = true,
+  recoveryEnv?: NodeJS.ProcessEnv,
 ): Promise<void> {
   if (runtimeSatisfies(details)) {
     const note =
@@ -230,10 +231,10 @@ export async function assertSupportedRuntime(
     }
     return;
   }
-  // CLI entrypoints supply argv; later checks and sealed workers retain their runtime.
-  if (details.kind === "node" && argv) {
+  // Only startup callers with a pre-dotenv snapshot may select another runtime.
+  if (details.kind === "node" && argv && recoveryEnv) {
     const { recoverNodeRuntime } = await import("../../node-runtime-recovery.mjs");
-    await recoverNodeRuntime();
+    await recoverNodeRuntime({ env: recoveryEnv });
   }
   if (
     details.kind === "node" &&

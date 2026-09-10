@@ -31,6 +31,10 @@ Arguments, working directory, environment, standard streams, and exit status are
 preserved. Commands with an exact process-identity requirement cannot use this
 recovery.
 
+Runtime discovery uses the environment inherited when the CLI starts, before
+OpenClaw loads any `.env` file. Configure version-manager roots in your shell environment;
+workspace `.env` values cannot select a Node executable for recovery.
+
 Recovery ignores relative PATH entries and runtimes that resolve inside the
 current working directory, unless an absolute PATH entry explicitly names their
 directory. On Windows, the service reader honors recorded code pages and Unicode
