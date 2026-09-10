@@ -1,5 +1,6 @@
 import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
+import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
@@ -380,6 +381,8 @@ export type PluginManifestBackupResource = {
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /** Ordered browse categories; the first category is the plugin's primary category. */
+  categories?: PluginCategorySlug[];
   /** Static backup inclusion/exclusion declarations; resolved without loading plugin runtime. */
   backupResources?: PluginManifestBackupResource[];
   /** Plugin ids that must also be installed for this plugin to have effect. */

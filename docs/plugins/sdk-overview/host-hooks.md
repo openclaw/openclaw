@@ -96,6 +96,11 @@ work or cleanup has finished. If the original inspection retires during
 preflight, new task admission is rejected. Prepare tools from the current provider
 setup before retrying.
 An already accepted task keeps its captured resources until its work settles.
+When the prepared view copies callbacks from another managed registration, that
+source remains available through the task and the prepared view's final disposers,
+including cleanup already started by rollback. Final resource release awaits the
+borrowed source's cleanup and reports disposal failures. These physical holds do
+not restore a retired registration's authority to accept new work.
 Raw prepared registries retain their existing host lifetime; this does not enable
 automatic physical disposal for all prepared runtimes.
 

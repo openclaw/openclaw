@@ -1,5 +1,6 @@
 {
   "id": "webhooks",
+  "categories": ["gateway", "tools"],
   "activation": {
     "onStartup": true
   },

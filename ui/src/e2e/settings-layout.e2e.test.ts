@@ -106,7 +106,7 @@ const mobileGeometryCases = [
   { route: "appearance", contentSelector: ".settings-page" },
   { route: "model-setup", contentSelector: ".model-setup" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
-  { route: "plugins", contentSelector: ".settings-page" },
+  { route: "plugin-settings", contentSelector: ".settings-page" },
 ] as const satisfies ReadonlyArray<{ route: RouteId; contentSelector: string }>;
 
 const responsiveViewports = [

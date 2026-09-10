@@ -47,6 +47,11 @@ gets a separate `runId`.
 
 `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+If history cannot be read or classified, status still shows update availability
+and runtime findings. Human output explains that run status is unavailable;
+JSON includes `runStatusError` and omits the run fields. This does not mean
+there are no active or past runs, and status does not repair the underlying state.
+
 When the active row has been inactive for more than 30 minutes and its recorded
 driver is verifiably dead, status also reports `abandonedRun` with its `runId`
 and reconciliation `rule`. Status remains read-only: the stored row stays in

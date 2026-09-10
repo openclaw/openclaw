@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
@@ -207,6 +208,14 @@ export function loadPluginManifest(
       diagnosticCode: "backup-resource-declaration-invalid",
     });
   }
+  const categories = validatePluginCategories(raw.categories);
+  if (!categories.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest categories: ${categories.error}`,
+      manifestPath,
+    });
+  }
 
   const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const enabledByDefaultOnPlatforms = setupNormalizers.normalizeManifestDefaultPlatforms(
@@ -235,6 +244,7 @@ export function loadPluginManifest(
   const manifestBeforeDashboard = {
     id,
     configSchema,
+    ...("categories" in categories ? { categories: categories.categories } : {}),
     ...(backupResources.resources !== undefined
       ? { backupResources: backupResources.resources }
       : {}),

@@ -1,5 +1,6 @@
 {
   "id": "crabbox",
+  "categories": ["runtime", "tools"],
   "doctorContract": {
     "stateMigrations": [{ "id": "crabbox-warm-profile-v2", "doctorOnly": true }]
   },

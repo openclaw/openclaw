@@ -1,5 +1,6 @@
 {
   "id": "feishu",
+  "categories": ["channels", "tools"],
   "doctorContract": {
     "configRepair": true
   },

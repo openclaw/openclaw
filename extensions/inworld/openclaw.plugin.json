@@ -1,5 +1,6 @@
 {
   "id": "inworld",
+  "categories": ["voice"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false

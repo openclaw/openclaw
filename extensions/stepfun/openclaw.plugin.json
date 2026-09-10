@@ -1,5 +1,6 @@
 {
   "id": "stepfun",
+  "categories": ["models"],
   "name": "StepFun",
   "activation": {
     "onStartup": false

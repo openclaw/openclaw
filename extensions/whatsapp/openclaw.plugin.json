@@ -1,5 +1,6 @@
 {
   "id": "whatsapp",
+  "categories": ["channels", "tools"],
   "doctorContract": {
     "configRepair": true,
     "stateMigrations": [{ "id": "whatsapp-legacy-state" }]

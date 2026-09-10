@@ -1,5 +1,6 @@
 {
   "id": "memory-lancedb",
+  "categories": ["memory", "tools"],
   "doctorContract": {
     "stateMigrations": [
       { "id": "memory-lancedb-agent-scope" },
