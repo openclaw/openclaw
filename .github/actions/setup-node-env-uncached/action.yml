@@ -1,0 +1,137 @@
+name: Setup Node environment without caches
+description: Install the pinned Node and pnpm toolchain without reading or writing shared caches.
+inputs:
+  node-version:
+    description: Node.js version to install.
+    required: false
+    default: "24.x"
+  install-bun:
+    description: Whether to install Bun alongside Node.
+    required: false
+    default: "true"
+  install-deps:
+    description: Whether to run pnpm install after environment setup.
+    required: false
+    default: "true"
+  frozen-lockfile:
+    description: Whether to use --frozen-lockfile for install.
+    required: false
+    default: "true"
+  cache-mode:
+    description: Must remain off; this action has no cache authority.
+    required: false
+    default: "off"
+runs:
+  using: composite
+  steps:
+    - name: Revalidate current maintainer authority
+      if: github.triggering_actor != 'github-actions[bot]'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      run: |
+        set -euo pipefail
+        role_name="$(gh api \
+          "repos/${GITHUB_REPOSITORY}/collaborators/${TRIGGERING_ACTOR}/permission" \
+          --jq .role_name)"
+        case "$role_name" in
+          admin|maintain) ;;
+          *)
+            echo "::error::Current triggering actor ${TRIGGERING_ACTOR} no longer has maintain/admin authority."
+            exit 1
+            ;;
+        esac
+
+    - name: Validate cache isolation
+      shell: bash
+      env:
+        CACHE_MODE: ${{ inputs.cache-mode }}
+      run: |
+        if [[ "$CACHE_MODE" != "off" ]]; then
+          echo "::error::setup-node-env-uncached requires cache-mode=off"
+          exit 2
+        fi
+
+    - name: Normalize container toolcache
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -d /__t && ! -e /opt/hostedtoolcache ]]; then
+          mkdir -p /opt
+          ln -s /__t /opt/hostedtoolcache
+        fi
+
+    - name: Setup Node.js
+      shell: bash
+      env:
+        REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
+      run: |
+        set -euo pipefail
+        source "$GITHUB_ACTION_PATH/../setup-pnpm-store-cache/ensure-node.sh"
+        openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
+    - name: Setup pnpm from packageManager
+      shell: bash
+      env:
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      run: |
+        set -euo pipefail
+        package_manager="$(node -e "const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); process.stdout.write(pkg.packageManager || '')")"
+        case "$package_manager" in
+          pnpm@*) ;;
+          *)
+            echo "::error::Expected packageManager to pin pnpm, got '${package_manager:-<empty>}'"
+            exit 1
+            ;;
+        esac
+        if [[ -n "${PNPM_HOME:-}" ]]; then
+          mkdir -p "$PNPM_HOME"
+          corepack enable --install-directory "$PNPM_HOME"
+          echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"
+          echo "$PNPM_HOME" >> "$GITHUB_PATH"
+        else
+          corepack enable
+        fi
+        for attempt in 1 2 3; do
+          if corepack prepare "$package_manager" --activate; then
+            break
+          fi
+          if [[ "$attempt" -eq 3 ]]; then
+            exit 1
+          fi
+          sleep $((attempt * 5))
+        done
+
+    - name: Setup Bun
+      if: inputs.install-bun == 'true'
+      shell: bash
+      run: npm install -g bun@1.4.0
+
+    - name: Runtime versions
+      shell: bash
+      run: |
+        node -v
+        npm -v
+        pnpm -v
+        if command -v bun &>/dev/null; then bun -v; fi
+
+    - name: Capture node path
+      shell: bash
+      run: |
+        node_bin="$(dirname "$(node -p 'process.execPath')")"
+        if command -v cygpath >/dev/null 2>&1; then
+          node_bin="$(cygpath -u "$node_bin")"
+        fi
+        echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
+        echo "$node_bin" >> "$GITHUB_PATH"
+
+    - name: Install dependencies
+      if: inputs.install-deps == 'true'
+      shell: bash
+      env:
+        CI: "true"
+        DEPENDENCY_CACHE: "false"
+        DEPENDENCY_CACHE_HIT: "false"
+        FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
+      run: bash "$GITHUB_ACTION_PATH/../setup-node-env/install-dependencies.sh"

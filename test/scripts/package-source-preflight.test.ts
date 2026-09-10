@@ -94,14 +94,23 @@ function runSourceRequirement(step: WorkflowStep, env: Record<string, string>) {
   }
 }
 
-function runLiveArtifactTupleValidation(packageEnv: Record<string, string>) {
+function runLiveArtifactTupleValidation(
+  packageEnv: Record<string, string>,
+  options: {
+    coordinatorRef?: string;
+    directDispatch?: boolean;
+    selectedSha?: string;
+    trustedWorkflowSha?: string;
+  } = {},
+) {
   const workflow = readWorkflow(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
   const step = workflowStep(workflow, "validate_selected_ref", "Validate selected ref");
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-live-artifact-tuple-"));
   const fakeBin = path.join(tempDir, "bin");
   const outputPath = path.join(tempDir, "output");
   const summaryPath = path.join(tempDir, "summary");
-  const selectedSha = "a".repeat(40);
+  const selectedSha = options.selectedSha ?? "a".repeat(40);
+  const trustedWorkflowSha = options.trustedWorkflowSha ?? selectedSha;
   mkdirSync(fakeBin);
   mkdirSync(path.join(tempDir, ".release-harness", "scripts"), { recursive: true });
   copyFileSync(
@@ -133,12 +142,15 @@ exit 64
         ...stepEnv,
         GITHUB_OUTPUT: outputPath,
         GITHUB_STEP_SUMMARY: summaryPath,
+        COORDINATOR_REF: options.coordinatorRef ?? "refs/heads/main",
+        DEFAULT_BRANCH: "main",
+        DIRECT_DISPATCH: options.directDispatch ? "true" : "false",
         INPUT_REF: "main",
         PATH: `${fakeBin}:${process.env.PATH}`,
         PROVIDED_BARE_IMAGE: "ghcr.io/openclaw/openclaw:test",
         SELECTED_SHA: selectedSha,
         SHARED_IMAGE_POLICY: "existing-only",
-        TRUSTED_WORKFLOW_SHA: selectedSha,
+        TRUSTED_WORKFLOW_SHA: trustedWorkflowSha,
         ...packageEnv,
       },
     });
@@ -639,6 +651,33 @@ describe("package source preflight", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(output.package_artifact_present).toBe("false");
+  });
+
+  it("rejects hostile manual live dispatches before privileged setup", () => {
+    const offMain = runLiveArtifactTupleValidation(
+      {},
+      {
+        coordinatorRef: "refs/heads/feature/hostile",
+        directDispatch: true,
+      },
+    );
+    expect(offMain.result.status).toBe(1);
+    expect(offMain.result.stderr).toContain("must use the default-branch workflow coordinator");
+
+    const arbitraryCandidate = runLiveArtifactTupleValidation(
+      {},
+      {
+        directDispatch: true,
+        selectedSha: "b".repeat(40),
+        trustedWorkflowSha: "a".repeat(40),
+      },
+    );
+    expect(arbitraryCandidate.result.status).toBe(1);
+    expect(arbitraryCandidate.result.stderr).toContain("fresh secretless, cacheless AWS Crabbox");
+
+    const canonical = runLiveArtifactTupleValidation({}, { directDispatch: true });
+    expect(canonical.result.status, canonical.result.stderr).toBe(0);
+    expect(canonical.output.trusted_reason).toBe("default-branch-workflow-sha");
   });
 
   it("keeps a whitespace-only artifact tuple in source mode through Docker reports", async () => {

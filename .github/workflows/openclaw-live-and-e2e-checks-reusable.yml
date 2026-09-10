@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Ref, tag, or SHA to validate
+        description: Default-branch workflow ref only; arbitrary candidates require AWS Crabbox
         required: true
         type: string
       include_repo_e2e:
@@ -586,10 +586,85 @@ env:
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
 
 jobs:
+  authorize_actor:
+    name: Authorize workflow actor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
+    steps:
+      - name: Require maintainer-level repository access
+        id: permission
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const defaultBranch = process.env.DEFAULT_BRANCH ?? "";
+            const triggeringActor = process.env.TRIGGERING_ACTOR ?? "";
+            if (!triggeringActor) {
+              core.setOutput("authorized", "false");
+              core.setFailed("github.triggering_actor is required for authority validation.");
+              return;
+            }
+            const directDispatch = callerWorkflowRef === job.workflow_ref;
+            const callerPrefix = "openclaw/openclaw/.github/workflows/";
+            const calledPrefix =
+              `${callerPrefix}openclaw-live-and-e2e-checks-reusable.yml@refs/heads/`;
+            const callerMatch = callerWorkflowRef.match(
+              /^openclaw\/openclaw\/\.github\/workflows\/([A-Za-z0-9_.-]+)\.yml@refs\/heads\/(.+)$/u,
+            );
+            const calledRef = job.workflow_ref.startsWith(calledPrefix)
+              ? job.workflow_ref.slice(calledPrefix.length)
+              : "";
+            const releaseCiMatch = calledRef.match(/^release-ci\/([0-9a-f]{12})-[1-9][0-9]*$/u);
+            const trustedCoordinatorRef =
+              calledRef === defaultBranch ||
+              (releaseCiMatch !== null && job.workflow_sha.startsWith(releaseCiMatch[1]));
+            const trustedCaller =
+              !directDispatch &&
+              callerMatch !== null &&
+              callerMatch[2] === calledRef &&
+              trustedCoordinatorRef &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref.startsWith(calledPrefix);
+            if (triggeringActor === "github-actions[bot]") {
+              core.setOutput("authorized", trustedCaller ? "true" : "false");
+              if (!trustedCaller) {
+                core.setFailed("Bot invocation is not bound to a trusted release coordinator.");
+              }
+              return;
+            }
+            const allowedRoles = new Set(["admin", "maintain"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: triggeringActor,
+            });
+            const roleName = data.role_name;
+            const authorized =
+              allowedRoles.has(roleName) && (directDispatch || trustedCaller);
+            core.info(`Triggering actor ${triggeringActor} repository role: ${roleName}`);
+            core.setOutput("authorized", authorized ? "true" : "false");
+            if (!authorized) {
+              core.setFailed(
+                `Workflow requires maintain/admin access and reusable calls must originate from a trusted coordinator. Triggering actor "${triggeringActor}" has role "${roleName}".`,
+              );
+            }
+
   validate_selected_ref:
+    needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: ${{ !inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     outputs:
+      direct_dispatch: ${{ steps.workflow.outputs.direct_dispatch }}
       fs_safe_native_contract: ${{ steps.validate.outputs.fs_safe_native_contract }}
       package_artifact_present: ${{ steps.validate.outputs.package_artifact_present }}
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
@@ -602,6 +677,7 @@ jobs:
       - name: Resolve job workflow identity
         id: workflow
         env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           JOB_CONTEXT: ${{ toJSON(job) }}
         shell: bash
         run: |
@@ -610,6 +686,7 @@ jobs:
           import fs from "node:fs";
 
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
           if (
             typeof job.workflow_repository !== "string" ||
             !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(job.workflow_repository)
@@ -619,13 +696,21 @@ jobs:
           if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
             throw new Error("job.workflow_sha must be a full lowercase commit SHA");
           }
+          if (typeof job.workflow_ref !== "string" || job.workflow_ref.length === 0) {
+            throw new Error("job.workflow_ref is required");
+          }
           const outputPath = process.env.GITHUB_OUTPUT;
           if (!outputPath) {
             throw new Error("GITHUB_OUTPUT is required");
           }
           fs.appendFileSync(
             outputPath,
-            `workflow_repository=${job.workflow_repository}\nworkflow_sha=${job.workflow_sha}\n`,
+            [
+              `direct_dispatch=${callerWorkflowRef === job.workflow_ref}`,
+              `workflow_repository=${job.workflow_repository}`,
+              `workflow_sha=${job.workflow_sha}`,
+              "",
+            ].join("\n"),
           );
           NODE
 
@@ -653,6 +738,9 @@ jobs:
         id: validate
         env:
           ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
+          COORDINATOR_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DIRECT_DISPATCH: ${{ steps.workflow.outputs.direct_dispatch }}
           INPUT_REF: ${{ inputs.ref }}
           PACKAGE_ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
           PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
@@ -695,19 +783,41 @@ jobs:
             exit 1
           fi
 
-          if git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main; then
+          if [[ "$DIRECT_DISPATCH" == "true" ]]; then
+            [[ "$COORDINATOR_REF" == "refs/heads/${DEFAULT_BRANCH}" ]] || {
+              echo "Manual live/E2E dispatches must use the default-branch workflow coordinator." >&2
+              exit 1
+            }
+            [[ "$selected_sha" == "$TRUSTED_WORKFLOW_SHA" ]] || {
+              echo "Manual live/E2E dispatches may validate only the exact default-branch workflow SHA." >&2
+              echo "Run arbitrary candidates in a fresh secretless, cacheless AWS Crabbox instead." >&2
+              exit 1
+            }
+            trusted_reason="default-branch-workflow-sha"
+          elif git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
           elif git tag --points-at "$selected_sha" | grep -Eq '^v'; then
             trusted_reason="release-tag"
-          elif git for-each-ref --format='%(refname:short)' --contains "$selected_sha" refs/remotes/origin | grep -Eq '^origin/'; then
-            trusted_reason="repository-branch-history"
+          elif git for-each-ref --format='%(objectname) %(refname:short)' refs/remotes/origin |
+            awk -v sha="$selected_sha" '
+              $1 == sha && (
+                $2 ~ /^origin\/release\// ||
+                $2 ~ /^origin\/extended-stable\/[0-9][0-9][0-9][0-9]\.([1-9]|1[0-2])\.33$/ ||
+                $2 ~ /^origin\/tideclaw\/alpha\//
+              ) {
+                found = 1
+              }
+              END { exit(found ? 0 : 1) }
+            '; then
+            trusted_reason="release-branch-head"
           else
             trusted_reason=""
           fi
 
           if [[ -z "$trusted_reason" ]]; then
             echo "Ref '${INPUT_REF}' resolved to $selected_sha, which is not trusted for secret-bearing live/E2E checks." >&2
-            echo "Allowed refs must be reachable from an OpenClaw branch or release tag." >&2
+            echo "Allowed refs must be on main, a release tag, or an exact release automation branch head." >&2
+            echo "Run arbitrary candidates in a fresh secretless, cacheless AWS Crabbox instead." >&2
             exit 1
           fi
 
@@ -1045,10 +1155,50 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: &prepare_trusted_harness_destination |
+          set -euo pipefail
+          harness="$GITHUB_WORKSPACE/.release-harness"
+          rm -rf -- "$harness"
+          mkdir -p -- "$harness"
+
+      - name: Checkout trusted workflow harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache-mode: restore
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          fetch-depth: 1
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Stage trusted setup action graph
+        shell: bash
+        run: &stage_trusted_setup_action |
+          set -euo pipefail
+          github_dir="$GITHUB_WORKSPACE/.github"
+          actions_dir="$github_dir/actions"
+          trusted_action="$GITHUB_WORKSPACE/.release-harness/.github/actions/setup-pnpm-store-cache"
+
+          test -f "$trusted_action/action.yml"
+          test -f "$trusted_action/ensure-node.sh"
+          if [[ -L "$github_dir" || ( -e "$github_dir" && ! -d "$github_dir" ) ]]; then
+            rm -rf -- "$github_dir"
+          fi
+          mkdir -p "$github_dir"
+          if [[ -L "$actions_dir" || ( -e "$actions_dir" && ! -d "$actions_dir" ) ]]; then
+            rm -rf -- "$actions_dir"
+          fi
+          mkdir -p "$actions_dir"
+          rm -rf -- "$actions_dir/setup-pnpm-store-cache"
+          cp -R -- "$trusted_action" "$actions_dir/setup-pnpm-store-cache"
+          cmp "$trusted_action/action.yml" "$actions_dir/setup-pnpm-store-cache/action.yml"
+          cmp "$trusted_action/ensure-node.sh" "$actions_dir/setup-pnpm-store-cache/ensure-node.sh"
+
+      - name: Setup Node environment
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
+        with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -1145,13 +1295,29 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
+      - name: Checkout trusted workflow harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          cache-mode: restore
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          fetch-depth: 1
+          path: .release-harness
+          persist-credentials: false
+
+      - name: Stage trusted setup action graph
+        shell: bash
+        run: *stage_trusted_setup_action
+
+      - name: Setup Node environment
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
+        with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
-          build-all-cache-scope: full
 
       - name: Build dist for special E2E
         if: |
@@ -1360,6 +1526,10 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
       - name: Checkout trusted release harness
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1383,11 +1553,16 @@ jobs:
           GHCR_USERNAME: ${{ github.actor }}
           GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Stage trusted setup action graph
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        shell: bash
+        run: *stage_trusted_setup_action
+
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: ./.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
         with:
-          cache-mode: restore
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -1753,6 +1928,10 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
       - name: Checkout trusted release harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1774,10 +1953,14 @@ jobs:
           GHCR_USERNAME: ${{ github.actor }}
           GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Stage trusted setup action graph
+        shell: bash
+        run: *stage_trusted_setup_action
+
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
         with:
-          cache-mode: restore
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -2053,6 +2236,10 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
       - name: Checkout trusted release harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2074,8 +2261,12 @@ jobs:
           GHCR_USERNAME: ${{ github.actor }}
           GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Stage trusted setup action graph
+        shell: bash
+        run: *stage_trusted_setup_action
+
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
         with:
           cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
@@ -2347,6 +2538,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
       - name: Checkout trusted release harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2510,11 +2705,16 @@ jobs:
           fi
           node .release-harness/scripts/package-source-preflight.mjs "${args[@]}"
 
+      - name: Stage trusted setup action graph
+        if: (steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')
+        shell: bash
+        run: *stage_trusted_setup_action
+
       - name: Setup Node environment
         if: (steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')
-        uses: ./.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
         with:
-          cache-mode: restore
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -3702,6 +3902,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
       - name: Checkout trusted live Docker harness
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -3754,11 +3958,16 @@ jobs:
             bash .release-harness/scripts/docker/shared-image-artifact.sh \
             load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
+      - name: Stage trusted setup action graph
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        shell: bash
+        run: *stage_trusted_setup_action
+
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: ./.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
         with:
-          cache-mode: restore
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -3873,6 +4082,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
       - name: Checkout trusted live Docker harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -3924,10 +4137,14 @@ jobs:
             bash .release-harness/scripts/docker/shared-image-artifact.sh \
             load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
+      - name: Stage trusted setup action graph
+        shell: bash
+        run: *stage_trusted_setup_action
+
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
         with:
-          cache-mode: restore
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -4310,6 +4527,10 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
       - name: Checkout trusted live shard harness
         if: steps.selection.outputs.run == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -4320,11 +4541,16 @@ jobs:
           fetch-depth: 1
           path: .release-harness
 
+      - name: Stage trusted setup action graph
+        if: steps.selection.outputs.run == 'true'
+        shell: bash
+        run: *stage_trusted_setup_action
+
       - name: Setup Node environment
         if: steps.selection.outputs.run == 'true'
-        uses: ./.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
         with:
-          cache-mode: restore
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -4595,6 +4821,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -4657,11 +4887,16 @@ jobs:
             bash .release-harness/scripts/docker/shared-image-artifact.sh \
             load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
+      - name: Stage trusted setup action graph
+        if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
+        shell: bash
+        run: *stage_trusted_setup_action
+
       - name: Setup Node environment
         if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
-        uses: ./.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
         with:
-          cache-mode: restore
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -4873,6 +5108,10 @@ jobs:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
+      - name: Prepare trusted harness destination
+        shell: bash
+        run: *prepare_trusted_harness_destination
+
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -4891,11 +5130,16 @@ jobs:
           ffmpeg -version | head -1
           ffprobe -version | head -1
 
+      - name: Stage trusted setup action graph
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
+        shell: bash
+        run: *stage_trusted_setup_action
+
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: ./.github/actions/setup-node-env
+        uses: ./.release-harness/.github/actions/setup-node-env-uncached
         with:
-          cache-mode: restore
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 

@@ -7507,6 +7507,118 @@ server.listen(0, "127.0.0.1", () => {
     });
   });
 
+  it("keeps privileged live dispatch on the trusted default-branch control plane", () => {
+    const source = readFileSync(
+      ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+      "utf8",
+    );
+    const workflow = parse(source);
+    const authorize = workflow.jobs.authorize_actor;
+    const validate = workflow.jobs.validate_selected_ref;
+    const validateStep = validate.steps.find(
+      (step: WorkflowStep) => step.name === "Validate selected ref",
+    );
+
+    expect(authorize.steps[0].uses).toBe(
+      "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+    );
+    expect(authorize.steps[0].with.script).toContain('new Set(["admin", "maintain"])');
+    expect(authorize.steps[0].with.script).toContain("data.role_name");
+    expect(authorize.steps[0].with.script).not.toContain("data.permission");
+    expect(authorize.steps[0].with.script).toContain("trustedCaller");
+    expect(authorize.steps[0].with.script).toContain("^release-ci\\/");
+    expect(authorize.steps[0].with.script).toContain("core.setFailed");
+    expect(authorize.steps[0].env.TRIGGERING_ACTOR).toBe("${{ github.triggering_actor }}");
+    expect(authorize.steps[0].with.script).toContain("username: triggeringActor");
+    expect(authorize.steps[0].with.script).not.toContain("username: context.actor");
+    expect(authorize.steps[0].with.script).toContain(
+      "allowedRoles.has(roleName) && (directDispatch || trustedCaller)",
+    );
+    expect(validate.needs).toBe("authorize_actor");
+    expect(validate.if).toBe("needs.authorize_actor.outputs.authorized == 'true'");
+    expect(validateStep.run).toContain(
+      '[[ "$COORDINATOR_REF" == "refs/heads/${DEFAULT_BRANCH}" ]]',
+    );
+    expect(validateStep.run).toContain('[[ "$selected_sha" == "$TRUSTED_WORKFLOW_SHA" ]]');
+    expect(validateStep.run).toContain("fresh secretless, cacheless AWS Crabbox");
+    expect(validateStep.run).toContain('trusted_reason="release-branch-head"');
+    expect(validateStep.run).toContain("origin\\/extended-stable\\/");
+    expect(source).not.toContain('trusted_reason="repository-branch-history"');
+
+    const setupJobs = Object.entries(workflow.jobs).filter(([, job]) =>
+      (job as { steps?: WorkflowStep[] }).steps?.some(
+        (step) => step.name === "Setup Node environment",
+      ),
+    );
+    expect(setupJobs).toHaveLength(11);
+    for (const [jobName, job] of setupJobs) {
+      const steps = (job as { steps: WorkflowStep[] }).steps;
+      const setupIndex = steps.findIndex((step) => step.name === "Setup Node environment");
+      const stageIndex = steps.findIndex(
+        (step) => step.name === "Stage trusted setup action graph",
+      );
+      const trustedCheckoutIndex = steps.findIndex(
+        (step) =>
+          step.uses === "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" &&
+          step.with?.path === ".release-harness" &&
+          step.with?.ref === "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+      );
+      const prepareHarnessIndex = steps.findIndex(
+        (step) => step.name === "Prepare trusted harness destination",
+      );
+      expect(steps[setupIndex]?.uses, `${jobName} setup action source`).toBe(
+        "./.release-harness/.github/actions/setup-node-env-uncached",
+      );
+      expect(steps[setupIndex]?.with?.["cache-mode"], `${jobName} cache authority`).toBe("off");
+      expect(stageIndex, `${jobName} trusted action graph stage`).toBeGreaterThanOrEqual(0);
+      expect(stageIndex, `${jobName} trusted action graph ordering`).toBe(setupIndex - 1);
+      expect(steps[stageIndex]?.if, `${jobName} trusted action graph condition`).toBe(
+        steps[setupIndex]?.if,
+      );
+      expect(trustedCheckoutIndex, `${jobName} trusted harness checkout`).toBeGreaterThanOrEqual(0);
+      expect(prepareHarnessIndex, `${jobName} trusted harness destination`).toBe(
+        trustedCheckoutIndex - 1,
+      );
+      expect(steps[prepareHarnessIndex]?.run, `${jobName} trusted harness cleanup`).toContain(
+        'rm -rf -- "$harness"',
+      );
+      expect(trustedCheckoutIndex, `${jobName} trusted harness ordering`).toBeLessThan(setupIndex);
+    }
+    const stageSteps = Object.values(workflow.jobs).flatMap((job) =>
+      ((job as { steps?: WorkflowStep[] }).steps ?? []).filter(
+        (step) => step.name === "Stage trusted setup action graph",
+      ),
+    );
+    expect(stageSteps).toHaveLength(11);
+    const cachelessSetup = readFileSync(
+      ".github/actions/setup-node-env-uncached/action.yml",
+      "utf8",
+    );
+    expect(cachelessSetup).not.toContain("actions/cache");
+    expect(cachelessSetup).toContain("Revalidate current maintainer authority");
+    expect(cachelessSetup).toContain("github.triggering_actor != 'github-actions[bot]'");
+    expect(cachelessSetup).toContain("TRIGGERING_ACTOR: ${{ github.triggering_actor }}");
+    expect(cachelessSetup).toContain("collaborators/${TRIGGERING_ACTOR}/permission");
+    expect(cachelessSetup).not.toContain("collaborators/${GITHUB_ACTOR}/permission");
+    expect(cachelessSetup).toContain("admin|maintain");
+    const stageScript = stageSteps.find((step) => typeof step.run === "string")?.run ?? "";
+    expect(stageScript).toContain(
+      'trusted_action="$GITHUB_WORKSPACE/.release-harness/.github/actions/setup-pnpm-store-cache"',
+    );
+    expect(stageScript).toContain('[[ -L "$github_dir"');
+    expect(stageScript).toContain('[[ -L "$actions_dir"');
+    expect(stageScript).toContain('rm -rf -- "$actions_dir/setup-pnpm-store-cache"');
+    expect(stageScript).toContain(
+      'cp -R -- "$trusted_action" "$actions_dir/setup-pnpm-store-cache"',
+    );
+    expect(stageScript).toContain(
+      'cmp "$trusted_action/action.yml" "$actions_dir/setup-pnpm-store-cache/action.yml"',
+    );
+    expect(stageScript).toContain(
+      'cmp "$trusted_action/ensure-node.sh" "$actions_dir/setup-pnpm-store-cache/ensure-node.sh"',
+    );
+  });
+
   it("fingerprints dependency install inputs without ordinary script churn", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-dependency-fingerprint-"));
     try {
