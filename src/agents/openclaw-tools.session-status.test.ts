@@ -208,7 +208,7 @@ function createModelCatalogModuleMock() {
     loadProviderScopedThinkingCatalog: async () => [],
     // A run's captured config goes stale after any Gateway config republish; the exact
     // loader then throws, and session_status must read the published owner instead.
-    loadPreparedModelCatalog: async () => {
+    readPreparedModelCatalog: async () => {
       throw new Error("prepared model catalog owner config was replaced during the read (/tmp)");
     },
     loadPublishedPreparedModelCatalog: async () => [
@@ -252,7 +252,6 @@ function createProviderUsageModuleMock() {
       updatedAt: Date.now(),
       providers: [],
     }),
-    formatUsageSummaryLine: () => null,
   };
 }
 
@@ -357,7 +356,7 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
-vi.mock("./tools/session-status.runtime.js", createCommandsStatusRuntimeModuleMock);
+vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
 vi.mock("../auto-reply/group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value ?? "always",
 }));
@@ -2725,6 +2724,7 @@ describe("session_status tool", () => {
     const saved = savedStore.main as Record<string, unknown>;
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
+    expect(saved.modelOverrideSource).toBe("default");
     expect(saved.authProfileOverride).toBeUndefined();
     expect(saved.liveModelSwitchPending).toBe(true);
   });

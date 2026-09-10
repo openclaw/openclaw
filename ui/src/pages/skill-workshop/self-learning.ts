@@ -1,27 +1,19 @@
-// Self-learning (skills.workshop.autonomous.mode) surface for the Workshop
-// tab: config read/patch plumbing plus the toggle, pitch, and error renderers.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 
 export type SkillWorkshopSelfLearning = {
   enabled: boolean;
+  weeklyReviewsPaused: boolean;
   busy: boolean;
   canUpdate: boolean;
   error: string | null;
 };
 
 const CONFIG_CHANGED_SINCE_LOAD = "config changed since last load";
-
-// Mirrors the gateway default for skills.workshop.autonomous.mode: absent
-// config means automatic self-learning. Snapshot sourceConfig/resolved are both
-// $include-resolved (src/config/io.ts), so the editable read is display-safe.
-function isSelfLearningEnabled(config: Record<string, unknown>): boolean {
-  const workshop = asRecord(asRecord(config.skills)?.workshop);
-  return asRecord(workshop?.autonomous)?.mode !== "off";
-}
 
 export function resolveSelfLearning(
   runtimeConfig: RuntimeConfigCapability | undefined,
@@ -30,7 +22,22 @@ export function resolveSelfLearning(
   canUpdate: boolean,
 ): SkillWorkshopSelfLearning | null {
   const config = resolveEditableSnapshotConfig(runtimeConfig?.state.configSnapshot);
-  return config ? { enabled: isSelfLearningEnabled(config), busy, canUpdate, error } : null;
+  if (!config) {
+    return null;
+  }
+  const workshop = asRecord(asRecord(config.skills)?.workshop);
+  // The Gateway defaults an absent autonomous mode to automatic self-learning.
+  const mode = asRecord(workshop?.autonomous)?.mode ?? "auto";
+  return {
+    enabled: mode !== "off",
+    weeklyReviewsPaused:
+      mode === "auto" &&
+      runtimeConfig?.state.configLoading === false &&
+      asRecord(config.cron)?.enabled === false,
+    busy,
+    canUpdate,
+    error,
+  };
 }
 
 /** Patch the canonical config key; returns an error message or null on success. */
@@ -76,15 +83,13 @@ export async function setSelfLearningEnabled(
 export function renderSelfLearningToggle(
   selfLearning: SkillWorkshopSelfLearning | null,
   onToggle: (enabled: boolean) => void,
+  automationHref: string,
 ) {
   if (!selfLearning) {
     return nothing;
   }
   return html`
-    <label
-      class="sw-revision-session-toggle"
-      title=${t("skillWorkshop.header.selfLearningTooltip")}
-    >
+    <label class="sw-self-learning-toggle" title=${t("skillWorkshop.header.selfLearningTooltip")}>
       <input
         type="checkbox"
         aria-label=${t("skillWorkshop.header.selfLearningAria")}
@@ -92,11 +97,17 @@ export function renderSelfLearningToggle(
         ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @change=${(event: Event) => onToggle((event.currentTarget as HTMLInputElement).checked)}
       />
-      <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
-      <span class="sw-revision-session-toggle__label"
-        >${t("skillWorkshop.header.selfLearning")}</span
-      >
+      <span class="sw-self-learning-toggle__track" aria-hidden="true"></span>
+      <span class="sw-self-learning-toggle__label">${t("skillWorkshop.header.selfLearning")}</span>
     </label>
+    ${
+      selfLearning.weeklyReviewsPaused
+        ? html`<span class="sw-self-learning-warning" role="status">
+            <span aria-hidden="true">${icons.alertTriangle}</span>
+            <a href=${automationHref}>${t("skillWorkshop.header.weeklyReviewsPaused")}</a>
+          </span>`
+        : nothing
+    }
   `;
 }
 
@@ -113,7 +124,9 @@ export function renderSelfLearningPitch(
       <p>${t("skillWorkshop.selfLearning.pitchBody")}</p>
       <button
         type="button"
-        class="sw-btn sw-btn--primary ${selfLearning.busy ? "is-busy" : ""}"
+        class="sw-btn sw-btn--primary oc-action oc-action-primary ${
+          selfLearning.busy ? "is-busy" : ""
+        }"
         ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @click=${() => onToggle(true)}
       >
@@ -131,5 +144,7 @@ export function renderSelfLearningError(selfLearning: SkillWorkshopSelfLearning 
   if (!selfLearning?.error) {
     return nothing;
   }
-  return html`<div class="sw-error" role="status"><span>${selfLearning.error}</span></div>`;
+  return html`<div class="sw-error oc-banner oc-banner-error" role="status">
+    <span>${selfLearning.error}</span>
+  </div>`;
 }

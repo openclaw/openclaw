@@ -18,6 +18,7 @@ import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { resolvePluginRegistrationConfigKey } from "./loader-registration-config.js";
 import type {
   ChannelPluginLoadIntent,
   PluginLoadOptions,
@@ -41,6 +42,7 @@ import {
   type PluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { getPluginRegistryForContext } from "./runtime.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 function resolveBundledPackageRootForCache(stockRoot?: string): string | undefined {
@@ -91,10 +93,12 @@ function resolveRuntimeBindingCacheId(value: object | undefined): number | undef
   return id;
 }
 
-function resolveRuntimeBindingCacheIdentity(
-  runtimeOptions: PluginLoadOptions["runtimeOptions"],
-): string {
+function resolveRuntimeBindingCacheIdentity(options: PluginLoadOptions): string {
+  const { runtimeOptions } = options;
   return JSON.stringify({
+    capabilityCatalogContext: resolveRuntimeBindingCacheId(options.capabilityCatalogContext),
+    modelAuth: resolveRuntimeBindingCacheId(runtimeOptions?.modelAuth),
+    modelConfig: resolveRuntimeBindingCacheId(runtimeOptions?.modelConfig),
     nodes: resolveRuntimeBindingCacheId(runtimeOptions?.nodes),
     subagent: resolveRuntimeBindingCacheId(runtimeOptions?.subagent),
   });
@@ -146,10 +150,9 @@ function buildActivationMetadataHash(params: {
       return typeof enabled === "boolean" ? [[channelId, enabled] as const] : [];
     })
     .toSorted(([left], [right]) => left.localeCompare(right));
-  // Source config selects validation and defaults even when resolved values match.
-  // Object fields keep an absent config distinct from an explicit null source.
+  // Registration inputs are keyed separately; source enablement still steers activation.
   const pluginEntryInputs = Object.entries(params.activationSource.plugins.entries)
-    .map(([pluginId, { enabled, config }]) => [pluginId, { enabled, config }] as const)
+    .map(([pluginId, { enabled }]) => [pluginId, enabled] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
   const autoEnableReasonEntries = Object.entries(params.autoEnabledReasons)
     .map(([pluginId, reasons]) => [pluginId, [...reasons]] as const)
@@ -170,21 +173,24 @@ function buildActivationMetadataHash(params: {
     .digest("hex");
 }
 
-function buildCacheKey(params: {
+function buildCacheKeys(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
+  registrationConfigKey: string;
   activationMetadataKey?: string;
   installs?: Record<string, PluginInstallRecord>;
+  manifestRegistry?: PluginLoadOptions["manifestRegistry"];
+  discovery?: PluginLoadOptions["discovery"];
   env: NodeJS.ProcessEnv;
   devSourceRoot?: string | null;
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
-  requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   channelPluginLoadIntent: ChannelPluginLoadIntent;
   artifactPreference: PluginRuntimeArtifactPreference;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
+  capabilityCatalogIdentity?: string;
   loadModules?: boolean;
   runtimeSubagentMode?: PluginRuntimeSubagentMode;
   runtimeBindingIdentity?: string;
@@ -192,7 +198,7 @@ function buildCacheKey(params: {
   coreGatewayMethodNames?: string[];
   allowProcessHomeSessionCatalogs?: boolean;
   activate?: boolean;
-}): string {
+}) {
   const discoveryContext = resolvePluginDiscoveryContext({
     workspaceDir: params.workspaceDir,
     loadPaths: params.plugins.loadPaths,
@@ -219,28 +225,63 @@ function buildCacheKey(params: {
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   const setupOnlyModeKey =
     params.forceSetupOnlyChannelPlugins === true ? "force-setup" : "normal-setup";
-  const setupOnlyRequirementKey =
-    params.requireSetupEntryForSetupOnlyChannelPlugins === true
-      ? "require-setup-entry"
-      : "allow-full-fallback";
   const rawConfigEnvMode =
     params.resolveRawConfigEnvVars === true ? "resolve-raw-env" : "runtime-config";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const activationMode = params.activate === false ? "snapshot" : "active";
-  const cacheIdentity = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
+  // Freeze request facts before discovery or plugin registration can mutate caller inputs.
+  const prefix = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
     {
       bundledPackage,
       devSourceRoot: params.devSourceRoot ?? "",
       discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
       ...params.plugins,
+      entries: Object.entries(params.plugins.entries).map(([id, entry]) => [id, entry.enabled]),
+      registrationConfigKey: params.registrationConfigKey,
       installs,
       loadPaths,
-      activationMetadataKey: params.activationMetadataKey ?? "",
-      allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
     },
-  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
-  return createHash("sha256").update(cacheIdentity).digest("hex");
+  ).slice(0, -1)}`;
+  const suffix = `${JSON.stringify({
+    activationMetadataKey: params.activationMetadataKey ?? "",
+    capabilityCatalogIdentity: params.capabilityCatalogIdentity,
+    allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
+  }).slice(
+    1,
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  const discoveryFields = JSON.stringify({
+    discoverySources: params.discovery?.candidates.map((candidate) => [
+      candidate.effectivePluginId ?? candidate.idHint,
+      candidate.origin,
+      candidate.rootDir,
+      candidate.source,
+      candidate.setupSource,
+      candidate.sourcePreferred,
+      candidate.configSelected,
+      candidate.packageManifest?.build?.bundledDist,
+    ]),
+  }).slice(1, -1);
+  const resolveManifestCacheKey = (manifestRegistry: PluginLoadOptions["manifestRegistry"]) => {
+    const manifestFields = JSON.stringify({
+      manifestSources: manifestRegistry?.plugins.map((plugin) => [
+        plugin.id,
+        plugin.origin,
+        plugin.rootDir,
+        plugin.source,
+        plugin.setupSource,
+        plugin.providerDiscoverySource,
+        plugin.capabilityCatalogSource,
+        plugin.sourcePreferred,
+        plugin.packageManifest?.build?.bundledDist,
+      ]),
+    }).slice(1, -1);
+    const sourceFields = [manifestFields, discoveryFields].filter(Boolean).join(",");
+    // Keep the existing key encoding; only the discovered manifest projection can differ.
+    const identity = `${prefix},${sourceFields ? `${sourceFields},` : ""}${suffix}`;
+    return createHash("sha256").update(identity).digest("hex");
+  };
+  return { cacheKey: resolveManifestCacheKey(params.manifestRegistry), resolveManifestCacheKey };
 }
 
 export function resolveRuntimeSubagentMode(
@@ -262,7 +303,7 @@ function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
 }
 
 function mergePluginTrustList(runtimeList: string[], sourceList: readonly string[]): string[] {
-  if (sourceList.length === 0) {
+  if (runtimeList === sourceList || sourceList.length === 0) {
     return runtimeList;
   }
   const merged = [...runtimeList];
@@ -317,7 +358,11 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       }) as OpenClawConfig)
     : rawActivationSourceConfig;
   const normalized = normalizePluginsConfig(cfg.plugins);
-  const activationSource = createPluginActivationSource({ config: activationSourceConfig });
+  // Identical plugin inputs may share facts; source channel policy keeps its own root config.
+  const activationSource = createPluginActivationSource({
+    config: activationSourceConfig,
+    plugins: cfg.plugins === activationSourceConfig.plugins ? normalized : undefined,
+  });
   const trustNormalized = mergeTrustPluginConfigFromActivationSource({
     normalized,
     activationSource,
@@ -325,8 +370,6 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const onlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const forceSetupOnlyChannelPlugins = options.forceSetupOnlyChannelPlugins === true;
-  const requireSetupEntryForSetupOnlyChannelPlugins =
-    options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const channelPluginLoadIntent = options.channelPluginLoadIntent ?? "full";
   const artifactPreference = resolvePluginRuntimeArtifactPreference(
     options.preferBuiltPluginArtifacts,
@@ -368,27 +411,43 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     ...cfg.plugins?.installs,
   };
   const devSourceRoot = resolveOpenClawDevSourceRoot(env);
-  const cacheKey = buildCacheKey({
+  const registrationConfigKey = resolvePluginRegistrationConfigKey({
+    config: cfg,
+    activationSourceConfig,
+  });
+  const { cacheKey, resolveManifestCacheKey } = buildCacheKeys({
     workspaceDir: options.workspaceDir,
     plugins: trustNormalized,
+    registrationConfigKey,
     activationMetadataKey: buildActivationMetadataHash({
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
     }),
     installs: installRecords,
+    manifestRegistry:
+      options.manifestRegistry ??
+      (options.discovery === undefined ? currentMetadataSnapshot?.manifestRegistry : undefined),
+    discovery: options.manifestRegistry ? undefined : options.discovery,
     env,
     devSourceRoot,
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
-    requireSetupEntryForSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
     artifactPreference,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
+    capabilityCatalogIdentity: options.capabilityCatalog
+      ? JSON.stringify([
+          options.capabilityCatalog.family,
+          resolveRuntimeBindingCacheId(options.capabilityCatalog.context),
+          resolveRuntimeBindingCacheId(getPluginCache()),
+          resolveRuntimeBindingCacheId(getPluginRegistryForContext() ?? undefined),
+        ])
+      : undefined,
     loadModules: options.loadModules,
     runtimeSubagentMode,
-    runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options.runtimeOptions),
+    runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,
@@ -397,6 +456,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   return {
     env,
     cfg,
+    registrationConfigKey,
     metadataSnapshot: currentMetadataSnapshot,
     normalized: trustNormalized,
     activationSourceConfig,
@@ -405,7 +465,6 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
-    requireSetupEntryForSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
     artifactPreference,
     shouldActivate: options.activate !== false,
@@ -414,6 +473,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     installRecords,
     devSourceRoot,
     cacheKey,
+    resolveManifestCacheKey,
   };
 }
 

@@ -315,6 +315,7 @@ function loadRegistryForMinHostVersionCase(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   return loadPluginManifestRegistryCore({
+    installRecords: {},
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -341,6 +342,7 @@ function loadRegistryForPluginApiCase(params: {
   idHint?: string;
 }) {
   return loadPluginManifestRegistryCore({
+    installRecords: {},
     ...(params.env ? { env: params.env } : {}),
     candidates: [
       createPluginCandidate({
@@ -657,10 +659,11 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
   });
 
-  it("preserves manifest catalog metadata on registry records", () => {
+  it("preserves manifest catalog metadata and categories on registry records", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "catalog-demo",
+      categories: ["web", "tools"],
       catalog: { featured: true, order: 20 },
       configSchema: { type: "object" },
     });
@@ -674,6 +677,7 @@ describe("loadPluginManifestRegistry", () => {
     ]);
 
     expect(registry.plugins[0]?.catalog).toEqual({ featured: true, order: 20 });
+    expect(registry.plugins[0]?.categories).toEqual(["web", "tools"]);
   });
 
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
@@ -3022,6 +3026,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
 
     const registry = loadPluginManifestRegistryCore({
+      installRecords: {},
       candidates: [
         createPluginCandidate({
           idHint: "codex",

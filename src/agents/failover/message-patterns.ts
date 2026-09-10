@@ -35,8 +35,27 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 
 // First-party model transports use these terminal-contract forms when EOF arrives
 // before a response is complete; keep non-model stream lifecycle errors out.
+// The completions transport throws `Stream ended without finish_reason` (no
+// "terminal" wording); Mistral/Google keep the longer form. Plugin lifecycle
+// strings such as `opencode-go stream ended without a terminal event` must not
+// match — those are not assistant-stream contracts.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
-  /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without a terminal finish reason)[.!]?$/i;
+  /^[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)[.!]?$/i;
+// Undici ends a stream body with this exact bare transport message. Keep it
+// anchored so unrelated failures that merely contain the word do not match.
+export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;
+// These exact transport diagnostics identify rejection, not whether replay is safe.
+const PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES = new Set([
+  "Provider completed tool call with malformed JSON arguments",
+  "Provider completed stream with an incomplete tool call",
+  "Provider returned an incomplete or malformed tool call",
+  "Mistral completed tool call has invalid JSON arguments",
+  "Responses stream completed tool call with invalid JSON arguments",
+]);
+
+export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): boolean {
+  return errorMessage !== undefined && PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage);
+}
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
@@ -103,9 +122,6 @@ const BILLING_ERROR_HARD_402_RE =
 // standalone status token, HTTP/status context, or a structured status/code shape.
 const RATE_LIMIT_429_RE =
   /^\s*429\b|\b(?:https?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|http(?:[ _-]?status)?)\b[\s:=#"'(]{0,6}429\b|["'](?:status|code)["']\s*:\s*429\b|\b429\b[\s:)\].,-]*(?:rate[_ -]?limit(?:ed|ing)?|too many requests|resource has been exhausted|quota(?:\s+(?:exceeded|exhausted|depleted|reached))?)\b/i;
-// Catches provider "model X not found" wording; the legacy provider table
-// only covers Groq's deactivated-model forms.
-export const GENERIC_MODEL_NOT_FOUND_RE = /\bmodel\b.{0,60}?\bnot (?:found|available)\b/i;
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
   ZAI_AUTH_CODE_1113_RE,
@@ -220,7 +236,7 @@ const ERROR_PATTERNS = {
     // 502 served with an empty body, socket reset mid-response, body-stream
     // aborted). These arrive as bare strings on the outer error and, without
     // an explicit match, the fallback chain is never attempted (#69368).
-    /^terminated$/i,
+    TERMINATED_TRANSPORT_MESSAGE_RE,
     /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
     // shared model runtime's openai provider surfaces `Request failed` when the HTTP

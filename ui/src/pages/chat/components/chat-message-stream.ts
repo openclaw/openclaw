@@ -7,7 +7,11 @@ import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { resolveMessageActionDetails, type MessageReplyTarget } from "./chat-message-markdown.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageActionDetails,
+  type MessageReplyTarget,
+} from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -23,13 +27,14 @@ export type StreamGroupPart = Extract<
 type StreamMessageOptions = Pick<
   Parameters<typeof renderGroupedMessage>[2],
   | "sessionKey"
+  | "presented"
   | "boardProvider"
   | "agentId"
   | "runActive"
   | "onRequestUpdate"
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
-  | "localMediaPreviewRoots"
+  | "mediaPolicyKey"
   | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
@@ -39,6 +44,7 @@ type StreamMessageOptions = Pick<
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
   | "fetchLinkFavicon"
+  | "githubRepo"
   | "onOpenWorkspaceFile"
 >;
 
@@ -71,21 +77,20 @@ export function renderStreamGroupParts(
       const prompt = opts.questionPrompts?.get(part.questionId);
       return prompt ? renderChatQuestionSummary(prompt) : nothing;
     }
-    const message = {
+    const source = prepareChatMessageRender({
       role: "assistant",
       content: [{ type: "text", text: part.text }],
       timestamp: part.startedAt,
-    };
+    });
     return renderGroupedMessage(
-      message,
+      source,
       part.key,
       {
         ...opts,
         isStreaming: part.isStreaming,
         showReasoning: false,
         // Settled segments can be replied to without transcript IDs or footer actions.
-        messageActions: resolveMessageActionDetails({
-          message,
+        messageActions: resolveMessageActionDetails(source, {
           messageId: part.key,
           onReply: opts.onReply,
           senderLabel: opts.assistant?.name ?? "Assistant",
@@ -100,7 +105,7 @@ export function renderStreamGroupParts(
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { assistant, resourceBasePath, assistantAttachmentAuthToken } = opts;
+  const { assistant, resourceBasePath } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
@@ -116,13 +121,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const avatar =
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
-      : renderChatAvatar(
-          "assistant",
-          assistant,
-          undefined,
-          resourceBasePath,
-          assistantAttachmentAuthToken,
-        );
+      : renderChatAvatar("assistant", assistant, undefined, resourceBasePath);
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`

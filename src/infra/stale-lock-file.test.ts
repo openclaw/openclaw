@@ -2,11 +2,39 @@
 import { describe, expect, it } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
+  inspectStaleLockOwner,
   isLockOwnerDefinitelyStale,
   shouldRemoveDeadOwnerOrExpiredLock,
 } from "./stale-lock-file.js";
 
 describe("stale lock file ownership", () => {
+  it.each([false, true])(
+    "records the deciding owner facts without payload disclosure (exited=%s)",
+    (exited) => {
+      let startReads = 0;
+      let deadReads = 0;
+      const observed = inspectStaleLockOwner({
+        payload: { pid: 123, starttime: 111, privateField: "must-not-be-copied" },
+        getProcessStartTime: () => {
+          startReads += 1;
+          return exited ? 111 : 222;
+        },
+        isPidDefinitelyDead: () => {
+          deadReads += 1;
+          return exited;
+        },
+      });
+      expect(observed).toEqual({
+        reason: exited ? "owner-process-exited" : "owner-starttime-changed",
+        pid: 123,
+        recordedStarttime: 111,
+        observedStarttime: exited ? 111 : 222,
+      });
+      expect(startReads).toBe(1);
+      expect(deadReads).toBe(exited ? 1 : 0);
+    },
+  );
+
   it("keeps expired locks when a pid owner is not definitely dead", () => {
     expect(
       isLockOwnerDefinitelyStale({

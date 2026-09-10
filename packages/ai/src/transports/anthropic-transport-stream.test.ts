@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AssistantMessage, Model } from "@openclaw/llm-core";
 /**
  * Tests Anthropic Messages transport streaming.
@@ -6,11 +7,14 @@ import type { AssistantMessage, Model } from "@openclaw/llm-core";
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   configureAiTransportHost,
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createCompactionCapture } from "./anthropic-compaction-replay.js";
 import { resolveCompactionReplayPressure } from "./provider-compaction-replay.js";
@@ -158,7 +162,9 @@ function createInterruptedThinkingEvents(): Record<string, unknown>[] {
   ];
 }
 
-function createStalledSseResponse(params: { onCancel: (reason: unknown) => void }): Response {
+function createStalledSseResponse(params: {
+  onCancel: (reason: unknown) => void | Promise<void>;
+}): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -169,7 +175,7 @@ function createStalledSseResponse(params: { onCancel: (reason: unknown) => void 
       );
     },
     cancel(reason) {
-      params.onCancel(reason);
+      return params.onCancel(reason);
     },
   });
 
@@ -188,7 +194,7 @@ function createRawSseResponse(body: string): Response {
 
 function createOpenRawSseResponse(params: {
   body: string;
-  onCancel: (reason: unknown) => void;
+  onCancel: (reason: unknown) => void | Promise<void>;
 }): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -196,7 +202,7 @@ function createOpenRawSseResponse(params: {
       controller.enqueue(encoder.encode(params.body));
     },
     cancel(reason) {
-      params.onCancel(reason);
+      return params.onCancel(reason);
     },
   });
   return new Response(stream, {
@@ -313,14 +319,7 @@ function makeSonnet5PrefillContext(): AnthropicStreamContext {
         api: "anthropic-messages",
         provider: "anthropic",
         model: "claude-sonnet-5",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsage(),
         stopReason: "stop",
         timestamp: 1,
       },
@@ -692,14 +691,7 @@ describe("anthropic transport stream", () => {
       api: "anthropic-messages",
       provider: "anthropic",
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "stop",
       timestamp: 1,
     };
@@ -2002,8 +1994,77 @@ describe("anthropic transport stream", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Provider completed tool call with malformed JSON arguments");
     expect(result.errorMessage).not.toContain("SECRET.md");
+    // Bounded diagnostics survive projection onto the terminal message without the content.
+    expect(result.errorCode).toBe("malformed_tool_call_arguments");
+    expect(JSON.parse(result.errorBody ?? "{}")).toEqual({
+      code: "malformed_tool_call_arguments",
+      argumentChars: '{"path":"SECRET.md"'.length,
+      argumentHash: expect.stringMatching(/^[0-9a-z]+$/),
+      repairAttempted: true,
+    });
+    expect(result.errorBody).not.toContain("SECRET.md");
     expect(eventTypes).not.toContain("toolcall_end");
     expect(eventTypes).not.toContain("done");
+  });
+
+  it("repairs complete terminal tool JSON with raw control characters instead of failing the turn", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        anthropicMessageStart({
+          id: "msg_repairable_tools",
+          usage: { input_tokens: 2, output_tokens: 0 },
+        }),
+        anthropicContentBlockStart(0, {
+          type: "tool_use",
+          id: "call_valid",
+          name: "read",
+          input: {},
+        }),
+        anthropicContentBlockDelta(0, {
+          type: "input_json_delta",
+          partial_json: '{"path":"README.md"}',
+        }),
+        { type: "content_block_stop", index: 0 },
+        anthropicContentBlockStart(1, {
+          type: "tool_use",
+          id: "call_repairable",
+          name: "edit",
+          input: {},
+        }),
+        // Fine-grained tool streaming skips server-side JSON validation, so a finished
+        // block can carry a literal newline inside a string value. The sibling oldText
+        // holds a valid \n escape after a "C:" prefix that the repair must leave intact.
+        anthropicContentBlockDelta(1, {
+          type: "input_json_delta",
+          partial_json: '{"path":"a.py","oldText":"C:\\nnext","newText":"x = 1\ny = 2"}',
+        }),
+        { type: "content_block_stop", index: 1 },
+        anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 2, output_tokens: 2 }),
+        { type: "message_stop" },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "edit" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const toolCallEnds: unknown[] = [];
+    for await (const event of stream) {
+      if (event.type === "toolcall_end") {
+        toolCallEnds.push(event.toolCall.arguments);
+      }
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.errorMessage).toBeUndefined();
+    expect(toolCallEnds).toEqual([
+      { path: "README.md" },
+      { path: "a.py", oldText: "C:\nnext", newText: "x = 1\ny = 2" },
+    ]);
   });
 
   it("rejects an active tool call that never receives content_block_stop", async () => {
@@ -2831,9 +2892,11 @@ describe("anthropic transport stream", () => {
             parameters: {
               type: "object",
               properties: {
-                query: { type: "string" },
+                query: { $ref: "#/$defs/Query" },
               },
+              $defs: { Query: { type: "string", minLength: 1 } },
               required: ["query"],
+              additionalProperties: false,
             },
           },
         ],
@@ -2847,8 +2910,12 @@ describe("anthropic transport stream", () => {
     expect(tools).toHaveLength(1);
     const tool = requireRecord(tools[0], "tool");
     expect(tool.name).toBe("good_plugin_tool");
-    expect(requireRecord(tool.input_schema, "input schema").properties).toEqual({
-      query: { type: "string" },
+    expect(tool.input_schema).toEqual({
+      type: "object",
+      properties: { query: { $ref: "#/$defs/Query" } },
+      $defs: { Query: { type: "string", minLength: 1 } },
+      required: ["query"],
+      additionalProperties: false,
     });
   });
 
@@ -3277,13 +3344,7 @@ describe("anthropic transport stream", () => {
     {
       name: "blank user content",
       context: {
-        messages: [
-          {
-            role: "user",
-            content: " \n\t ",
-            timestamp: 0,
-          },
-        ],
+        messages: [makeUserMessage(" \n\t ", 0)],
       } as AnthropicStreamContext,
     },
   ])(
@@ -3523,14 +3584,7 @@ describe("anthropic transport stream", () => {
             model: "claude-sonnet-4-6",
             stopReason: "toolUse",
             timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
           },
           {
@@ -3707,39 +3761,92 @@ describe("anthropic transport stream", () => {
     expect(toolResult.is_error).toBe(false);
   });
 
-  it("cancels stalled SSE body reads when the abort signal fires mid-stream", async () => {
-    const controller = new AbortController();
-    const abortReason = new Error("anthropic test abort");
-    let cancelReason: unknown;
-    guardedFetchMock.mockResolvedValueOnce(
-      createStalledSseResponse({
-        onCancel: (reason) => {
-          cancelReason = reason;
+  it.each(["resolve", "reject", "throw"] as const)(
+    "owns %s cancellation after reporting an abort from another context",
+    async (outcome) => {
+      const context = new AsyncLocalStorage<string>();
+      const controller = new AbortController();
+      const abortReason = new Error("anthropic test abort");
+      const finishCancellation = createDeferred();
+      const observed: Promise<unknown>[] = [];
+      const observerContexts: Array<string | undefined> = [];
+      let cancelReason: unknown;
+      let cancelContext: string | undefined;
+      let cancellationFinished = false;
+      configureAiTransportHost({
+        ...getAiTransportHost(),
+        observePendingProviderWork: (pending) => {
+          observerContexts.push(context.getStore());
+          observed.push(pending);
         },
-      }),
-    );
-
-    setTimeout(() => controller.abort(abortReason), 50);
-
-    const timedOut = Symbol("timed out");
-    const startedAt = Date.now();
-    const result = await Promise.race([
-      runTransportStream(
-        makeAnthropicTransportModel(),
-        { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
-        { apiKey: "sk-ant-api", signal: controller.signal } as AnthropicStreamOptions,
-      ),
-      delay(1_000, timedOut),
-    ]);
-
-    if (result === timedOut) {
-      throw new Error("Anthropic SSE stream did not abort within 1000ms");
-    }
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(result.stopReason).toBe("aborted");
-    expect(result.errorMessage).toBe("anthropic test abort");
-    expect(cancelReason).toBe(abortReason);
-  });
+      });
+      guardedFetchMock.mockResolvedValueOnce(
+        createStalledSseResponse({
+          onCancel: (reason) => {
+            cancelReason = reason;
+            cancelContext = context.getStore();
+            if (outcome === "throw") {
+              cancellationFinished = true;
+              throw new Error("synchronous cancellation cleanup failure");
+            }
+            return finishCancellation.promise.finally(() => {
+              cancellationFinished = true;
+            });
+          },
+        }),
+      );
+      const startedAt = Date.now();
+      const completion = context.run("origin", () =>
+        runTransportStream(
+          makeAnthropicTransportModel(),
+          { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+          { apiKey: "fixture", signal: controller.signal } as AnthropicStreamOptions,
+        ),
+      );
+      const abortTimer = setTimeout(
+        () => context.run("foreign", () => controller.abort(abortReason)),
+        50,
+      );
+      try {
+        const timedOut = Symbol("timed out");
+        const result = await Promise.race([completion, delay(1_000, timedOut)]);
+        if (result === timedOut) {
+          throw new Error("Anthropic SSE stream did not abort within 1000ms");
+        }
+        expect(Date.now() - startedAt).toBeLessThan(1_000);
+        expect(result.stopReason).toBe("aborted");
+        expect(result.errorMessage).toBe("anthropic test abort");
+        expect(cancelReason).toBe(abortReason);
+        expect.soft(cancelContext).toBe("origin");
+        expect(cancellationFinished).toBe(outcome === "throw");
+        expect.soft(observed.length).toBeGreaterThan(0);
+        expect.soft(observerContexts.every((owner) => owner === "origin")).toBe(true);
+        let joined = false;
+        const joining = Promise.allSettled(observed).then(() => {
+          joined = true;
+        });
+        if (outcome === "throw") {
+          await joining;
+        } else {
+          await Promise.resolve();
+          expect.soft(joined).toBe(false);
+        }
+        if (outcome === "reject") {
+          finishCancellation.reject(new Error("cancellation cleanup failed"));
+        } else {
+          finishCancellation.resolve();
+        }
+        await joining;
+        expect(cancellationFinished).toBe(true);
+        expect((await completion).errorMessage).toBe("anthropic test abort");
+      } finally {
+        clearTimeout(abortTimer);
+        finishCancellation.resolve();
+        await completion;
+        await Promise.allSettled(observed);
+      }
+    },
+  );
 
   it("treats already-aborted signals as abort errors before reading SSE chunks", async () => {
     const controller = new AbortController();
@@ -3795,26 +3902,39 @@ describe("anthropic transport stream", () => {
     await vi.waitFor(() => expect(cancelCalled).toBe(true));
   });
 
-  it("cancels open SSE bodies when Anthropic stream consumers throw", async () => {
-    let cancelCalled = false;
+  it("joins open SSE body cancellation when a non-abort stream consumer throws", async () => {
+    const cancelStarted = createDeferred();
+    const finishCancellation = createDeferred();
     guardedFetchMock.mockResolvedValueOnce(
       createOpenRawSseResponse({
         body: 'data: {"type":"error","error":{"message":"stream exploded"}}\n\n',
         onCancel: () => {
-          cancelCalled = true;
+          cancelStarted.resolve();
+          return finishCancellation.promise;
         },
       }),
     );
-
-    const result = await runTransportStream(
+    let settled = false;
+    const completion = runTransportStream(
       makeAnthropicTransportModel(),
       { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
-      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
-    );
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("stream exploded");
-    expect(cancelCalled).toBe(true);
+      { apiKey: "fixture" } as AnthropicStreamOptions,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await cancelStarted.promise;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      finishCancellation.resolve();
+      const result = await completion;
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toBe("stream exploded");
+    } finally {
+      finishCancellation.resolve();
+      await completion;
+    }
   });
 
   it.each([

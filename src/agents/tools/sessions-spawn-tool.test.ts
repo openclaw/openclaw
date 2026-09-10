@@ -12,11 +12,13 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { readParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "../subagents/swarm/swarm-code-mode.js";
+import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const hoisted = vi.hoisted(() => {
@@ -385,7 +387,10 @@ describe("sessions_spawn tool", () => {
   });
 
   it("hides and rejects swarm parameters while tools.swarm is disabled", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { swarm: false } },
+    });
     const schema = tool.parameters as { properties?: Record<string, unknown> };
 
     expect(schema.properties?.collect).toBeUndefined();
@@ -405,6 +410,7 @@ describe("sessions_spawn tool", () => {
       config: { tools: { swarm: true } },
     });
 
+    finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
     await expect(tool.execute("normal-child", { task: "ask for approval" })).rejects.toThrow(
       "requires collect=true",
     );
@@ -478,12 +484,12 @@ describe("sessions_spawn tool", () => {
     },
   );
 
-  it("forwards collector parameters and requesting run identity when enabled", async () => {
+  it("forwards collector parameters and requesting identity when native waiting is available", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       requesterRunId: "parent-run",
-      config: { tools: { swarm: true } },
     });
+    finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
     const schema = tool.parameters as {
       properties?: Record<string, { description?: string } | undefined>;
     };
@@ -521,6 +527,7 @@ describe("sessions_spawn tool", () => {
       requesterRunId: "parent-run",
       config: { tools: { swarm: true } },
     });
+    finalizeAgentToolAvailability([tool, createAgentsWaitTool({})]);
     const input: Record<PropertyKey, unknown> = { task: "collect", collect: true };
     Object.defineProperty(input, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
       value: "cm-restart:bridge:1",
@@ -664,6 +671,7 @@ describe("sessions_spawn tool", () => {
         category: "P1 issues from beta feedback",
         model: "anthropic/claude-sonnet-4-6",
         task: "inspect issue",
+        timeoutMs: 120000,
         parentSessionKey: "agent:main:main",
         spawnDepth: 1,
         fork: true,
@@ -988,37 +996,49 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it("applies a per-run timeout to visible dashboard sessions", async () => {
-    const callGateway = vi.fn(async () => ({
-      key: "agent:main:dashboard:timed-child",
-      runStarted: true,
-      runId: "run-visible-timed",
-    }));
-    const registerRun = vi.fn();
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      config: {
-        agents: {
-          defaults: { subagents: { runTimeoutSeconds: 120 } },
-          list: [{ id: "main" }],
+  it.each([
+    { requested: 1800, configured: 120, seconds: 1800 },
+    { requested: 0, configured: 120, seconds: 0 },
+    { requested: undefined, configured: 120, seconds: 120 },
+    { requested: undefined, configured: undefined, seconds: 0 },
+  ])(
+    "forwards visible run timeout $requested (default $configured)",
+    async ({ requested, configured, seconds }) => {
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:timed-child",
+        runStarted: true,
+        runId: "run-visible-timed",
+      }));
+      const registerRun = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: {
+          agents: {
+            defaults: { timeoutSeconds: 180, subagents: { runTimeoutSeconds: configured } },
+            list: [{ id: "main" }],
+          },
         },
-      },
-      callGateway: callGateway as never,
-      registerRun,
-      countActiveRuns: () => 0,
-    });
+        callGateway: callGateway as never,
+        registerRun,
+        countActiveRuns: () => 0,
+      });
 
-    const result = await tool.execute("visible-timeout", {
-      task: "inspect issue",
-      visible: true,
-      runTimeoutSeconds: 7,
-    });
+      const result = await tool.execute("visible-timeout", {
+        task: "inspect issue",
+        visible: true,
+        ...(requested !== undefined ? { runTimeoutSeconds: requested } : {}),
+      });
 
-    expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible-timed" });
-    expect(registerRun).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-visible-timed", runTimeoutSeconds: 7 }),
-    );
-  });
+      expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible-timed" });
+      expect(callGateway).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining({ timeoutMs: seconds * 1000 }),
+      );
+      expect(registerRun).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-visible-timed", runTimeoutSeconds: seconds }),
+      );
+    },
+  );
 
   it("uses the target agent model for cross-agent visible sessions", async () => {
     const callGateway = vi.fn(async () => ({

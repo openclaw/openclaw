@@ -1,4 +1,5 @@
 // Built plugin control-plane module checks cover native require(esm) acceptance.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,6 +49,43 @@ afterEach(() => {
 });
 
 describe("built plugin control-plane module loads", () => {
+  it("keeps TypeScript unloaded for checker imports and runtime inventory checks", () => {
+    const rootDir = makeRoot();
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "--eval",
+        `import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const compilerPath = require.resolve("typescript");
+const compilerLoaded = () => Boolean(require.cache[compilerPath]);
+assert.equal(compilerLoaded(), false, "TypeScript loaded before the checker");
+await import("./scripts/check-built-plugin-control-plane-modules.mts");
+assert.equal(compilerLoaded(), false, "TypeScript loaded by the checker import");
+const { listCoreRuntimePostBuildOutputs } = await import("./scripts/runtime-postbuild.mts");
+listCoreRuntimePostBuildOutputs({ rootDir: ${JSON.stringify(rootDir)} });
+assert.equal(compilerLoaded(), false, "TypeScript loaded by runtime postbuild inventory checks");
+await import("./scripts/run-node.mts");
+assert.equal(compilerLoaded(), false, "TypeScript loaded by the development runner import");
+require("typescript");
+assert.equal(compilerLoaded(), true, "the compiler cache observation must detect an actual load");
+`,
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, NODE_OPTIONS: undefined },
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it.each([".js", ".cjs"])(
     "lists exact %s contracts and channel legacy setup references",
     (extension) => {

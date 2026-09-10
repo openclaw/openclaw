@@ -33,9 +33,17 @@ describe("command handler registration", () => {
         { SenderId: "registry-sender", CommandInterpretationSuppressed: suppressed },
       );
       params.skillCommands = [];
-      expect(params.command.isAuthorizedSender).toBe(true);
+      expect(params.command.isAuthorizedSender).toBe(!suppressed);
       expect(params.command.senderIsOwner).toBe(false);
-      return withPluginRuntimeRegistryScope(registry, () => handleCommands(params));
+      return withPluginRuntimeRegistryScope(registry, () =>
+        handleCommands({
+          ...params,
+          resolveModelLevels: async () => ({
+            resolvedThinkLevel: params.resolvedThinkLevel,
+            resolvedReasoningLevel: params.resolvedReasoningLevel,
+          }),
+        }),
+      );
     };
 
     expect(observation).toEqual({ imports: 0, loads: 0 });

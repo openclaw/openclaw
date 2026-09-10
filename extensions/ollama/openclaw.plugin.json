@@ -1,5 +1,6 @@
 {
   "id": "ollama",
+  "categories": ["models", "memory", "web"],
   "doctorContract": {
     "configRepair": true
   },
@@ -77,6 +78,9 @@
     }
   ],
   "modelCatalog": {
+    "modelsDev": {
+      "ollama-cloud": "ollama-cloud"
+    },
     "runtimeAugment": true,
     "providers": {
       "ollama-cloud": {

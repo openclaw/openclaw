@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import { createServer, get } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -136,16 +137,7 @@ describe("isolated setup inference detection", () => {
     expect(JSON.parse(response.body)).toEqual({ ok: true, status: "live" });
     expect(elapsedMs).toBeLessThan(500);
     const detection = await pending;
-    expect(detection).toMatchObject({
-      candidates: fallback.candidates,
-      unavailableCandidates: fallback.unavailableCandidates,
-      manualProviders: fallback.manualProviders,
-      authOptions: fallback.authOptions,
-      recommendedInstalls: fallback.recommendedInstalls,
-      workspace: fallback.workspace,
-      setupComplete: fallback.setupComplete,
-    });
-    expect(detection.prepareOptions ?? []).toEqual([]);
+    expect(detection).toEqual(fallback);
     expect(performance.now() - pendingStartedAt).toBeLessThan(10_000);
   });
 
@@ -164,26 +156,6 @@ describe("isolated setup inference detection", () => {
         "AI access detection did not finish after 0.05s. " +
         "This Gateway may still be checking — try again.",
     });
-  });
-
-  it("returns partial candidates when detection times out", async () => {
-    const { detectSetupInferenceIsolated } = await loadDetectionModule();
-    const partial = detectedCodex();
-
-    const detection = await detectSetupInferenceIsolated({
-      workerUrl: blockingWorkerUrl,
-      workerData: {
-        blockMs: 30_000,
-        detection: emptyDetection(),
-        partialDetection: partial,
-      },
-      // Generous timeout: the partial must beat the deadline on loaded CI
-      // runners, or the empty-timeout rejection makes this flake.
-      timeoutMs: 3_000,
-      fallbackEnv: {},
-    });
-
-    expect(detection).toEqual(partial);
   });
 
   it("returns ambient API keys when detection times out", async () => {
@@ -270,45 +242,72 @@ describe("isolated setup inference detection", () => {
     const shutdownGate = new Promise<void>((resolve) => {
       releaseShutdown = resolve;
     });
-    const terminateSpy = vi.spyOn(Worker.prototype, "terminate");
-    terminateSpy.mockImplementationOnce(function (this: Worker) {
-      terminateSpy.mockRestore();
-      return this.terminate().then(async (code) => {
+    const unrelatedWorker = new Worker(silentBlockingWorkerUrl);
+    const capturedWorkers: Worker[] = [];
+    const workerChannel = channel("worker_threads");
+    const captureWorker = (message: unknown) => {
+      // SAFETY: Node publishes { worker: this } synchronously from the Worker constructor.
+      capturedWorkers.push((message as { worker: Worker }).worker);
+    };
+    let detection: Promise<SetupInferenceDetection> | undefined;
+    let retry: Promise<SetupInferenceDetection> | undefined;
+    let gatedWorker: Worker | undefined;
+    try {
+      // Observe only this synchronous construction, not another worker's later shutdown.
+      workerChannel.subscribe(captureWorker);
+      try {
+        detection = detectSetupInferenceIsolated({
+          workerUrl: silentBlockingWorkerUrl,
+          timeoutMs: 50,
+          fallbackEnv: {},
+        });
+      } finally {
+        workerChannel.unsubscribe(captureWorker);
+      }
+      expect(capturedWorkers).toHaveLength(1);
+      const detectorWorker = capturedWorkers[0]!;
+      const terminate = detectorWorker.terminate.bind(detectorWorker);
+      vi.spyOn(detectorWorker, "terminate").mockImplementationOnce(async () => {
+        gatedWorker = detectorWorker;
+        const code = await terminate();
         await shutdownGate;
         return code;
       });
-    });
+      const unrelatedShutdown = unrelatedWorker.terminate();
+      expect(gatedWorker).toBeUndefined();
+      await expect(detection).rejects.toThrow("AI access detection did not finish");
+      await unrelatedShutdown;
+      expect(unrelatedWorker.threadId).toBe(-1);
+      expect(gatedWorker).toBe(capturedWorkers[0]);
 
-    await expect(
-      detectSetupInferenceIsolated({
-        workerUrl: silentBlockingWorkerUrl,
-        timeoutMs: 50,
+      let retrySettled = false;
+      const fresh = detectedCodex();
+      retry = detectSetupInferenceIsolated({
+        workerUrl: blockingWorkerUrl,
+        workerData: {
+          blockMs: 0,
+          detection: fresh,
+          partialDetection: emptyDetection(),
+        },
+        timeoutMs: 5_000,
         fallbackEnv: {},
-      }),
-    ).rejects.toThrow("AI access detection did not finish");
+      }).then((result) => {
+        retrySettled = true;
+        return result;
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
 
-    let retrySettled = false;
-    const fresh = detectedCodex();
-    const retry = detectSetupInferenceIsolated({
-      workerUrl: blockingWorkerUrl,
-      workerData: {
-        blockMs: 0,
-        detection: fresh,
-        partialDetection: emptyDetection(),
-      },
-      timeoutMs: 5_000,
-      fallbackEnv: {},
-    }).then((detection) => {
-      retrySettled = true;
-      return detection;
-    });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 20);
-    });
-
-    expect(retrySettled).toBe(false);
-    releaseShutdown?.();
-    await expect(retry).resolves.toEqual(fresh);
+      expect(retrySettled).toBe(false);
+      releaseShutdown?.();
+      await expect(retry).resolves.toEqual(fresh);
+    } finally {
+      releaseShutdown?.();
+      const settled = Promise.allSettled([detection, retry]);
+      await Promise.all([unrelatedWorker, ...capturedWorkers].map((worker) => worker.terminate()));
+      await settled;
+    }
   });
 
   it("returns successful worker results unchanged", async () => {

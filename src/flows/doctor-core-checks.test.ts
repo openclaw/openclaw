@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: mocks.loadModelCatalog,
+  readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../commands/doctor-gateway-services.js", () => ({
@@ -869,7 +869,7 @@ describe("CORE_HEALTH_CHECKS", () => {
         createDeps({
           async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
             return [
-              "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended",
+              "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private",
               "Memory system not found in workspace.",
             ];
           },
@@ -896,7 +896,7 @@ describe("CORE_HEALTH_CHECKS", () => {
         checkId: "core/doctor/workspace-suggestions",
         severity: "info",
         message:
-          "Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended",
+          "Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private",
       }),
     );
     expect(findings).toContainEqual(
@@ -998,6 +998,9 @@ describe("CORE_HEALTH_CHECKS", () => {
                 "groq/llama3-70b-8192",
                 "groq/llama-3.3-70b-versatile",
                 "openai/not-in-the-local-catalog",
+                "google/gemini-2.5-flash",
+                "google/gemini-3.8-flash",
+                "google-gemini-cli/gemini-2.5-pro",
               ],
             },
             imageModel: { primary: "no-such-provider/no-such-model" },
@@ -1010,6 +1013,7 @@ describe("CORE_HEALTH_CHECKS", () => {
       ["openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
       ["codex-cli/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
       ["groq/llama3-70b-8192", "groq/llama-3.3-70b-versatile", "info"],
+      ["google-gemini-cli/gemini-2.5-pro", "google/gemini-2.5-pro", "info"],
     ] as const) {
       expect(findings).toContainEqual(
         expect.objectContaining({
@@ -1029,6 +1033,12 @@ describe("CORE_HEALTH_CHECKS", () => {
             "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
         }),
         expect.objectContaining({
+          severity: "info",
+          target: "google/gemini-3.8-flash",
+          fixHint:
+            "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
+        }),
+        expect.objectContaining({
           severity: "warning",
           target: "no-such-provider/no-such-model",
           fixHint:
@@ -1038,6 +1048,9 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
     expect(findings).not.toContainEqual(
       expect.objectContaining({ target: "groq/llama-3.3-70b-versatile" }),
+    );
+    expect(findings).not.toContainEqual(
+      expect.objectContaining({ target: "google/gemini-2.5-flash" }),
     );
   });
 });

@@ -165,9 +165,13 @@ export async function hasAuthForModelProvider(params: {
     params.store ??
     (params.discoverExternalCliAuth === false
       ? ensureAuthProfileStoreWithoutExternalProfiles(slowPathAgentDir, {
+          migrationProvider: provider,
+          config: params.cfg,
           allowKeychainPrompt: false,
         })
       : ensureAuthProfileStore(slowPathAgentDir, {
+          migrationProvider: provider,
+          config: params.cfg,
           externalCli: externalCliDiscoveryForProviderAuth({ cfg: params.cfg, provider }),
         }));
 
@@ -247,6 +251,7 @@ export function createProviderAuthChecker(params: {
     });
     modelAuthResolver = createModelAuthAvailabilityResolver({
       cfg: params.cfg ?? {},
+      agentId: params.agentId,
       authStore,
       preparedRuntimeAuthStore: params.preparedAuth?.authStore,
       preparedRuntimeAuthModes: params.preparedAuth?.authModes,
@@ -304,7 +309,11 @@ export function createProviderAuthChecker(params: {
     const evaluation = Promise.resolve().then(
       async (): Promise<ModelAuthAvailabilityEvaluation> => {
         if (hasRouteFacts) {
-          return resolveModelAuthResolver().evaluateModelAuth(key, ref);
+          const authResolver = resolveModelAuthResolver();
+          // Native readiness belongs to prepared owners; setup hints stay provider-only.
+          return params.preparedAuth
+            ? authResolver.evaluateRuntimeModelAuth(key, ref)
+            : authResolver.evaluateModelAuth(key, ref);
         }
         return {
           availability: await resolveLegacyProviderAuth(),

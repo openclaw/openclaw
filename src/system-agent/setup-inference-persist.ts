@@ -1,46 +1,25 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
-import {
-  type AgentRunResultView,
-  extractAgentRunTerminalError,
-  extractAgentRunText,
-} from "../agents/agent-run-result.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
-import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import { describeFailoverError } from "../agents/failover-error.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { SessionManager } from "../agents/sessions/index.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import { prepareProviderAuthProfilesForPersistence } from "../plugins/provider-auth-persistence.js";
+import {
+  stageProviderAuthProfilesForPersistence,
+  type ProviderAuthProtectedProfilesReceipt,
+} from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  type ActivateSetupInferenceDeps,
-  SETUP_INFERENCE_TEST_PROMPT,
-  SETUP_INFERENCE_TEST_TIMEOUT_MS,
-  SetupInferenceCancelledError,
-  type SetupInferenceFailureStatus,
-  setupInferenceLog,
-} from "./setup-inference-core.js";
-import {
-  type SetupInferenceTestPlan,
-  extractRunWinnerError,
-  mapFailoverReasonToSetupStatus,
-  resolveStrictSetupAuthProfileError,
-  resolveToolFreeCliSetupError,
-} from "./setup-inference-plan-helpers.js";
-import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
+import { type ActivateSetupInferenceDeps, setupInferenceLog } from "./setup-inference-core.js";
+import type { SetupInferenceTestPlan } from "./setup-inference-plan-helpers.js";
 
 export async function cleanupSetupInferenceTempDir(params: {
   tempDir: string;
@@ -158,21 +137,14 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
 }
 
 export async function restoreSetupPluginMetadata(params: {
-  readSnapshot: () => Promise<
-    Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>
-  >;
   workspaceDir: string;
   deps: ActivateSetupInferenceDeps;
 }): Promise<void> {
   try {
-    const snapshot = await params.readSnapshot();
-    const sourceConfig =
-      snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const refreshPluginRegistry =
       params.deps.refreshPluginRegistryAfterConfigMutation ??
       (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
     await refreshPluginRegistry({
-      config: sourceConfig,
       reason: "source-changed",
       workspaceDir: params.workspaceDir,
       logger: setupInferenceLog,
@@ -208,7 +180,7 @@ function mergePatchConflicts(base: unknown, current: unknown, patch: unknown): b
 export function applyManualAuthConfig(
   config: OpenClawConfig,
   manualAuth: NonNullable<SetupInferenceTestPlan["manualAuth"]>,
-  configKind: "runtime" | "source",
+  currentSourceConfig: OpenClawConfig,
   enablePlugin: typeof enablePluginInConfig = enablePluginInConfig,
 ): OpenClawConfig {
   let enabledConfig = config;
@@ -219,11 +191,11 @@ export function applyManualAuthConfig(
     }
     enabledConfig = enableResult.config;
   }
-  // Runtime validation includes resolved defaults; source validation must compare
-  // only authored state so normal materialization cannot impersonate a concurrent edit.
-  const configBase =
-    configKind === "runtime" ? manualAuth.runtimeConfigBase : manualAuth.sourceConfigBase;
-  if (mergePatchConflicts(configBase, enabledConfig, manualAuth.configPatch)) {
+  // Installing a provider can materialize new runtime defaults without editing
+  // config. Both projections validate conflicts against the same authored source.
+  if (
+    mergePatchConflicts(manualAuth.sourceConfigBase, currentSourceConfig, manualAuth.configPatch)
+  ) {
     throw new Error(
       "Provider configuration changed during the live inference test, so the verified credential was not saved. Review the current provider settings and retry.",
     );
@@ -239,7 +211,7 @@ export type ManualAuthPersistenceReceipt = {
   }>;
   /** Profiles created by this activation; rollback must not delete prior identical entries. */
   insertedProfileIds: ReadonlySet<string>;
-  rollbackProtectedSecretStorage: () => void;
+  protectedPersistence?: ProviderAuthProtectedProfilesReceipt;
 };
 
 type ManualAuthProfilesReadback = "present" | "absent" | "mismatch" | "unknown";
@@ -329,65 +301,82 @@ export async function persistManualAuthProfiles(params: {
   secretStorage?: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
 }): Promise<ManualAuthPersistenceResult> {
   const prepared = params.secretStorage
-    ? prepareProviderAuthProfilesForPersistence({
+    ? await stageProviderAuthProfilesForPersistence({
         profiles: params.profiles,
         config: params.secretStorage.config,
         ...(params.secretStorage.env ? { env: params.secretStorage.env } : {}),
       })
-    : { profiles: [...params.profiles], rollback: () => {} };
-  const profiles = prepared.profiles.map((profile) => ({
-    profileId: profile.profileId,
-    credential: normalizeAuthProfileCredential(profile.credential),
-  }));
-  const insertedProfileIds = new Set<string>();
-  const receipt = {
-    agentDir: params.agentDir,
-    profiles,
-    insertedProfileIds,
-    rollbackProtectedSecretStorage: prepared.rollback,
-  };
-  let collision = false;
-  const update = params.deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
-  const updated = await update({
-    agentDir: params.agentDir,
-    saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
-    updater: (store) => {
-      let changed = false;
-      for (const profile of profiles) {
-        const existing = store.profiles[profile.profileId];
-        if (existing && !isDeepStrictEqual(existing, profile.credential)) {
-          collision = true;
-          return false;
+    : undefined;
+  try {
+    const preparedProfiles = prepared?.profiles ?? [...params.profiles];
+    const profiles = preparedProfiles.map((profile) => ({
+      profileId: profile.profileId,
+      credential: normalizeAuthProfileCredential(profile.credential),
+    }));
+    const insertedProfileIds = new Set<string>();
+    const receipt = {
+      agentDir: params.agentDir,
+      profiles,
+      insertedProfileIds,
+      ...(prepared ? { protectedPersistence: prepared } : {}),
+    };
+    let collision = false;
+    const update = params.deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
+    const updated = await update({
+      agentDir: params.agentDir,
+      saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+      updater: (store) => {
+        let changed = false;
+        for (const profile of profiles) {
+          const existing = store.profiles[profile.profileId];
+          if (existing && !isDeepStrictEqual(existing, profile.credential)) {
+            collision = true;
+            return false;
+          }
+          if (!existing) {
+            store.profiles[profile.profileId] = profile.credential;
+            insertedProfileIds.add(profile.profileId);
+            changed = true;
+          }
         }
-        if (!existing) {
-          store.profiles[profile.profileId] = profile.credential;
-          insertedProfileIds.add(profile.profileId);
-          changed = true;
-        }
-      }
-      return changed;
-    },
-  });
-  if (collision) {
-    prepared.rollback();
-    return { status: "not-persisted" };
+        return changed;
+      },
+    });
+    if (collision) {
+      await prepared?.rollback();
+      return { status: "not-persisted" };
+    }
+    // The store helper can report a post-commit chmod failure as null. Read back
+    // the exact unique profiles before deciding whether the transaction failed.
+    const readback = readManualAuthProfiles(receipt, params.deps);
+    if (updated !== null || readback === "present") {
+      return { status: "persisted", receipt };
+    }
+    if (readback === "absent") {
+      await prepared?.rollback();
+      return { status: "not-persisted" };
+    }
+    return { status: "unknown", receipt };
+  } catch (error) {
+    try {
+      await prepared?.rollback();
+    } catch (rollbackError) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
+      throw new AggregateError(
+        [error, rollbackError],
+        "Manual provider auth persistence failed and protected storage could not be released.",
+        { cause: error },
+      );
+    }
+    throw error;
   }
-  // The store helper can report a post-commit chmod failure as null. Read back
-  // the exact unique profiles before deciding whether the transaction failed.
-  const readback = readManualAuthProfiles(receipt, params.deps);
-  if (updated !== null || readback === "present") {
-    return { status: "persisted", receipt };
-  }
-  if (readback === "absent") {
-    prepared.rollback();
-    return { status: "not-persisted" };
-  }
-  return { status: "unknown", receipt };
 }
 
-function rollbackManualAuthSecretStorage(receipt: ManualAuthPersistenceReceipt): boolean {
+async function rollbackManualAuthSecretStorage(
+  receipt: ManualAuthPersistenceReceipt,
+): Promise<boolean> {
   try {
-    receipt.rollbackProtectedSecretStorage();
+    await receipt.protectedPersistence?.rollback();
     return true;
   } catch {
     return false;
@@ -399,7 +388,7 @@ export async function rollbackManualAuthProfiles(
   deps: ActivateSetupInferenceDeps,
 ): Promise<boolean> {
   if (receipt.insertedProfileIds.size === 0) {
-    return rollbackManualAuthSecretStorage(receipt);
+    return await rollbackManualAuthSecretStorage(receipt);
   }
   const update = deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -435,7 +424,7 @@ export async function rollbackManualAuthProfiles(
           updated.profiles[profile.profileId] === undefined,
       )
     ) {
-      return rollbackManualAuthSecretStorage(receipt);
+      return await rollbackManualAuthSecretStorage(receipt);
     }
     let persistedStore: ReturnType<typeof loadPersistedAuthProfileStore>;
     try {
@@ -453,192 +442,29 @@ export async function rollbackManualAuthProfiles(
           persistedStore.profiles[profile.profileId] === undefined,
       )
     ) {
-      return rollbackManualAuthSecretStorage(receipt);
+      return await rollbackManualAuthSecretStorage(receipt);
     }
   }
+  // Profile removal is indeterminate, so retain every protected write that a
+  // surviving profile may reference. Commit releases the staged locks, and its
+  // failure must remain visible instead of hiding a lock leak.
+  await receipt.protectedPersistence?.commit();
   return false;
 }
 
-export async function runSetupInferenceTest(params: {
-  plan: SetupInferenceTestPlan;
-  prompt?: string;
-  tempDir: string;
-  deps: ActivateSetupInferenceDeps;
-  authProfileStateMode: "read-write" | "read-only";
-  requireExecutionOwner: boolean;
-  signal?: AbortSignal;
-}): Promise<
-  | { ok: true; latencyMs: number; auth: AgentExecutionAuthBinding; text: string }
-  | {
-      ok: false;
-      status: SetupInferenceFailureStatus;
-      error: string;
-    }
-> {
-  const { plan, tempDir, deps, authProfileStateMode, requireExecutionOwner } = params;
-  // Keep probe prefixes aligned with the logging filters; provider transports can also use the
-  // session id as cache affinity, so this ephemeral id must stay under OpenAI's 64-character cap.
-  const runId = `probe-setup-inference-${randomUUID()}`;
-  const sessionId = runId;
-  const sessionFile = `in-memory:${sessionId}`;
-  const sessionManager = SessionManager.inMemory(tempDir);
-  const effectiveAgentId = plan.routeAgentId ?? plan.agentId ?? "openclaw";
-  const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
-  const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
-  const started = Date.now();
-  const failed = (status: SetupInferenceFailureStatus, error: string) => {
-    setupInferenceLog.warn("Inference setup probe failed.", {
-      event: "setup_inference_probe_failed",
-      provider: plan.provider,
-      model: plan.model,
-      runner: plan.runner,
-      status,
-      timeoutMs,
-      durationMs: Date.now() - started,
-    });
-    return { ok: false as const, status, error };
-  };
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    plan.config,
-    runId,
-    effectiveAgentId,
-    "system-agent.setup-inference",
-  );
-  let successfulAuth: AgentExecutionAuthBinding | undefined;
+export async function commitManualAuthProfiles(
+  receipt: ManualAuthPersistenceReceipt,
+  failure?: { primaryError: unknown; message: string },
+): Promise<void> {
   try {
-    if (plan.runner === "cli") {
-      const unsupportedError = resolveToolFreeCliSetupError(plan);
-      if (unsupportedError) {
-        return failed("unavailable", unsupportedError);
-      }
+    await receipt.protectedPersistence?.commit();
+  } catch (releaseError) {
+    if (!failure || releaseError === failure.primaryError) {
+      throw releaseError;
     }
-    const strictProfileError = resolveStrictSetupAuthProfileError({
-      plan,
-      workspaceDir: tempDir,
-      deps,
+    // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains releaseError; cause remains the primary activation failure.
+    throw new AggregateError([failure.primaryError, releaseError], failure.message, {
+      cause: failure.primaryError,
     });
-    if (strictProfileError) {
-      return failed("auth", strictProfileError);
-    }
-
-    let result: AgentRunResultView;
-    if (plan.runner === "cli") {
-      const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
-      result = (await runCli({
-        preparedRunAdmission,
-        sessionId,
-        sessionKey,
-        sessionManager,
-        agentId: effectiveAgentId,
-        trigger: "manual",
-        sessionFile,
-        workspaceDir: tempDir,
-        ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.executionConfig ?? plan.config,
-        prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
-        provider: plan.provider,
-        model: plan.model,
-        ...(plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
-        timeoutMs,
-        runId,
-        messageChannel: "openclaw",
-        messageProvider: "openclaw",
-        executionMode: "side-question",
-        disableTools: true,
-        cleanupCliLiveSessionOnRunEnd: true,
-        onSuccessfulAuthBinding: (binding) => {
-          successfulAuth = binding;
-        },
-        ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as AgentRunResultView;
-    } else {
-      const runEmbedded =
-        deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
-      result = (await runEmbedded({
-        preparedRunAdmission,
-        sessionId,
-        sessionKey,
-        sessionManager,
-        // The probe owns its transcript; session admission must not create durable agent state.
-        sessionPersistence: "detached",
-        agentId: effectiveAgentId,
-        trigger: "manual",
-        sessionFile,
-        workspaceDir: tempDir,
-        ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.executionConfig ?? plan.config,
-        prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
-        provider: plan.provider,
-        model: plan.model,
-        ...(plan.authProfileId
-          ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
-          : {}),
-        authProfileStateMode,
-        preparedModelRuntimeMode: "isolated-read-only",
-        ...(plan.cleanupBundleMcpOnRunEnd ? { cleanupBundleMcpOnRunEnd: true } : {}),
-        ...(plan.agentHarnessRuntimeOverride
-          ? { agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride }
-          : {}),
-        timeoutMs,
-        runId,
-        lane: `session:probe-setup-inference:${plan.provider}`,
-        thinkLevel: "off",
-        reasoningLevel: "off",
-        verboseLevel: "off",
-        disableTrajectory: true,
-        // Keep the "reply OK" probe bounded while leaving room for reasoning.
-        // Custom completions pass no explicit cap: the stream layer applies the
-        // resolved model's own maxTokens budget without exceeding its limits.
-        ...(params.prompt === undefined
-          ? resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride)
-          : {}),
-        disableTools: true,
-        modelRun: true,
-        messageChannel: "openclaw",
-        messageProvider: "openclaw",
-        onSuccessfulAuthBinding: (binding) => {
-          successfulAuth = binding;
-        },
-        ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as AgentRunResultView;
-    }
-    if (params.signal?.aborted) {
-      throw new SetupInferenceCancelledError();
-    }
-    const terminalError = extractAgentRunTerminalError(result);
-    if (terminalError) {
-      const described = describeFailoverError(new Error(terminalError));
-      return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
-    }
-    const text = extractAgentRunText(result)?.trim();
-    if (!text) {
-      return failed(
-        "format",
-        "The model started but did not send a reply. Try again or pick another option.",
-      );
-    }
-    const winnerError = await extractRunWinnerError(plan, result);
-    if (winnerError) {
-      return failed("unknown", winnerError);
-    }
-    if (requireExecutionOwner && !successfulAuth) {
-      return failed(
-        "unknown",
-        "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse.",
-      );
-    }
-    return {
-      ok: true,
-      latencyMs: Date.now() - started,
-      text,
-      auth:
-        successfulAuth ??
-        (!requireExecutionOwner && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
-    };
-  } catch (error) {
-    const described = describeFailoverError(error);
-    return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
-  } finally {
-    preparedRunAdmission.close();
   }
 }

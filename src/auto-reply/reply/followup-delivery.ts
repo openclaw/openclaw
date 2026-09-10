@@ -73,7 +73,10 @@ type FollowupDeliveryDecision =
 export function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
   execution: AgentTurnExecutionResult;
-  accounting?: AccountedAgentTurn & { compactionNotice?: ReplyPayload };
+  accounting?: AccountedAgentTurn & {
+    compactionNotice?: ReplyPayload;
+    diagnosticsPayload?: ReplyPayload;
+  };
   opts?: InternalGetReplyOptions;
 }): FollowupDeliveryDecision {
   const { turn, execution, accounting, opts } = params;
@@ -178,21 +181,18 @@ export function resolveFollowupDeliveryDecision(params: {
     sentTargets: result.messagingToolSentTargets,
     sentTexts: result.messagingToolSentTexts,
   });
-  const hasExplicitlyDeliverablePayload = payloads.some(
-    (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
-  );
-  const recovery =
-    hasExplicitlyDeliverablePayload || accounting.terminalFailurePayload
-      ? ({ kind: "none" } as const)
-      : resolveStrandedReplyRecovery({
-          base: turn.queued,
-          finalText: assistantFinalText,
-          sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
-          sendPolicyDenied: sourcePolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery: completedSourceDelivery,
-          isHeartbeat: opts?.isHeartbeat === true,
-          isRoomEvent: false,
-        });
+  const recovery = accounting.terminalFailurePayload
+    ? ({ kind: "none" } as const)
+    : resolveStrandedReplyRecovery({
+        base: turn.queued,
+        payloads,
+        finalText: assistantFinalText,
+        sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
+        sendPolicyDenied: sourcePolicy.sendPolicyDenied,
+        successfulSourceReplyDelivery: completedSourceDelivery,
+        isHeartbeat: opts?.isHeartbeat === true,
+        isRoomEvent: false,
+      });
   if (recovery.kind === "retry") {
     return {
       kind: "retry-source-delivery",
@@ -258,7 +258,10 @@ export function resolveFollowupDeliveryDecision(params: {
   const hasTerminalPayload = payloads.some(
     (payload) =>
       isReplyPayloadTerminalContent(payload) &&
-      (sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
+      // Private terminal content is not an empty result. Source visibility is
+      // enforced below; genuine failures and yield acknowledgments still win.
+      ((!accounting.terminalFailurePayload && result.meta?.yielded !== true) ||
+        sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (!hasTerminalPayload && fallbackPayload) {
@@ -276,6 +279,15 @@ export function resolveFollowupDeliveryDecision(params: {
       payloads: [accounting.compactionNotice],
     });
     payloads = [...compactionNotices, ...payloads];
+  }
+  if (accounting.diagnosticsPayload && payloads.length > 0) {
+    payloads = [
+      ...payloads,
+      ...resolveFollowupDeliveryPayloads({
+        ...deliveryContext,
+        payloads: [accounting.diagnosticsPayload],
+      }),
+    ];
   }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,
@@ -407,6 +419,12 @@ async function sendFollowupPayloads(params: {
         requesterSenderUsername: turn.queued.run.senderUsername,
         requesterSenderE164: turn.queued.run.senderE164,
         threadId: turn.queued.originatingThreadId,
+        currentMessageId:
+          sameChannelOrigin &&
+          (turn.queued.run.inputProvenance?.kind === undefined ||
+            turn.queued.run.inputProvenance.kind === "external_user")
+            ? turn.queued.messageId
+            : undefined,
         cfg: turn.config,
         mirror:
           metadata?.assistantMessageIndex !== undefined ||
@@ -416,6 +434,12 @@ async function sendFollowupPayloads(params: {
         replyKind: params.kind,
         runId: params.runId,
       });
+      if (!result.delivered && (result.queueCustody === "held" || result.ambiguous)) {
+        logVerbose(
+          `followup queue: route-reply remains pending: ${result.error ?? "unconfirmed delivery"}`,
+        );
+        continue;
+      }
       if (!result.delivered && !result.suppressed) {
         const routeError = result.error ?? "no visible delivery";
         logVerbose(`followup queue: route-reply failed: ${routeError}`);

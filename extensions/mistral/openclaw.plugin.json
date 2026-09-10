@@ -1,5 +1,7 @@
 {
   "id": "mistral",
+  "categories": ["models", "memory", "voice"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -19,6 +21,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "mistral": "mistral"
+    },
     "providers": {
       "mistral": {
         "baseUrl": "https://api.mistral.ai/v1",

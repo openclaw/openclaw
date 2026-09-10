@@ -1,5 +1,6 @@
 {
   "id": "kilocode",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -48,6 +49,9 @@
     "properties": {}
   },
   "modelCatalog": {
+    "modelsDev": {
+      "kilocode": "kilo"
+    },
     "providers": {
       "kilocode": {
         "baseUrl": "https://api.kilo.ai/api/gateway/",

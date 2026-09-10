@@ -52,6 +52,8 @@ openclaw gateway restart
   </Step>
 </Steps>
 
+Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the built-in catalog because that mode skips discovery.
+
 <AccordionGroup>
   <Accordion title="Non-interactive setup">
     For scripted or headless installations, pass all flags directly:
@@ -166,6 +168,9 @@ the selected model.
 <CardGroup cols={2}>
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
+  </Card>
+  <Card title="ds4 local server" href="/providers/ds4" icon="server">
+    Running DeepSeek V4 Flash from a local OpenAI-compatible ds4 server.
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config reference for agents, models, and providers.

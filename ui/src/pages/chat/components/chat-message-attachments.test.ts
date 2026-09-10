@@ -130,7 +130,6 @@ describe("attachment sidebar source ownership", () => {
         render(
           renderAssistantAttachments([attachment], {
             authToken: "test-token",
-            localMediaPreviewRoots: ["/tmp/openclaw"],
             onRequestUpdate: rerender,
           }),
           container,
@@ -711,79 +710,20 @@ describe("attachment sidebar source ownership", () => {
     subscribers.add(sidebarUpdate);
     const runtime = {
       connectionEpoch: 1,
-      localMediaPreviewRoots: [],
       resolveArtifactDownload,
     };
-    expect(sidebarContent?.resolveSource?.(sidebarUpdate, runtime)?.src).toBe(firstTicket);
+    expect(sidebarContent?.resolveSource?.(sidebarUpdate, runtime)).toMatchObject({
+      status: "ready",
+      src: firstTicket,
+    });
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(sidebarUpdate).toHaveBeenCalled();
-    expect(sidebarContent?.resolveSource?.(sidebarUpdate, runtime)?.src).toBe(renewedTicket);
+    expect(sidebarContent?.resolveSource?.(sidebarUpdate, runtime)).toMatchObject({
+      status: "ready",
+      src: renewedTicket,
+    });
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
-    container.remove();
-  });
-
-  it("resolves an open managed sidebar attachment again after the connection epoch changes", async () => {
-    const attachmentId = crypto.randomUUID();
-    const artifactId = `artifact_managed_video_${attachmentId}`;
-    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
-    const firstTicket = `${source}?mediaTicket=authority-A`;
-    const secondTicket = `${source}?mediaTicket=authority-B`;
-    const firstResolver = vi.fn(async () => ({ url: firstTicket }));
-    const secondResolver = vi.fn(async () => ({ url: secondTicket }));
-    const container = document.body.appendChild(document.createElement("div"));
-    let sidebarContent: AttachmentSidebarContent | undefined;
-    const transcriptUpdate = () => rerender();
-    const rerender = () =>
-      render(
-        renderAssistantAttachments(
-          [managedAttachment(source, artifactId)],
-          {
-            connectionEpoch: 1,
-            onRequestUpdate: transcriptUpdate,
-            resolveArtifactDownload: firstResolver,
-          },
-          (content) => {
-            if (content.kind === "attachment") {
-              sidebarContent = content;
-            }
-          },
-        ),
-        container,
-      );
-    subscribers.add(transcriptUpdate);
-
-    rerender();
-    await flushAttachmentResolution();
-    rerender();
-    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
-
-    const sidebarUpdate = vi.fn();
-    subscribers.add(sidebarUpdate);
-    expect(
-      sidebarContent?.resolveSource?.(sidebarUpdate, {
-        connectionEpoch: 1,
-        localMediaPreviewRoots: [],
-        resolveArtifactDownload: firstResolver,
-      })?.src,
-    ).toBe(firstTicket);
-    expect(
-      sidebarContent?.resolveSource?.(sidebarUpdate, {
-        connectionEpoch: 2,
-        localMediaPreviewRoots: [],
-        resolveArtifactDownload: secondResolver,
-      }),
-    ).toBeNull();
-    await flushAttachmentResolution();
-
-    expect(
-      sidebarContent?.resolveSource?.(sidebarUpdate, {
-        connectionEpoch: 2,
-        localMediaPreviewRoots: [],
-        resolveArtifactDownload: secondResolver,
-      })?.src,
-    ).toBe(secondTicket);
-    expect(secondResolver).toHaveBeenCalledOnce();
     container.remove();
   });
 
@@ -1002,7 +942,6 @@ describe("attachment sidebar source ownership", () => {
           ],
           {
             authToken: "token-A",
-            localMediaPreviewRoots: ["/tmp/openclaw"],
             onRequestUpdate: transcriptUpdate,
           },
           (content) => {
@@ -1022,29 +961,18 @@ describe("attachment sidebar source ownership", () => {
 
     const sidebarUpdate = vi.fn();
     subscribers.add(sidebarUpdate);
-    const resolveSource = sidebarContent?.resolveSource as unknown as
-      | ((
-          onRequestUpdate: () => void,
-          runtime: {
-            authToken?: string | null;
-            localMediaPreviewRoots: readonly string[];
-            resourceBasePath?: string;
-          },
-        ) => { src: string; authToken?: string | null } | null)
-      | undefined;
+    const resolveSource = sidebarContent?.resolveSource;
     expect(resolveSource).toBeDefined();
     expect(
       resolveSource?.(sidebarUpdate, {
         authToken: "token-B",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
       }),
-    ).toBeNull();
+    ).toEqual({ status: "pending" });
     await flushAttachmentResolution();
 
     expect(
       resolveSource?.(sidebarUpdate, {
         authToken: "token-B",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
       }),
     ).toEqual(
       expect.objectContaining({

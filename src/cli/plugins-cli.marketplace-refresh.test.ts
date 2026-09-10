@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => {
     writeJson: vi.fn(),
   };
   return {
-    clearManagedPluginOfficialCatalogCache: vi.fn(),
+    clearManagedPluginCatalogCache: vi.fn(),
     defaultRuntime,
     getRuntimeConfig: vi.fn(),
     loadConfiguredHostedOfficialExternalPluginCatalogEntries: vi.fn(),
@@ -40,8 +40,8 @@ vi.mock("../plugins/official-external-plugin-catalog.js", () => ({
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries,
 }));
 
-vi.mock("../plugins/management-service.js", () => ({
-  clearManagedPluginOfficialCatalogCache: mocks.clearManagedPluginOfficialCatalogCache,
+vi.mock("../plugins/management-catalog.js", () => ({
+  clearManagedPluginCatalogCache: mocks.clearManagedPluginCatalogCache,
 }));
 
 vi.mock("./plugins-update-gateway-signal.js", () => ({
@@ -70,7 +70,7 @@ describe("plugins marketplace refresh", () => {
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.getRuntimeConfig.mockReset();
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockReset();
-    mocks.clearManagedPluginOfficialCatalogCache.mockReset();
+    mocks.clearManagedPluginCatalogCache.mockReset();
     mocks.notifyGatewayPluginMetadataChanged.mockReset().mockResolvedValue(true);
     vi.unstubAllEnvs();
   });

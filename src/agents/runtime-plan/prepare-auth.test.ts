@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
+import { createOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import { resolveAgentHarnessPreparedAuthSupport } from "../harness/support.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import {
@@ -125,21 +127,59 @@ function allCooldownOpenAIStore(): AuthProfileStore {
 }
 
 describe("prepareAgentRuntimeAuthPlan", () => {
+  it("keeps a materialized model endpoint on its own credential provider", () => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] },
+        },
+      },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "arcee",
+          providers: ["arcee"],
+          providerAuthAliases: {
+            arcee: { provider: "openrouter", baseUrls: ["https://openrouter.ai/api/v1"] },
+          },
+        },
+      ],
+    });
+    const plan = prepareAgentRuntimeAuthPlan({
+      provider: "arcee",
+      modelId: "trinity-large-thinking",
+      modelApi: "openai-completions",
+      modelBaseUrl: "https://api.arcee.ai/api/v1",
+      config,
+      metadataSnapshot,
+      env: {},
+      authProfileStore: authStore({
+        "arcee:direct": apiKeyProfile("arcee", "direct-model-key"),
+        "openrouter:routed": apiKeyProfile("openrouter", "router-model-key"),
+      }),
+    });
+
+    expect(plan.providerForAuth).toBe("arcee");
+    expect(plan.forwardedAuthProfileId).toBe("arcee:direct");
+    expect(config.models?.providers?.arcee?.baseUrl).toBe("https://openrouter.ai/api/v1");
+  });
+
   it("carries prepared provider aliases into generic auth planning", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       provider: "legacy-provider",
       modelId: "model",
       env: {},
       authProfileStore: authStore({}),
-      metadataSnapshot: {
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
         plugins: [
           {
             id: "alias-owner",
             origin: "bundled",
             providerAuthAliases: { "legacy-provider": "canonical-provider" },
-          } as never,
+          },
         ],
-      },
+      }),
     });
 
     expect(plan.providerForAuth).toBe("canonical-provider");
@@ -431,6 +471,76 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       "user",
       "auto",
     ]);
+  });
+
+  it("prepares an automatic pending OAuth fence for runtime settlement", () => {
+    const pendingProfileId = "xai:pending";
+    const backupProfileId = "xai:backup";
+    const pending = createOAuthRefreshFence({
+      profileId: pendingProfileId,
+      credential: {
+        type: "oauth",
+        provider: "xai",
+        access: "expired-access",
+        refresh: "refresh-token",
+        expires: 1,
+      },
+    });
+
+    const prepared = prepareAgentRuntimeAuth({
+      provider: "xai",
+      modelId: "grok-4",
+      env: {},
+      authProfileStore: authStore(
+        {
+          [pendingProfileId]: pending,
+          [backupProfileId]: apiKeyProfile("xai", "backup-key"),
+        },
+        { xai: [pendingProfileId, backupProfileId] },
+      ),
+    });
+
+    expect(
+      prepared.attempts
+        .filter((attempt) => attempt.kind === "profile")
+        .map((attempt) => attempt.profileId),
+    ).toEqual([pendingProfileId, backupProfileId]);
+  });
+
+  it("keeps a user-pinned pending OAuth fence ahead of ordered siblings", () => {
+    const pendingProfileId = "xai:pending";
+    const backupProfileId = "xai:backup";
+    const pending = createOAuthRefreshFence({
+      profileId: pendingProfileId,
+      credential: {
+        type: "oauth",
+        provider: "xai",
+        access: "expired-access",
+        refresh: "refresh-token",
+        expires: 1,
+      },
+    });
+
+    const prepared = prepareAgentRuntimeAuth({
+      provider: "xai",
+      modelId: "grok-4",
+      env: {},
+      authProfileStore: authStore(
+        {
+          [pendingProfileId]: pending,
+          [backupProfileId]: apiKeyProfile("xai", "backup-key"),
+        },
+        { xai: [backupProfileId] },
+      ),
+      sessionAuthProfileId: pendingProfileId,
+      sessionAuthProfileSource: "user",
+    });
+
+    expect(
+      prepared.attempts
+        .filter((attempt) => attempt.kind === "profile")
+        .map((attempt) => attempt.profileId),
+    ).toEqual([pendingProfileId, backupProfileId]);
   });
 
   it("defers an ambiguous route when native Codex owns auth", () => {
@@ -1897,6 +2007,30 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toThrow(/not configured for openai/u);
   });
 
+  it("keeps provider incompatibility for a config-only AWS SDK profile", () => {
+    const profileId = "amazon-bedrock:default";
+    expect(() =>
+      prepareAgentRuntimeAuthPlan({
+        ...virtualCodexAuthFixture(),
+        config: {
+          auth: { profiles: { [profileId]: { provider: "amazon-bedrock", mode: "aws-sdk" } } },
+          models: {
+            providers: {
+              "amazon-bedrock": {
+                auth: "aws-sdk",
+                baseUrl: "https://bedrock.example.test",
+                models: [],
+              },
+            },
+          },
+        },
+        authProfileStore: authStore({}),
+        sessionAuthProfileId: profileId,
+        sessionAuthProfileSource: "user",
+      }),
+    ).toThrow(/not configured for openai/u);
+  });
+
   it("rejects unavailable user-pinned OpenAI profiles on the virtual Codex provider", () => {
     expect(() =>
       prepareAgentRuntimeAuthPlan({
@@ -1912,7 +2046,13 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         sessionAuthProfileId: "openai:missing",
         sessionAuthProfileSource: "user",
       }),
-    ).toThrow(/not configured for openai/u);
+    ).toThrow(
+      expect.objectContaining({
+        code: "selected_auth_profile_unavailable",
+        reason: "auth",
+        status: 401,
+      }),
+    );
   });
 
   it("does not reuse a routed plan across compaction model overrides", () => {

@@ -4,7 +4,8 @@ import { expect } from "vitest";
 import type { readSkillReviewOutcomes } from "./collection-review-state.js";
 import { readExperienceReviewMessageText } from "./experience-review-message-text.test-support.js";
 import type { observeExperienceReview } from "./experience-review-observation.test-support.js";
-import type { getSkillProposalRunProgress, listSkillProposals } from "./service.js";
+import type { getSkillProposalRunProgress } from "./proposal-run-progress.test-support.js";
+import type { listSkillProposals } from "./service.js";
 
 export function assertExperienceReviewDecision(params: {
   observation: Awaited<ReturnType<typeof observeExperienceReview>>;
@@ -45,7 +46,11 @@ export function assertExperienceReviewDecision(params: {
     expect(mutations).toHaveLength(0);
     for (const call of observation.toolCalls) {
       expect(isRecord(call.arguments) && call.arguments.action).toSatisfy(
-        (action: unknown) => action === "read" || action === "prepare_patch",
+        (action: unknown) =>
+          action === "list" ||
+          action === "inspect" ||
+          action === "read" ||
+          action === "prepare_patch",
       );
     }
     expect(progress.proposalIds).toEqual([]);

@@ -15,6 +15,7 @@ import {
   MAX_IMAGE_INPUT_PIXELS,
   readImageMetadataFromHeader,
 } from "../media/image-ops.js";
+import { resolveClawHubCatalogIconUrl } from "../plugins/catalog-icon-registry.js";
 import {
   resolveManagedPluginIconSource,
   resolveManagedSetupCatalogIconUrl,
@@ -156,7 +157,7 @@ async function loadPackageIcon(params: {
       maxBytes: PLUGIN_ICON_MAX_BYTES,
       rejectHardlinks: true,
     });
-    if (!opened.ok || opened.stat.size < 1) {
+    if (!opened.ok) {
       return null;
     }
     try {
@@ -339,10 +340,10 @@ export async function handlePluginIconHttpRequest(
       })
     : undefined;
   const remoteIconUrl = catalogIconUrl
-    ? resolveManagedSetupCatalogIconUrl({
+    ? (resolveManagedSetupCatalogIconUrl({
         config: opts.config,
         iconUrl: catalogIconUrl,
-      })
+      }) ?? resolveClawHubCatalogIconUrl(catalogIconUrl))
     : faviconHostname
       ? // The route accepts a hostname, never a caller-controlled URL. Keep
         // path and scheme fixed so only the strict fetch guard owns redirects.

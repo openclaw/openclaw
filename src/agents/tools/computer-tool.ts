@@ -1,16 +1,10 @@
-/**
- * computer built-in tool.
- *
- * Drives a paired desktop node with computer_20251124-style actions: reads
- * reuse the screen.snapshot node command as the reference frame and input is
- * routed through the dangerous computer.act node command. The tool cannot
- * tell how a node fulfills computer.act; macOS nodes are the first fulfiller.
- */
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ComputerUseV2ActionName } from "../../plugins/computer-use-contract.js";
+import { COMPUTER_USE_V2_ACTION_NAMES } from "../../plugins/computer-use-contract.js";
 import { sleep } from "../../utils/sleep.js";
+import type { PreparedPairedComputerUse } from "../computer-use-node-capabilities.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { buildComputerToolDescription } from "./computer-tool-guidance.js";
@@ -32,7 +26,6 @@ import type {
   ComputerToolAction,
   ComputerToolTransport,
   ResolvedComputerTarget,
-  ScreenshotCapture,
 } from "./computer-tool-shared.js";
 import {
   AFTER_ACTION_SCREENSHOT_DELAY_MS,
@@ -53,6 +46,8 @@ export function createComputerTool(options?: {
   contextEpoch?: ComputerContextEpoch;
   /** Host-owned session desktop; omitted for ordinary paired-node selection. */
   transport?: ComputerToolTransport;
+  /** Host-prepared effective paired-node action surface for pre-execution serialization. */
+  pairedNodeComputerUse?: PreparedPairedComputerUse;
   /** Attempt owner for deterministic provider-execution cleanup. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
 }): AnyAgentTool {
@@ -65,9 +60,17 @@ export function createComputerTool(options?: {
   const targetScope = options?.transport ? "session" : "paired";
   // Harnesses serialize the schema before execution; a prepared desktop must
   // advertise its full action surface before the first observation.
-  const initialCapabilities = options?.transport?.computerUse;
+  const initialCapabilities =
+    options?.transport?.computerUse ?? options?.pairedNodeComputerUse?.guidanceCapabilities;
+  const preparedPairedActions = options?.transport ? undefined : options?.pairedNodeComputerUse;
+  const initialPairedActions = preparedPairedActions
+    ? COMPUTER_USE_V2_ACTION_NAMES.filter(
+        (action) =>
+          COMPUTER_TOOL_ACTIONS.includes(action) || preparedPairedActions.actions.includes(action),
+      )
+    : COMPUTER_TOOL_ACTIONS;
   const parameterSchema = createComputerToolSchema(
-    availableActions(initialCapabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
+    availableActions(options?.transport?.computerUse?.actions ?? initialPairedActions),
     targetScope,
   );
   const replaceParameterSchema = (actions: readonly ComputerUseV2ActionName[]) => {
@@ -108,15 +111,16 @@ export function createComputerTool(options?: {
     getOperationQueue: () => opQueue,
   });
 
-  const deliverScreenshot = async (params: {
-    capture: ScreenshotCapture;
+  const captureAndDeliverScreenshot = async (params: {
     noteLines: string[];
     resolved: ResolvedComputerTarget;
     action: ComputerToolAction;
     toolCallId: string;
+    signal?: AbortSignal;
   }) => {
+    const capture = await session.captureScreenshot(params.resolved, referenceWidth, params.signal);
     const projected = await projectScreenshotResult({
-      capture: params.capture,
+      capture,
       noteLines: params.noteLines,
       target: params.resolved.target,
       action: params.action,
@@ -125,7 +129,7 @@ export function createComputerTool(options?: {
     });
     const previousFrame = session.refreshUnchangedFrame({
       target: params.resolved.target,
-      capture: params.capture,
+      capture,
       imageIdentity: projected.imageIdentity,
       modelHasVision: options?.modelHasVision,
     });
@@ -147,7 +151,7 @@ export function createComputerTool(options?: {
     }
     session.bindDeliveredFrame({
       resolved: params.resolved,
-      capture: params.capture,
+      capture,
       frameId: projected.frameId,
       toolCallId: params.toolCallId,
       imageIdentity: projected.imageIdentity,
@@ -180,18 +184,9 @@ export function createComputerTool(options?: {
           signal,
         });
 
-        switch (action) {
-          case "screenshot": {
-            const capture = await session.captureScreenshot(resolved, referenceWidth, signal);
-            return await deliverScreenshot({
-              capture,
-              noteLines: [],
-              resolved,
-              action,
-              toolCallId,
-            });
-          }
-          case "wait": {
+        if (action === "screenshot" || action === "wait") {
+          const noteLines: string[] = [];
+          if (action === "wait") {
             const seconds =
               readFiniteNumberParam(params, "duration", {
                 min: 0,
@@ -199,17 +194,15 @@ export function createComputerTool(options?: {
                 message: `duration must be 0-${MAX_WAIT_SECONDS} seconds for wait`,
               }) ?? 1;
             await sleep(Math.round(seconds * 1000), signal);
-            const capture = await session.captureScreenshot(resolved, referenceWidth, signal);
-            return await deliverScreenshot({
-              capture,
-              noteLines: [`waited ${seconds}s`],
-              resolved,
-              action,
-              toolCallId,
-            });
+            noteLines.push(`waited ${seconds}s`);
           }
-          default:
-            break;
+          return await captureAndDeliverScreenshot({
+            noteLines,
+            resolved,
+            action,
+            toolCallId,
+            signal,
+          });
         }
 
         if (!isComputerActAction(action)) {
@@ -230,25 +223,25 @@ export function createComputerTool(options?: {
           signal,
         });
         if (actResult.observation || isComputerObservationAction(action, params.dialogAction)) {
-          session.recordObservation(resolved, actResult);
           session.setTarget(resolved.target);
-          return await projectComputerActResult({
+          const projected = await projectComputerActResult({
             result: actResult,
             target: resolved.target,
             action,
             referenceWidth,
             modelHasVision: options?.modelHasVision,
           });
+          session.recordObservation(resolved, actResult, projected.imageCoordinates);
+          return projected.result;
         }
         try {
           await sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);
-          const capture = await session.captureScreenshot(resolved, referenceWidth, signal);
-          return await deliverScreenshot({
-            capture,
+          return await captureAndDeliverScreenshot({
             noteLines: [computerActResultText(action, actResult)],
             resolved,
             action,
             toolCallId,
+            signal,
           });
         } catch (err) {
           session.setTarget(resolved.target);

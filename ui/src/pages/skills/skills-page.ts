@@ -3,13 +3,13 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
-import { pathForPluginsHubTab } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { searchClawHub, type ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
@@ -49,6 +49,7 @@ export type SkillsRouteData = {
   selectedAgentId: string | null;
   report: SkillStatusReport | null;
   error: string | null;
+  clawhubRef?: string;
 };
 
 class SkillsPage extends OpenClawLightDomElement {
@@ -211,7 +212,12 @@ class SkillsPage extends OpenClawLightDomElement {
       this.routeDataEnabled = false;
       return;
     }
-    if (this.skillsAgentId && data.selectedAgentId && data.selectedAgentId !== this.skillsAgentId) {
+    if (
+      this.skillsAgentId &&
+      data.selectedAgentId &&
+      data.selectedAgentId !== this.skillsAgentId &&
+      !data.clawhubRef
+    ) {
       return;
     }
     this.skillsAgentId = data.selectedAgentId ?? this.skillsAgentId;
@@ -220,6 +226,9 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsError = data.error;
     if (data.report) {
       void loadClawHubSecurityVerdicts(this, data.report);
+    }
+    if (data.clawhubRef && data.clawhubRef !== this.clawhubDetailRef) {
+      void loadClawHubDetail(this, data.clawhubRef);
     }
   }
 
@@ -356,13 +365,7 @@ class SkillsPage extends OpenClawLightDomElement {
     if (tab === "skills") {
       return;
     }
-    if (tab === "workshop") {
-      this.context.navigate("skill-workshop");
-      return;
-    }
-    this.context.navigate("plugins", {
-      pathname: pathForPluginsHubTab(tab, this.context.basePath),
-    });
+    this.context.navigate("plugins");
   }
 
   override render() {
@@ -372,6 +375,10 @@ class SkillsPage extends OpenClawLightDomElement {
       ${renderPluginsHubHeader({
         active: "skills",
         onSelect: (tab) => this.selectHubTab(tab),
+        secondaryAction: {
+          label: t("pluginsPage.workshopTab"),
+          onClick: () => this.context.navigate("skill-workshop"),
+        },
       })}
       ${renderSettingsWorkspace(html`
         <wa-tab-panel

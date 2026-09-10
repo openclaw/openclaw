@@ -13,6 +13,7 @@ import type {
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
+import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import {
   consumeNodeInvokePlacementGrant,
@@ -110,6 +111,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   };
   timeoutMs?: number;
   signal?: AbortSignal;
+  deadlineAtMs?: number;
   resolveRemainingTimeoutMs?: () => number | undefined;
   onNodeCommandDispatched?: () => void;
   nodeInvokeStream?: GatewayNodeInvokeStream;
@@ -323,6 +325,12 @@ export async function applyPluginNodeInvokePolicy(params: {
           ? Math.min(requestedTimeoutMs, remainingTimeoutMs)
           : remainingTimeoutMs
         : requestedTimeoutMs;
+    const deadlineAtMs =
+      params.deadlineAtMs === undefined
+        ? undefined
+        : typeof requestedTimeoutMs === "number" && requestedTimeoutMs > 0
+          ? Math.min(params.deadlineAtMs, performance.now() + requestedTimeoutMs)
+          : params.deadlineAtMs;
     // Pairing and policy checks above may await. Revalidate the exact runtime
     // capability at the final transport handoff so closure wins that race.
     sessionAuthority?.assertCurrent();
@@ -431,7 +439,10 @@ export async function applyPluginNodeInvokePolicy(params: {
     };
     const res = params.privateTransport
       ? await params.privateTransport.invoke(request)
-      : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, request);
+      : await invokeNodeWithReadinessRetry(params.context.nodeRegistry, {
+          ...request,
+          deadlineAtMs,
+        });
     if (!res.ok) {
       if (nodeCommandDispatched) {
         recordNodeDecision({
@@ -565,9 +576,10 @@ export async function applyPluginNodeInvokePolicy(params: {
         : {}),
     });
   } catch (error) {
-    // Plugin policy handlers may settle after their exact caller authority
-    // closes. Never attribute that late result to the retired run.
-    if (!nodeCommandDispatched && isCallerRuntimeAuthorityActive()) {
+    // Observer closure is not a denial. Do not attribute a late policy failure
+    // after the exact caller authority has closed.
+    const policyFailed = !(error instanceof ApprovalObserverClosedError);
+    if (policyFailed && !nodeCommandDispatched && isCallerRuntimeAuthorityActive()) {
       recordNodeDecision({
         pluginId: entry.pluginId,
         outcome: "denied",
@@ -598,13 +610,12 @@ export async function applyPluginNodeInvokePolicy(params: {
         : [],
     });
   }
-  if (result.ok) {
-    return result;
-  }
-  return {
-    ...result,
-    // Core owns dispatch and must override a plugin-supplied claim. Callers may
-    // clear speculative state only when this value is definitively false.
-    details: { ...result.details, nodeCommandDispatched },
-  };
+  return result.ok
+    ? result
+    : {
+        ...result,
+        // Core owns dispatch and must override a plugin-supplied claim. Callers may
+        // clear speculative state only when this value is definitively false.
+        details: { ...result.details, nodeCommandDispatched },
+      };
 }

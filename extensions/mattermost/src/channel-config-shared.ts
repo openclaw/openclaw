@@ -8,6 +8,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMattermostGatewayAuthBypassPaths } from "./gateway-auth-bypass.js";
 import {
+  inspectMattermostAccount,
   isMattermostConfigured,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
@@ -55,6 +56,7 @@ export const mattermostConfigAdapter = createScopedChannelConfigAdapter<Resolved
   sectionKey: "mattermost",
   listAccountIds: listMattermostAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveMattermostAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectMattermostAccount),
   defaultAccountId: resolveDefaultMattermostAccountId,
   clearBaseFields: ["botToken", "baseUrl", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,

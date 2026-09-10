@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import { formatTimeAgo } from "../../lib/format.ts";
-import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
+import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createOfflineDeviceNode, deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import {
@@ -459,6 +459,47 @@ describe("devices inventory rendering", () => {
     ]);
   });
 
+  it("routes the Edit alias menu item to the device with its current alias", () => {
+    const renamed: Array<{ id: string; name: string; operatorLabel?: string }> = [];
+    const container = renderDevicesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "alias-device",
+            displayName: "LIN-5F196050F5D",
+            operatorLabel: "Office node",
+            roles: ["operator"],
+          },
+          {
+            deviceId: "unaliased-device",
+            displayName: "Fresh laptop",
+            roles: ["operator"],
+          },
+        ],
+      },
+      onDeviceRename: (device) => renamed.push(device),
+    });
+
+    selectMenuItem(getSettingsRow(container, "Office node"), "editAlias");
+    selectMenuItem(getSettingsRow(container, "Fresh laptop"), "editAlias");
+
+    expect(renamed).toEqual([
+      { id: "alias-device", name: "Office node", operatorLabel: "Office node" },
+      { id: "unaliased-device", name: "Fresh laptop", operatorLabel: undefined },
+    ]);
+  });
+
+  it("offers no Edit alias menu item for rows without a paired device record", () => {
+    const container = renderDevicesContainer({
+      nodes: [{ nodeId: "node-only", displayName: "Bare node", paired: true, connected: true }],
+    });
+
+    const row = getSettingsRow(container, "Bare node");
+    expect(row.querySelector('wa-dropdown-item[value="copy"]')).toBeInstanceOf(Element);
+    expect(row.querySelector('wa-dropdown-item[value="editAlias"]')).toBeNull();
+  });
+
   it.each([true, false])(
     "reports the device ID copy outcome when clipboard succeeds: %s",
     async (succeeds) => {
@@ -869,8 +910,38 @@ describe("devices inventory rendering", () => {
         paired: [
           { deviceId: "ios-1", displayName: "iPhone", platform: "iOS 26.4", roles: ["operator"] },
           { deviceId: "mac-1", displayName: "Mac", platform: "darwin", roles: ["operator"] },
+          {
+            deviceId: "mac-browser",
+            displayName: "Mac browser",
+            platform: "MacIntel",
+            deviceFamily: "Mac",
+            roles: ["operator"],
+          },
+          {
+            deviceId: "ipad-browser",
+            displayName: "iPad browser",
+            platform: "MacIntel",
+            deviceFamily: "iPad",
+            roles: ["operator"],
+          },
+          {
+            deviceId: "legacy-browser",
+            displayName: "Legacy browser",
+            platform: "MacIntel",
+            roles: ["operator"],
+          },
         ],
       },
+      presence: [
+        {
+          instanceId: "unpaired-ipad",
+          host: "Unpaired iPad",
+          platform: "MacIntel",
+          deviceFamily: "iPad",
+          mode: "webchat",
+          ts: 1_000,
+        },
+      ],
     });
     const subs = Array.from(
       getInventorySection(container).querySelectorAll(".device-entry .settings-row__desc"),
@@ -880,6 +951,21 @@ describe("devices inventory rendering", () => {
     expect(subs.some((text) => text.includes("iOS 26.4"))).toBe(true);
     expect(subs.some((text) => text.includes("IOS"))).toBe(false);
     expect(subs.some((text) => text.includes("macOS"))).toBe(true);
+    for (const [name, label] of [
+      ["Mac browser", "macOS"],
+      ["iPad browser", "iPadOS"],
+      ["Legacy browser", "MacIntel"],
+      ["Unpaired iPad", "iPadOS"],
+    ]) {
+      const row = Array.from(container.querySelectorAll(".device-entry")).find(
+        (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
+      );
+      expect(
+        row
+          ?.querySelector(".device-entry__body > .settings-row__desc")
+          ?.textContent?.split(" · ")[0],
+      ).toBe(label);
+    }
   });
 });
 
@@ -888,10 +974,12 @@ describe("devices access gating", () => {
     const onInventoryRemove = vi.fn();
     const onNodeApprove = vi.fn();
     const onNodeReject = vi.fn();
+    const onDeviceRename = vi.fn();
     const container = renderDevicesContainer({
       onInventoryRemove,
       onNodeApprove,
       onNodeReject,
+      onDeviceRename,
       nodes: [
         {
           nodeId: "node-pending",
@@ -937,13 +1025,20 @@ describe("devices access gating", () => {
     );
     expect(remove?.hasAttribute("disabled")).toBe(true);
     expect(remove?.getAttribute("title")).toContain("operator.pairing");
+    const editAlias = getSettingsRow(container, "Device One").querySelector(
+      'wa-dropdown-item[value="editAlias"]',
+    );
+    expect(editAlias?.hasAttribute("disabled")).toBe(true);
+    expect(editAlias?.getAttribute("title")).toContain("operator.pairing");
     selectMenuItem(getSettingsRow(container, "Device One"), "remove");
+    selectMenuItem(getSettingsRow(container, "Device One"), "editAlias");
     for (const action of ["approve", "reject"]) {
       expect(
         selectMenuItem(getSettingsRow(container, "Pending node"), action).hasAttribute("disabled"),
       ).toBe(true);
     }
     expect(onInventoryRemove).not.toHaveBeenCalled();
+    expect(onDeviceRename).not.toHaveBeenCalled();
     expect(onNodeApprove).not.toHaveBeenCalled();
     expect(onNodeReject).not.toHaveBeenCalled();
     expect(container.textContent).toContain(

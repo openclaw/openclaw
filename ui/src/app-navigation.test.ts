@@ -23,7 +23,7 @@ import {
 import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
-import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.ts";
 
 /**
  * All route identifiers derived from core sidebar routes, plugin-owned native
@@ -111,7 +111,8 @@ describe("navigationIconForRoute", () => {
       tasks: "listChecks",
       agents: "bot",
       skills: "zap",
-      plugins: "puzzle",
+      plugins: "plug",
+      "plugin-settings": "plug",
       "skill-workshop": "wrench",
       devices: "monitorSmartphone",
       "cloud-workers": "server",
@@ -215,6 +216,7 @@ describe("titleForRoute", () => {
       agents: "Agents",
       skills: "Skills",
       plugins: "Plugins",
+      "plugin-settings": "Plugins",
       "skill-workshop": "Skill Workshop",
       devices: "Devices",
       "cloud-workers": "Cloud workers",
@@ -266,13 +268,15 @@ describe("subtitleForRoute", () => {
       cron: "Scheduled tasks and recurring agent runs.",
       tasks: "Background tasks: subagents, automation runs, CLI.",
       agents: "Workspaces, tools, identities.",
-      skills: "Skills and API keys.",
-      plugins: "Install and manage optional capabilities.",
-      "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
+      skills: "Manage agent skills and find new ones on ClawHub.",
+      plugins: "Extend your Claw with tools",
+      "plugin-settings": "Extend your Claw with tools",
+      "skill-workshop":
+        "The skills your agent uses now, suggestions waiting for review, and past decisions.",
       devices: "Paired devices, pairing approvals, and exec bindings.",
       "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
-      communications: "Messages and text-to-speech settings.",
+      communications: "Messages, text-to-speech, and meeting capture settings.",
       appearance: "Theme and UI settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, automations, and plugins.",
@@ -307,7 +311,8 @@ describe("pathForRoute", () => {
     expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
     expect(pathForRoute("logs")).toBe("/logs");
-    expect(pathForRoute("plugins")).toBe("/settings/plugins");
+    expect(pathForRoute("plugins")).toBe("/plugins");
+    expect(pathForRoute("plugin-settings")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
     expect(pathForRoute("labs")).toBe("/settings/labs");
     expect(pathForRoute("cloud-workers")).toBe("/settings/cloud-workers");
@@ -346,8 +351,9 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/logs")).toBe("logs");
     expect(routeIdFromPath("/dreaming")).toBeNull();
     expect(routeIdFromPath("/dreams")).toBeNull();
-    expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
-    expect(routeIdFromPath("/plugins")).toBeNull();
+    expect(routeIdFromPath("/settings/plugins")).toBe("plugin-settings");
+    expect(routeIdFromPath("/plugins")).toBe("plugins");
+    expect(routeIdFromPath("/plugins/ch_bWF0cml4")).toBe("plugins");
     expect(routeIdFromPath("/settings/about")).toBe("about");
     expect(routeIdFromPath("/settings/labs")).toBe("labs");
     expect(routeIdFromPath("/labs")).toBeNull();
@@ -361,7 +367,7 @@ describe("routeIdFromPath", () => {
   it("handles base paths", () => {
     expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
     expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
-    expect(routeIdFromPath("/ui/settings/plugins", "/ui")).toBe("plugins");
+    expect(routeIdFromPath("/ui/settings/plugins", "/ui")).toBe("plugin-settings");
     expect(routeIdFromPath("/xx/chat/main", "/ui")).toBeNull();
   });
 
@@ -573,13 +579,13 @@ describe("plugin tabs route", () => {
   it("round-trips the shared /plugin route", () => {
     expect(pathForRoute("plugin", "")).toBe("/plugin");
     expect(routeIdFromPath("/plugin", "")).toBe("plugin");
-    // The tab id travels in the search, not the pathname.
+    // Generic tab URLs carry their reference in the search.
     expect(routeIdFromPath("/plugin/logbook", "")).toBeNull();
   });
 
-  it("round-trips a namespaced tab reference through the search", () => {
+  it("reads a namespaced tab reference from the generic URL", () => {
     const ref = { pluginId: "logbook", id: "logbook" };
-    expect(pluginTabRefFromSearch(pluginTabSearch(ref))).toEqual(ref);
+    expect(pluginTabRefFromSearch("?plugin=logbook&id=logbook")).toEqual(ref);
     expect(pluginTabKey(ref)).toBe("logbook/logbook");
     // Distinct plugins with the same local tab id stay distinct.
     expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
@@ -625,6 +631,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "agents",
       "labs",
       "model-providers",
+      "plugin-settings",
       "mcp",
       "memory",
       "automation",

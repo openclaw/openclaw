@@ -453,7 +453,25 @@ auto-injected.
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
-file entries are indexed exactly. The builtin engine skips symlinks.
+file entries are indexed exactly. The builtin engine skips symlinks. When a configured root is a
+symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
+configuring its canonical absolute directory instead.
+
+For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
+canonical path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event
+migration through a symlink.
+
+If `openclaw doctor --fix` reports an unsafe Memory Core host-event source, check the named path and
+permissions. Back up the legacy journal before replacing any symlink. To import it, preserve its
+contents at `memory/.dreams/events.jsonl` as a regular file under regular directories inside the intended
+workspace, then rerun `openclaw doctor --fix`. Doctor leaves rejected sources untouched. A symlink to
+the workspace root itself is supported. Symlinks below that root are refused when a legacy event
+source, import claim, or migrated archive is present; directories without those sources need no repair.
+
+If a checkpointed `events.jsonl.migrated` archive changed other than by append, Doctor warns and
+preserves both the archive and the already imported SQLite events. It defers later event generations
+in that workspace while continuing unrelated repairs. Preserve the archive for inspection; this warning
+does not mean its edited contents were imported. Unsafe source paths and failed imports still stop Doctor.
 
 ---
 
@@ -497,6 +515,8 @@ Batch enablement is the only remote batching setting. Concurrency, polling, and 
 
 ---
 
+<a id="session-memory-search-experimental" />
+
 ## Session memory search
 
 Index session transcripts and surface them via `memory_search`:
@@ -521,7 +541,7 @@ Ordinary user-session transcripts, including retained, reset, and
 deleted-session archives, remain eligible until explicitly targeted.
 
 <Note>
-The [session-memory hook](/automation/hooks#session-memory) saves conversation
+The [session-memory hook](/automation/hooks/bundled-hooks#session-memory) saves conversation
 excerpts to `<workspace>/memory/`, which the `memory` source already indexes.
 If transcript indexing is also enabled, the same conversation can appear from
 both `memory` and `sessions`, resulting in overlapping search results and
@@ -583,6 +603,8 @@ default `all`:
 | `store.vector.enabled`       | `boolean` | `true`  | Use sqlite-vec for vector queries |
 | `store.vector.extensionPath` | `string`  | bundled | Override sqlite-vec path          |
 
+For Bun on macOS, install Homebrew SQLite to enable extension loading; see [Bun SQLite setup](/install/bun-compatibility#sqlite-library-selection) for automatic discovery and the `OPENCLAW_SQLITE_LIBRARY` library override.
+
 When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similarity automatically.
 
 ---
@@ -596,11 +618,17 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 | --------------------- | -------- | ----------- | ----------------------------------------- |
 | `store.fts.tokenizer` | `string` | `unicode61` | FTS5 tokenizer (`unicode61` or `trigram`) |
 
+With `trigram`, query terms shorter than three characters use substring matching,
+so short terms such as `AI` and `UK` remain searchable. Longer terms keep
+full-text matching, including in queries that also contain short terms.
+
 ---
 
 ## Citations
 
 `memory.citations` controls citation visibility for built-in memory results:
+
+Cited snippets preserve leading indentation; trailing whitespace is removed before the source footer.
 
 | Value            | Behavior                                               |
 | ---------------- | ------------------------------------------------------ |

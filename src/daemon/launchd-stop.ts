@@ -4,7 +4,7 @@ import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { probePortUsage } from "../infra/ports-probe.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { sleep } from "../utils.js";
-import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
+import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
@@ -29,7 +29,9 @@ async function bootoutLaunchAgentOrThrow(params: {
   warning: string;
   stdout: NodeJS.WritableStream;
   onMutation?: () => void;
+  assertCurrent?: () => void;
 }): Promise<void> {
+  params.assertCurrent?.();
   const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
   if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
     throw new Error(
@@ -54,11 +56,15 @@ async function waitForGatewayPortRelease(
   return false;
 }
 
-async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promise<void> {
+async function assertGatewayPortReleasedAfterStop(
+  env: GatewayServiceEnv,
+  assertCurrent?: () => void,
+): Promise<void> {
   const { port, probeHosts } = await resolveLaunchAgentGatewayContext(env);
   if (port === null) {
     return;
   }
+  assertCurrent?.();
   cleanStaleGatewayProcessesSync(port);
   const diagnostics = await inspectPortUsage(port, {
     probeHosts,
@@ -82,6 +88,7 @@ export async function stopLaunchAgent({
   env,
   disable: persistDisable,
   onMutation,
+  assertCurrent,
 }: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveLaunchAgentGuiDomain();
@@ -89,14 +96,13 @@ export async function stopLaunchAgent({
   const serviceTarget = `${domain}/${label}`;
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
-  if (
-    isCurrentProcessLaunchdServiceLabel(label, process.env, { allowConfiguredLabelFallback: false })
-  ) {
+  if (await isCurrentProcessInsideLaunchdService(label, process.env)) {
     throw new Error(
       `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
     );
   }
 
+  assertCurrent?.();
   if (!persistDisable) {
     // Default: bootout only. Removes the job from the current launchd domain without
     // persisting a disable, so KeepAlive auto-recovery survives future crashes and
@@ -106,7 +112,7 @@ export async function stopLaunchAgent({
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
     }
     reportMutation("bootout");
-    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
     stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
     return;
   }
@@ -117,26 +123,29 @@ export async function stopLaunchAgent({
   if (disableResult.code !== 0) {
     await bootoutLaunchAgentOrThrow({
       serviceTarget,
+      assertCurrent,
       stdout,
       warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disableResult)}`,
       onMutation: () => reportMutation("disable-bootout"),
     });
-    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
   reportMutation("disable");
 
   // `launchctl stop` targets the plain label (not the fully-qualified service target).
+  assertCurrent?.();
   const stop = await execLaunchctl(["stop", label]);
   if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
     await bootoutLaunchAgentOrThrow({
       serviceTarget,
+      assertCurrent,
       stdout,
       warning: `launchctl stop failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(stop)}`,
       onMutation: () => reportMutation("disable-bootout"),
     });
-    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
@@ -151,16 +160,17 @@ export async function stopLaunchAgent({
         : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
     await bootoutLaunchAgentOrThrow({
       serviceTarget,
+      assertCurrent,
       stdout,
       warning,
       onMutation: () => reportMutation("disable-bootout"),
     });
-    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
 
-  await assertGatewayPortReleasedAfterStop(serviceEnv);
+  await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
   stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
@@ -172,11 +182,7 @@ export async function parkCurrentLaunchAgentForMaintenance(
   const serviceEnv = params.env ?? (process.env as GatewayServiceEnv);
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(serviceEnv);
-  if (
-    !isCurrentProcessLaunchdServiceLabel(label, process.env, {
-      allowConfiguredLabelFallback: false,
-    })
-  ) {
+  if (!(await isCurrentProcessInsideLaunchdService(label, process.env))) {
     return false;
   }
   const serviceTarget = `${domain}/${label}`;

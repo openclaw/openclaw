@@ -1,6 +1,10 @@
 // Sanctioned low-level scope/Kysely entry point for doctor, migrations, and infrastructure.
 // Runtime feature code imports the session accessor barrel instead of this module.
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { isMainThread, threadId } from "node:worker_threads";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
@@ -10,12 +14,15 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
+import { runQueuedStoreWrite, type StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -24,11 +31,13 @@ import type {
   SessionAccessScope,
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
+  SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
+import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -90,31 +99,85 @@ export type SessionSqliteTargetResolutionCache = Map<
 >;
 
 const SQLITE_SESSION_SLOW_WRITE_MS = 1_000;
+const SQLITE_SESSION_WRITE_ERROR_MAX_CHARS = 2_048;
 const SQLITE_TRANSCRIPT_READ_QUERY_CHUNK_SIZE = 400;
+
+/** Checks the freshly read identity and lifecycle before a synchronous transcript mutation. */
+export function transcriptWriteScopeIsCurrent(
+  entry:
+    | Pick<InternalSessionEntry, "sessionId" | "activeWriterRunId" | "lifecycleRevision">
+    | undefined,
+  sessionId: string,
+  scope: SessionTranscriptWriteScope,
+): boolean {
+  return (
+    entry !== undefined &&
+    entry.sessionId === sessionId &&
+    (scope.expectedLifecycleRevision === undefined ||
+      entry.lifecycleRevision === scope.expectedLifecycleRevision) &&
+    (scope.expectedWriterRunId === undefined ||
+      entry.activeWriterRunId === scope.expectedWriterRunId)
+  );
+}
 
 export function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SessionSqliteDatabase>(database);
 }
 
+export function withSqliteSessionDatabase<T>(
+  options: OpenClawAgentDatabaseOptions,
+  operation: (database: OpenClawAgentDatabase) => T,
+  assertCurrent?: () => void,
+): T | Promise<T> {
+  assertCurrent?.();
+  if (getOpenClawAgentDatabaseIfOpen(options)) {
+    return operation(openOpenClawAgentDatabase(options));
+  }
+  // The caller keeps its FIFO section while the existing owner joins the integrity child.
+  return withOpenClawAgentDatabaseAsync(options, operation, assertCurrent);
+}
+
 export async function runExclusiveSqliteSessionWrite<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   fn: () => Promise<T>,
+  operation: SqliteSessionWriteOperation,
+  reclamation?: SqliteSessionReclamationDiagnostics,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
   const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-  const startedAt = Date.now();
+  const startedAt = performance.now();
+  const timing: StoreWriterTiming = {};
+  const timingFields = (completedAt: number) => ({
+    pid: process.pid,
+    threadId,
+    isMainThread,
+    operation,
+    ...(reclamation?.kind ? { reclamationKind: reclamation.kind } : {}),
+    ...(reclamation?.workerThreadId !== undefined
+      ? { workerThreadId: reclamation.workerThreadId }
+      : {}),
+    elapsedMs: Math.round(completedAt - startedAt),
+    ...(timing.startedAt !== undefined && timing.finishedAt !== undefined
+      ? {
+          queueWaitMs: Math.round(timing.startedAt - startedAt),
+          writerExecutionMs: Math.round(timing.finishedAt - timing.startedAt),
+          completionDelayMs: Math.round(completedAt - timing.finishedAt),
+        }
+      : {}),
+  });
   try {
     const result = await runQueuedStoreWrite({
       queues: SQLITE_SESSION_WRITER_QUEUES,
       storePath,
       label: "runExclusiveSqliteSessionWrite",
       fn,
+      timing,
     });
-    const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= SQLITE_SESSION_SLOW_WRITE_MS) {
+    const completedAt = performance.now();
+    if (completedAt - startedAt >= SQLITE_SESSION_SLOW_WRITE_MS) {
       getChildLogger({ subsystem: "session-sqlite" }).warn("slow SQLite session write", {
         agentId: scope.agentId,
-        elapsedMs,
+        ...timingFields(completedAt),
         storePath,
       });
     }
@@ -122,8 +185,11 @@ export async function runExclusiveSqliteSessionWrite<T>(
   } catch (error) {
     getChildLogger({ subsystem: "session-sqlite" }).warn("SQLite session write failed", {
       agentId: scope.agentId,
-      elapsedMs: Date.now() - startedAt,
-      error,
+      ...timingFields(performance.now()),
+      error: truncateUtf16Safe(
+        formatErrorMessageWithCode(error),
+        SQLITE_SESSION_WRITE_ERROR_MAX_CHARS,
+      ),
       storePath,
     });
     throw error;
@@ -271,12 +337,18 @@ export function resolveSqliteStoreScope(
   });
 }
 
-function resolveSqliteAgentId(params: {
+type ResolveSqliteAgentIdParams = {
   scopedAgentId?: string;
   sessionKey?: string;
   storeAgentId?: string;
   storeShared?: boolean;
-}): string | undefined {
+};
+
+export function resolveSqliteAgentId(
+  params: ResolveSqliteAgentIdParams & { storeAgentId: string },
+): string;
+export function resolveSqliteAgentId(params: ResolveSqliteAgentIdParams): string | undefined;
+export function resolveSqliteAgentId(params: ResolveSqliteAgentIdParams): string | undefined {
   const scopedAgentId = params.scopedAgentId ? normalizeAgentId(params.scopedAgentId) : undefined;
   if (
     scopedAgentId &&

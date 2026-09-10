@@ -26,6 +26,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider } from "./worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -55,7 +56,7 @@ export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (p
   });
 
 let testState: OpenClawTestState;
-let database: OpenClawStateDatabase;
+export let database: OpenClawStateDatabase;
 let cleanupAdmissionSink: (() => void) | undefined;
 
 export let root: string;
@@ -112,7 +113,7 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
 type DefaultedWorkerTurnLauncherOption =
   | "reconcileActivePlacement"
   | "redispatchReclaimed"
-  | "resolveWorkspacePath"
+  | "resolveWorkspace"
   | "workspaceOperations";
 
 export function createWorkerSessionTurnPlacementProvider(
@@ -126,7 +127,7 @@ export function createWorkerSessionTurnPlacementProvider(
     redispatchReclaimed: async () => {
       throw new Error("unexpected reclaimed placement redispatch");
     },
-    resolveWorkspacePath: async () => root,
+    resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
   });
@@ -139,6 +140,7 @@ export function openSessionManager(): SessionManager {
 export function seedActivePlacement(
   executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   remoteWorkspaceDir = "/worker/workspace",
+  workspaceBaseManifestRef = MANIFEST_REF,
 ): void {
   let placement = placements.startDispatch({
     sessionId: SESSION_ID,
@@ -167,8 +169,13 @@ export function seedActivePlacement(
     expectedGeneration: placement.generation,
     patch: {
       remoteWorkspaceDir,
-      workspaceBaseManifestRef: MANIFEST_REF,
+      workspaceBaseManifestRef,
     },
+  });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: ENVIRONMENT_ID,
+    sessionId: SESSION_ID,
+    ownerEpoch: OWNER_EPOCH,
   });
   placements.transition({
     sessionId: SESSION_ID,
@@ -233,6 +240,8 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     updatedAtMs: 1,
     stateChangedAtMs: 1,
     idleSinceAtMs: null,
+    lastActivatedAtMs: null,
+    preparation: null,
     destroyRequestedAtMs: null,
     tunnelStatus: "connected",
     state: "attached",

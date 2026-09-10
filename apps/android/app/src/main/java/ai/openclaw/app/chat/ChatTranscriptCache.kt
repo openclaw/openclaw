@@ -34,6 +34,7 @@ private data class CachedMessageContent(
   val sizeBytes: Long? = null,
   val durationMs: Long? = null,
   val playback: String? = null,
+  val toolActivity: ChatToolActivity? = null,
 )
 
 @Serializable
@@ -42,6 +43,15 @@ private data class CachedMessagePayload(
   val provenance: ChatMessageProvenance? = null,
   @SerialName("__openclaw") val transcriptMarker: ChatTranscriptMarker? = null,
   val senderLabel: String? = null,
+  val provider: String? = null,
+  val model: String? = null,
+  val deliveryMirror: ChatDeliveryMirror? = null,
+  val usage: ChatMessageUsage? = null,
+  val cost: ChatMessageCost? = null,
+  val isSyntheticDisplay: Boolean = false,
+  val runId: String? = null,
+  val steerTargetRunId: String? = null,
+  val turnBoundary: Boolean = false,
 )
 
 /**
@@ -82,6 +92,7 @@ interface ChatTranscriptCache {
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry? = null,
   )
 
   /** Removes one session and its transcript, so gateway-side deletes also purge offline copies. */
@@ -335,6 +346,7 @@ class RoomChatTranscriptCache internal constructor(
               sizeBytes = part.sizeBytes,
               durationMs = part.durationMs,
               playback = part.playback,
+              toolActivity = part.toolActivity,
             )
           },
         timestampMs = row.timestampMs,
@@ -344,6 +356,15 @@ class RoomChatTranscriptCache internal constructor(
         provenance = payload.provenance,
         transcriptMarker = payload.transcriptMarker,
         senderLabel = payload.senderLabel,
+        provider = payload.provider,
+        model = payload.model,
+        deliveryMirror = payload.deliveryMirror,
+        usage = payload.usage,
+        cost = payload.cost,
+        isSyntheticDisplay = payload.isSyntheticDisplay,
+        runId = payload.runId,
+        steerTargetRunId = payload.steerTargetRunId,
+        turnBoundary = payload.turnBoundary,
       )
     }
   }
@@ -388,6 +409,7 @@ class RoomChatTranscriptCache internal constructor(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry?,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
@@ -404,6 +426,10 @@ class RoomChatTranscriptCache internal constructor(
               when {
                 part.type == "text" && !part.text.isNullOrBlank() -> {
                   CachedMessageContent(type = "text", text = part.text)
+                }
+
+                part.toolActivity != null -> {
+                  CachedMessageContent(type = part.type, toolActivity = part.toolActivity)
                 }
 
                 (isImage && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank()) ||
@@ -429,13 +455,28 @@ class RoomChatTranscriptCache internal constructor(
                 }
               }
             }
-          if (content.isEmpty() && message.provenance == null && message.transcriptMarker == null) return@mapNotNull null
+          val hasPersistedMetadata =
+            message.provenance != null || message.transcriptMarker != null || message.deliveryMirror != null ||
+              message.usage != null || message.cost != null || message.turnBoundary
+          // An empty real call still ends the previous call’s usage snapshot.
+          val isRealAssistantBoundary =
+            message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant()
+          if (content.isEmpty() && !hasPersistedMetadata && !isRealAssistantBoundary) return@mapNotNull null
           val payload =
             CachedMessagePayload(
               content = content,
               provenance = message.provenance,
               transcriptMarker = message.transcriptMarker,
               senderLabel = message.senderLabel,
+              provider = message.provider,
+              model = message.model,
+              deliveryMirror = message.deliveryMirror,
+              usage = message.usage,
+              cost = message.cost,
+              isSyntheticDisplay = message.isSyntheticDisplay,
+              runId = message.runId,
+              steerTargetRunId = message.steerTargetRunId,
+              turnBoundary = message.turnBoundary,
             )
           Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)
@@ -460,11 +501,16 @@ class RoomChatTranscriptCache internal constructor(
       val currentSession = dao.session(gateway, agent, key)
       // REPLACE refreshes SQLite rowid, making the transcript's session the most recent gateway
       // row while preserving list metadata when that session was already cached.
+      // Persist the accepted history row with its transcript, including cleared usage.
+      // Otherwise a failed list refresh resurrects the previous run on offline reopen.
+      val session = sessionInfo?.copy(key = key) ?: ChatSessionEntry(key = key, updatedAtMs = null)
       dao.insertSessions(
         listOf(
-          currentSession
-            ?: ChatSessionEntry(key = key, updatedAtMs = null)
-              .toCachedSession(gateway, agent, rowOrder = dao.nextSessionRowOrder(gateway, agent)),
+          if (sessionInfo != null || currentSession == null) {
+            session.toCachedSession(gateway, agent, rowOrder = currentSession?.rowOrder ?: dao.nextSessionRowOrder(gateway, agent))
+          } else {
+            currentSession
+          },
         ),
       )
       dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)

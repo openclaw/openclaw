@@ -1,11 +1,15 @@
-import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
 /**
  * Normalizes transcript messages before provider transport replay. It drops
  * unsafe failed turns, maps tool-call ids across model boundaries, and fills
  * strict provider tool-result gaps when supported.
  */
+import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
+import {
+  FAILED_ASSISTANT_REPLAY_TEXT,
+  isReasoningOnlyLengthAssistantTurn,
+  resolveFailedAssistantReplay,
+} from "@openclaw/ai/internal/shared";
 import type { Api, Context, Model } from "../llm/types.js";
-import { isReasoningOnlyLengthAssistantTurn } from "./replay-turn-classification.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -39,26 +43,6 @@ function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
   return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
 }
 
-function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
-  return (
-    message.stopReason === "error" ||
-    message.stopReason === "aborted" ||
-    isReasoningOnlyLengthAssistantTurn(message)
-  );
-}
-
-function failedAssistantHasToolCalls(message: Context["messages"][number]): boolean {
-  return (
-    message.role === "assistant" &&
-    (message.stopReason === "error" || message.stopReason === "aborted") &&
-    Array.isArray(message.content) &&
-    message.content.some((block) => block.type === "toolCall")
-  );
-}
-
 /** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
@@ -79,6 +63,7 @@ export function transformTransportMessages(
     ? "aborted"
     : "No result provided";
   const toolCallIdMap = new Map<string, string>();
+  let hasCrossModelAsyncCalls = false;
   const transformed = messages.map((msg) => {
     if (msg.role === "user") {
       return msg;
@@ -145,6 +130,11 @@ export function transformTransportMessages(
         continue;
       }
       let normalizedToolCall = block;
+      if (!isSameModel && block.async) {
+        hasCrossModelAsyncCalls = true;
+        normalizedToolCall = { ...normalizedToolCall };
+        delete normalizedToolCall.async;
+      }
       if (
         !isSameModel &&
         block.thoughtSignature &&
@@ -170,17 +160,28 @@ export function transformTransportMessages(
   // Pairing-aware transports must let shared repair see errored tool-call frames and
   // their adjacent results together; pre-filtering the call can misattribute its result
   // to an older turn that reused the same provider id.
-  const replayable = transformed.filter((_, index) => {
+  const requiresPairing = allowSyntheticToolResults || hasCrossModelAsyncCalls;
+  const replayable = transformed.flatMap((msg, index) => {
     const original = messages[index];
     if (!original) {
-      return true;
+      return [msg];
     }
-    return allowSyntheticToolResults
-      ? !isFailedAssistantTurn(original) || failedAssistantHasToolCalls(original)
-      : !isFailedAssistantTurn(original);
+    if (isReasoningOnlyLengthAssistantTurn(original)) {
+      return [];
+    }
+    switch (resolveFailedAssistantReplay(original, { pairingAware: requiresPairing })) {
+      case "drop":
+        return [];
+      case "marker":
+        return [
+          { ...msg, content: [{ type: "text" as const, text: FAILED_ASSISTANT_REPLAY_TEXT }] },
+        ];
+      default:
+        return [msg];
+    }
   });
 
-  if (!allowSyntheticToolResults) {
+  if (!requiresPairing) {
     return replayable;
   }
 

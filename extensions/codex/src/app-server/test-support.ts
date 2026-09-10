@@ -10,7 +10,11 @@ import { expect, vi } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { isJsonObject } from "./protocol.js";
+import {
+  isJsonObject,
+  type CodexConfigReadResponse,
+  type CodexGetAccountResponse,
+} from "./protocol.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
@@ -144,6 +148,7 @@ export async function waitForHarnessRequest(
 export function createClientHarness(
   options: {
     autoEmitExit?: boolean;
+    maxFrameBytes?: number;
     onWrite?: (line: string, send: (message: unknown) => void) => void;
   } = {},
 ) {
@@ -163,6 +168,8 @@ export function createClientHarness(
     stdin: Writable;
     stdout: PassThrough;
     stderr: PassThrough;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
     killed: boolean;
     kill: (signal?: NodeJS.Signals) => unknown;
   };
@@ -188,9 +195,12 @@ export function createClientHarness(
     return result;
   }) as typeof stdin.destroy;
   const process: HarnessProcess = Object.assign(new EventEmitter(), {
+    maxFrameBytes: options.maxFrameBytes,
     stdin,
     stdout,
     stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
     killed: false,
     kill: vi.fn((_signal?: NodeJS.Signals) => {
       process.killed = true;
@@ -199,6 +209,21 @@ export function createClientHarness(
   emitProcessExit = () => {
     process.emit("exit", 0, null);
   };
+  // Record terminal state before client observers, including direct error/signal exits.
+  // Otherwise later closeAndWait calls wait for an exit that already happened.
+  process.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    exitEmitted = true;
+    process.exitCode = code;
+    process.signalCode = signal;
+    stdin.destroy();
+    // Let exit observers run before output reaches EOF.
+    queueMicrotask(() => {
+      for (const output of [stdout, process.stderr]) {
+        output.end();
+        output.resume();
+      }
+    });
+  });
   const client = CodexAppServerClient.fromTransportForTests(process);
   return {
     client,
@@ -234,6 +259,39 @@ export function createClientHarness(
       stdout.write(`${JSON.stringify(message)}\n`);
     },
   };
+}
+
+/** Stock read-only replies from an authenticated managed native app-server. */
+export function createCodexInferenceReadResponses() {
+  return {
+    "config/read": { config: {}, origins: {}, layers: [] },
+    "account/read": { account: { type: "apiKey" }, requiresOpenaiAuth: true },
+  } satisfies {
+    "config/read": CodexConfigReadResponse;
+    "account/read": CodexGetAccountResponse;
+  };
+}
+
+/** Keep other RPCs manual; low-level protocol tests still use the raw harness. */
+export function createInferenceReadyClientHarness(
+  options: NonNullable<Parameters<typeof createClientHarness>[0]> = {},
+) {
+  const reads = createCodexInferenceReadResponses();
+  return createClientHarness({
+    ...options,
+    onWrite: (line, send) => {
+      const request: unknown = JSON.parse(line);
+      if (
+        isJsonObject(request) &&
+        request.id !== undefined &&
+        (request.method === "config/read" || request.method === "account/read")
+      ) {
+        send({ id: request.id, result: reads[request.method] });
+      } else {
+        options.onWrite?.(line, send);
+      }
+    },
+  });
 }
 
 /** External transport replies with a real initialize handshake and shared-client lease. */

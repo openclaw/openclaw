@@ -1189,6 +1189,8 @@ export class NodeRegistry {
     command: string;
     params?: unknown;
     timeoutMs?: number;
+    /** Process-local monotonic deadline inherited from invocation admission. */
+    deadlineAtMs?: number;
     /** Inactivity deadline reset by each ordered progress chunk. */
     idleTimeoutMs?: number;
     onProgress?: (chunk: string) => void;

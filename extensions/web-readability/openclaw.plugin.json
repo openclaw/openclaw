@@ -1,5 +1,6 @@
 {
   "id": "web-readability",
+  "categories": ["web", "context"],
   "activation": {
     "onStartup": false
   },

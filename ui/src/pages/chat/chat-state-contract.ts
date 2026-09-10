@@ -16,12 +16,18 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
 };
 
+export type ChatHistorySessions = Pick<SessionCapability, "captureReconcile">;
+
+export type ChatHistoryHost = ChatState & { sessions: ChatHistorySessions };
+
 export type ChatState = StreamCausalBoundaryState & {
   client: GatewayBrowserClient | null;
   connected: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
+  /** Config changes retire preview tickets even when session permissions stay inherited. */
+  mediaPolicyEpoch?: number;
   sessionKey: string;
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
@@ -75,4 +81,6 @@ export type ChatState = StreamCausalBoundaryState & {
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
   requestUpdate?: () => void;
+  /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
+  transcriptLoadingChanged?: () => void;
 };

@@ -1,6 +1,6 @@
 // Tests local port probing and availability detection.
 import net from "node:net";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { probePortUsage, tryListenOnPort } from "./ports-probe.js";
 
 async function withListeningServer(
@@ -52,38 +52,55 @@ describe("tryListenOnPort", () => {
     ).rejects.toBe(reason);
   });
 
-  it("can bind and release an ephemeral loopback port", async () => {
-    let port;
+  it("returns an ephemeral port only after its listener closes", async () => {
+    let signalClose: () => void = () => {};
+    const closeSignaled = new Promise<void>((resolve) => {
+      signalClose = resolve;
+    });
+    let releaseClose: () => void = () => {};
+    const closeReleased = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const closeSpy = vi.spyOn(net.Server.prototype, "close").mockImplementation(function (
+      this: net.Server,
+      callback?: (error?: Error) => void,
+    ) {
+      closeSpy.mockRestore();
+      return this.close((error?: Error) => {
+        signalClose();
+        void closeReleased.then(() => callback?.(error));
+      });
+    });
+
     try {
-      port = await tryListenOnPort({ port: 0, host: "127.0.0.1", exclusive: true });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EPERM") {
+      let settled = false;
+      const portPromise = tryListenOnPort({
+        port: 0,
+        host: "127.0.0.1",
+        exclusive: true,
+      }).then((port) => {
+        settled = true;
+        return port;
+      });
+
+      const firstEvent = await Promise.race([
+        closeSignaled.then(() => "closing" as const),
+        portPromise.then(
+          () => "settled" as const,
+          (error: unknown) => error,
+        ),
+      ]);
+      if (firstEvent instanceof Error && (firstEvent as NodeJS.ErrnoException).code === "EPERM") {
         return;
       }
-      throw err;
+      expect(firstEvent).toBe("closing");
+      expect(settled).toBe(false);
+      releaseClose();
+      await expect(portPromise).resolves.toBeGreaterThan(0);
+    } finally {
+      releaseClose();
+      closeSpy.mockRestore();
     }
-    expect(port).toBeGreaterThan(0);
-    // Release proof stays tied to the allocated port: a lingering listener
-    // would accept this probe, a released port refuses it. A rebind assertion
-    // instead collides with any foreign outbound socket occupying the port on
-    // busy runners (EADDRINUSE flake) without detecting leaks any better.
-    await expect(
-      new Promise<"accepted" | "unavailable">((resolve, reject) => {
-        const socket = net.connect({ port, host: "127.0.0.1" });
-        socket.once("connect", () => {
-          socket.destroy();
-          resolve("accepted");
-        });
-        socket.once("error", (err) => {
-          const code = (err as NodeJS.ErrnoException).code;
-          if (code === "ECONNREFUSED" || code === "ECONNRESET") {
-            resolve("unavailable");
-            return;
-          }
-          reject(err);
-        });
-      }),
-    ).resolves.toBe("unavailable");
   });
 
   it("rejects when the port is already in use", async () => {

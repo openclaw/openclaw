@@ -16,6 +16,12 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
+/** One writer callback owns this record; no Worker object or plan payload is retained. */
+export type SqliteSessionReclamationDiagnostics = {
+  kind?: "entry" | "lifecycle-artifacts" | "history-eviction" | "historical-generation";
+  workerThreadId?: number;
+};
+
 export type SessionTranscriptInstance = SessionEntrySummary & {
   agentId: string;
   /** Stable transcript identity, including rotated history for one logical session key. */
@@ -46,6 +52,10 @@ export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
   /** Synchronous authority check run inside the append transaction. */
   beforeCommitInTransaction?: () => void;
+  /** Reject the append when the transcript changed since the caller loaded it. */
+  expectedMutationAt?: number | null;
+  /** Captures the parent selected by an active-branch event append. */
+  captureEffectiveParentIdInTransaction?: (parentId: string | null) => void;
 };
 
 export type TranscriptAppendRefusal =

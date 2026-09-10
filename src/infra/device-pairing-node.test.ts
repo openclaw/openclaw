@@ -1,5 +1,4 @@
 // Tests node-role capability approvals stored on canonical paired-device records.
-import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -8,6 +7,7 @@ import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
@@ -24,6 +24,7 @@ import {
   requestNodePairing,
   reusePendingNodePairingForReconnect,
 } from "./device-pairing-node.js";
+import { seedNodeDevice, setupPairedNode } from "./device-pairing-node.test-support.js";
 import {
   getPairedDevice,
   listDevicePairingReadOnly,
@@ -31,8 +32,16 @@ import {
   resolveNodePairingGeneration,
   withPairedDeviceRecords,
 } from "./device-pairing.js";
+import {
+  NODE_BROWSER_PROXY_COMMANDS,
+  NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
+  NODE_SYSTEM_RUN_COMMANDS,
+  NODE_TERMINAL_UPLOAD_COMMAND,
+} from "./node-commands.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
+const databasePaths = new Set<string>();
 const hostStats: NodeHostStats = {
   cpuCount: 4,
   loadAverage: [1.5, 1, 0.5],
@@ -42,43 +51,11 @@ const hostStats: NodeHostStats = {
 };
 
 async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
-  return await run(await tempDirs.make("case"));
-}
-
-async function seedNodeDevice(baseDir: string, nodeId: string): Promise<void> {
-  const request = await requestDevicePairing(
-    {
-      deviceId: nodeId,
-      publicKey: `test-key-${nodeId}`,
-      role: "node",
-      roles: ["node"],
-      scopes: [],
-    },
-    baseDir,
+  const baseDir = await tempDirs.make("case");
+  databasePaths.add(
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
   );
-  await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
-}
-
-async function setupPairedNode(baseDir: string, displayName?: string) {
-  await seedNodeDevice(baseDir, "node-1");
-  const request = await requestNodePairing(
-    {
-      nodeId: "node-1",
-      displayName,
-      platform: "darwin",
-      commands: ["system.run"],
-    },
-    baseDir,
-  );
-  await approveNodePairing(
-    request.request.requestId,
-    { callerScopes: ["operator.pairing", "operator.admin"] },
-    baseDir,
-  );
-  return expectDefined(
-    resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir)),
-    "node pairing generation",
-  );
+  return await run(baseDir);
 }
 
 async function findPairedNode(nodeId: string, baseDir: string) {
@@ -106,6 +83,9 @@ describe("node surface approvals", () => {
   });
 
   afterAll(async () => {
+    for (const databasePath of databasePaths) {
+      closeOpenClawStateDatabaseByPath(databasePath);
+    }
     await tempDirs.cleanup();
   });
 
@@ -545,55 +525,44 @@ describe("node surface approvals", () => {
     });
   });
 
-  test("requires the right scopes to approve node requests", async () => {
+  test.each([
+    ...[
+      ...NODE_SYSTEM_RUN_COMMANDS,
+      ...NODE_BROWSER_PROXY_COMMANDS,
+      ...NODE_EXEC_APPROVALS_COMMANDS,
+      NODE_FS_LIST_DIR_COMMAND,
+      NODE_TERMINAL_UPLOAD_COMMAND,
+    ].map((command) => ({ command, scopes: ["operator.pairing", "operator.admin"] })),
+    { command: "canvas.present", scopes: ["operator.pairing", "operator.write"] },
+    { command: undefined, scopes: ["operator.pairing"] },
+  ])("reports and enforces approval scopes for $command", async ({ command, scopes }) => {
     await withNodePairingDir(async (baseDir) => {
       await seedNodeDevice(baseDir, "node-1");
-      const systemRunRequest = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run"],
-        },
+      const commands = command ? [command] : undefined;
+      const { request } = await requestNodePairing(
+        { nodeId: "node-1", platform: "darwin", commands },
         baseDir,
       );
 
+      expect(request.requiredApproveScopes).toEqual(scopes);
+      expect((await listNodePairing(baseDir)).pending).toEqual([request]);
       await expect(
-        approveNodePairing(
-          systemRunRequest.request.requestId,
-          { callerScopes: ["operator.pairing"] },
-          baseDir,
-        ),
+        approveNodePairing(request.requestId, { callerScopes: scopes.slice(0, -1) }, baseDir),
       ).resolves.toEqual({
         status: "forbidden",
-        missingScope: "operator.admin",
+        missingScope: scopes.at(-1),
       });
       await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
 
-      await seedNodeDevice(baseDir, "node-2");
-      const commandlessRequest = await requestNodePairing(
-        {
-          nodeId: "node-2",
-          platform: "darwin",
-        },
-        baseDir,
-      );
-
-      await expect(
-        approveNodePairing(commandlessRequest.request.requestId, { callerScopes: [] }, baseDir),
-      ).resolves.toEqual({
-        status: "forbidden",
-        missingScope: "operator.pairing",
-      });
       const approved = await approveNodePairing(
-        commandlessRequest.request.requestId,
-        { callerScopes: ["operator.pairing"] },
+        request.requestId,
+        { callerScopes: scopes },
         baseDir,
       );
-      const approvedRecord = requireRecord(approved);
-      const approvedNode = requireRecord(approvedRecord.node);
-      expect(approvedRecord.requestId).toBe(commandlessRequest.request.requestId);
-      expect(approvedNode.nodeId).toBe("node-2");
-      expect(approvedNode.commands).toBeUndefined();
+      expect(approved).toMatchObject({
+        requestId: request.requestId,
+        node: { nodeId: "node-1", commands },
+      });
     });
   });
 

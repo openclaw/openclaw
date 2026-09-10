@@ -9,6 +9,7 @@ import {
   type ChannelMessageActionName,
 } from "../../../channels/plugins/types.public.js";
 import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
+import { parseAccountSelector } from "../../../commands/channels/account-selector.js";
 import { messageCommand } from "../../../commands/message.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
@@ -32,6 +33,7 @@ import {
 } from "../../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
 import { createDefaultDeps } from "../../deps.js";
+import { requestExitAfterOneShotOutput } from "../../one-shot-exit.js";
 
 /** Shared helpers used by every message subcommand registration. */
 export type MessageCliHelpers = {
@@ -149,7 +151,7 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
     withMessageBase: (command) =>
       command
         .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
-        .option("--account <id>", "Channel account id (accountId)")
+        .option("--account <id>", "Channel account id (accountId)", parseAccountSelector)
         .option("--json", "Output result as JSON", false)
         .option("--dry-run", "Print payload and skip sending", false)
         .option("--verbose", "Verbose logging", false),
@@ -219,7 +221,7 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
         }
       }
       failed ||= result !== undefined && !resolveMessageActionOutcome(result).ok;
-      defaultRuntime.exit(failed ? 1 : 0);
+      requestExitAfterOneShotOutput(defaultRuntime, failed ? 1 : 0);
     },
   };
 }

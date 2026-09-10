@@ -2,8 +2,11 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
+import ai.openclaw.app.gateway.GatewayBootstrapHandoff
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.ui.GatewayConnectConfig
@@ -30,6 +33,7 @@ import kotlinx.coroutines.android.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -39,6 +43,9 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
@@ -153,7 +160,7 @@ class NodeForegroundServiceTest {
   }
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun stopDuringRuntimeConstructionRetiresBackgroundStartup() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     val fixture = Shadow.extract<ServiceRuntimePrefsShadow>(app)
@@ -187,11 +194,11 @@ class NodeForegroundServiceTest {
       assertFalse(runtime.nodeConnected.value)
       assertFalse(runtime.isForeground.value)
       assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
-      while (gateway.takeRequest(0, TimeUnit.MILLISECONDS) != null) {
-        // Construction may have started a socket before Stop retired it.
-      }
+      // A startup socket's HTTP upgrade can reach the server after Stop retires it.
+      // Observe new session admissions instead of the asynchronous server request queue.
+      fixture.sessionConnections.clear()
       runtime.setForeground(true)
-      assertNull("Foreground re-entry must not reconnect a stopped runtime", gateway.takeRequest(10, TimeUnit.SECONDS))
+      assertNull("Foreground re-entry must not reconnect a stopped runtime", fixture.sessionConnections.poll(10, TimeUnit.SECONDS))
     } finally {
       gate.release.countDown()
       fixture.prefsReadGate = null
@@ -333,7 +340,7 @@ class NodeForegroundServiceTest {
   }
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun stopRetiresQueuedActivityConnect() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Connect)
 
   @Test
@@ -353,11 +360,11 @@ class NodeForegroundServiceTest {
   fun stopRetiresQueuedForgetGateway() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Forget)
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class, ConnectAdmissionShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, ConnectAdmissionShadow::class, SessionDisconnectShadow::class])
   fun stopRetiresConnectAfterViewModelAdmissionCheck() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Connect, gateAtConnectEntry = true)
 
   @Test
-  @Config(shadows = [ServiceRuntimePrefsShadow::class, ConnectAdmissionShadow::class])
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, ConnectAdmissionShadow::class, SessionDisconnectShadow::class])
   fun anotherActivityResumeDoesNotReviveStoppedConnect() = assertStopRetiresQueuedGatewayAction(QueuedGatewayAction.Connect, gateAtConnectEntry = true, resumeFromAnotherActivity = true)
 
   @Test
@@ -469,6 +476,14 @@ class NodeForegroundServiceTest {
           runtime.gatewayConnectionDisplay.first { it.isConnected && runtime.nodeConnected.value }
         }
       }
+      if (action == QueuedGatewayAction.Connect) {
+        val initialRoles =
+          appFixture.sessionConnections
+            .filter { it.endpoint.port == initialGateway.port }
+            .map { it.role }
+            .toSet()
+        assertEquals(setOf("node", "operator"), initialRoles)
+      }
       while (initialGateway.takeRequest(0, TimeUnit.MILLISECONDS) != null) {
         // The initial ready sockets are not requests issued by the queued action.
       }
@@ -513,6 +528,13 @@ class NodeForegroundServiceTest {
         }
       }
       assertTrue("Queued action did not reach runtime adoption", gate.entered.await(10, TimeUnit.SECONDS))
+      if (action == QueuedGatewayAction.Connect) {
+        assertTrue(
+          "Queued Connect target must remain unknown to background gateway selection",
+          app.prefs.gatewayRegistry.entries.value
+            .none { it.stableId == nextEndpoint.stableId },
+        )
+      }
       val operation =
         viewModel.viewModelScope.coroutineContext.job.children
           .single { it !in existingOperations }
@@ -544,7 +566,7 @@ class NodeForegroundServiceTest {
       }
       gate.release.countDown()
       drainWithMainLooper { withTimeout(10_000) { operation.join() } }
-      if (gateAtConnectEntry) assertFalse("Call-through probe must not crash the gateway operation", operation.isCancelled)
+      if (action == QueuedGatewayAction.Connect) assertFalse("Call-through probe must not crash the gateway operation", operation.isCancelled)
 
       if (action == QueuedGatewayAction.Forget) {
         val savedId = GatewayEndpoint.manual("127.0.0.1", initialGateway.port).stableId
@@ -552,6 +574,13 @@ class NodeForegroundServiceTest {
           "Stop must retire queued Forget before deleting the saved gateway",
           app.prefs.gatewayRegistry.entries.value
             .any { it.stableId == savedId },
+        )
+      } else if (action == QueuedGatewayAction.Connect) {
+        // This unsaved cleartext target reaches session admission before the direct operation returns.
+        // Observe admission rather than delayed HTTP arrival; newer activity sockets remain valid.
+        assertTrue(
+          "Stopped activity work must not admit another Gateway connection",
+          appFixture.sessionConnections.none { it.endpoint.stableId == nextEndpoint.stableId },
         )
       } else {
         val target = if (action == QueuedGatewayAction.Refresh) initialGateway else nextGateway
@@ -613,7 +642,13 @@ class NodeForegroundServiceTest {
 
   @Test
   @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
-  fun stopRetiresSecondaryConnectionAfterAuthRead() {
+  fun stopRetiresSecondaryConnectionAfterAuthRead() = assertSecondaryAdmissionAfterStop(reenable = false)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun reenablingSecondaryAfterStopRetriesItsPendingAdmission() = assertSecondaryAdmissionAfterStop(reenable = true)
+
+  private fun assertSecondaryAdmissionAfterStop(reenable: Boolean) {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     app.prefs.setManualTls(false)
     val runtime = app.ensureBackgroundRuntime()
@@ -633,16 +668,35 @@ class NodeForegroundServiceTest {
       fixture.operatorTokenReadGate = authRead
       runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
       assertTrue("Secondary connection did not reach its credential read", authRead.entered.await(10, TimeUnit.SECONDS))
-      NodeForegroundService.stop(app)
+      // Capture the held admission's completion before Stop can retire it; the queue below owns the verdict.
+      val stoppedAdmission =
+        if (reenable) {
+          null
+        } else {
+          ReflectionHelpers.getField<CompletableDeferred<Unit>>(runtime, "gatewayConnectOperationsDrained").also {
+            assertFalse("Held secondary admission must remain unfinished", it.isCompleted)
+          }
+        }
+      if (reenable) {
+        runtime.disconnect()
+        runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
+      } else {
+        NodeForegroundService.stop(app)
+      }
       assertTrue("Stop did not finish its runtime teardown", stoppedNode.await(10, TimeUnit.SECONDS))
       assertNull(fixture.sessionConnections.poll())
 
       authRead.release.countDown()
 
-      assertNull(
-        "Stopped fleet work must not start an authenticated secondary connection",
-        fixture.sessionConnections.poll(10, TimeUnit.SECONDS),
-      )
+      if (reenable) {
+        val connection = fixture.sessionConnections.poll(10, TimeUnit.SECONDS)
+        assertNotNull("Reenabled admission must reach the session owner", connection)
+        assertEquals("operator", connection!!.role)
+        assertNotNull("Reenabled admission must reach the Gateway", gateway.takeRequest(10, TimeUnit.SECONDS))
+      } else {
+        drainWithMainLooper { withTimeout(10_000) { checkNotNull(stoppedAdmission).await() } }
+        assertNull("Stopped fleet work must not start an authenticated secondary connection", fixture.sessionConnections.poll())
+      }
     } finally {
       authRead.release.countDown()
       fixture.operatorTokenReadGate = null
@@ -661,7 +715,203 @@ class NodeForegroundServiceTest {
 
   @Test
   @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun savedGatewayAuthResetHasAVisibleDeadlineBeforeAcceptedTokenCleanup() = assertSavedGatewayAdmissionDeadline(GatewayAdmissionBlock.AuthReset)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun savedGatewayDeadlineIncludesBackgroundReconciliationMutexWait() = assertSavedGatewayAdmissionDeadline(GatewayAdmissionBlock.BackgroundReconciliation)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun savedGatewayDeadlineIncludesTheViewModelConfigQueue() = assertSavedGatewayAdmissionDeadline(GatewayAdmissionBlock.ViewModelQueue)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun disconnectDuringSavedGatewayAuthResetSuppressesReplacementWritesAndAdmission() = assertSavedGatewayAdmissionDeadline(GatewayAdmissionBlock.AuthReset, disconnectBeforeRelease = true)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun disconnectDuringBackgroundCleanupSuppressesQueuedSavedGateway() = assertSavedGatewayAdmissionDeadline(GatewayAdmissionBlock.BackgroundReconciliation, disconnectBeforeRelease = true)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun disconnectDuringViewModelQueueSuppressesQueuedSavedGateway() = assertSavedGatewayAdmissionDeadline(GatewayAdmissionBlock.ViewModelQueue, disconnectBeforeRelease = true)
+
+  private enum class GatewayAdmissionBlock { AuthReset, BackgroundReconciliation, ViewModelQueue }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private fun assertSavedGatewayAdmissionDeadline(
+    block: GatewayAdmissionBlock,
+    disconnectBeforeRelease: Boolean = false,
+  ) {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    app.prefs.setManualTls(false)
+    val runtime = app.ensureBackgroundRuntime()
+    runtime.disconnect()
+    val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+    val scheduler = TestCoroutineScheduler()
+    val viewModel = MainViewModel(app, app.prefs, SavedStateHandle())
+    val viewModels = ViewModelStore().apply { put("admission-deadline", viewModel) }
+    val configMutex = ReflectionHelpers.getField<Mutex>(viewModel, "gatewayConfigOperationMutex")
+    val fixture = Shadow.extract<ServiceRuntimePrefsShadow>(app)
+    val tokenWrite = RuntimeReturnGate()
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    val gateway =
+      lifetimeGateway { role ->
+        if (role == "operator") {
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{},"auth":{"deviceToken":"synthetic-operator-token","role":"operator","scopes":["operator.read","operator.write"]}}"""
+        } else {
+          """{"type":"hello-ok","server":{"host":"lifetime-proof"},"features":{"methods":[]},"snapshot":{}}"""
+        }
+      }
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
+    val node = ReflectionHelpers.getField<GatewaySession>(runtime, "nodeSession")
+    val admitted = CompletableDeferred<Unit>()
+    var configQueueHeld = false
+    try {
+      app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      app.prefs.saveGatewayCredentials(endpoint.stableId, token = "synthetic-old-setup")
+      app.prefs.setManualEnabled(false)
+      val cleanupStarted = CompletableDeferred<Unit>()
+      if (block != GatewayAdmissionBlock.ViewModelQueue) {
+        fixture.operatorTokenWriteGate = tokenWrite
+        if (block == GatewayAdmissionBlock.BackgroundReconciliation) {
+          runtime.setForeground(true)
+          runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
+        } else {
+          runtime.connect(endpoint)
+        }
+        assertTrue("Accepted hello did not reach token persistence", tokenWrite.entered.await(10, TimeUnit.SECONDS))
+        if (block == GatewayAdmissionBlock.AuthReset) {
+          drainWithMainLooper {
+            withTimeout(10_000) {
+              while (ReflectionHelpers.getField<Any?>(node, "desired") == null) delay(10)
+            }
+          }
+        }
+        val first =
+          generateSequence { fixture.sessionConnections.poll() }
+            .first { it.role == "operator" }
+            .session
+        Shadow.extract<SessionDisconnectShadow>(first).joinStarted = cleanupStarted
+        if (block == GatewayAdmissionBlock.BackgroundReconciliation) {
+          runtime.setGatewayConnectionEnabled(endpoint.stableId, false)
+          runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
+          drainWithMainLooper { withTimeout(10_000) { cleanupStarted.await() } }
+          assertFalse("Background cleanup must hold the actual gateway mutex", ReflectionHelpers.getField<Mutex>(runtime, "gatewaySwitchMutex").tryLock())
+        }
+      } else {
+        runBlocking { configMutex.lock() }
+        configQueueHeld = true
+      }
+      Shadow.extract<SessionDisconnectShadow>(node).connectStarted = admitted
+      ReflectionHelpers.setField(runtime, "scope", CoroutineScope(originalScope.coroutineContext + StandardTestDispatcher(scheduler)))
+      val previousOperations =
+        viewModel.viewModelScope.coroutineContext.job.children
+          .toSet()
+      viewModel.saveGatewayConfigAndConnect(
+        GatewayConnectPlan(
+          GatewayConnectConfig(
+            host = "127.0.0.1",
+            port = gateway.port,
+            tls = false,
+            bootstrapToken = "",
+            token = "synthetic-replacement-setup",
+            password = "",
+          ),
+          GatewaySavedAuthAction.REPLACE_ENDPOINT,
+        ),
+      )
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          while (ReflectionHelpers.getField<Any?>(runtime, "gatewayConnectionOperation") == null) delay(10)
+          if (block == GatewayAdmissionBlock.AuthReset) cleanupStarted.await()
+        }
+      }
+      assertEquals("Connecting…", runtime.gatewayConnectionDisplay.value.statusText)
+      scheduler.advanceTimeBy(GATEWAY_CONNECT_TIMEOUT_MS)
+      scheduler.runCurrent()
+      assertEquals(
+        "transport-cleanup",
+        runtime.gatewayConnectionDisplay.value.problem
+          ?.reason,
+      )
+      assertFalse(
+        runtime.gatewayConnectionDisplay.value.problem
+          ?.isTailscaleRoute == true,
+      )
+      assertFalse("The deadline must not admit a replacement socket", admitted.isCompleted)
+      assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
+      assertFalse("Queued configuration must not be persisted before cleanup", app.prefs.manualEnabled.value)
+
+      if (disconnectBeforeRelease) {
+        viewModel.disconnect()
+        drainWithMainLooper { withTimeout(10_000) { runtime.gatewayConnectionDisplay.first { it.statusText == "Offline" } } }
+      }
+      ReflectionHelpers.setField(runtime, "scope", originalScope)
+      tokenWrite.release.countDown()
+      if (configQueueHeld) {
+        configMutex.unlock()
+        configQueueHeld = false
+      }
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          val operations =
+            viewModel.viewModelScope.coroutineContext.job.children
+              .filterNot(previousOperations::contains)
+              .toList()
+          while (operations.any { !it.isCompleted }) {
+            scheduler.runCurrent()
+            delay(10)
+          }
+          operations.joinAll()
+        }
+      }
+      scheduler.runCurrent()
+      if (disconnectBeforeRelease) {
+        assertFalse(admitted.isCompleted)
+        assertEquals("synthetic-old-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
+        assertFalse(app.prefs.manualEnabled.value)
+        assertEquals("Offline", runtime.gatewayConnectionDisplay.value.statusText)
+        assertNull(runtime.gatewayConnectionDisplay.value.problem)
+      } else {
+        drainWithMainLooper { withTimeout(10_000) { admitted.await() } }
+        assertEquals("synthetic-replacement-setup", app.prefs.loadGatewayCredentials(endpoint.stableId).token)
+        assertTrue(app.prefs.manualEnabled.value)
+        assertNull(runtime.gatewayConnectionDisplay.value.problem)
+      }
+    } finally {
+      ReflectionHelpers.setField(runtime, "scope", originalScope)
+      tokenWrite.release.countDown()
+      fixture.operatorTokenWriteGate = null
+      if (configQueueHeld) configMutex.unlock()
+      viewModels.clear()
+      runtime.disconnect()
+      // Cancellation queues finalizers on the injected dispatcher; keep it and Main
+      // moving until the runtime drains before the common fixture closer joins it.
+      val runtimeJob = originalScope.coroutineContext.job
+      runtimeJob.cancel()
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          while (!runtimeJob.isCompleted) {
+            scheduler.runCurrent()
+            delay(10)
+          }
+          runtimeJob.join()
+        }
+      }
+      closeNodeServiceTestFixture(controller, app)
+      gateway.shutdown()
+    }
+  }
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun reenabledSecondaryDoesNotOverwriteItsNewTokenWithARetiredHello() = assertReconnectDrainsAcceptedOperatorToken(GatewayTokenTransition.SecondaryReenable)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun foregroundRoundTripPreservesAcceptedOperatorTokenOrder() = assertReconnectDrainsAcceptedOperatorToken(GatewayTokenTransition.ForegroundRoundTrip)
 
   @Test
   @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
@@ -675,15 +925,22 @@ class NodeForegroundServiceTest {
   @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class, ConnectAdmissionShadow::class])
   fun focusingSecondaryKeepsItsAdmittedOperatorWhileHelloPersists() = assertReconnectDrainsAcceptedOperatorToken(GatewayTokenTransition.SecondaryFocus, holdPrimaryWriteUntilNode = true)
 
-  private enum class GatewayTokenTransition { SecondaryReenable, PrimaryReconnect, SecondaryFocus }
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun supersededSecondaryFocusPreservesAcceptedOperatorTokenOrder() = assertReconnectDrainsAcceptedOperatorToken(GatewayTokenTransition.SecondaryFocus, supersedeFocus = true)
+
+  private enum class GatewayTokenTransition { SecondaryReenable, PrimaryReconnect, SecondaryFocus, ForegroundRoundTrip }
 
   private fun assertReconnectDrainsAcceptedOperatorToken(
     transition: GatewayTokenTransition,
     holdPrimaryWriteUntilNode: Boolean = false,
+    supersedeFocus: Boolean = false,
   ) {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     app.prefs.setManualTls(false)
     val runtime = app.ensureBackgroundRuntime()
+    val viewModel = if (supersedeFocus) MainViewModel(app, app.prefs, SavedStateHandle()) else null
+    val viewModels = viewModel?.let { ViewModelStore().apply { put("secondary-focus", it) } }
     val fixture = Shadow.extract<ServiceRuntimePrefsShadow>(app)
     val tokenWrite = RuntimeReturnGate()
     val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
@@ -717,12 +974,17 @@ class NodeForegroundServiceTest {
       }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
     app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+    val undiscoverableId = "undiscoverable-focus-target"
+    if (supersedeFocus) {
+      app.prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null).copy(stableId = undiscoverableId, kind = GatewayRegistryEntryKind.DISCOVERED))
+    }
     val deviceId = DeviceIdentityStore.withPrefs(app, app.prefs).loadOrCreate().deviceId
     val authStore = DeviceAuthStore(app.prefs)
     authStore.saveToken(endpoint.stableId, deviceId, "operator", "synthetic-initial-token", listOf("operator.read", "operator.write"))
     assertEquals("synthetic-initial-token", fixture.operatorTokenWrites.tryReceive().getOrNull())
 
     try {
+      viewModel?.setForeground(true)
       runtime.setForeground(true)
       fixture.operatorTokenWriteGate = tokenWrite
       if (transition == GatewayTokenTransition.PrimaryReconnect) {
@@ -737,17 +999,28 @@ class NodeForegroundServiceTest {
       val drained = CompletableDeferred<Unit>()
       Shadow.extract<SessionDisconnectShadow>(first).joinStarted = drained
       val replacement =
-        if (transition == GatewayTokenTransition.SecondaryReenable) {
+        if (supersedeFocus || transition == GatewayTokenTransition.SecondaryReenable || transition == GatewayTokenTransition.ForegroundRoundTrip) {
           first
         } else {
           ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
         }
       val admitted = CompletableDeferred<Unit>()
       Shadow.extract<SessionDisconnectShadow>(replacement).connectStarted = admitted
+      val existingOperations =
+        viewModel
+          ?.let {
+            it.viewModelScope.coroutineContext.job.children
+              .toSet()
+          }.orEmpty()
       when (transition) {
         GatewayTokenTransition.SecondaryReenable -> {
           runtime.setGatewayConnectionEnabled(endpoint.stableId, false)
           runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
+        }
+
+        GatewayTokenTransition.ForegroundRoundTrip -> {
+          runtime.setForeground(false)
+          runtime.setForeground(true)
         }
 
         GatewayTokenTransition.PrimaryReconnect -> {
@@ -760,7 +1033,7 @@ class NodeForegroundServiceTest {
         }
 
         GatewayTokenTransition.SecondaryFocus -> {
-          runtime.connect(endpoint)
+          if (viewModel == null) runtime.connect(endpoint) else viewModel.switchToGateway(endpoint.stableId)
         }
       }
       val completedWrites = mutableListOf<String>()
@@ -776,8 +1049,21 @@ class NodeForegroundServiceTest {
           if (!waitingForOldOwner) {
             completedWrites += withTimeout(10_000) { fixture.operatorTokenWrites.receive() }
           }
+          viewModel?.let {
+            assertTrue("Promotion must join the accepted write before supersession", waitingForOldOwner)
+            it.switchToGateway(undiscoverableId)
+          }
         } finally {
           tokenWrite.release.countDown()
+        }
+        viewModel?.let {
+          val operations =
+            it.viewModelScope.coroutineContext.job.children
+              .filterNot(existingOperations::contains)
+              .toList()
+          withTimeout(10_000) { operations.joinAll() }
+          assertTrue("Superseded UI operations must finish normally", operations.none { it.isCancelled })
+          assertTrue("The selecting Activity must remain foreground", runtime.isForeground.value)
         }
         if (holdPrimaryWriteUntilNode) {
           assertTrue("Primary hello did not reach its held persistence", primaryWrite.entered.await(10, TimeUnit.SECONDS))
@@ -819,6 +1105,7 @@ class NodeForegroundServiceTest {
       heldNodeHello.release.countDown()
       tokenWrite.release.countDown()
       fixture.operatorTokenWriteGate = null
+      viewModels?.clear()
       closeNodeServiceTestFixture(controller, app)
       gateway.shutdown()
     }
@@ -1021,7 +1308,7 @@ class NodeForegroundServiceTest {
                   return this
                 }
 
-                override fun apply() {
+                override fun commit(): Boolean {
                   if (savesOperatorToken) {
                     operatorTokenWriteGate?.let { gate ->
                       if (gate.claimed.compareAndSet(false, true)) {
@@ -1030,8 +1317,9 @@ class NodeForegroundServiceTest {
                       }
                     }
                   }
-                  editor.apply()
-                  operatorToken?.let { operatorTokenWrites.trySend(it) }
+                  val committed = editor.commit()
+                  if (committed) operatorToken?.let { operatorTokenWrites.trySend(it) }
+                  return committed
                 }
               }
             }
@@ -1161,6 +1449,7 @@ class NodeForegroundServiceTest {
       password: String?,
       options: GatewayConnectOptions,
       tls: GatewayTlsParams?,
+      bootstrapHandoff: GatewayBootstrapHandoff?,
     ) {
       connectStarted?.complete(Unit)
       Shadow
@@ -1177,6 +1466,7 @@ class NodeForegroundServiceTest {
         ReflectionHelpers.ClassParameter.from(String::class.java, password),
         ReflectionHelpers.ClassParameter.from(GatewayConnectOptions::class.java, options),
         ReflectionHelpers.ClassParameter.from(GatewayTlsParams::class.java, tls),
+        ReflectionHelpers.ClassParameter.from(GatewayBootstrapHandoff::class.java, bootstrapHandoff),
       )
     }
 

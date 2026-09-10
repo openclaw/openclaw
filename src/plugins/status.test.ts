@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   createAutoEnabledStatusConfig,
@@ -427,11 +428,7 @@ describe("plugin status reports", () => {
   });
 
   it("forwards an explicit logger to plugin loading", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    const logger = createInfoWarnErrorLogger();
 
     buildPluginSnapshotReport({
       config: {},
@@ -969,22 +966,32 @@ describe("plugin status reports", () => {
     expectNoCompatibilityWarnings();
   });
 
-  it("builds structured compatibility notices with deterministic ordering", () => {
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "hook-only",
-          name: "Hook Only",
-          hookCount: 1,
-        }),
-      ],
-      hooks: [createCustomHook({ pluginId: "hook-only", events: ["message"] })],
-    });
+  it.each([false, true])(
+    "keeps compatibility notices ordered and attributed to their plugin (supplied report: %s)",
+    (suppliedReport) => {
+      const report = createPluginLoadResult({
+        plugins: [
+          createPluginRecord({ id: "old", hookCount: 1 }),
+          createPluginRecord({ id: "api", providerIds: ["api"] }),
+          createPluginRecord({ id: "bundled", origin: "bundled", error: "sessionFile missing" }),
+          createPluginRecord({ id: "unrelated" }),
+        ],
+        hooks: [createCustomHook({ pluginId: "old", events: ["message"] })],
+        diagnostics: [
+          { level: "error", pluginId: "api", message: "saveSessionStore missing" },
+          { level: "error", message: "sessionFile missing" },
+          { level: "error", pluginId: "old", message: "sessionFile missing" },
+        ],
+      });
+      setPluginLoadResult(suppliedReport ? { plugins: [] } : report);
 
-    expectCompatibilityOutput({
-      notices: [createCompatibilityNotice({ pluginId: "hook-only", code: "hook-only" })],
-    });
-  });
+      expect(buildPluginCompatibilityNotices(suppliedReport ? { report } : undefined)).toEqual([
+        createCompatibilityNotice({ pluginId: "old", code: "hook-only" }),
+        createCompatibilityNotice({ pluginId: "old", code: "removed-session-transcript-file-api" }),
+        createCompatibilityNotice({ pluginId: "api", code: "removed-session-transcript-file-api" }),
+      ]);
+    },
+  );
 
   it("does not warn for explicit startup-lazy metadata", () => {
     setSinglePluginLoadResult(

@@ -2,16 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../../session-cards/progress-card-store.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
@@ -163,7 +165,7 @@ describe("session accessor seam", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  describe.sequential("session database teardown boundary", () => {
+  describe("session database teardown boundary", { concurrent: false }, () => {
     it("opens cached agent and shared-state handles", async () => {
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },
@@ -272,6 +274,60 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("preserves explicit default intent across reopen and unrelated whole-entry writes", async () => {
+    const parentKey = "agent:main:dashboard:parent";
+    const childKey = "agent:main:dashboard:child";
+    await replaceSessionEntry(
+      { sessionKey: parentKey, storePath },
+      {
+        sessionId: "parent-session",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+      },
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      {
+        sessionId: "child-session",
+        updatedAt: 2,
+        parentSessionKey: parentKey,
+        modelOverrideSource: "default",
+      },
+    );
+
+    closeOpenClawAgentDatabasesForTest();
+    const olderReaderEntry = expectDefined(
+      loadSessionEntry({ sessionKey: childKey, storePath }),
+      "reopened child entry",
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      { ...olderReaderEntry, label: "preserved by older reader" },
+    );
+
+    closeOpenClawAgentDatabasesForTest();
+    const reopenedChild = expectDefined(
+      loadSessionEntry({ sessionKey: childKey, storePath }),
+      "re-upgraded child entry",
+    );
+    expect(reopenedChild).toMatchObject({
+      label: "preserved by older reader",
+      modelOverrideSource: "default",
+    });
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: reopenedChild,
+        sessionKey: childKey,
+        sessionStore: Object.fromEntries(
+          listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+        ),
+      }),
+    ).toBeNull();
   });
 
   it("derives a scoped key owner before fixed-store read and write target resolution", async () => {
@@ -1259,28 +1315,33 @@ describe("session accessor seam", () => {
     });
   });
 
-  it.each(["global", "main", "agent:main:main"])(
-    "keeps explicit logical owner reads and updates isolated for %s",
-    async (sessionKey) => {
+  it.each([
+    { sessionKey: "global", agentId: "research", global: true },
+    { sessionKey: "main", agentId: "research", global: false },
+    { sessionKey: "agent:main:main", agentId: "research", global: false },
+    { sessionKey: "agent:research:main", agentId: undefined, global: true },
+  ])(
+    "keeps logical owner reads and updates isolated for $sessionKey with owner $agentId",
+    async ({ sessionKey, agentId: requestedAgentId, global }) => {
       const cfg: OpenClawConfig = {
         session: {
           store: path.join(tempDir, "{agentId}.json"),
-          scope: sessionKey === "global" ? "global" : undefined,
+          scope: global ? "global" : undefined,
         },
         agents: { entries: { research: {}, ops: {} } },
       };
-      const canonicalKey = sessionKey === "global" ? "global" : "agent:research:main";
+      const canonicalKey = global ? "global" : "agent:research:main";
       for (const agentId of ["research", "ops"]) {
         await upsertSessionEntryCore(
           {
             agentId,
-            sessionKey: sessionKey === "global" ? "global" : `agent:${agentId}:main`,
+            sessionKey: global ? "global" : `agent:${agentId}:main`,
             storePath: path.join(tempDir, `${agentId}.json`),
           },
           { sessionId: `${agentId}-session`, updatedAt: 1, label: agentId },
         );
       }
-      const scope = { cfg, sessionKey, agentId: "research" };
+      const scope = { cfg, sessionKey, agentId: requestedAgentId };
 
       expect(resolveSessionEntryAccessTarget(scope)).toMatchObject({
         agentId: "research",
@@ -1297,7 +1358,7 @@ describe("session accessor seam", () => {
       expect(
         loadSessionEntry({
           agentId: "ops",
-          sessionKey: sessionKey === "global" ? "global" : "agent:ops:main",
+          sessionKey: global ? "global" : "agent:ops:main",
           storePath: path.join(tempDir, "ops.json"),
         })?.label,
       ).toBe("ops");
@@ -1387,16 +1448,21 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    const created = await createSessionEntryWithTranscript(scope, ({ sessionEntries }) => {
-      expect(sessionEntries).toEqual({});
-      return {
-        ok: true,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: 10,
-        },
-      };
-    });
+    const created = await createSessionEntryWithTranscript(
+      scope,
+      ({ existingEntry, targetEntry, isLabelInUse }) => {
+        expect(existingEntry).toBeUndefined();
+        expect(targetEntry).toBeUndefined();
+        expect(isLabelInUse("unused")).toBe(false);
+        return {
+          ok: true,
+          entry: {
+            sessionId: "session-1",
+            updatedAt: 10,
+          },
+        };
+      },
+    );
 
     expect(created.ok).toBe(true);
     if (!created.ok) {
@@ -3115,6 +3181,7 @@ describe("session accessor seam", () => {
 
     expect(result.removedEntries).toBe(1);
     expect(notify).toHaveBeenCalledWith({
+      agentId: "main",
       kind: "delete",
       previous: { sessionId: scope.sessionId, sessionKeys: [scope.sessionKey] },
     });
@@ -3281,6 +3348,9 @@ describe("session accessor seam", () => {
       contextBudgetStatus,
       inputTokens: 10,
       outputTokens: 20,
+      cacheRead: 40,
+      cacheWrite: 10,
+      estimatedCostUsd: 0.02,
       sessionId,
       totalTokens: 30,
       totalTokensFresh: true,
@@ -3330,6 +3400,9 @@ describe("session accessor seam", () => {
     expect(updatedEntry?.contextBudgetStatus).toBeUndefined();
     expect(updatedEntry?.inputTokens).toBeUndefined();
     expect(updatedEntry?.outputTokens).toBeUndefined();
+    expect(updatedEntry?.cacheRead).toBeUndefined();
+    expect(updatedEntry?.cacheWrite).toBeUndefined();
+    expect(updatedEntry?.estimatedCostUsd).toBeUndefined();
     expect(updatedEntry?.totalTokens).toBeUndefined();
     expect(updatedEntry?.totalTokensFresh).toBeUndefined();
     expect(updates).toEqual([]);
@@ -3563,11 +3636,7 @@ describe("session accessor seam", () => {
       cwd: tempDir,
       messages: [
         {
-          message: {
-            role: "user",
-            content: "hello",
-            timestamp: 100,
-          },
+          message: makeUserMessage("hello", 100),
         },
         {
           message: {
@@ -4132,11 +4201,7 @@ describe("session accessor seam", () => {
     }
     const queuedAppendPromise = appendTranscriptMessage(scope, {
       cwd: tempDir,
-      message: {
-        role: "user",
-        content: "queued prompt",
-        timestamp: 200,
-      },
+      message: makeUserMessage("queued prompt", 200),
     });
     resumeShouldAppend();
 

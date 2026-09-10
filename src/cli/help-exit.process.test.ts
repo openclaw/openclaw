@@ -2,11 +2,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import {
   CLI_PROCESS_DEADLOCK_GUARD_MS,
   formatCliProcessFailure,
@@ -97,6 +99,7 @@ registerHooks({
 
 async function runCliProcess(params: {
   args: string[];
+  entry?: URL;
   config?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
   forbidTlsImport?: boolean;
@@ -121,6 +124,7 @@ async function runCliProcess(params: {
   const expectedExitCode = params.expectedExitCode ?? 0;
   const exit = await runCliProcessChild({
     nodeArgs: [
+      // Prepared entrypoints still load source-checkout plugins; keep the same TSX loader.
       "--import",
       "tsx",
       // Node runs later sync customization hooks first. Install test guards after
@@ -132,7 +136,7 @@ async function runCliProcess(params: {
       ...(params.failRunMainImport
         ? ["--import", pathToFileURL(fixture.failRunMainImportPath).href]
         : []),
-      "src/entry.ts",
+      params.entry ? fileURLToPath(params.entry) : "src/entry.ts",
       ...params.args,
     ],
     env: {
@@ -248,7 +252,7 @@ describe("CLI help process exit", () => {
       const argv = ["node", "openclaw", group, "--help"];
       const registered =
         registry === "core"
-          ? await registerCoreCliByName(program, createProgramContext(), group, argv)
+          ? await registerCoreCliByName(program, createProgramContext(), group)
           : await registerSubCliByName(program, group, argv);
       const parseResult = await program
         .parseAsync(argv.slice(2), { from: "user" })
@@ -334,7 +338,7 @@ describe("models list JSON failure process output", () => {
       {
         provider: "autoqa-no-such-provider",
         message:
-          'Unknown provider filter "autoqa-no-such-provider" for this installation. Run openclaw plugins list --json to see installed providers, or configure it under models.providers.',
+          "Unknown model catalog provider. Use a provider id from the installed plugins or configured providers.",
       },
     ].flatMap(({ provider, message }) => [
       {
@@ -353,6 +357,7 @@ describe("models list JSON failure process output", () => {
   )("renders $name as one clean canonical JSON document", async ({ provider, message, env }) => {
     const result = await runCliProcess({
       args: ["models", "list", "--provider", provider, "--json"],
+      entry: resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli),
       config: {},
       env,
       expectedExitCode: 1,
@@ -369,15 +374,17 @@ describe("models list JSON failure process output", () => {
 });
 
 describe("message broadcast process exit", () => {
-  it("exits nonzero after a structured target failure", async () => {
+  it("drains a large piped JSON payload before exiting nonzero on a structured target failure", async () => {
     const root = tempDirs.make("openclaw-message-broadcast-exit-");
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const entryPath = path.join(root, "run-message-broadcast.mjs");
+    const largePayload = "x".repeat(8_388_608);
     await fs.writeFile(
       entryPath,
       `import { registerHooks } from "node:module";
 const messageModule = "data:text/javascript," + encodeURIComponent(\`export async function messageCommand() {
+  process.stdout.write(JSON.stringify(${JSON.stringify({ payload: largePayload })}) + "\\\\n");
   return ${JSON.stringify({
     kind: "broadcast",
     channel: "fixture",
@@ -400,11 +407,18 @@ registerHooks({
   },
 });
 const { createMessageCliHelpers } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/program/message/helpers.ts")).href)});
+const { runCliWithExitFinalization } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/cli/one-shot-exit.ts")).href)});
 const { runMessageAction } = createMessageCliHelpers("fixture");
-await runMessageAction("broadcast", {
-  channel: "fixture",
-  targets: ["ok-target", "failed-target"],
-  message: "hello",
+await runCliWithExitFinalization({
+  run: () =>
+    runMessageAction("broadcast", {
+      channel: "fixture",
+      targets: ["ok-target", "failed-target"],
+      message: "hello",
+    }),
+  onError: (err) => {
+    console.error(err);
+  },
 });
 `,
     );
@@ -412,6 +426,7 @@ await runMessageAction("broadcast", {
     const child = spawnSync(process.execPath, ["--import", "tsx", entryPath], {
       cwd: path.resolve("."),
       encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
       env: {
         ...process.env,
         HOME: root,
@@ -429,6 +444,7 @@ await runMessageAction("broadcast", {
     expect(child.error).toBeUndefined();
     expect(child.signal).toBeNull();
     expect(child.status, child.stderr).toBe(1);
+    expect(JSON.parse(child.stdout.trim())).toEqual({ payload: largePayload });
   });
 });
 

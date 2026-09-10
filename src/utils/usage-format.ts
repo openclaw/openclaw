@@ -29,6 +29,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { UsageCacheStatus } from "../infra/session-cost-usage.types.js";
 import {
   modelCatalogPricingFingerprint,
   resolveModelPricing,
@@ -73,6 +74,13 @@ export function formatUsd(value?: number): string | undefined {
     return `$${value.toFixed(2)}`;
   }
   return `$${value.toFixed(4)}`;
+}
+
+/** Prefix aggregate totals with their recorded cache-readiness notice. */
+export function formatCostUsageCachePrefix(cacheStatus?: UsageCacheStatus): string {
+  return cacheStatus && cacheStatus.status !== "fresh"
+    ? `Usage totals may be incomplete (${cacheStatus.status}). Run this command again later.\n`
+    : "";
 }
 
 function normalizeRawModelKey(provider: string, model: string): string {
@@ -363,10 +371,12 @@ export function estimateUsageCost(params: {
 }
 
 /** Preserve summed per-call costs; aggregate tokens cannot reconstruct request tiers. */
-export function estimateAggregateUsageCost(params: {
-  usage?: NormalizedUsage | null;
-  cost?: ModelCostConfig;
-}): number | undefined {
+export function estimateAggregateUsageCost(
+  params: Parameters<typeof resolveModelCostConfig>[0] & {
+    usage?: NormalizedUsage | null;
+    cost?: ModelCostConfig;
+  },
+): number | undefined {
   const usage = params.usage;
   if (usage?.cost !== undefined) {
     return usage.cost.total;
@@ -376,9 +386,12 @@ export function estimateAggregateUsageCost(params: {
     [usage.input, usage.output, usage.cacheRead, usage.cacheWrite].some(
       (value) => value !== undefined,
     );
-  return !hasBillableBuckets || params.cost?.tieredPricing?.length
-    ? undefined
-    : estimateUsageCost(params);
+  if (!hasBillableBuckets) {
+    return undefined;
+  }
+  // Recorded totals own billing; discover fallback prices only for unpriced usage.
+  const cost = params.cost ?? resolveModelCostConfig(params);
+  return cost?.tieredPricing?.length ? undefined : estimateUsageCost({ usage, cost });
 }
 
 export function resetUsageFormatCachesForTest(): void {

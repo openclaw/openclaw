@@ -23,7 +23,9 @@ export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): str
   }
   const ids = new Set<string>();
   for (const binding of listBindings(cfg)) {
-    const resolved = resolveNormalizedRouteBindingMatch(binding);
+    const resolved = resolveNormalizedRouteBindingMatch(binding, {
+      includeImplicitDefaultAccount: true,
+    });
     if (!resolved || resolved.channelId !== normalizedChannel) {
       continue;
     }
@@ -62,7 +64,9 @@ export function resolveDefaultAgentBoundAccountId(
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   const map = new Map<string, Map<string, string[]>>();
   for (const binding of listBindings(cfg)) {
-    const resolved = resolveNormalizedRouteBindingMatch(binding);
+    const resolved = resolveNormalizedRouteBindingMatch(binding, {
+      includeImplicitDefaultAccount: true,
+    });
     if (!resolved) {
       continue;
     }

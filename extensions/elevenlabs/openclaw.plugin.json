@@ -1,5 +1,7 @@
 {
   "id": "elevenlabs",
+  "categories": ["models", "voice", "media"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
   },

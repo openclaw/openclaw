@@ -12,6 +12,7 @@ import {
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import {
   failNextDeviceIdentityMint,
+  focusChatSidePanel,
   openChatSidePanelType,
 } from "./chat-side-panel.test-support.ts";
 import {
@@ -247,11 +248,16 @@ suite.define(() => {
   it.each(["navigation", "replacement open", "reconnection", "outside pointer", "Escape"] as const)(
     "keeps pending Inbox intent current across %s",
     async (action) => {
-      const page = await openPage({ pathname: "new" });
-      const held = await holdModuleResponse(
-        page,
-        /\/assets\/sidebar-attention-panel\.runtime-[^/?]+\.js(?:\?.*)?$/u,
-      );
+      let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
+      const page = await openPage({
+        pathname: "new",
+        beforeNavigate: async (targetPage) => {
+          held = await holdModuleResponse(
+            targetPage,
+            /\/assets\/sidebar-attention-panel\.runtime-[^/?]+\.js(?:\?.*)?$/u,
+          );
+        },
+      });
       const attention = await page
         .locator("openclaw-app-sidebar openclaw-sidebar-attention")
         .elementHandle();
@@ -581,7 +587,7 @@ suite.define(() => {
       operatorScopes: limitedScopes,
       width: 1280,
     },
-  ])("keeps expanded side-panel tabs clear of $label web titlebar chrome", async (testCase) => {
+  ])("keeps focused main controls clear of $label web titlebar chrome", async (testCase) => {
     const page = await openPage({
       deviceLess: testCase.deviceLess,
       scenario: testCase.operatorScopes
@@ -605,14 +611,12 @@ suite.define(() => {
       await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     }
     await openChatSidePanelType(page, "Side chat");
-    const panel = page.getByRole("region", { name: "Side panel" });
-    await panel.getByRole("button", { name: "Expand side panel" }).click();
-    await panel.getByRole("button", { name: "Collapse" }).waitFor();
+    await focusChatSidePanel(page);
 
     const shellControls = page.locator(
       ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
     );
-    const panelControls = panel.locator(":scope > .side-panel__header :is(button, wa-tab):visible");
+    const panelControls = page.locator(".chat-pane__actions button:visible");
     const shellBoxes = await Promise.all(
       Array.from({ length: await shellControls.count() }, (_, index) =>
         shellControls.nth(index).boundingBox(),
@@ -623,10 +627,20 @@ suite.define(() => {
         panelControls.nth(index).boundingBox(),
       ),
     );
-    const shellRight = Math.max(...shellBoxes.flatMap((box) => (box ? [box.x + box.width] : [])));
-    const panelLeft = Math.min(...panelBoxes.flatMap((box) => (box ? [box.x] : [])));
-    expect(panelLeft - shellRight).toBeGreaterThanOrEqual(4);
-    expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
+    expect(shellBoxes.length).toBeGreaterThan(0);
+    expect(panelBoxes.length).toBeGreaterThan(0);
+    for (const panelBox of panelBoxes) {
+      expect(panelBox).not.toBeNull();
+      for (const shellBox of shellBoxes) {
+        expect(shellBox).not.toBeNull();
+        expect(
+          panelBox!.x >= shellBox!.x + shellBox!.width + 4 ||
+            panelBox!.x + panelBox!.width <= shellBox!.x - 4 ||
+            panelBox!.y >= shellBox!.y + shellBox!.height + 4 ||
+            panelBox!.y + panelBox!.height <= shellBox!.y - 4,
+        ).toBe(true);
+      }
+    }
     if (testCase.deviceLess) {
       await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").waitFor();
       expect(await page.locator(".scope-upgrade-shell-status").count()).toBe(0);
@@ -648,7 +662,7 @@ suite.define(() => {
   it("keeps overlay motion anchored to its owning interaction", async () => {
     const page = await openPage({ nativeNav: false });
 
-    await page.keyboard.press("Meta+K");
+    await page.keyboard.press("ControlOrMeta+K");
     const palette = page.locator(".cmd-palette");
     const paletteDialog = page.locator("openclaw-modal-dialog.palette");
     await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });

@@ -1,5 +1,7 @@
 {
   "id": "xiaomi",
+  "categories": ["models", "voice"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -19,6 +21,10 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "xiaomi": "xiaomi",
+      "xiaomi-token-plan": "xiaomi-token-plan-sgp"
+    },
     "providers": {
       "xiaomi": {
         "baseUrl": "https://api.xiaomimimo.com/v1",

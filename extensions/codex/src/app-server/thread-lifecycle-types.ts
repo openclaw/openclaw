@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import type { CodexAppServerLiveThreadOwnership } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexDynamicToolSpec, CodexTurnEnvironmentParams, JsonObject } from "./protocol.js";
@@ -56,11 +57,14 @@ export type CodexPluginThreadConfigProvider = {
 };
 
 export type CodexStartOrResumeThreadParams = {
+  inferenceRoute?: CodexInferenceProxy;
   client: CodexAppServerClient;
   abandonClient?: () => Promise<void>;
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
   params: EmbeddedRunAttemptParams;
+  /** Retained host-generation proof; the opaque host capability remains unchanged. */
+  assertCurrent?: () => void;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;
   agentId?: string;

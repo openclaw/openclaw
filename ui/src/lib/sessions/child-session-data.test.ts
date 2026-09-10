@@ -1,8 +1,15 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { fetchChildSessionRows } from "./child-session-data.ts";
-import type { SessionCapability } from "./index.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "./session-capability.test-support.ts";
 
 const parentKey = "agent:main:parent";
 
@@ -32,13 +39,37 @@ function listResult(
   };
 }
 
+function capability(request: GatewayRequestHandler) {
+  const sessions = createTestSessionCapability(
+    createGatewayHarness(createTestGatewayClient(request)).gateway,
+  );
+  onTestFinished(() => sessions.dispose());
+  return sessions;
+}
+
 describe("fetchChildSessionRows", () => {
   it("loads a default 50-child Swarm roster in one request", async () => {
     const children = Array.from({ length: 50 }, (_, index) => childRow(index));
-    const list = vi.fn().mockResolvedValue(listResult(children, children.length, null));
+    const renamed = {
+      ...children[0]!,
+      sessionId: "persisted-child-0",
+      updatedAt: 20,
+      label: "New child name",
+    };
+    children[0] = renamed;
+    const previous = { ...renamed, updatedAt: 10, label: "Old child name" };
+    const sessions = capability((method, params) => {
+      expect(method).toBe("sessions.list");
+      return (params as { spawnedBy?: string }).spawnedBy === parentKey
+        ? listResult(children, children.length, null)
+        : listResult([previous], 1, null);
+    });
+    await sessions.refresh({ force: true, agentId: "worker" });
+    expect(sessions.state.result?.sessions[0]?.label).toBe(previous.label);
+    const list = vi.spyOn(sessions, "list");
 
     const rows = await fetchChildSessionRows({
-      sessions: { list } as unknown as SessionCapability,
+      sessions,
       parentKey,
       isCurrent: () => true,
     });
@@ -52,18 +83,26 @@ describe("fetchChildSessionRows", () => {
       includeUnknown: false,
       configuredAgentsOnly: true,
     });
+    const sampled = rows?.find((row) => row.key === renamed.key);
+    expect(sampled).toBeDefined();
+    expect(sessions.reconcile(sampled)).toBe(true);
+    expect(sessions.state.result?.sessions.find((row) => row.key === renamed.key)?.label).toBe(
+      renamed.label,
+    );
   });
 
   it("continues paging when a child roster exceeds the default page", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => childRow(index));
     const lastPage = [childRow(100)];
-    const list = vi
+    const request = vi
       .fn()
       .mockResolvedValueOnce(listResult(firstPage, 101, 100))
       .mockResolvedValueOnce(listResult(lastPage, 101, null));
+    const sessions = capability(request);
+    const list = vi.spyOn(sessions, "list");
 
     const rows = await fetchChildSessionRows({
-      sessions: { list } as unknown as SessionCapability,
+      sessions,
       parentKey,
       isCurrent: () => true,
     });

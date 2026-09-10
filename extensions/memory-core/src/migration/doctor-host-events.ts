@@ -155,7 +155,7 @@ async function migrateLegacyMemoryHostEventSource(params: {
   context: PluginDoctorStateMigrationContext;
   changes: string[];
   warnings: string[];
-}): Promise<"completed" | "blocked"> {
+}): Promise<"completed" | "blocked" | "warning"> {
   const { normalizeMemoryHostEventRecordForStorage, resolveMemoryHostEventLogPath } =
     await import("openclaw/plugin-sdk/memory-host-events");
   const activeRelativePath = path.relative(
@@ -274,7 +274,7 @@ async function migrateLegacyMemoryHostEventSource(params: {
         params.warnings.push(
           `Skipped Memory Core host event recovery because ${source.filePath} changed other than by append; left the archive in place`,
         );
-        return "blocked";
+        return "warning";
       }
     }
     const firstCandidateOrdinal =
@@ -561,40 +561,49 @@ export const hostEventsStateMigration: PluginDoctorStateMigration = {
       preview: pending.map((source) =>
         source.kind === "ready"
           ? `- Memory Core host events: ${source.filePath} -> SQLite plugin state (${MEMORY_HOST_EVENTS_NAMESPACE})`
-          : `- Memory Core host events: ${source.filePath} requires safe-path repair (${source.reason})`,
+          : `- ${source.reason}`,
       ),
     };
   },
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
+    let advisoryWarningCount = 0;
     const blockedWorkspaces = new Set<string>();
     for (const source of await collectLegacyMemoryHostEventSources(params.config, params.env)) {
       if (blockedWorkspaces.has(source.workspaceDir)) {
         continue;
       }
       if (source.kind === "rejected") {
-        warnings.push(
-          `Skipped unsafe Memory Core host event source for ${source.workspaceDir}: ${source.reason}`,
-        );
+        warnings.push(source.reason);
         blockedWorkspaces.add(source.workspaceDir);
         continue;
       }
       if (!(await memoryHostEventSourceNeedsMigration({ source, context: params.context }))) {
         continue;
       }
+      const warningStart = warnings.length;
       const result = await migrateLegacyMemoryHostEventSource({
         source,
         context: params.context,
         changes,
         warnings,
       });
-      if (result === "blocked") {
+      if (result === "warning") {
+        advisoryWarningCount += warnings.length - warningStart;
+      }
+      if (result !== "completed") {
         // Archive generations encode append order. A later generation cannot
         // overtake an older source that still needs repair or durable import.
         blockedWorkspaces.add(source.workspaceDir);
       }
     }
-    return { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(warnings.length > 0 && advisoryWarningCount === warnings.length
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
+    };
   },
 };

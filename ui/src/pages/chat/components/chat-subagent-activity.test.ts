@@ -111,6 +111,7 @@ describe("subagent activity rows", () => {
       '[data-subagent-task-id="clickable-subagent"]',
     );
     expect(row?.tagName).toBe("BUTTON");
+    expect(row?.querySelector(".chat-subagent-activity__label")?.textContent).toBe("Subagent");
     expect(row?.getAttribute("aria-label")).toBe("Open subagent details for Map codebase");
     row?.click();
     expect(onOpenTaskDetail).toHaveBeenCalledWith(task);
@@ -228,7 +229,7 @@ describe("subagent activity rows", () => {
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
 
-  it("retains streaming fields on a terminal event and expires the finished row after 60 seconds", async () => {
+  it("retires live text but retains diff stats through terminal activity", async () => {
     const running = makeTask({
       id: "retained-subagent",
       lastActivity: "Editing the final report",
@@ -244,28 +245,26 @@ describe("subagent activity rows", () => {
       action: "upserted",
       task: makeTask({
         id: "retained-subagent",
-        status: "completed",
+        status: "cancelled",
         updatedAt: 100_000,
         endedAt: 100_000,
-        terminalSummary: "Final report complete",
       }),
     });
     const props = createBackgroundTasksProps(host);
     expect(props.tasks?.[0]).toMatchObject({
-      status: "completed",
-      lastActivity: "Editing the final report",
+      status: "cancelled",
       diffStat: { files: 2, added: 12, removed: 3 },
     });
+    expect(props.tasks?.[0]).not.toHaveProperty("lastActivity");
 
     const container = document.createElement("div");
     document.body.append(container);
     const renderCurrent = () =>
       render(html`${renderBackgroundTasksStatusRow(createBackgroundTasksProps(host))}`, container);
     renderCurrent();
-    expect(container.textContent).toContain("Subagent finished");
-    expect(container.textContent).toContain("Final report complete");
-    expect(container.querySelector(".chat-diffstat__add")?.textContent).toBe("+12");
-    expect(container.querySelector(".chat-diffstat__del")?.textContent).toBe("-3");
+    expect(container.textContent).toContain("Subagent cancelled");
+    expect(container.textContent).not.toContain("Editing the final report");
+    expect(container.querySelector(".chat-diffstat")).toBeNull();
 
     requestUpdate.mockClear();
     vi.advanceTimersByTime(TERMINAL_RETENTION_MS - 1);

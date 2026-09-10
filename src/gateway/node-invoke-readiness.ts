@@ -10,9 +10,10 @@ export async function invokeNodeWithReadinessRetry(
   request: Parameters<NodeRegistry["invoke"]>[0],
 ): Promise<NodeInvokeResult> {
   let deadlineAtMs =
-    request.timeoutMs !== undefined && Number.isFinite(request.timeoutMs) && request.timeoutMs > 0
+    request.deadlineAtMs ??
+    (request.timeoutMs !== undefined && Number.isFinite(request.timeoutMs) && request.timeoutMs > 0
       ? performance.now() + request.timeoutMs
-      : undefined;
+      : undefined);
   const timedOut = (): NodeInvokeResult => ({
     ok: false,
     error: { code: "TIMEOUT", message: "node invoke timed out" },
@@ -28,6 +29,7 @@ export async function invokeNodeWithReadinessRetry(
     const result = await registry.invoke({
       ...request,
       timeoutMs,
+      deadlineAtMs,
       onDispatchReady: (invokeId, dispatchDeadlineAtMs) => {
         // The omitted timeout starts at registry dispatch, not at RPC admission.
         // Capture that first armed deadline so retries cannot replenish its budget.

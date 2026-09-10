@@ -2,6 +2,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveOpenAICodexAccessTokenExpiry } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
 
 function createJwt(payload: Record<string, unknown>): string {
@@ -17,28 +18,6 @@ function createJsonResponse(body: unknown, init?: { status?: number }) {
       "Content-Type": "application/json",
     },
   });
-}
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: number) {
@@ -666,7 +645,7 @@ describe("loginOpenAICodexDeviceCode", () => {
   });
 
   it("bounds user-code error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"device code unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"device code unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "Content-Type": "text/plain" },
     });

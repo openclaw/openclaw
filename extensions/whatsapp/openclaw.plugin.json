@@ -1,8 +1,9 @@
 {
   "id": "whatsapp",
+  "categories": ["channels", "tools"],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "whatsapp-legacy-state" }]
   },
   "name": "WhatsApp",
   "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",

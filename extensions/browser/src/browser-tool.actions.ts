@@ -33,7 +33,10 @@ import {
   wrapBrowserExternalJson,
   wrapBrowserExternalText,
 } from "./browser-tool.snapshot.js";
-import { resolveBrowserActRequestTimeoutMs } from "./browser/act-policy.js";
+import {
+  EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS,
+  resolveBrowserActRequestTimeoutMs,
+} from "./browser/act-policy.js";
 import type {
   BrowserBatchAbort,
   BrowserBatchActionResult,
@@ -73,14 +76,6 @@ const ACT_TIMEOUT_KINDS = new Set([
   "evaluate",
   "wait",
 ]);
-const EXISTING_SESSION_TIMEOUT_REJECTED_KINDS = new Set([
-  "type",
-  "hover",
-  "scrollIntoView",
-  "drag",
-  "select",
-  "fill",
-]);
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
   return readPositiveIntegerParam({ value }, "value", {
@@ -102,7 +97,7 @@ function withLocalActTimeout(
   if (
     normalizePositiveTimeoutMs(typedRequest.timeoutMs) !== undefined ||
     !ACT_TIMEOUT_KINDS.has(request.kind) ||
-    (usesChromeMcp && EXISTING_SESSION_TIMEOUT_REJECTED_KINDS.has(request.kind))
+    (usesChromeMcp && !EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS.has(request.kind))
   ) {
     return request;
   }

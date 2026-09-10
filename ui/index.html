@@ -15,7 +15,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
-    <script>
+    <script data-cfasync="false">
       // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
       globalThis.__zod_globalConfig ??= {};
       globalThis.__zod_globalConfig.jitless = true;
@@ -105,7 +105,7 @@
           document.documentElement.setAttribute("data-theme", resolved);
           var resolvedMode = resolved.includes("light") ? "light" : "dark";
           document.documentElement.setAttribute("data-theme-mode", resolvedMode);
-          // Carapace CSS selects on [data-theme-resolved]; keep in lockstep.
+          // Plugin semantic styles select on [data-theme-resolved]; keep in lockstep.
           document.documentElement.setAttribute("data-theme-resolved", resolvedMode);
         } catch (e) {}
       })();
@@ -397,7 +397,7 @@
         </div>
       </div>
     </section>
-    <script>
+    <script data-cfasync="false">
       (function () {
         var app = document.querySelector("openclaw-app");
         var fallback = document.getElementById("openclaw-mount-fallback");
@@ -562,6 +562,6 @@
         }
       })();
     </script>
-    <script type="module" src="/src/main.ts"></script>
+    <script data-cfasync="false" type="module" src="/src/main.ts"></script>
   </body>
 </html>

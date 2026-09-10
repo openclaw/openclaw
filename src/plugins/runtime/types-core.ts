@@ -10,9 +10,7 @@ import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-ta
 
 type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
 type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
-type PrepareTtsRequest = (
-  ...args: Parameters<TtsRuntimeApi["prepareTtsRequest"]>
-) => Promise<ReturnType<TtsRuntimeApi["prepareTtsRequest"]>>;
+type PrepareTtsRequest = TtsRuntimeApi["prepareTtsRequest"];
 type TextToSpeech = typeof import("../../tts/tts.js").textToSpeech;
 type TextToSpeechStream = TtsRuntimeApi["textToSpeechStream"];
 type TextToSpeechTelephony = TtsRuntimeApi["textToSpeechTelephony"];
@@ -156,6 +154,8 @@ type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
       }
   );
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   fallbackEntry?: RuntimeSessionEntry;
   maintenanceConfig?: import("../../config/sessions/store-maintenance.js").ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
@@ -309,7 +309,7 @@ export type LlmCompleteResult = {
 
 type RuntimeRunEmbeddedAgentParams = Omit<
   import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
-  "admittedRunContext" | "preparedRunAdmission" | "skillWorkshopCollectionReconcile"
+  "admittedRunContext" | "preparedRunAdmission"
 >;
 
 type RuntimeRunEmbeddedAgent = (
@@ -539,11 +539,23 @@ export type PluginRuntimeCore = {
         providerId: string;
         baseUrl: string;
         headers?: HeadersInit;
+        reconcile?: import("../provider-plugin.types.js").ProviderPlugin["reconcileLocalService"];
       },
       signal?: AbortSignal | null,
     ) => Promise<{ release: () => void } | undefined>;
   };
+  modelConfig: {
+    /** Read-only model selection; no session mutation or harness execution authority. */
+    resolveDefaultModelForAgent: typeof import("../../agents/model-selection-config.js").resolveDefaultModelForAgent;
+    resolveAllowedModelRef: typeof import("../../agents/model-selection-resolve.js").resolveAllowedModelRefCore;
+  };
   modelAuth: {
+    /** Existing synchronous SDK operations, composed by the native host. */
+    resolveProviderIdForAuth: typeof import("../../agents/provider-auth-aliases.js").resolveProviderIdForAuth;
+    ensureAuthProfileStore: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
+    resolveAuthProfileOrder: typeof import("../../agents/auth-profiles/order.js").resolveAuthProfileOrder;
+    listProfilesForProvider: typeof import("../../agents/auth-profiles/profile-list.js").listProfilesForProvider;
+    isProviderApiKeyConfigured: typeof import("../provider-auth-availability.js").isProviderApiKeyConfigured;
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
       model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;

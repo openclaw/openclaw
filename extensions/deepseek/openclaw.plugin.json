@@ -1,5 +1,6 @@
 {
   "id": "deepseek",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -23,6 +24,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "deepseek": "deepseek"
+    },
     "providers": {
       "deepseek": {
         "baseUrl": "https://api.deepseek.com",

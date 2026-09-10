@@ -30,13 +30,75 @@ const localGit = options.localGit ?? options.performance;
 // uses .js specifiers that native Node type stripping cannot resolve.
 let getFileLockProcessStartTime;
 if (options.cancelDuringCleanup && ["supervise", "git"].includes(mode)) {
-  const { tsImport } = await import("tsx/esm/api");
-  ({ getFileLockProcessStartTime } = await tsImport(
-    "../../../src/shared/pid-alive.ts",
-    import.meta.url,
-  ));
+  if (process.versions.bun) {
+    ({ getFileLockProcessStartTime } = await import("../../../src/shared/pid-alive.ts"));
+  } else {
+    const { tsImport } = await import("tsx/esm/api");
+    ({ getFileLockProcessStartTime } = await tsImport(
+      "../../../src/shared/pid-alive.ts",
+      import.meta.url,
+    ));
+  }
 }
 const refsFile = path.join(root, "refs.json");
+
+function docsPublisherPackages() {
+  const name = "@sindresorhus/slugify";
+  const source = JSON.parse(
+    fs.readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+  );
+  const version = source.devDependencies[name];
+  const devDependencies = { [name]: version, "markdown-it": "15.0.0" };
+  return {
+    "package.json": { name: "docs-fixture", private: true, devDependencies },
+    "package-lock.json": {
+      name: "docs-fixture",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "docs-fixture", devDependencies },
+        [`node_modules/${name}`]: { version },
+        "node_modules/markdown-it": { version: "15.0.0" },
+      },
+    },
+  };
+}
+
+function prepareDocsPublisher() {
+  const source = fileURLToPath(new URL("../../../", import.meta.url));
+  const target = path.join(workspace, "publish");
+  // Model the earlier sync step, but execute the real validator from the source
+  // checkout. Package files remain independent of the remote baseline objects.
+  fs.symlinkSync(path.join(source, "scripts"), path.join(workspace, "scripts"), "junction");
+  for (const [name, value] of Object.entries(docsPublisherPackages())) {
+    fs.writeFileSync(path.join(target, name), JSON.stringify(value));
+  }
+  for (const name of [
+    "lib/docs-markdown.mjs",
+    "lib/docs-redirects.mjs",
+    "check-docs-mdx.mjs",
+    "check-docs-mdx.mts",
+    "lib/arg-utils.runtime.mjs",
+    "lib/tsx-cli-shim.mjs",
+    "lib/local-check-runtime.mts",
+    "tsx.mjs",
+    "lib/mintlify-accordion.mjs",
+    "docs-mdx-repair.md",
+  ]) {
+    const output = path.join(target, ".openclaw-sync", name);
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.copyFileSync(
+      path.join(source, name === "docs-mdx-repair.md" ? ".github/codex/prompts" : "scripts", name),
+      output,
+    );
+  }
+  fs.mkdirSync(path.join(target, "docs"));
+  fs.writeFileSync(path.join(target, "docs", "page.mdx"), "# Valid page\n");
+  fs.symlinkSync(
+    path.join(source, "node_modules"),
+    path.join(target, ".openclaw-sync", "node_modules"),
+    "junction",
+  );
+}
 
 function resolveRef(cwd, ref) {
   const refs = fs.existsSync(refsFile) ? JSON.parse(fs.readFileSync(refsFile, "utf8")) : {};
@@ -391,7 +453,7 @@ async function command() {
     }
     return;
   }
-  if (["gh", "node", "pnpm", "go", "crabbox"].includes(mode)) {
+  if (["gh", "node", "npm", "pnpm", "go", "crabbox"].includes(mode)) {
     const cwd = insideOwnedPath(process.cwd());
     recordCommand(mode, cwd, args);
     if (options.performance && mode === "node") {
@@ -417,6 +479,37 @@ async function command() {
       process.exit(0);
     }
     await boundary(`consumer:${mode}`);
+    if (mode === "npm" && options.docsPublish) {
+      // Model npm ci's installed-lock output without downloading or modifying
+      // the real dependencies borrowed by the copied checker.
+      fs.mkdirSync(path.join(cwd, "node_modules"), { recursive: true });
+      fs.copyFileSync(
+        path.join(cwd, "package-lock.json"),
+        path.join(cwd, "node_modules", ".package-lock.json"),
+      );
+      process.exit(0);
+    }
+    if (mode === "node" && options.docsPublish && args[0] === ".openclaw-sync/check-docs-mdx.mts") {
+      const result = spawnSync(process.execPath, args, { stdio: "inherit" });
+      process.exit(result.status ?? 1);
+    }
+    if (mode === "node" && options.docsPublish && args[0] === "--input-type=module") {
+      const validator =
+        "import fs from 'node:fs'; " +
+        "import { validateDocsSyncDependencies } from './scripts/docs-sync-publish.mjs'; " +
+        "validateDocsSyncDependencies(process.argv[1], JSON.parse(fs.readFileSync(0, 'utf8')));";
+      if (
+        cwd !== workspace ||
+        args.length !== 4 ||
+        args[1] !== "-e" ||
+        args[2] !== validator ||
+        args[3] !== path.join(workspace, "publish")
+      ) {
+        throw new Error("Unexpected docs dependency validator command");
+      }
+      const result = spawnSync(process.execPath, args, { stdio: "inherit" });
+      process.exit(result.status ?? 1);
+    }
     if (mode === "go") {
       const [build, changeDirectory, source, outputFlag, output, target] = args;
       if (
@@ -488,7 +581,9 @@ async function command() {
     if (count === (fault.occurrence ?? 1)) commandResult = fault;
   }
   const operation = args.shift();
-  if (operation === "init" && !localGit) {
+  if (operation === "rev-parse" && args.join(" ") === "--git-path info/exclude" && !localGit) {
+    fs.writeSync(1, `${path.join(cwd, ".git/info/exclude")}\n`);
+  } else if (operation === "init" && !localGit) {
     await boundary("init");
     const config = path.join(root, "fixture-config.json");
     if (fs.existsSync(config)) {
@@ -550,6 +645,19 @@ async function command() {
       ? JSON.parse(fs.readFileSync(treeCounter, "utf8")) + 1
       : 1;
     await boundary(`${operation}:${resultAttempt}`);
+    if (operation === "rebase" && options.env?.FIXTURE_DOCS_MDX_AFTER_REBASE) {
+      fs.writeFileSync(
+        path.join(cwd, "docs", "page.mdx"),
+        options.env.FIXTURE_DOCS_MDX_AFTER_REBASE,
+      );
+    }
+    if (
+      operation === "rebase" &&
+      resultAttempt === 2 &&
+      options.env?.FIXTURE_DOCS_LOCK_AFTER_REBASE
+    ) {
+      fs.appendFileSync(path.join(cwd, "package-lock.json"), "\n");
+    }
     publish("tree-attempt.json", attempt);
     await record(process.pid, "parent", attempt);
     if (operation === "clone" || operation === "worktree") {
@@ -830,7 +938,8 @@ async function command() {
     }
   } else if (
     operation === "diff" &&
-    (args.join(" ") === "--quiet -- docs .openclaw-sync" ||
+    ((options.docsPublish &&
+      args.join(" ") === "--quiet -- docs .openclaw-sync package.json package-lock.json") ||
       (options.docsAgent && args.join(" ") === "--quiet") ||
       options.maturity)
   ) {
@@ -852,7 +961,15 @@ async function command() {
     if (spec.endsWith("^{commit}")) {
       process.exit(options.baseAvailableAfter === 0 ? 0 : 1);
     }
-    const object = options.objects?.[spec];
+    const packages = options.docsPublish
+      ? Object.fromEntries(
+          Object.entries(docsPublisherPackages()).map(([name, value]) => [
+            `refs/remotes/origin/main:${name}`,
+            { text: JSON.stringify(value) },
+          ]),
+        )
+      : {};
+    const object = options.objects?.[spec] ?? packages[spec];
     if (operation === "show" && object) {
       fs.writeSync(1, object.text);
     }
@@ -896,6 +1013,9 @@ async function command() {
 }
 
 async function supervise() {
+  if (options.docsPublish && options.workingDirectory === "publish") {
+    prepareDocsPublisher();
+  }
   fs.mkdirSync(recordsDir);
   fs.writeFileSync(eventsFile, "");
   fs.writeFileSync(commandsFile, "");
@@ -921,7 +1041,7 @@ async function supervise() {
   }
   const extraTools = [
     ...(linux ? ["find"] : []),
-    ...(options.docsPublish ? ["rm"] : []),
+    ...(options.docsPublish ? ["rm", "npm"] : []),
     ...(options.performance ? ["curl", "tar", "sha256sum", "npm"] : []),
     ...(options.docsAgent ? ["date"] : []),
     ...(options.consumers ? ["gh", "node", "pnpm", "go"] : []),

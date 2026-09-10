@@ -4,10 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { testing as authStoreTesting } from "../agents/auth-profiles/store.test-support.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerModelsCli } from "./models-cli.js";
@@ -36,7 +36,10 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: mocks.callGateway,
+}));
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
   resolvePluginSetupRegistry: () => ({ providers: [] }),
@@ -123,6 +126,13 @@ describe("models auth login owner integration", () => {
           FRESH_PROFILE_ID,
           STALE_PROFILE_ID,
         ]);
+        expect(mocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "models.authStatus",
+            params: { refresh: true, agentId: "main" },
+            requireLocalBackendSharedAuth: true,
+          }),
+        );
       },
     );
   });

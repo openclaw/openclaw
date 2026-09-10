@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import {
   createWatchers,
@@ -280,14 +281,8 @@ describe("cron stream output", () => {
     it("drains output accepted behind a slow owner write before entering backoff", async () => {
       vi.useFakeTimers();
       const fake = fakeSupervisor();
-      let releasePayload!: () => void;
-      const payload = new Promise<void>((resolve) => {
-        releasePayload = resolve;
-      });
-      let releaseCounter!: () => void;
-      const counter = new Promise<void>((resolve) => {
-        releaseCounter = resolve;
-      });
+      const { promise: payload, resolve: releasePayload } = createDeferred();
+      const { promise: counter, resolve: releaseCounter } = createDeferred();
       const updateState = vi.fn(async (_jobId: string, patch: Partial<CronJob["state"]>) => {
         if (patch.streamCoalescedBatches === 1) {
           await counter;
@@ -343,18 +338,9 @@ describe("cron stream output", () => {
     it("lets a stop requested during exit draining own teardown without counting failure", async () => {
       vi.useFakeTimers();
       const fake = fakeSupervisor();
-      let releasePayload!: () => void;
-      const payload = new Promise<void>((resolve) => {
-        releasePayload = resolve;
-      });
-      let markDrainEntered!: () => void;
-      const drainEntered = new Promise<void>((resolve) => {
-        markDrainEntered = resolve;
-      });
-      let releaseDrain!: () => void;
-      const drain = new Promise<void>((resolve) => {
-        releaseDrain = resolve;
-      });
+      const { promise: payload, resolve: releasePayload } = createDeferred();
+      const { promise: drainEntered, resolve: markDrainEntered } = createDeferred();
+      const { promise: drain, resolve: releaseDrain } = createDeferred();
       const updateState = vi.fn(async (_jobId: string, patch: Partial<CronJob["state"]>) => {
         if (patch.streamCoalescedBatches === 2) {
           markDrainEntered();
@@ -430,14 +416,8 @@ describe("cron stream output", () => {
     it("bounds raw output while a serialized counter write is slow", async () => {
       vi.useFakeTimers();
       const fake = fakeSupervisor();
-      let releasePayload!: () => void;
-      const payload = new Promise<void>((resolve) => {
-        releasePayload = resolve;
-      });
-      let releaseCounter!: () => void;
-      const counter = new Promise<void>((resolve) => {
-        releaseCounter = resolve;
-      });
+      const { promise: payload, resolve: releasePayload } = createDeferred();
+      const { promise: counter, resolve: releaseCounter } = createDeferred();
       const updateState = vi.fn(async (_jobId: string, patch: Partial<CronJob["state"]>) => {
         if (patch.streamCoalescedBatches === 1) {
           await counter;
@@ -497,10 +477,7 @@ describe("cron stream output", () => {
     it("bounds stop while a payload remains in flight and freezes its counter", async () => {
       vi.useFakeTimers();
       const fake = fakeSupervisor();
-      let releasePayload!: () => void;
-      const payload = new Promise<void>((resolve) => {
-        releasePayload = resolve;
-      });
+      const { promise: payload, resolve: releasePayload } = createDeferred();
       const updateState = vi.fn(async (_jobId: string, _patch: Partial<CronJob["state"]>) => {});
       const watchers = createWatchers({
         getProcessSupervisor: () => fake.supervisor,

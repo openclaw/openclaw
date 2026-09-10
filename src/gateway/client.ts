@@ -31,6 +31,7 @@ import { logDebug, logError } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
+import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 import { VERSION } from "../version.js";
 
 export {
@@ -56,7 +57,7 @@ export type GatewayClientOptions = BaseGatewayClientOptions & {
 function createOpenClawGatewayClientHostDeps(
   overrides?: GatewayClientHostDeps,
   deviceAuthScope?: string,
-  suppressOriginDeviceAuth = false,
+  suppressStoredDeviceAuth = false,
   sharedStateMode?: "read-only",
   preparedDeviceAuth?: DeviceAuthEntry,
 ): GatewayClientHostDeps {
@@ -72,7 +73,7 @@ function createOpenClawGatewayClientHostDeps(
   > = deviceAuthScope
     ? {
         loadDeviceAuthToken: (params) =>
-          suppressOriginDeviceAuth
+          suppressStoredDeviceAuth
             ? null
             : readOnly
               ? loadOriginDeviceTokenReadOnly({ ...params, gatewayScope: deviceAuthScope })
@@ -96,7 +97,7 @@ function createOpenClawGatewayClientHostDeps(
       }
     : readOnly
       ? {
-          loadDeviceAuthToken: loadDeviceAuthTokenReadOnly,
+          loadDeviceAuthToken: suppressStoredDeviceAuth ? () => null : loadDeviceAuthTokenReadOnly,
           storeDeviceAuthToken: () => {},
           clearDeviceAuthToken: () => {},
         }
@@ -137,19 +138,33 @@ export class GatewayClient {
 
   constructor(opts: GatewayClientOptions) {
     const { deviceAuthScope, preparedDeviceAuth, sharedStateMode, ...baseOptions } = opts;
-    const suppressOriginDeviceAuth = Boolean(
-      deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim()),
-    );
+    const runtimeIdentity = resolveGatewayClientPlatformIdentity(process.platform);
+    // Password-only read-only clients cannot use stored tokens for auth, retry, or persistence.
+    const suppressStoredDeviceAuth =
+      Boolean(deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim())) ||
+      (!deviceAuthScope &&
+        sharedStateMode === "read-only" &&
+        Boolean(baseOptions.password?.trim()) &&
+        !baseOptions.token?.trim() &&
+        !baseOptions.bootstrapToken?.trim() &&
+        !baseOptions.deviceToken?.trim() &&
+        !baseOptions.approvalRuntimeToken?.trim() &&
+        !baseOptions.agentRuntimeIdentityToken?.trim() &&
+        !baseOptions.preferBootstrapToken);
     for (const value of Object.values(baseOptions.edgeAuthHeaders ?? {})) {
       registerSecretValueForRedaction(value);
     }
     this.#client = new BaseGatewayClient({
       ...baseOptions,
       clientVersion: baseOptions.clientVersion ?? VERSION,
+      platform: baseOptions.platform ?? runtimeIdentity.platform,
+      deviceFamily:
+        baseOptions.deviceFamily ??
+        (baseOptions.platform === undefined ? runtimeIdentity.deviceFamily : undefined),
       hostDeps: createOpenClawGatewayClientHostDeps(
         baseOptions.hostDeps,
         deviceAuthScope,
-        suppressOriginDeviceAuth,
+        suppressStoredDeviceAuth,
         sharedStateMode,
         preparedDeviceAuth,
       ),
@@ -174,6 +189,12 @@ export class GatewayClient {
     opts?: GatewayClientRequestOptions,
   ): Promise<T> {
     return this.#client.request<T>(method, params, opts);
+  }
+
+  /** Current transport state, including CLOSING before the close callback fires.
+   * This is not authentication or readiness evidence on its own. */
+  get connected(): boolean {
+    return this.#client.connected;
   }
 
   getConnectionMetadata(): GatewayClientConnectionMetadata {

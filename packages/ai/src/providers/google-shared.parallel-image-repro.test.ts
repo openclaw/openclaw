@@ -1,9 +1,9 @@
 import type { Part } from "@google/genai";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import type { Context, Model } from "../types.js";
-import { convertMessages } from "./google-shared.js";
-import { makeGoogleAssistantMessage } from "./google-shared.test-helpers.js";
+import { convertMessages, makeGoogleAssistantMessage } from "./google-shared.test-helpers.js";
 
 const convertMessagesForTest = convertMessages as unknown as (
   model: Model<"google-generative-ai">,
@@ -57,14 +57,7 @@ describe("google-shared convertMessages — parallel tool results with an image 
           isError: false,
           timestamp: 0,
         },
-        weather: {
-          role: "toolResult",
-          toolCallId: "call_2",
-          toolName: "weather",
-          content: [{ type: "text", text: "Sunny, 21C" }],
-          isError: false,
-          timestamp: 0,
-        },
+        weather: makeTextToolResult("call_2", "weather", "Sunny, 21C", false, 0),
       } as const;
       const context = {
         messages: [

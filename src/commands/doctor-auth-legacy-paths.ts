@@ -6,6 +6,7 @@ import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-ma
 import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { resolveUserPath } from "../utils.js";
 
 function resolveLegacyAuthAgentDir(agentDir?: string): string {
@@ -17,12 +18,18 @@ export type AuthProfileRepairCandidate = {
   authPath: string;
 };
 
-function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
+function listExistingAgentDirsFromState(
+  env: NodeJS.ProcessEnv,
+  onUnavailable?: (pathname: string) => void,
+): string[] {
   const root = path.join(resolveStateDir(env), "agents");
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      onUnavailable?.(root);
+    }
     return [];
   }
   return (
@@ -32,8 +39,33 @@ function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
       .map((entry) => path.join(root, entry.name, "agent"))
       .filter((agentDir) => {
         try {
-          return fs.statSync(agentDir).isDirectory();
-        } catch {
+          const directory = fs.statSync(agentDir).isDirectory();
+          if (!directory) {
+            onUnavailable?.(agentDir);
+          }
+          return directory;
+        } catch (error) {
+          if (!onUnavailable) {
+            return false;
+          }
+          if (!hasErrnoCode(error, "ENOENT")) {
+            onUnavailable?.(agentDir);
+            return false;
+          }
+          try {
+            fs.lstatSync(agentDir);
+            onUnavailable?.(agentDir);
+          } catch (missing) {
+            if (!hasErrnoCode(missing, "ENOENT")) {
+              onUnavailable?.(agentDir);
+            } else {
+              try {
+                fs.statSync(path.dirname(agentDir));
+              } catch {
+                onUnavailable?.(agentDir);
+              }
+            }
+          }
           return false;
         }
       })
@@ -48,6 +80,7 @@ function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
 export function listAuthProfileRepairCandidates(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  onUnavailable?: (pathname: string) => void,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
   const addCandidate = (agentDir: string | undefined): void => {
@@ -74,7 +107,7 @@ export function listAuthProfileRepairCandidates(
   for (const agentId of listAgentIds(cfg)) {
     addCandidate(resolveAgentDir(cfg, agentId, env));
   }
-  for (const agentDir of listExistingAgentDirsFromState(env)) {
+  for (const agentDir of listExistingAgentDirsFromState(env, onUnavailable)) {
     addCandidate(agentDir);
   }
   return [...candidates.values()];

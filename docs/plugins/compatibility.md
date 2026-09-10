@@ -12,6 +12,11 @@ adapters before removing them. This protects existing bundled and external
 plugins while the SDK, manifest, setup, config, and agent runtime contracts
 evolve.
 
+All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
+Plugin authors should pin and test supported OpenClaw host versions. This
+stability designation does not cancel existing deprecation windows,
+compatibility adapters, or supported-upgrade migrations described below.
+
 ## Compatibility registry
 
 Plugin compatibility contracts are tracked in the core registry at
@@ -153,13 +158,16 @@ New channel plugins should use `MsgContext.ChannelPromptContext`,
 `SupplementalContextFacts.channelStructuredContext`. The older
 `UntrustedContext`, `UntrustedStructuredContext`,
 `UntrustedStructuredContextEntry`, and supplemental `untrustedContext` names
-remain as deprecated SDK aliases until 2026-09-08 (registry record
-`sdk-untrusted-context-identifier-aliases`). Inbound finalization folds those
+remain as deprecated SDK aliases. Their 2026-09-08 removal review date is
+unchanged, but registry record `sdk-untrusted-context-identifier-aliases` is now
+`removal-pending`: removal still requires verified migration of published plugin
+readers and explicit breaking-release approval. Inbound finalization folds those
 deprecated fields into the channel-named fields and removes the old keys from
 runtime context.
 
 The security runtime similarly exports `buildChannelMetadata`; the deprecated
-`buildUntrustedChannelMetadata` alias remains available on the same schedule.
+`buildUntrustedChannelMetadata` alias remains available under the same pending
+removal conditions.
 
 ### WhatsApp inbound callback retirement
 
