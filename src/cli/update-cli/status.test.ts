@@ -1,14 +1,20 @@
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   createUpdateRun,
+  findActiveUpdateRun,
+  finishUpdateRun,
   getUpdateRun,
+  listUpdateRuns,
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { updateStatusCommand } from "./status.js";
 
 const runtime = vi.hoisted(() => ({
@@ -38,9 +44,6 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: runtime,
 }));
-vi.mock("../../config/config.js", () => ({
-  readSourceConfigBestEffort: async () => ({}),
-}));
 vi.mock("../../infra/update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-check.js")>()),
   checkUpdateStatus: async () => ({
@@ -60,10 +63,95 @@ const tempDirs = createTempDirTracker();
 beforeEach(() => {
   vi.clearAllMocks();
   service.readCommand.mockResolvedValue(null);
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-update-status-"));
+  const stateDir = tempDirs.make("openclaw-update-status-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
 });
 
 describe("update status Node runtime findings", () => {
+  it.each(
+    [true, false].flatMap((json) => [
+      { json, stored: true, sqliteVersion: "3.51.2", unavailable: true },
+      { json, stored: false, sqliteVersion: "3.51.2", unavailable: false },
+      { json, stored: true, sqliteVersion: "3.51.3", unavailable: false },
+    ]),
+  )(
+    "preserves diagnostics with stored=$stored SQLite $sqliteVersion (JSON: $json)",
+    async ({ json, stored, sqliteVersion, unavailable }) => {
+      const recorded = stored ? createUpdateRun({ trigger: "cli" }) : undefined;
+      closeOpenClawStateDatabaseForTest();
+      vi.resetModules();
+      const sqlitePrototype: {
+        prepare: (this: DatabaseSync, sql: string) => ReturnType<DatabaseSync["prepare"]>;
+      } = DatabaseSync.prototype;
+      const realPrepare = sqlitePrototype.prepare;
+      const prepare = vi
+        .spyOn(DatabaseSync.prototype, "prepare")
+        .mockImplementation(function (this: DatabaseSync, sql) {
+          return realPrepare.call(
+            this,
+            sql === "SELECT sqlite_version() AS version"
+              ? `SELECT '${sqliteVersion}' AS version`
+              : sql,
+          );
+        });
+      const freshGuard = await import("../../infra/runtime-guard.js");
+      vi.spyOn(freshGuard, "detectRuntime").mockReturnValue({
+        kind: "node",
+        version: process.versions.node,
+        execPath: "/fixture/node",
+        pathEnv: "/fixture",
+        hasNodeSqlite: true,
+        sqliteVersion,
+        sqliteProbe: {
+          available: true,
+          version: sqliteVersion,
+          text: true,
+          blob: true,
+          json: true,
+        },
+      });
+      const command = await import("./status.js");
+      const ledger = await import("../../infra/update-run-ledger.js");
+      if (unavailable) {
+        expect(() => ledger.findActiveUpdateRun()).toThrow(
+          "SQLite support is unavailable or unsafe",
+        );
+      }
+      await expect(command.updateStatusCommand({ json })).resolves.toBeUndefined();
+      if (json) {
+        const result = runtime.writeJson.mock.lastCall?.[0];
+        expect(result).toHaveProperty("availability");
+        expect(Boolean(result?.runStatusError)).toBe(unavailable);
+        if (sqliteVersion === "3.51.2") {
+          expect(result?.runtimeFindings).toEqual([
+            expect.objectContaining({
+              severity: "error",
+              message: expect.stringContaining("SQLite 3.51.2"),
+              fixHint: expect.stringContaining("nvm install 26"),
+            }),
+          ]);
+        }
+        expect(result?.activeRun).toEqual(unavailable ? undefined : recorded);
+        expect(result?.lastRun).toEqual(unavailable ? undefined : recorded);
+        expect(result).not.toHaveProperty("abandonedRun");
+      } else {
+        const output = runtime.log.mock.calls.flat().join("\n");
+        expect(output).toContain("OpenClaw update status");
+        expect(output.includes("Update run status unavailable:")).toBe(unavailable);
+        if (sqliteVersion === "3.51.2") {
+          expect(output).toContain("SQLite 3.51.2");
+          expect(output).toContain("nvm install 26");
+        }
+      }
+      if (!stored) {
+        expect(prepare).not.toHaveBeenCalled();
+      }
+      prepare.mockRestore();
+      expect(recorded && ledger.getUpdateRun(recorded.runId)).toEqual(recorded);
+    },
+  );
+
   it.each(["cli", "service"])(
     "renders admitted %s runtime information without a missing hint",
     async (source) => {
@@ -173,6 +261,47 @@ afterEach(() => {
 });
 
 describe("update status abandoned-run reporting", () => {
+  it.each([true, false])(
+    "does not publish partial history when the latest terminal row is unreadable (JSON: %s)",
+    async (json) => {
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const active = createUpdateRun({ trigger: "cli" });
+      vi.mocked(Date.now).mockReturnValue(now + 1);
+      const latest = createUpdateRun({ trigger: "cli" });
+      finishUpdateRun(latest.runId, { status: "succeeded" });
+      closeOpenClawStateDatabaseForTest();
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath());
+      try {
+        database
+          .prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?")
+          .run("not-json", latest.runId);
+      } finally {
+        database.close();
+      }
+      expect(findActiveUpdateRun()).toEqual(active);
+      expect(() => listUpdateRuns({ limit: 1 })).toThrow();
+
+      await updateStatusCommand({ json });
+
+      if (json) {
+        const result = runtime.writeJson.mock.lastCall?.[0];
+        expect(result?.runStatusError).toEqual(expect.any(String));
+        expect(result).toHaveProperty("availability");
+        for (const field of ["activeRun", "lastRun", "staleRun", "abandonedRun"]) {
+          expect(result).not.toHaveProperty(field);
+        }
+      } else {
+        const output = runtime.log.mock.calls.flat().join("\n");
+        expect(output).toContain("OpenClaw update status");
+        expect(output).toContain("Update run status unavailable:");
+        expect(output).not.toContain(active.runId);
+      }
+      expect(getUpdateRun(active.runId)).toEqual(active);
+      expect(() => listUpdateRuns({ limit: 1 })).toThrow();
+    },
+  );
+
   it.each([true, false])(
     "gives explicit recovery guidance for stale identityless history (JSON: %s)",
     async (json) => {
