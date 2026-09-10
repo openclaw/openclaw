@@ -257,6 +257,27 @@ export class ModelSetupWizardRunner {
       return undefined;
     }
     if (result?.status === "cancelled" || result?.status === "error") {
+      if (session.startMethod === "models.authLogin") {
+        // Cancellation acknowledges the abort before provider teardown releases
+        // admission. Status waits for that release; a purged session is settled.
+        try {
+          await session.client.request<WizardStatusResult>(
+            "wizard.status",
+            { sessionId: session.sessionId },
+            {
+              timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
+              signal: session.abortController.signal,
+            },
+          );
+        } catch (error) {
+          if (!isWizardNotFoundError(error)) {
+            throw error;
+          }
+        }
+        if (session !== this.session || this.isRetired(session) || session.suspended) {
+          return undefined;
+        }
+      }
       this.close();
       return "cancelled";
     }

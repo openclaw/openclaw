@@ -168,6 +168,35 @@ describe("models.authLogin ownership", () => {
     expect(accepted).toBe(true);
   });
 
+  it("keeps a cancelled login readable until repeated cancellation releases admission", async () => {
+    const release = createDeferred();
+    hooks.admission.mockImplementation(async (_stateDir: string, run: () => Promise<unknown>) => {
+      await run();
+      await release.promise;
+    });
+    hooks.login.mockImplementation(async (options: ModelsAuthLoginFlowOptions) => {
+      await options.prompter.note("Waiting for acknowledgement");
+      return result;
+    });
+    const h = harness();
+    try {
+      await h.start();
+      const session = expectDefined(h.tracker.wizardSessions.get("login"), "login session");
+      await h.invoke("wizard.cancel", { sessionId: "login" });
+      await session.whenSettled();
+      await h.invoke("wizard.cancel", { sessionId: "login" });
+      const status = h.invoke("wizard.status", { sessionId: "login" });
+      release.resolve();
+      expect(await status).toHaveBeenCalledWith(
+        true,
+        { status: "cancelled", error: "cancelled" },
+        undefined,
+      );
+    } finally {
+      release.resolve();
+    }
+  });
+
   it("delivers the provider browser URL on the next wizard step", async () => {
     const h = harness();
     hooks.login.mockImplementationOnce(async (options: ModelsAuthLoginFlowOptions) => {

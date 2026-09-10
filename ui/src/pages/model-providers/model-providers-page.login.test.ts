@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ModelAuthStatusResult, WizardNextResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -23,6 +24,7 @@ function loginHarness() {
   let stepShown = false;
   const answer = deferred<WizardNextResult>();
   const cancel = deferred<{ status: "running" | "cancelled" }>();
+  const status = deferred<{ status: "cancelled" }>();
   const authStatus = (): ModelAuthStatusResult => ({
     ts: 1,
     providers: saved
@@ -82,6 +84,8 @@ function loginHarness() {
         });
       case "wizard.cancel":
         return cancel.promise;
+      case "wizard.status":
+        return status.promise;
       default:
         return originalRequest(method);
     }
@@ -93,7 +97,7 @@ function loginHarness() {
     const value = await task(context.gateway.snapshot.client!);
     return { ok: true, value, refresh: { ok: true } };
   };
-  return { ...harness, answer, cancel };
+  return { ...harness, answer, cancel, status };
 }
 
 async function openLogin(page: ModelProvidersPageTestElement, choice = "example-secret") {
@@ -172,20 +176,39 @@ describe("Models provider login", () => {
     );
   });
 
-  it("closes confirmed cancellation and enables a new connection", async () => {
-    const { context, cancel } = loginHarness();
-    const page = appendPage(context);
-    await openLogin(page);
-    page.querySelector<HTMLButtonElement>(".wizard-step__actions .btn")!.click();
-    cancel.resolve({ status: "cancelled" });
+  it.each(["settled", "purged"])(
+    "keeps Connect disabled until cancellation is %s",
+    async (outcome) => {
+      const { context, request, cancel, status } = loginHarness();
+      const page = appendPage(context);
+      await openLogin(page);
+      page.querySelector<HTMLButtonElement>(".wizard-step__actions .btn")!.click();
+      cancel.resolve({ status: "cancelled" });
+      await waitForFast(() =>
+        expect(request.mock.calls.some(([method]) => method === "wizard.status")).toBe(true),
+      );
+      expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
+      expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
+      if (outcome === "purged") {
+        status.reject(
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "Wizard session not found",
+            details: { code: "WIZARD_NOT_FOUND" },
+          }),
+        );
+      } else {
+        status.resolve({ status: "cancelled" });
+      }
 
-    await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(false);
-    expect(page.textContent).not.toContain("Provider credentials saved.");
-    page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
-    await page.updateComplete;
-    expect(page.querySelector("[data-models-login-choice]")).not.toBeNull();
-  });
+      await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+      expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(false);
+      expect(page.textContent).not.toContain("Provider credentials saved.");
+      page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
+      await page.updateComplete;
+      expect(page.querySelector("[data-models-login-choice]")).not.toBeNull();
+    },
+  );
 
   it("does not publish a previous agent's completion after selection changes", async () => {
     const { context, agentSelection, notifySelection, answer, cancel } = loginHarness();
