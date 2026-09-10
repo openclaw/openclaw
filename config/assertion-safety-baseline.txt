@@ -910,14 +910,12 @@ extensions/pixverse/video-generation-provider.ts	2
 extensions/policy/src/cli.ts	1
 extensions/policy/src/doctor/access-findings.ts	1
 extensions/policy/src/doctor/access-shapes.ts	2
-extensions/policy/src/doctor/agent-tool-shapes.ts	1
 extensions/policy/src/doctor/automatic-repairs.ts	7
 extensions/policy/src/doctor/data-auth-shapes.ts	1
 extensions/policy/src/doctor/evaluation.ts	4
 extensions/policy/src/doctor/exec-approval-findings.ts	1
 extensions/policy/src/doctor/policy-runtime.ts	2
 extensions/policy/src/doctor/routing-shapes.ts	2
-extensions/policy/src/doctor/sandbox-gateway-shapes.ts	1
 extensions/policy/src/doctor/strictness.ts	3
 extensions/policy/src/doctor/tool-findings.ts	2
 extensions/policy/src/policy-routing.ts	2
