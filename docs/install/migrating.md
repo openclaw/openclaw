@@ -148,5 +148,6 @@ In-place plugin upgrades preserve the same plugin id and config keys but may mov
 - [`openclaw migrate`](/cli/migrate): CLI reference for cross-system imports.
 - [Install overview](/install): all installation methods.
 - [Doctor](/gateway/doctor): post-migration health check.
+- [Updating](/install/updating): updating an existing install in place, plus rollback strategy.
 - [Uninstall](/install/uninstall): removing OpenClaw cleanly.
 - [`openclaw backup`](/cli/backup) — create the archive this migration restores

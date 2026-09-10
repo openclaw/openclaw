@@ -122,4 +122,10 @@ Every section heading from the previous single-page version keeps its anchor her
   <Card title="Configuration reference" icon="sliders" href="/gateway/config-channels#imessage">
     Full iMessage field reference.
   </Card>
+  <Card title="RPC adapters" icon="plug" href="/reference/rpc">
+    The line-delimited JSON-RPC stdio protocol OpenClaw speaks to `imsg rpc`.
+  </Card>
+  <Card title="macOS VMs" icon="display" href="/install/macos-vm">
+    Run OpenClaw in a sandboxed macOS VM, local or hosted, when you want iMessage isolated from your main Mac.
+  </Card>
 </CardGroup>

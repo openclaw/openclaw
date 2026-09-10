@@ -1204,3 +1204,5 @@ Maintainers use the private release docs in [`openclaw/maintainers/release/READM
 ## Related
 
 - [Release channels](/install/development-channels)
+- [Full release validation](/reference/full-release-validation) - the release product-validation umbrella and its child workflows
+- [Update and plugin tests](/help/testing-updates-plugins) - proving the installable package updates real user state before a release

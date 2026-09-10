@@ -18,6 +18,9 @@ adds native widget-panel, camera, screen, notification, and computer-control com
 to the same node-host command surface used by `openclaw node run`. Do not start a
 second CLI node on that Mac; the app runs the matching CLI node-host runtime as
 an internal worker and remains the sole Gateway connection and node identity.
+The app's **Instances** UI shows each device under a friendly hardware name; see
+[Device model database](/reference/device-models) for how Apple model
+identifiers are vendored and mapped.
 
 Nodes are **peripherals**, not gateways: they don't run the gateway service, and channel messages (Telegram, WhatsApp, etc.) land on the gateway, not on nodes.
 

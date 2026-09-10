@@ -175,5 +175,6 @@ _Related: [Configuration Examples](/gateway/configuration-examples) · [Configur
 - [Gateway runbook](/gateway)
 - [`openclaw config`](/cli/config) — read and write these settings from the CLI
 - [`openclaw configure`](/cli/configure) — guided editor for these settings
+- [Docker](/install/docker) — container deployment, its environment variables, and the mounted config and state paths
 - [Security audit checks](/gateway/security/audit-checks) — what the audit flags in this configuration
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — configuring the Gateway behind a reverse proxy

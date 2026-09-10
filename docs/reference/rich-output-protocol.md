@@ -101,5 +101,5 @@ The normalized/stored assistant content block is a structured `canvas` item:
 
 ## Related
 
-- [RPC adapters](/reference/rpc)
+- [Hosted embeds](/web/control-ui/chat#hosted-embeds) - how the Control UI renders `[embed ...]` and its iframe sandbox policy
 - [Typebox](/concepts/typebox)

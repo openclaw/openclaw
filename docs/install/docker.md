@@ -350,5 +350,8 @@ docker compose exec openclaw-gateway sh -lc 'node dist/index.js gateway health -
 
 - [Install Overview](/install) — all installation methods
 - [Podman](/install/podman) — Podman alternative to Docker
+- [Kubernetes](/install/kubernetes) — a minimal Kustomize starting point for running the Gateway on a cluster
+- [Ansible](/install/ansible) — automated server deployment with Tailscale VPN and firewall isolation
+- [Cloudflare Containers](/install/cloudflare) — experimental Worker plus container deployment with Litestream backups to R2
 - [Updating](/install/updating) — keeping OpenClaw up to date
 - [Configuration](/gateway/configuration) — gateway configuration after install

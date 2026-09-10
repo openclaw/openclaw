@@ -512,4 +512,5 @@ Related global options:
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
 - [Groups](/channels/groups) - group chat behavior and mention gating
 - [Channel Routing](/channels/channel-routing) - session routing for messages
+- [RPC adapters](/reference/rpc) - the signal-cli JSON-RPC-over-HTTP daemon pattern behind this channel
 - [Security](/gateway/security) - access model and hardening

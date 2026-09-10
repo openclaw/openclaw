@@ -155,3 +155,4 @@ They complement each other -- pruning keeps tool output lean between compaction 
 - [Session management](/concepts/session)
 - [Session tools](/concepts/session-tool)
 - [Context engine](/concepts/context-engine)
+- [Transcript hygiene](/reference/transcript-hygiene) - in-memory, provider-specific transcript sanitization applied before a run

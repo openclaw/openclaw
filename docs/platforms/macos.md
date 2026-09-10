@@ -263,5 +263,6 @@ own docs.
 
 - [Platforms](/platforms)
 - [Getting started](/start/getting-started)
+- [Onboarding](/start/onboarding) - the macOS app's first-run flow: where the Gateway runs, runtime install, and connecting a provider
 - [Gateway](/gateway)
 - [Exec approvals](/tools/exec-approvals)

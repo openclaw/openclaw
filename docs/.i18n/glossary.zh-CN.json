@@ -52,6 +52,10 @@
     "target": "密钥管理"
   },
   {
+    "source": "SecretRef credential surface",
+    "target": "SecretRef 凭据覆盖面"
+  },
+  {
     "source": "Secrets runtime model",
     "target": "密钥运行时模型"
   },
@@ -242,6 +246,10 @@
   {
     "source": "Gateway protocol",
     "target": "Gateway 协议"
+  },
+  {
+    "source": "RPC adapters",
+    "target": "RPC 适配器"
   },
   {
     "source": "Gateway RPC methods",
@@ -484,6 +492,10 @@
     "target": "入门指南"
   },
   {
+    "source": "Personal assistant setup",
+    "target": "个人助理设置"
+  },
+  {
     "source": "Quick start",
     "target": "快速开始"
   },
@@ -636,6 +648,10 @@
     "target": "模型提供商"
   },
   {
+    "source": "Models FAQ",
+    "target": "模型常见问题"
+  },
+  {
     "source": "Quick rules",
     "target": "快速规则"
   },
@@ -708,6 +724,18 @@
     "target": "VPS 托管"
   },
   {
+    "source": "Ansible",
+    "target": "Ansible"
+  },
+  {
+    "source": "Kubernetes",
+    "target": "Kubernetes"
+  },
+  {
+    "source": "Cloudflare Containers",
+    "target": "Cloudflare Containers"
+  },
+  {
     "source": "Fly.io",
     "target": "Fly.io"
   },
@@ -722,6 +750,10 @@
   {
     "source": "Linux server",
     "target": "Linux 服务器"
+  },
+  {
+    "source": "macOS VMs",
+    "target": "macOS 虚拟机"
   },
   {
     "source": "Platforms",
@@ -770,6 +802,10 @@
   {
     "source": "Credits",
     "target": "致谢"
+  },
+  {
+    "source": "OpenClaw lore",
+    "target": "OpenClaw 传说"
   },
   {
     "source": "Features",
@@ -1146,6 +1182,10 @@
   {
     "source": "Release policy",
     "target": "发布策略"
+  },
+  {
+    "source": "Full release validation",
+    "target": "完整发布验证"
   },
   {
     "source": "Release notes",
@@ -1600,6 +1640,10 @@
     "target": "迁移"
   },
   {
+    "source": "Backups",
+    "target": "备份"
+  },
+  {
     "source": "Migrating from Hermes",
     "target": "从 Hermes 迁移"
   },
@@ -1610,6 +1654,14 @@
   {
     "source": "Agent workspace",
     "target": "Agent 工作区"
+  },
+  {
+    "source": "Default AGENTS.md",
+    "target": "默认 AGENTS.md"
+  },
+  {
+    "source": "Bootstrapping",
+    "target": "引导初始化"
   },
   {
     "source": "Migration",
@@ -1646,6 +1698,14 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Tests",
+    "target": "测试"
+  },
+  {
+    "source": "Scripts",
+    "target": "脚本"
   },
   {
     "source": "Update and plugin tests",
@@ -1922,6 +1982,10 @@
   {
     "source": "Control UI",
     "target": "Control UI"
+  },
+  {
+    "source": "Hosted embeds",
+    "target": "托管嵌入"
   },
   {
     "source": "Control UI URLs",
@@ -2598,6 +2662,10 @@
   {
     "source": "Session management",
     "target": "会话管理"
+  },
+  {
+    "source": "Transcript hygiene",
+    "target": "转录净化"
   },
   {
     "source": "Session tools",
