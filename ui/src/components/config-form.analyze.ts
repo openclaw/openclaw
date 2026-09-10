@@ -613,13 +613,14 @@ function normalizeUnion(
     const booleanBranch = remaining.length === 1 ? remaining[0] : undefined;
     const plainBooleanBranch =
       booleanBranch?.type === "boolean" && Object.keys(booleanBranch).length === 1;
-    // A single plain scalar branch renders as a text input (the renderer
+    // A single plain string branch renders as a text input (the renderer
     // handles mixed primitives); pass the union through UNCHANGED so value
     // coercion keeps recognizing literal sentinels via the original branches
-    // (issue #143646). Other combinations stay in Raw mode.
+    // (issue #143646). Numeric branches stay in Raw mode: a text input cannot
+    // distinguish a typed number from a boolean sentinel.
     const plainScalarBranch =
       remaining.length === 1 &&
-      ["string", "number", "integer"].includes(String(booleanBranch?.type)) &&
+      booleanBranch?.type === "string" &&
       Object.keys(booleanBranch ?? {}).length === 1;
     if (plainScalarBranch) {
       return { schema, unsupportedPaths: [] };

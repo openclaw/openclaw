@@ -48,6 +48,19 @@ describe("analyzeConfigSchema mixed literal unions", () => {
     expect(analysis.unsupportedPaths).not.toContain("test2");
   });
 
+  it("keeps numeric unions with boolean sentinels in Raw mode", () => {
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        numeric: {
+          anyOf: [{ type: "number" }, { type: "boolean", const: false }],
+        },
+      },
+    });
+
+    expect(analysis.unsupportedPaths).toContain("numeric");
+  });
+
   it("still routes literal + non-scalar branches to Raw mode", () => {
     const analysis = analyzeConfigSchema({
       type: "object",
