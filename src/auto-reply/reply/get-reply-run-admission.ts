@@ -357,6 +357,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         channel: sessionCtx.Provider,
         sessionEntry,
         inlineMode: effectiveQueueMode,
+        // Preserve ambient follow-up unless the operator explicitly selects steering.
+        defaultMode: isRoomEvent ? "followup" : undefined,
         inlineOptions: perMessageQueueOptions,
       });
   const embeddedAgentRuntime = useFastReplyRuntime
@@ -556,7 +558,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       : "steering";
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const shouldSteer =
-    !isRoomEvent &&
     queueAdmissionState !== "ready" &&
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&

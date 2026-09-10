@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -144,7 +145,17 @@ export async function runActiveReplySteer(
     if (!injectionTarget) {
       return await fallback("no injectable reply operation");
     }
-    const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
+    const steerPrompt =
+      followupRun.currentInboundEventKind === "room_event"
+        ? buildCurrentInboundPrompt({
+            context: followupRun.currentInboundContext,
+            prompt: followupRun.prompt,
+            // The active backend already owns the conversation. Carry only the
+            // compact room-event wrapper plus the exact current message body.
+            preferResumableText: true,
+          })
+        : followupRun.prompt;
+    const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, steerPrompt, {
       steeringMode: "all",
       isInboundUserMessage: true,
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,

@@ -481,6 +481,59 @@ describe("runReplyAgent media path normalization", () => {
     expect(parkedSteerFallbackMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "task revision", body: "#123 Alice: use the Willow Glen branch instead" },
+    { label: "task cancellation", body: "#124 Alice: stop the current task" },
+  ])(
+    "steers a room-event $label with runtime context and the current body exactly once",
+    async ({ body: currentBody }) => {
+      queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(
+        async (sessionId: string) => ({
+          queued: true,
+          sessionId,
+          target: "embedded_run",
+          gatewayHealth: "live",
+        }),
+      );
+      const roomEventContext = ["[OpenClaw room event]", "inbound_event_kind: room_event"].join(
+        "\n\n",
+      );
+      const followupRun = createMediaFollowupRun({ prompt: currentBody });
+      followupRun.currentInboundEventKind = "room_event";
+      followupRun.currentInboundContext = { text: roomEventContext };
+
+      await runReplyAgent(
+        makeRunReplyAgentParams({
+          resolvedQueue: { mode: "steer" } as QueueSettings,
+          shouldSteer: true,
+          shouldFollowup: true,
+          isActive: true,
+          followupRun,
+        }),
+      );
+
+      expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
+        "session",
+        `${roomEventContext}\n\n${currentBody}`,
+        {
+          abortSignal: undefined,
+          steeringMode: "all",
+          isInboundUserMessage: true,
+          waitForTranscriptCommit: true,
+          queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
+          onQueueAccepted: expect.any(Function),
+          taskSuggestionDeliveryMode: undefined,
+          toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(followupRun),
+        },
+      );
+      expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+      expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
+      expect(parkedSteerFallbackMock).not.toHaveBeenCalled();
+      const injectedPrompt = queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls.at(-1)?.[1];
+      expect(injectedPrompt?.split(currentBody)).toHaveLength(2);
+    },
+  );
+
   it("steers ordered current-turn images with the active prompt", async () => {
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,

@@ -177,14 +177,6 @@ function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
   return marker !== undefined;
 }
 
-function userMessageHasImageContent(message: AgentMessage): boolean {
-  return (
-    isUserMessage(message) &&
-    Array.isArray(message.content) &&
-    message.content.some((block) => asOptionalRecord(block)?.type === "image")
-  );
-}
-
 // Runtime messages may lack transcript metadata because channel adapters prepare
 // display text separately. Merge only safe user messages, never block markers.
 export function mergePreparedUserTurnMessageForRuntime(params: {
@@ -200,12 +192,24 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   }
   const runtimeMeta = readOpenClawMessageMeta(params.runtimeMessage);
   const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
+  const images = Array.isArray(params.runtimeMessage.content)
+    ? params.runtimeMessage.content.filter((block) => block.type === "image")
+    : [];
+  // Keep hydrated images without persisting adjacent runtime-only prompt text.
+  const preparedContent = params.preparedMessage.content;
   return {
     ...params.runtimeMessage,
     ...params.preparedMessage,
     ...(preparedMeta ? { __openclaw: { ...runtimeMeta, ...preparedMeta } } : {}),
-    ...(userMessageHasImageContent(params.runtimeMessage)
-      ? { content: params.runtimeMessage.content }
+    ...(images.length > 0
+      ? {
+          content: [
+            ...(typeof preparedContent === "string"
+              ? [{ type: "text" as const, text: preparedContent }]
+              : preparedContent.filter((block) => block.type !== "image")),
+            ...images,
+          ],
+        }
       : {}),
   };
 }

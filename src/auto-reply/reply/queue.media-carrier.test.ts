@@ -92,6 +92,85 @@ afterEach(() => {
 });
 
 describe("followup prompt metadata carrier", () => {
+  it.each([
+    ["selection", "#1000000000000000001 Alice: Let's do Nick the Greek."],
+    ["revision", "#1000000000000000002 Alice: Use the Willow Glen location instead."],
+    ["cancel", "#1000000000000000003 Alice: Cancel that; do not send anything."],
+  ])(
+    "steers an active room-event %s with compact context and its exact body",
+    async (_name, body) => {
+      const key = `agent:main:room-event-${_name}`;
+      queueKeys.add(key);
+      const run = createQueueTestRun({ prompt: body, messageId: `message-${_name}` });
+      run.currentInboundEventKind = "room_event";
+      run.transcriptPrompt = body;
+      run.currentInboundContext = {
+        text: [
+          "[OpenClaw room event]",
+          "Room context:\nConversation info\n\nConversation context (chronological, selected for current message):\nstale lunch options",
+          "Stay silent unless useful.",
+        ].join("\n\n"),
+        resumableText: [
+          "[OpenClaw room event]",
+          "Room context:\nConversation info",
+          "Stay silent unless useful.",
+        ].join("\n\n"),
+      };
+      const operation = createReplyOperation({
+        sessionKey: key,
+        sessionId: run.run.sessionId,
+        resetTriggered: false,
+      });
+      operation.bindToolAuthoritySnapshot({
+        fingerprint: () => "room-authority",
+        project: () => "room-authority",
+      });
+      const queueMessage = vi.fn(
+        async (_text: string, options?: { onQueueAccepted?: (accepted: boolean) => void }) => {
+          options?.onQueueAccepted?.(true);
+        },
+      );
+      operation.attachBackend({
+        kind: "embedded",
+        toolAuthorityFingerprint: "room-authority",
+        cancel: vi.fn(),
+        messageInjection: { isAvailable: () => true, queueMessage },
+      });
+      operation.setPhase("running");
+      const typing = createMockTypingController();
+      try {
+        await expect(
+          runActiveReplySteer({
+            followupRun: run,
+            opts: undefined,
+            providedReplyOperation: operation,
+            queueKey: key,
+            releaseAdmissionTicket: vi.fn(),
+            replyOperationRunState: undefined,
+            resolvedQueue: { mode: "steer", debounceMs: 0 },
+            restartRecoverySourceTurnId: `source-${_name}`,
+            runFollowup: vi.fn(async () => {}),
+            sessionCtx: {},
+            sessionKey: key,
+            touchActiveSessionEntry: async () => {},
+            typing,
+            typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+            toolAuthorityFingerprint: "room-authority",
+          }),
+        ).resolves.toBe("handled");
+        expect(queueMessage).toHaveBeenCalledOnce();
+        const injected = queueMessage.mock.calls[0]?.[0];
+        expect(injected).toContain("[OpenClaw room event]");
+        expect(injected).toContain("Room context:\nConversation info");
+        expect(injected).toContain(body);
+        expect(injected).not.toContain("stale lunch options");
+        expect(injected?.split(body)).toHaveLength(2);
+      } finally {
+        operation.complete();
+      }
+    },
+  );
+
   it("drains the complete parked image turn after active steering rejects it", async () => {
     const key = "agent:main:parked-media-fallback";
     queueKeys.add(key);

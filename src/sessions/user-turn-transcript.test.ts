@@ -208,14 +208,15 @@ describe("user turn transcript persistence", () => {
       ).toBe(blocked);
     });
 
-    it("preserves runtime multimodal content while merging prepared metadata", () => {
+    it("preserves ordered runtime images without persisting runtime-only text", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "canonical image caption", timestamp: 123 },
         target: unusedRecorderTarget,
       });
       const runtimeContent = [
-        { type: "text", text: "canonical image caption" },
+        { type: "text", text: "runtime-only room context\ncanonical image caption" },
         { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+        { type: "image", data: "d29ybGQ=", mimeType: "image/png" },
       ];
 
       expect(
@@ -228,7 +229,7 @@ describe("user turn transcript persistence", () => {
         }),
       ).toMatchObject({
         role: "user",
-        content: runtimeContent,
+        content: [{ type: "text", text: "canonical image caption" }, ...runtimeContent.slice(1)],
         timestamp: 123,
       });
     });
