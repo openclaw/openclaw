@@ -1,6 +1,12 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
+import { calculateCost } from "../model-utils.js";
+import {
+  mapResponsesTerminalUsage,
+  type ResponsesTerminalUsagePayload,
+} from "../providers/openai-responses-terminal-usage.js";
+import type { Usage } from "../types.js";
 import type { OpenAIResponsesCompactEndpointResult } from "./openai-responses-compact-request.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
 import { isOpenAIResponsesCompactionOutput } from "./openai-responses-compaction-window.js";
@@ -65,11 +71,21 @@ export async function postOpenAIResponsesCompaction(params: {
   ) {
     throw new Error("Responses compact endpoint did not return one trailing compaction item");
   }
+  const priced: Usage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    ...mapResponsesTerminalUsage(usage as ResponsesTerminalUsagePayload),
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  calculateCost(params.model, priced);
   return {
     output,
     item,
     historyMode: retainedUserMessageCount > 0 ? "retained-users" : "compacted-prefix",
-    usage,
+    usage: { ...usage, cost: priced.cost },
     model: params.model,
     replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(params.model, {
       authProfileId: params.options?.authProfileId,
