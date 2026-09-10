@@ -297,6 +297,7 @@ export function createCodexAppServerAgentHarness(
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       const {
+        isCodexCyberEscalationReplaySafe,
         isCodexCyberRefusalResult,
         isCodexDaybreakUnavailableResult,
         planCodexCyberEscalation,
@@ -335,6 +336,7 @@ export function createCodexAppServerAgentHarness(
         config: cyberFailover,
         sessionKey: params.sessionKey,
         currentModel: requestedModel,
+        replaySafe: isCodexCyberEscalationReplaySafe(result),
       });
       if (plan.kind !== "escalate") {
         return result;

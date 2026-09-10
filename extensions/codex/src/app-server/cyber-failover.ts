@@ -129,18 +129,26 @@ export function resolveCodexCyberStickyModel(params: {
 
 export type CodexCyberEscalationPlan =
   | { kind: "escalate"; model: string }
-  | { kind: "skip"; reason: "disabled" | "already_daybreak" | "cooling_off" | "no_target" };
+  | {
+      kind: "skip";
+      reason: "disabled" | "already_daybreak" | "cooling_off" | "no_target" | "not_replay_safe";
+    };
 
 /** Decides whether a refused turn may be retried on Daybreak. */
 export function planCodexCyberEscalation(params: {
   config: CodexCyberFailoverConfig;
   sessionKey: string | undefined;
   currentModel: string | undefined;
+  replaySafe: boolean;
   now?: number;
 }): CodexCyberEscalationPlan {
   const { config } = params;
   if (config.mode !== "auto") {
     return { kind: "skip", reason: "disabled" };
+  }
+  // Retrying a turn that already acted would repeat those actions.
+  if (!params.replaySafe) {
+    return { kind: "skip", reason: "not_replay_safe" };
   }
   if (!config.model.trim()) {
     return { kind: "skip", reason: "no_target" };
@@ -172,7 +180,20 @@ export type CodexCyberAttemptOutcome = {
   lastAssistant?: CyberRefusalMessage | undefined;
   currentAttemptAssistant?: CyberRefusalMessage | undefined;
   promptError?: unknown;
+  replayMetadata?: { replaySafe?: boolean } | undefined;
 };
+
+/**
+ * True when the refused attempt committed nothing that a retry would repeat.
+ * The projector reports this for every settled turn, so anything else — a sent
+ * message, a cron add, a spawned session, generated media — must not be
+ * replayed by an escalation. Absence is treated as unsafe.
+ */
+export function isCodexCyberEscalationReplaySafe(
+  result: CodexCyberAttemptOutcome | undefined,
+): boolean {
+  return result?.replayMetadata?.replaySafe === true;
+}
 
 function hasCyberRefusalDiagnostic(message: CyberRefusalMessage | undefined): boolean {
   if (message?.role !== "assistant") {

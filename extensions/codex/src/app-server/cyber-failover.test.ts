@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  isCodexCyberEscalationReplaySafe,
   isCodexCyberRefusalResult,
   isCodexDaybreakUnavailableResult,
   planCodexCyberEscalation,
@@ -88,10 +89,34 @@ describe("cyber refusal detection", () => {
 });
 
 describe("escalation planning", () => {
+  it("refuses to replay a turn that already acted", () => {
+    const SESSION = nextSession();
+    expect(
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: SESSION,
+        currentModel: PRIMARY,
+        replaySafe: false,
+      }),
+    ).toEqual({ kind: "skip", reason: "not_replay_safe" });
+  });
+
+  it("reads replay safety only from an explicit safe verdict", () => {
+    expect(isCodexCyberEscalationReplaySafe({ replayMetadata: { replaySafe: true } })).toBe(true);
+    expect(isCodexCyberEscalationReplaySafe({ replayMetadata: { replaySafe: false } })).toBe(false);
+    expect(isCodexCyberEscalationReplaySafe({})).toBe(false);
+    expect(isCodexCyberEscalationReplaySafe(undefined)).toBe(false);
+  });
+
   it("escalates a refused turn to the configured Daybreak model", () => {
     const SESSION = nextSession();
     expect(
-      planCodexCyberEscalation({ config: config(), sessionKey: SESSION, currentModel: PRIMARY }),
+      planCodexCyberEscalation({
+        config: config(),
+        sessionKey: SESSION,
+        currentModel: PRIMARY,
+        replaySafe: true,
+      }),
     ).toEqual({ kind: "escalate", model: DAYBREAK });
   });
 
@@ -100,6 +125,7 @@ describe("escalation planning", () => {
     expect(
       planCodexCyberEscalation({
         config: config({ mode: "off" }),
+        replaySafe: true,
         sessionKey: SESSION,
         currentModel: PRIMARY,
       }),
@@ -111,6 +137,7 @@ describe("escalation planning", () => {
     expect(
       planCodexCyberEscalation({
         config: config(),
+        replaySafe: true,
         sessionKey: SESSION,
         currentModel: DAYBREAK,
       }),
@@ -119,6 +146,7 @@ describe("escalation planning", () => {
     expect(
       planCodexCyberEscalation({
         config: config(),
+        replaySafe: true,
         sessionKey: SESSION,
         currentModel: `openai/${DAYBREAK}`,
       }),
@@ -137,6 +165,7 @@ describe("escalation planning", () => {
     expect(
       planCodexCyberEscalation({
         config: config(),
+        replaySafe: true,
         sessionKey: SESSION,
         currentModel: PRIMARY,
         now: now + 1,
@@ -145,6 +174,7 @@ describe("escalation planning", () => {
     expect(
       planCodexCyberEscalation({
         config: config(),
+        replaySafe: true,
         sessionKey: SESSION,
         currentModel: PRIMARY,
         now: now + 600_001,
@@ -163,6 +193,7 @@ describe("escalation planning", () => {
     expect(
       planCodexCyberEscalation({
         config: config(),
+        replaySafe: true,
         sessionKey: "other-session",
         currentModel: PRIMARY,
         now: 1_001,
