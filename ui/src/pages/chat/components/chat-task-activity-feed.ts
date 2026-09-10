@@ -82,7 +82,15 @@ function entries(messages: unknown[]): Entry[] {
     }
     const normalized = normalizeMessage(item.message);
     const cards = extractToolCardsCached(item.message);
+    // Normalization reports a tool role for assistant messages that carry tool
+    // calls; the cap contract is keyed on the source role.
+    const sourceRole = asNullableRecord(item.message)?.role;
+    const cappedMessageId = resolveCappedMessageId(
+      item.message,
+      typeof sourceRole === "string" ? sourceRole : normalized.role,
+    );
     let callIndex = 0;
+    let cappedEntry: Extract<Entry, { text: string }> | undefined;
     const timestamp = rawMessageTimestamp(item.message);
     for (const [index, block] of normalized.content.entries()) {
       const key = `${item.key}:${index}`;
@@ -110,15 +118,25 @@ function entries(messages: unknown[]): Entry[] {
           normalized.role === "user"
             ? flattenMarkdownToPlainText(block.text ?? "")
             : stripThinkingTags(block.text ?? "");
-        if (text.trim()) {
-          result.push({
-            kind: normalized.role === "user" ? "user" : "assistant",
-            key,
-            timestamp,
-            text,
-            cappedMessageId: resolveCappedMessageId(item.message, normalized.role),
-          });
+        if (!text.trim()) {
+          continue;
         }
+        // Recovery replaces the whole message's text, so a capped message keeps
+        // one text entry; later text blocks join it instead of each rendering
+        // the complete recovered reply.
+        if (cappedMessageId && cappedEntry?.cappedMessageId === cappedMessageId) {
+          cappedEntry.text = `${cappedEntry.text}\n\n${text}`;
+          continue;
+        }
+        const entry: Entry = {
+          kind: normalized.role === "user" ? "user" : "assistant",
+          key,
+          timestamp,
+          text,
+          cappedMessageId,
+        };
+        cappedEntry = cappedMessageId ? entry : undefined;
+        result.push(entry);
       } else {
         const raw = asNullableRecord(item.message);
         const source = asNullableRecord(

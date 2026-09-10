@@ -105,6 +105,33 @@ describe("task activity feed", () => {
     },
   );
 
+  it("recovers a capped message with text around a tool call exactly once", async () => {
+    const message = {
+      ...capped,
+      content: [
+        { type: "text", text: "Before the call" },
+        toolCall("exec-1", "exec", { command: "pnpm test" }),
+        { type: "text", text: "After the call" },
+      ],
+    };
+    const loader = vi.fn().mockResolvedValue({
+      ok: true,
+      message: { role: "assistant", content: "Full recovered reply." },
+    });
+    const { container, rerender, host } = await mountRecovery([message], loader);
+    expect(container.textContent).toContain("Before the call");
+    expect(container.textContent).toContain("After the call");
+    await vi.waitFor(() =>
+      expect(host.taskDetailState?.fullMessages.get("m-1")?.status).toBe("loaded"),
+    );
+    rerender();
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(container.textContent?.split("Full recovered reply.")).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-task-feed__tool-group")).toHaveLength(1);
+    expect(container.textContent).not.toContain("Before the call");
+    expect(container.textContent).not.toContain("After the call");
+  });
+
   it("bounds automatic retries and lets Retry recover after exhaustion", async () => {
     const loader = vi
       .fn()
