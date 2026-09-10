@@ -18,6 +18,7 @@ import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
+  parseSystemAgentOperation,
 } from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
@@ -57,6 +58,14 @@ function requireFirstMockCall(mock: unknown, label: string): unknown[] {
 function expectRuntimeArg(value: unknown) {
   const runtime = requireRecord(value, "runtime argument");
   expect(typeof runtime.log).toBe("function");
+}
+
+async function readConfigOutput(...paths: string[]): Promise<string> {
+  const { runtime, lines } = createSystemAgentTestRuntime();
+  for (const configPath of paths) {
+    await executeSystemAgentOperation({ kind: "config-get", path: configPath }, runtime);
+  }
+  return lines.join("\n");
 }
 
 const mockConfig = vi.hoisted(() => {
@@ -266,15 +275,10 @@ describe("system agent operations", () => {
         },
       },
     });
-    const { runtime, lines } = createSystemAgentTestRuntime();
+    const output = await readConfigOutput("models.providers.local.localService");
 
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "models.providers.local.localService" },
-      runtime,
-    );
-
-    expect(lines.join("\n")).toContain('"HF_HOME": "<redacted>"');
-    expect(lines.join("\n")).not.toContain("/private/model-cache");
+    expect(output).toContain('"HF_HOME": "<redacted>"');
+    expect(output).not.toContain("/private/model-cache");
     expect(
       describeSystemAgentPersistentOperation({
         kind: "config-set",
@@ -282,6 +286,27 @@ describe("system agent operations", () => {
         value: "/private/model-cache",
       }),
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
+  });
+
+  it.each([
+    ['channels.modelByChannel.telegram["team.ops[west]"]', '"openai/gpt-5.5"'],
+    ["channels.modelByChannel.telegram['team.ops[west]']", '"openai/gpt-5.5"'],
+    [String.raw`channels.modelByChannel.telegram.team\.ops\[west\]`, '"openai/gpt-5.5"'],
+    ['models.providers["local.service"].apiKey', '"<redacted>"'],
+    ["agents.list[0].id", '"main"'],
+    ["agents.list[00].id", '"main"'],
+    ["agents.list.length", "1"],
+  ])("reads canonical config path %s after redaction", async (configPath, expected) => {
+    mockConfig.setConfig({
+      channels: { modelByChannel: { telegram: { "team.ops[west]": "openai/gpt-5.5" } } },
+      models: { providers: { "local.service": { apiKey: "synthetic-key" } } },
+      agents: { list: [{ id: "main" }] },
+    });
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const operation = parseSystemAgentOperation(`config get ${configPath}`);
+    expect(operation).toEqual({ kind: "config-get", path: configPath });
+    expect(await executeSystemAgentOperation(operation, runtime)).toEqual({ applied: false });
+    expect(lines).toEqual([`${configPath} = ${expected}`]);
   });
 
   it("keeps invalid config reads available without exposing recovery secrets", async () => {
@@ -294,13 +319,7 @@ describe("system agent operations", () => {
       },
       {},
     );
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    await executeSystemAgentOperation({ kind: "config-get", path: "gateway" }, runtime);
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "plugins.entries.missing" },
-      runtime,
-    );
-    const output = lines.join("\n");
+    const output = await readConfigOutput("gateway", "plugins.entries.missing");
     expect(output).toContain('"port": 19001');
     expect(output).toContain('"token": "<redacted>"');
     expect(output).toContain('"config": "<redacted>"');
@@ -317,15 +336,7 @@ describe("system agent operations", () => {
       },
       channels: { missing: { enabled: true, opaque: "missing-channel-secret" } },
     });
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "plugins.entries.missing" },
-      runtime,
-    );
-    await executeSystemAgentOperation({ kind: "config-get", path: "channels.missing" }, runtime);
-
-    const output = lines.join("\n");
+    const output = await readConfigOutput("plugins.entries.missing", "channels.missing");
     expect(output).toContain('"enabled": true');
     expect(output).toContain('"config": "<redacted>"');
     expect(output).toContain('channels.missing = "<redacted>"');
@@ -340,15 +351,7 @@ describe("system agent operations", () => {
         modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
       },
     });
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
-    await executeSystemAgentOperation({ kind: "config-get", path: "channels.defaults" }, runtime);
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "channels.modelByChannel" },
-      runtime,
-    );
-
-    const output = lines.join("\n");
+    const output = await readConfigOutput("channels.defaults", "channels.modelByChannel");
     expect(output).toContain('"groupPolicy": "open"');
     expect(output).toContain('"chat": "openai/gpt-5.5"');
     expect(output).not.toContain("<redacted>");
@@ -365,17 +368,12 @@ describe("system agent operations", () => {
     };
     mockConfig.setConfig(config);
     const pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
-    const { runtime, lines } = createSystemAgentTestRuntime();
+    const output = await pluginMetadata.run(() =>
+      readConfigOutput("plugins.entries.codex.config.appServer"),
+    );
 
-    await pluginMetadata.run(async () => {
-      await executeSystemAgentOperation(
-        { kind: "config-get", path: "plugins.entries.codex.config.appServer" },
-        runtime,
-      );
-    });
-
-    expect(lines.join("\n")).toContain('"headers": "<redacted>"');
-    expect(lines.join("\n")).not.toContain(authorization);
+    expect(output).toContain('"headers": "<redacted>"');
+    expect(output).not.toContain(authorization);
   });
 
   it("keeps sensitive channel callback URLs out of model-visible config reads", async () => {
@@ -395,19 +393,14 @@ describe("system agent operations", () => {
     mockConfig.setConfig(config);
     setRuntimeConfigSnapshot(config, config);
     const pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
-    const { runtime, lines } = createSystemAgentTestRuntime();
-
     try {
       await pluginMetadata.run(async () => {
-        await executeSystemAgentOperation(
-          { kind: "config-get", path: "channels.synology-chat" },
-          runtime,
-        );
+        const output = await readConfigOutput("channels.synology-chat");
 
-        expect(lines.join("\n")).toContain('"webhookUrl": "<redacted>"');
-        expect(lines.join("\n")).toContain('"incomingUrl": "<redacted>"');
-        expect(lines.join("\n")).not.toContain("callback-secret");
-        expect(lines.join("\n")).not.toContain("incoming-secret");
+        expect(output).toContain('"webhookUrl": "<redacted>"');
+        expect(output).toContain('"incomingUrl": "<redacted>"');
+        expect(output).not.toContain("callback-secret");
+        expect(output).not.toContain("incoming-secret");
         expect(
           describeSystemAgentPersistentOperation({
             kind: "config-set",
