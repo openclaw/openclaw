@@ -95,7 +95,11 @@ for (const exactOptionalPropertyTypes of [true, false]) {
   const proof = ts.createProgram([fixturePath], options, host);
   const observedReadonly = new Set<number>();
   const unexpected = ts.getPreEmitDiagnostics(proof).filter((diagnostic) => {
-    if (diagnostic.file?.fileName === fixturePath && diagnostic.start !== undefined) {
+    if (
+      diagnostic.file &&
+      path.resolve(diagnostic.file.fileName) === fixturePath &&
+      diagnostic.start !== undefined
+    ) {
       const line = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line + 1;
       if (diagnostic.code === 2540 && readonlyLines.has(line)) {
         observedReadonly.add(line);
