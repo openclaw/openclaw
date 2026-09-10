@@ -82,7 +82,7 @@ separating explicit `activation.*` hints from manifest-ownership fallback:
 | `activation-agent-harness-hint`      | —                                                                                            |
 | `activation-capability-hint`         | —                                                                                            |
 | `activation-channel-hint`            | `manifest-channel-owner` (`channels`)                                                        |
-| `activation-command-hint`            | `manifest-command-alias` (`commandAliases`)                                                  |
+| `activation-command-hint`            | `manifest-cli-command-owner` (`cliCommands`), `manifest-command-alias` (`commandAliases`)    |
 | `activation-provider-hint`           | `manifest-provider-owner` (`providers`), `manifest-setup-provider-owner` (`setup.providers`) |
 | `activation-route-hint`              | —                                                                                            |
 | — (hook trigger has no hint variant) | `manifest-hook-owner` (`hooks`), `manifest-tool-contract` (`contracts.tools`)                |

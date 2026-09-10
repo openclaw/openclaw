@@ -92,6 +92,7 @@
       }
     },
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/discord",
       "npmSpec": "@openclaw/discord",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.5.26",

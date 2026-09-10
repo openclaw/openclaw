@@ -9,6 +9,8 @@ import {
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
   validateEnvironmentsListParams,
+  validateEnvironmentsPrepareParams,
+  validateEnvironmentsPrepareResult,
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
@@ -49,6 +51,45 @@ function workerSummary(
 }
 
 describe("worker environment protocol schemas", () => {
+  it("accepts only a profile and local project selector for preparation", () => {
+    const request = { profileId: "development", projectPath: "/projects/app" };
+    expect(validateEnvironmentsPrepareParams(request)).toBe(true);
+    for (const invalid of [
+      {},
+      { profileId: "development" },
+      { ...request, profileId: "" },
+      { ...request, projectPath: "" },
+      { ...request, setupAuthorized: false },
+    ]) {
+      expect(validateEnvironmentsPrepareParams(invalid)).toBe(false);
+    }
+    const result = { environmentId: "worker-1", preparationKey: "project-key", reused: false };
+    expect(validateEnvironmentsPrepareResult(result)).toBe(true);
+    expect(validateEnvironmentsPrepareResult({ ...result, reused: true })).toBe(true);
+    expect(validateEnvironmentsPrepareResult({ ...result, reused: "true" })).toBe(false);
+    expect(validateEnvironmentsPrepareResult({ ...result, preparationKey: "" })).toBe(false);
+  });
+
+  it("exposes only preparation purpose and key in list and status summaries", () => {
+    for (const purpose of ["build", "reserve"] as const) {
+      const summary = {
+        ...workerSummary("requested"),
+        preparation: { purpose, key: "project-key" },
+      };
+      expect(Value.Check(EnvironmentsListResultSchema, { environments: [summary] })).toBe(true);
+      expect(Value.Check(EnvironmentsStatusResultSchema, summary)).toBe(true);
+    }
+    for (const preparation of [
+      { purpose: "unknown", key: "project-key" },
+      { purpose: "build", key: "" },
+      { purpose: "build", key: "project-key", projectPath: "/projects/app" },
+    ]) {
+      expect(
+        Value.Check(EnvironmentSummarySchema, { ...workerSummary("requested"), preparation }),
+      ).toBe(false);
+    }
+  });
+
   it("accepts configured-profile create and environment-id destroy requests", () => {
     expect(
       validateEnvironmentsCreateParams({ profileId: "development", idempotencyKey: "request-1" }),

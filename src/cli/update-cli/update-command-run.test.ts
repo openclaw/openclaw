@@ -19,6 +19,7 @@ import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   admitUpdateCommandRun,
@@ -29,6 +30,51 @@ import {
 import * as servicePlan from "./update-command-service-plan.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+it.each([0, 86])("persists and surfaces successful Doctor warnings (exit %s)", (exitCode) => {
+  const env = { OPENCLAW_STATE_DIR: dirs.make("update-warning-ledger-") };
+  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  const message = "Skipped derived cache cleanup: permission denied. Run openclaw doctor --fix.";
+  const otherWarning =
+    "Skipped legacy cache cleanup: read-only directory. Run openclaw doctor --fix.";
+  const result = completeUpdateCommandRun(
+    {
+      status: "ok",
+      mode: "npm",
+      durationMs: 1,
+      steps: [
+        {
+          name: "openclaw doctor",
+          command: "openclaw doctor --fix",
+          cwd: "/tmp/update-fixture",
+          durationMs: 1,
+          exitCode,
+          advisory: { kind: "package-post-install-doctor", message },
+          warnings: [message, otherWarning],
+        },
+      ],
+    },
+    run,
+  );
+  expect(result.status).toBe("ok");
+  const recorded = getUpdateRun(run.runId, { env });
+  expect(recorded).toMatchObject({
+    status: "succeeded",
+    steps: expect.arrayContaining([
+      expect.objectContaining({
+        step: "warning:openclaw doctor",
+        status: "completed",
+        detail: message,
+      }),
+      expect.objectContaining({
+        step: "warning:openclaw doctor:2",
+        status: "completed",
+        detail: otherWarning,
+      }),
+    ]),
+  });
+  expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(message);
+  expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(otherWarning);
+});
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();

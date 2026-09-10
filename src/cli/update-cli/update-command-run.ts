@@ -43,13 +43,10 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
-import {
-  summarizeUpdateStepFailure,
-  type UpdateRunRecord,
-  type UpdateRunStep,
-} from "../../infra/update-run-record.js";
+import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -81,7 +78,7 @@ const previewAdmissions = new WeakMap<
   { record: UpdateRunRecord; env: NodeJS.ProcessEnv }
 >();
 
-export async function resolveUpdateCommandAdmissionEnv(params: {
+async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
@@ -293,15 +290,9 @@ export function createUpdateRunProgress(
     },
     onStepComplete(step) {
       const endedAtMs = Date.now();
-      record({
-        step: step.name,
-        status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
-        startedAtMs: Math.max(0, endedAtMs - step.durationMs),
-        endedAtMs,
-        ...(step.exitCode !== 0
-          ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-          : {}),
-      });
+      for (const entry of updateRunStepsFromResultStep(step)) {
+        record({ ...entry, startedAtMs: Math.max(0, endedAtMs - step.durationMs), endedAtMs });
+      }
       progress.onStepComplete?.(step);
     },
   };
@@ -361,18 +352,8 @@ export function completeUpdateCommandRun(
       recordOptions,
     );
   }
-  for (const step of result.steps) {
-    recordUpdateRunStep(
-      run.runId,
-      {
-        step: step.name,
-        status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
-        ...(step.exitCode !== 0
-          ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-          : {}),
-      },
-      recordOptions,
-    );
+  for (const step of result.steps.flatMap(updateRunStepsFromResultStep)) {
+    recordUpdateRunStep(run.runId, step, recordOptions);
   }
   // Both finalization and outer CLI unwind come here. A verified restored generation
   // stays with its helper until native recovery finishes; neither caller may close it early.

@@ -606,6 +606,7 @@ Other bundled providers report `background: "transparent"` as ignored.
 - [Microsoft Foundry plugin](/plugins/reference/microsoft-foundry) - Microsoft Foundry chat and MAI image setup
 - [MiniMax](/providers/minimax) - MiniMax image provider setup
 - [OpenAI](/providers/openai) - OpenAI Images provider setup
+- [OpenRouter](/providers/openrouter) - OpenRouter image provider setup
 - [Vydra](/providers/vydra) - Vydra image, video, and speech setup
 - [xAI](/providers/xai) - Grok image, video, search, code execution, and TTS setup
 - [Configuration reference](/gateway/config-agents#agent-defaults) - `agents.defaults.mediaModels.image` config

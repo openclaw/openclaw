@@ -693,8 +693,8 @@ describe("triageCommand", () => {
     expect(prompt).not.toContain(stateDir);
   });
 
-  it.each(["json", "nonInteractive"] as const)(
-    "preserves a failed update when Doctor and export fail in %s mode on a terminal",
+  it.each(["json", "nonInteractive", "piped"] as const)(
+    "preserves a failed update when Doctor and export fail in %s mode",
     async (mode) => {
       const secret = "sk-test-update-triage-secret-1234567890";
       mocks.collectDoctorFindings.mockRejectedValue(
@@ -710,9 +710,9 @@ describe("triageCommand", () => {
         JSON.stringify({ error: `Original update failed at ${stateDir}; token=${secret}` }),
       );
 
-      await withTriageTerminal(true, async () => {
+      await withTriageTerminal(mode !== "piped", async () => {
         await triageCommand(runtime, {
-          [mode]: true,
+          ...(mode === "piped" ? {} : { [mode]: true }),
           updateResult,
         });
       });

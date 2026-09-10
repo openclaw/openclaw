@@ -20,8 +20,8 @@ the package to [ClawHub](/clawhub) and users install it with:
 openclaw plugins install clawhub:<package-name>
 ```
 
-Bare package specs still install from npm during the launch cutover. Use the
-`clawhub:` prefix when you want ClawHub resolution.
+Bare package specs install from npm. Use the `clawhub:` prefix when you want
+ClawHub resolution.
 
 ## Requirements
 

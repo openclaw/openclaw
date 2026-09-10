@@ -16,6 +16,7 @@ export type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
 };
 export type WorkerEnvironmentTeardownTerminalState = "destroyed" | "failed";
 export type WorkerEnvironmentPreparation = {
+  purpose: "reserve" | "build";
   key: string;
   demandAtMs: number;
   expiresAtMs: number;

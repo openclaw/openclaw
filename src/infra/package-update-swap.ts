@@ -26,13 +26,6 @@ import {
   verifyNpmRootRecovery,
 } from "./package-update-npm-root.js";
 import {
-  createPackageRecoveryTransaction,
-  type PackageRecoveryHooks,
-  type PreparePackageRecovery,
-  type PackageRecoveryEffectReceipt,
-  type PackageTransactionDescriptor,
-} from "./package-update-recovery.js";
-import {
   PackageUpdateActivationError,
   type PackageUpdateTransaction,
   type StagedPackageInstall,
@@ -71,8 +64,6 @@ export async function swapStagedPackageInstall(params: {
   onLiveMutation?: () => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   timeoutMs?: number;
-  recovery?: PackageRecoveryHooks;
-  prepareRecovery?: PreparePackageRecovery;
 }): Promise<StagedPackageSwapResult> {
   const startedAt = Date.now();
   let activePackageRoot = params.installTarget.packageRoot;
@@ -134,19 +125,18 @@ export async function swapStagedPackageInstall(params: {
     backup: string | null;
     fingerprint?: string;
   }> = [];
-  const rollback: Array<() => Promise<void>> = [];
+  const rollback: Array<(assertCurrent: () => void) => Promise<void>> = [];
   let packageRollbackVerified = false;
   let retained = false;
   let projectActivated = false;
   let activationCompleted = false;
-  let recoveryTransaction: ReturnType<typeof createPackageRecoveryTransaction> | undefined;
-  let activationReceipt: PackageRecoveryEffectReceipt | undefined;
   const verifyNpmRecovery = (root: string, fromBackup: boolean) =>
     verifyNpmRootRecovery(
       { root, fromBackup, hadPackage, previousRoot, targetSwapRoot, shims },
       params.timeoutMs,
     );
-  const restoreSwap = async (): Promise<string[]> => {
+  const restoreSwap = async (assertCurrent = () => {}): Promise<string[]> => {
+    assertCurrent();
     const messages: string[] = [];
     if (!native && (packageBackedUp || (!hadPackage && rollback.length > 0))) {
       try {
@@ -155,6 +145,7 @@ export async function swapStagedPackageInstall(params: {
         // This observation does not exclude concurrent writers.
         await verifyNpmRecovery(backupRoot, true);
       } catch (error) {
+        assertCurrent();
         packageRollbackVerified = false;
         return [
           `${formatErrorMessage(error)}; current package unchanged; recovery evidence retained in ${targetLayout.globalRoot}`,
@@ -163,8 +154,13 @@ export async function swapStagedPackageInstall(params: {
     }
     for (const restore of native ? rollback.toReversed() : rollback) {
       try {
-        await restore();
+        assertCurrent();
+        await restore(assertCurrent);
+        assertCurrent();
       } catch (restoreError) {
+        // Ownership loss stops all compensation, including partial activation.
+        // It is not an ordinary restore failure that permits the next launcher.
+        assertCurrent();
         packageRollbackVerified = false;
         messages.push(`rollback failed: ${formatErrorMessage(restoreError)}`);
         // Keep a fully activated candidate's launchers on package refusal.
@@ -202,6 +198,7 @@ export async function swapStagedPackageInstall(params: {
           );
         }
       } catch (error) {
+        assertCurrent();
         packageRollbackVerified = false;
         messages.push(formatErrorMessage(error));
       }
@@ -227,6 +224,7 @@ export async function swapStagedPackageInstall(params: {
           );
         }
       } catch (verificationError) {
+        assertCurrent();
         packageRollbackVerified = false;
         messages.push(
           `rollback verification failed for launcher ${shim.destination}: ${formatErrorMessage(verificationError)}`,
@@ -243,22 +241,22 @@ export async function swapStagedPackageInstall(params: {
         [displacedCandidateRoot, "rejected candidate"],
       ] as const) {
         if (root) {
-          const cleanup = await discardPackageUpdateBackup(root, label, targetLayout.globalRoot);
+          const cleanup = await discardPackageUpdateBackup(
+            root,
+            label,
+            targetLayout.globalRoot,
+            assertCurrent,
+          );
           if (cleanup) {
             messages.push(cleanup);
           }
         }
       }
     }
+    assertCurrent();
     return messages;
   };
   const readBaseline = async () => {
-    if (params.recovery && params.prepareRecovery) {
-      throw new Error("Package recovery may be supplied or prepared, never both");
-    }
-    if ((params.recovery || params.prepareRecovery) && native) {
-      throw new Error("Durable package recovery is unavailable for this package-manager layout");
-    }
     hadPackage = await (native ? pathEntryExists(targetSwapRoot) : baseline.exists(targetSwapRoot));
     previousVersion =
       hadPackage && native
@@ -332,72 +330,9 @@ export async function swapStagedPackageInstall(params: {
         });
       }
     }
-    if (params.recovery && previousRoot?.kind === "link") {
-      throw new Error("Durable package recovery requires a real package directory");
-    }
-    if ((params.recovery || params.prepareRecovery) && previousRoot?.kind !== "link") {
-      const previousTree = previousRoot?.tree;
-      if (shims.length > 64) {
-        throw new Error("Package recovery launcher inventory exceeds 64 entries");
-      }
-      const candidate = await baseline.tree(stagedSwapRoot, targetSwapRoot);
-      const parent = await baseline.directoryIdentity(path.dirname(targetSwapRoot));
-      if (candidate.identity.split(":")[0] !== parent.split(":")[0]) {
-        throw new Error("Durable package recovery requires a same-filesystem staged package");
-      }
-      const launchers: PackageTransactionDescriptor["launchers"] = [];
-      for (const shim of shims) {
-        launchers.push({
-          name: path.basename(shim.destination),
-          previous: shim.fingerprint ?? null,
-          candidate: await baseline.launcher(shim.source),
-        });
-      }
-      const shimBackupIdentity = shimBackupDir
-        ? await baseline.directoryIdentity(shimBackupDir)
-        : null;
-      // Finish the bounded read scope before awaited startup/persistence work.
-      // Recovery independently rechecks this captured material before admission.
-      return async () => {
-        // Retain staging before entering the persistence owner, including a lost acknowledgement.
-        retained = true;
-        const recovery =
-          params.recovery ??
-          (await params.prepareRecovery!({
-            liveRoot: targetSwapRoot,
-            stageRoot: stagedSwapRoot,
-            previous: previousTree ?? null,
-            candidate,
-          }));
-        recoveryTransaction = createPackageRecoveryTransaction(
-          {
-            version: 1,
-            transactionId: recovery.transactionId,
-            packageName: params.packageName,
-            liveRoot: targetSwapRoot,
-            stageRoot: stagedSwapRoot,
-            backupRoot,
-            binDir: targetLayout.binDir,
-            shimBackupRoot: shimBackupDir ?? null,
-            shimBackupIdentity,
-            previous: previousTree ?? null,
-            candidate,
-            retention: null,
-            launchers,
-            interruptedLaunchers: [],
-          },
-          recovery,
-          params.timeoutMs,
-        );
-        // Persist the exact descriptor before service preparation or package mutation.
-        await recoveryTransaction.prepare();
-      };
-    }
-    return undefined;
   };
   try {
-    const prepare = await (native ? readBaseline() : baseline.observe("baseline", readBaseline));
-    await prepare?.();
+    await (native ? readBaseline() : baseline.observe("baseline", readBaseline));
     // Validation and launcher backup finish while the old Gateway is serving.
     // Only this boundary authorizes the orchestrator to suspend the service.
     const assertProjectUnchanged = native
@@ -408,20 +343,23 @@ export async function swapStagedPackageInstall(params: {
     } catch (error) {
       throw new PackageUpdateActivationError(error);
     }
-    // Integration binds the real checkpoint inside beforeActivate. Only after
-    // it returns can Recovery durably admit package exposure under a fresh fence.
-    if (recoveryTransaction) {
-      activationReceipt = await recoveryTransaction.beforeActivation();
-    }
     if (native) {
       // Service preparation can wait for drain; revalidate the project copied before that wait.
       await native.assertUnchanged();
     }
-    if (params.onTransaction || recoveryTransaction) {
+    if (params.onTransaction) {
       retained = true;
       let completed = false;
       let rollbackRefused = false;
       let rollbackResult: ReturnType<PackageUpdateTransaction["rollback"]> | undefined;
+      let retainedAssertion: (() => void) | undefined;
+      const retainAuthority = (assertCurrent: () => void) => {
+        // Replays and completion keep the first executor. A later caller cannot
+        // re-admit a transaction whose original owner has been revoked.
+        retainedAssertion ??= assertCurrent;
+        retainedAssertion();
+        return retainedAssertion;
+      };
       const assertRollbackSafe = assertProjectUnchanged
         ? async () => {
             if (!projectActivated) {
@@ -435,40 +373,11 @@ export async function swapStagedPackageInstall(params: {
             }
           }
         : undefined;
-      params.onTransaction?.({
+      params.onTransaction({
         backupRoot,
-        ...(recoveryTransaction ? { recovery: recoveryTransaction } : {}),
         ...(assertRollbackSafe ? { assertRollbackSafe } : {}),
-        rollback: () => {
-          if (recoveryTransaction) {
-            return (async () => {
-              const result = await recoveryTransaction.rollback();
-              // The CLI uses this result to decide whether the prior runtime
-              // can restart. Verified absence is not a restartable package.
-              packageRollbackVerified =
-                result.status === "verified" && result.observation.previous === "live";
-              activePackageRoot =
-                result.status === "verified" &&
-                (result.observation.previous === "live" || result.observation.candidate === "live")
-                  ? targetPackageRoot
-                  : null;
-              return {
-                ...step(
-                  packageRollbackVerified ? 0 : 1,
-                  packageRollbackVerified
-                    ? "Previous package and launchers restored; recovery material retained"
-                    : null,
-                  result.status === "verified"
-                    ? packageRollbackVerified
-                      ? null
-                      : "Package absence restored; no previous runtime is available to restart."
-                    : result.reason,
-                ),
-                name: "global install rollback",
-                activePackageRoot,
-              };
-            })();
-          }
+        rollback: (assertion) => {
+          const assertCurrent = retainAuthority(assertion);
           if (completed) {
             return Promise.resolve({
               ...step(
@@ -488,6 +397,7 @@ export async function swapStagedPackageInstall(params: {
             try {
               await assertRollbackSafe?.();
             } catch (error) {
+              assertCurrent();
               return {
                 ...step(1, null, formatErrorMessage(error)),
                 name: "global install rollback",
@@ -495,7 +405,7 @@ export async function swapStagedPackageInstall(params: {
                 ...(error instanceof NativePackageRollbackError ? { reason: error.reason } : {}),
               };
             }
-            const messages = await restoreSwap();
+            const messages = await restoreSwap(assertCurrent);
             return {
               ...step(
                 packageRollbackVerified ? 0 : 1,
@@ -512,15 +422,8 @@ export async function swapStagedPackageInstall(params: {
           })();
           return rollbackResult;
         },
-        complete: async ({ activationVerified }): Promise<UpdateStepResult | void> => {
-          if (recoveryTransaction) {
-            // Recovery owns selected-pair retention. Neither success nor a
-            // finalizer's false activation flag authorizes deletion here.
-            return {
-              ...step(0, "Recovery owns cleanup; no material retired", null),
-              name: "global install backup retention",
-            };
-          }
+        complete: async ({ activationVerified }, assertion): Promise<UpdateStepResult | void> => {
+          const assertCurrent = retainAuthority(assertion);
           if (completed) {
             return;
           }
@@ -529,6 +432,7 @@ export async function swapStagedPackageInstall(params: {
           const outcomeVerified = rollbackResult
             ? (await rollbackResult).exitCode === 0 && packageRollbackVerified
             : (native ? projectActivated : activationCompleted) && activationVerified;
+          assertCurrent();
           if (rollbackRefused || !outcomeVerified) {
             return {
               ...step(
@@ -539,16 +443,27 @@ export async function swapStagedPackageInstall(params: {
               name: "global install backup retention",
             };
           }
-          const linkRetention = rootLink ? await rootLink.retire() : null;
+          const linkRetention = rootLink ? await rootLink.retire(assertCurrent) : null;
+          assertCurrent();
           if (linkRetention) {
             return { ...step(1, null, linkRetention), name: "global install backup retention" };
           }
           completed = true;
           if (hadPackage && previousRoot?.kind !== "link") {
-            await discardPackageUpdateBackup(backupRoot, "old package", targetLayout.globalRoot);
+            await discardPackageUpdateBackup(
+              backupRoot,
+              "old package",
+              targetLayout.globalRoot,
+              assertCurrent,
+            );
           }
           if (shimBackupDir) {
-            await discardPackageUpdateBackup(shimBackupDir, "shim backup", targetLayout.globalRoot);
+            await discardPackageUpdateBackup(
+              shimBackupDir,
+              "shim backup",
+              targetLayout.globalRoot,
+              assertCurrent,
+            );
           }
         },
       });
@@ -558,7 +473,6 @@ export async function swapStagedPackageInstall(params: {
     // Mark mutation only now: a copy-fallback move can fail after partial publication,
     // and only a completed backup permits restoration.
     params.onLiveMutation?.();
-    activationReceipt?.assertCurrent();
     packageRollbackVerified = false;
     if (native || !hadPackage) {
       activePackageRoot = null;
@@ -577,14 +491,13 @@ export async function swapStagedPackageInstall(params: {
           throw new Error(acquisition.error);
         }
       } else {
-        activationReceipt?.assertCurrent();
         await fs.rename(targetSwapRoot, backupRoot);
       }
       activePackageRoot = null;
       packageBackedUp = true;
       packageRollbackVerified = native !== undefined || previousRoot?.kind === "directory";
     }
-    rollback.push(async () => {
+    rollback.push(async (assertCurrent) => {
       if (!native && hadPackage) {
         // Retain the candidate until the exact old object is restored. A
         // denied/cross-device rename must not silently copy or strand it.
@@ -597,11 +510,13 @@ export async function swapStagedPackageInstall(params: {
             backupRoot,
             displacedRoot: displaced,
             candidatePresent,
+            assertCurrent,
           });
           displacedCandidateRoot = candidatePresent ? displaced : undefined;
           packageBackedUp = false;
           activePackageRoot = params.installTarget.packageRoot;
         } catch (error) {
+          assertCurrent();
           if (candidatePresent) {
             displacedCandidateRoot = (await pathEntryExists(displaced)) ? displaced : undefined;
             activePackageRoot = (await pathEntryExists(targetSwapRoot)) ? targetPackageRoot : null;
@@ -617,39 +532,34 @@ export async function swapStagedPackageInstall(params: {
         return;
       }
       activePackageRoot = null;
-      await removePath(targetSwapRoot);
+      await removePath(targetSwapRoot, assertCurrent);
       if (hadPackage) {
         await movePathWithCopyFallback({
           from: backupRoot,
           sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
           to: targetSwapRoot,
+          assertBeforeRename: assertCurrent,
+          assertBeforeMutation: assertCurrent,
+          onDestinationPublished: assertCurrent,
         });
         activePackageRoot = params.installTarget.packageRoot;
       }
     });
-    await activateStagedNpmPackageRoot(
-      stagedSwapRoot,
-      targetSwapRoot,
-      activationReceipt?.assertCurrent,
-    );
+    await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot);
     activePackageRoot = targetPackageRoot;
     projectActivated = true;
     for (const shim of shims) {
       // Register before copying: replacing an entry can fail after removing it.
-      rollback.push(async () => {
+      rollback.push(async (assertCurrent) => {
         if (shim.backup) {
-          await copyPathEntry(shim.backup, shim.destination);
+          await copyPathEntry(shim.backup, shim.destination, assertCurrent);
         } else {
-          await removePath(shim.destination);
+          await removePath(shim.destination, assertCurrent);
         }
       });
-      activationReceipt?.assertCurrent();
-      await copyPathEntry(shim.source, shim.destination, activationReceipt?.assertCurrent);
+      await copyPathEntry(shim.source, shim.destination);
     }
     activationCompleted = true;
-    if (recoveryTransaction && activationReceipt) {
-      await recoveryTransaction.afterActivation(activationReceipt);
-    }
     let postVerifyStep: UpdateStepResult | null = null;
     if (params.postVerifyStep) {
       try {
@@ -722,9 +632,8 @@ export async function swapStagedPackageInstall(params: {
       postVerifyStep,
     };
   } catch (error) {
-    recoveryTransaction?.activationFailed();
     if (error instanceof PackageUpdateActivationError) {
-      if (shimBackupDir && !recoveryTransaction) {
+      if (shimBackupDir) {
         await discardPackageUpdateBackup(shimBackupDir, "shim backup", targetLayout.globalRoot);
       }
       throw error;
@@ -736,7 +645,6 @@ export async function swapStagedPackageInstall(params: {
       step: step(1, null, errors.join("\n")),
       postVerifyStep: null,
       packageRollbackVerified: retained ? false : packageRollbackVerified,
-      ...(recoveryTransaction ? { recovery: await recoveryTransaction.observe() } : {}),
     };
   }
 }

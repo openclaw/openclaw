@@ -456,9 +456,9 @@ update with no continuation does not wake the model to deliver the report.
 
 The sentinel's typed SQLite columns are authoritative for restart handling;
 its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
-and clears SQLite state without a file fallback. During the storage cutover, a
-bounded state migration runs at startup and through Doctor to preserve a
-validated `restart-sentinel.json` left by the older process after an update.
+and clears SQLite state without a file fallback. A bounded state migration runs
+at startup and through Doctor to preserve a validated legacy
+`restart-sentinel.json` left on disk after an update.
 The migration verifies the typed row and removes the source file before normal
 restart handling continues.
 

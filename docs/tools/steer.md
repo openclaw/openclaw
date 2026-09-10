@@ -13,6 +13,9 @@ sidebarTitle: "Steer"
 cannot accept steering, OpenClaw sends the message as a normal prompt instead
 of dropping it.
 
+`/tell` is an alias of `/steer`. The two names are interchangeable everywhere
+on this page.
+
 ## Current session
 
 Use top-level `/steer` to target the active run for the current session:

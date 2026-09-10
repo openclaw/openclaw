@@ -104,6 +104,36 @@ describe("models-config merge helpers", () => {
     ]);
   });
 
+  it.each([false, true])(
+    "preserves configured provider routing for catalog rows (overlap: %s)",
+    (overlap) => {
+      const implicit = createConfigProvider({
+        api: "anthropic-messages",
+        baseUrl: "https://catalog.example/v1",
+        models: [
+          createModel({
+            id: overlap ? "config-model" : "catalog-only",
+            ...(overlap
+              ? { api: "anthropic-messages", baseUrl: "https://catalog-model.example/v1" }
+              : {}),
+          }),
+        ],
+      });
+      const explicit = createConfigProvider();
+      const merged = mergeProviders({
+        implicit: { example: implicit },
+        explicit: { example: explicit },
+      });
+      const provider = merged.example;
+      const selected = provider?.models.find(
+        (model) => model.id === (overlap ? "config-model" : "catalog-only"),
+      );
+      expect(selected).toBeDefined();
+      expect(selected?.api ?? provider?.api).toBe(explicit.api);
+      expect(selected?.baseUrl ?? provider?.baseUrl).toBe(explicit.baseUrl);
+    },
+  );
+
   it("uses source input presence when merging matching model metadata", () => {
     const implicit = {
       api: "ollama",

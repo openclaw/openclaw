@@ -457,12 +457,14 @@ export async function fetchClawHubPluginCatalog(
       cursor: params.cursor,
       featured: params.intent === "featured" ? "true" : undefined,
       isOfficial: params.intent === "official" ? "true" : undefined,
+      officialFirst:
+        params.intent === "featured" || params.intent === "trending" ? undefined : "true",
       sort:
         params.intent === "featured"
           ? undefined
           : params.intent === "trending"
             ? "trending"
-            : "recommended",
+            : "downloads",
       limit: params.limit ? String(params.limit) : undefined,
     },
   });

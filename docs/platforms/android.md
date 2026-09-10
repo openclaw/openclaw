@@ -189,19 +189,30 @@ For Tailscale or public hosts, Android requires a secure endpoint:
 
 ### 1. Start the Gateway
 
-```bash
-openclaw gateway --port 18789 --verbose
-```
+Use an authenticated Gateway. If it is not configured yet, run `openclaw onboard` first to configure a token or password.
 
-Confirm in logs you see something like:
-
-- `listening on ws://0.0.0.0:18789`
-
-For remote Android access over Tailscale, prefer Serve/Funnel instead of a raw tailnet bind:
+For a trusted same-LAN setup, persist the LAN bind before starting:
 
 ```bash
-openclaw gateway --tailscale serve
+openclaw config set gateway.bind lan
+openclaw gateway --port 18789
 ```
+
+Bare-metal and virtual-machine hosts default to loopback, which a phone cannot reach. Detected containers can default to `auto` instead. Set the bind explicitly for this setup.
+
+Use the config command rather than `--bind lan` alone: a startup-only flag does not change the configuration read by a separate `openclaw qr` command. Without another configured URL route, setup-code creation still sees loopback and refuses to mint a code.
+
+Run `openclaw gateway status`. Its `Gateway:` line should show `bind=lan (0.0.0.0)` and `port=18789`.
+
+For remote Android access, choose managed Tailscale Serve as an alternative to LAN binding. Keep its settings in config so setup-code creation can use the same route:
+
+```bash
+openclaw config set gateway.bind loopback
+openclaw config set gateway.tailscale.mode serve
+openclaw gateway --port 18789
+```
+
+Tailscale must be installed and logged in. Managed Serve and Funnel require loopback binding; do not leave `gateway.bind=lan` set when switching to them. See [Tailscale](/gateway/tailscale) for Serve and password-authenticated Funnel setup.
 
 This gives Android a secure `wss://` / `https://` endpoint. A plain `gateway.bind: "tailnet"` setup is not enough for first-time remote Android pairing unless you also terminate TLS separately.
 
@@ -233,6 +244,20 @@ Android NSD/mDNS discovery does not cross networks. If the Android node and the 
 Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 
 ### 3. Connect from Android
+
+Create a setup code in the [Control UI](/web/control-ui) (**Devices → Pair device**) or with `openclaw qr`.
+
+An explicit `--url` or `--public-url` override wins. Otherwise, setup-code URL selection uses this order:
+
+1. `plugins.entries.device-pair.config.publicUrl`, unless remote preference was requested.
+2. `gateway.remote.url` when explicitly preferred.
+3. Managed Tailscale Serve or Funnel.
+4. The ordinary `gateway.remote.url` setting.
+5. A usable configured bind, such as the LAN bind from step 1.
+
+`openclaw qr --remote` selects remote credentials, ignores the configured device-pair `publicUrl`, and prefers `gateway.remote.url` before managed Tailscale. See [QR](/cli/qr).
+
+URL selection does not test network reachability. Resolution errors stop setup-code creation instead of triggering a lower-priority route. A loopback-only Gateway with no configured URL or managed Tailscale route refuses to mint a code.
 
 In the Android app:
 
@@ -266,6 +291,10 @@ The app keeps a registry of every Gateway it has paired with, so you can keep op
 - Each switch controls whether that non-focused Gateway stays connected while the app is in the foreground. The focused Gateway remains enabled and owns the phone's node connection and device capabilities.
 - Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per Gateway. Changing focus never mixes state between Gateways, and messages queued while offline are delivered only to the Gateway they were written for.
 - **Forget** removes a Gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
+
+Opening or replying to a conversation notification reconnects its saved Gateway when needed. An already connecting or connected target is retained. Replies wait for that target connection to become ready, including required TLS approval. If the target is no longer available, opening the notification shows **Gateway unavailable** and opens Gateway settings without disconnecting another Gateway. Disconnect is checked again before a notification reply enters the durable send queue; already queued input keeps its normal recovery behavior.
+
+For notifications created by the updated app, **Reply queued** confirms that the reply entered the durable send queue, not that it was delivered. The notification keeps a private preview of the submitted text and offers **Open conversation**. If the reply status is unknown, open the conversation to check before sending again; the notification does not offer another Reply action. Feedback updates only the latest notification for that conversation, so an older result cannot replace a newer notice. Notifications retained from an earlier app version can still send replies, but their result does not rewrite or dismiss a notification; open the conversation to check its status.
 
 The **Channels**, **Dreaming**, **Health** logs, **Skills**, and **Usage** pages keep their last loaded data while refreshing. A failed first load shows an error rather than empty counts or default health values. When refreshes overlap, only the latest request updates the page's data, error, and progress. Disconnecting clears the displayed summaries.
 

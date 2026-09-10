@@ -285,8 +285,9 @@ absent from the packaged inventory, and empty `dist` directories.
 `plugin-runtime-deps` only when the alias itself is genuinely dangling. Live
 aliases are preserved. Neither Doctor nor postinstall deletes shared
 `plugin-runtime-deps` roots or mirrors, which may still serve another
-installation or profile. The deprecated `core/doctor/legacy-plugin-dependencies`
-selector is informational only; it no longer scans shared roots for removal.
+installation or profile. Since 2026.9.2 the deprecated
+`core/doctor/legacy-plugin-dependencies` selector is informational only; it no
+longer scans shared roots for removal.
 
 Older npm installs also used a shared `~/.openclaw/npm/node_modules` root.
 Current install, update, uninstall, and doctor flows still recognize that

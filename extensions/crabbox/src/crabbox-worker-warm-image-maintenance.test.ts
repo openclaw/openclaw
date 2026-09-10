@@ -4,6 +4,7 @@ import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
   commandResult,
   createWarmProvider,
+  managedBinary,
   openWarmImageStore,
   provisionWarmProfile,
   PROFILE,
@@ -39,6 +40,43 @@ const expiredImage = (id: string): WarmProfileRecord => ({
 });
 
 describe("Crabbox idle image maintenance", () => {
+  it("deletes expired images through a healthy binary when another acquisition fails", async () => {
+    const { provider, calls, warn } = createWarmProvider();
+    vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => {
+      if (params?.binary === "/opt/b/crabbox") {
+        throw new Error("fixture binary acquisition unavailable");
+      }
+      return params?.binary ?? "crabbox";
+    });
+    const store = openWarmImageStore();
+    store.register("expired", expiredImage("chk_expired"));
+
+    await provider.maintain!(mixedContext());
+
+    expect(calls.map(({ argv }) => argv)).toEqual([
+      ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
+    ]);
+    expect(store.lookup("expired")).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("fixture binary acquisition unavailable"),
+    );
+  });
+
+  it("rejects maintenance and retains images when every binary acquisition fails", async () => {
+    const { provider, calls } = createWarmProvider();
+    vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockRejectedValue(
+      new Error("fixture binary acquisition unavailable"),
+    );
+    const store = openWarmImageStore();
+    const expired = expiredImage("chk_expired");
+    store.register("expired", expired);
+
+    await expect(provider.maintain!(mixedContext())).rejects.toThrow();
+
+    expect(calls).toEqual([]);
+    expect(store.lookup("expired")).toEqual(expired);
+  });
+
   it.each(["scrubbing", "creating", "uncertain"] as const)(
     "preserves ownership and pins while reporting an old %s capture",
     async (phase) => {

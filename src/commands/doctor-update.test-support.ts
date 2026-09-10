@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   restartUpdatedGateway: vi.fn(),
   stopGatewayService: vi.fn(),
   waitForHealthyRestart: vi.fn(),
+  inspectGatewayRestart: vi.fn(),
   waitForHttpReadiness:
     vi.fn<typeof import("../cli/daemon-cli/restart-health.js").waitForGatewayHttpReadiness>(),
   doctorCommand: vi.fn(),
@@ -87,7 +88,9 @@ vi.mock("../cli/daemon-cli.js", () => ({
 vi.mock("../cli/update-cli/update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: mocks.createUpdateConfigSnapshot,
 }));
-vi.mock("../cli/daemon-cli/restart-health.js", () => ({
+vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
+  inspectGatewayRestart: mocks.inspectGatewayRestart,
   waitForGatewayHealthyRestart: mocks.waitForHealthyRestart,
   waitForGatewayHttpReadiness: mocks.waitForHttpReadiness,
   renderRestartDiagnostics: () => ["gateway not ready"],
@@ -299,12 +302,14 @@ export function installDoctorUpdateTestHooks(): void {
     mocks.revalidateManagedGatewayServiceAfterUpdate.mockImplementation(
       async ({ preManagedServiceStop }) => preManagedServiceStop.serviceUpdateVerdict,
     );
-    mocks.waitForHealthyRestart.mockReset().mockResolvedValue({
+    const healthy = {
       healthy: true,
       runtime: { status: "running" },
       staleGatewayPids: [],
       gatewayVersion: "2026.4.24",
-    });
+    };
+    mocks.waitForHealthyRestart.mockReset().mockResolvedValue(healthy);
+    mocks.inspectGatewayRestart.mockReset().mockResolvedValue(healthy);
     mocks.waitForHttpReadiness.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
 
     mocks.doctorCommand.mockReset();

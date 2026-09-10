@@ -59,7 +59,7 @@ Facade-loaded entry points prefer the active runtime config snapshot when one
 exists, then fall back to the resolved config file on disk.
 
 Capability-specific subpaths such as `image-generation`, `media-understanding`,
-and `speech` exist because bundled plugins use them today. They are not
+and `speech` exist because bundled plugins import them. They are not
 automatically long-term frozen external contracts — check the relevant SDK
 reference page when relying on them.
 

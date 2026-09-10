@@ -257,6 +257,22 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("QA-MSTEAMS-GROUP-OK");
   });
 
+  it("proves ambiguous Teams delivery at the Gateway send boundary", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("msteams-ambiguous-gateway-timeout"));
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(flow).toContain("env.gateway.call('send'");
+    expect(flow).toContain("sendError.includes('504')");
+    expect(flow).toContain("matchingOutbound.length === 1");
+    expect(flow).toContain("seed proactive conversation reference");
+    expect(flow.match(/"resetTransport":true/g)).toHaveLength(1);
+    expect(flow.match(/"waitForOutbound"/g)).toHaveLength(1);
+    expect(flow).toContain("conversation:19:ambiguous-timeout@thread.tacv2");
+    expect(scenario.execution.config).toMatchObject({
+      seedMarker: "QA-MSTEAMS-CONVERSATION-READY",
+    });
+  });
+
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));

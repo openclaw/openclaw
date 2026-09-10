@@ -27,7 +27,10 @@ import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "./update-command-migrated-types.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import {
+  createUpdateCommandFinalizationFence,
+  UpdateCommandRecoveryPendingError,
+} from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import {
   resolveUpdatedInstallCommandEnv,
@@ -116,6 +119,8 @@ export async function continueMigratedUpdateInFreshProcess(
   if (!run) {
     throw new Error("Migrated update continuation requires its admitted run.");
   }
+  const assertCurrent = createUpdateCommandFinalizationFence(params);
+  assertCurrent();
   const windowsRecovery = params.preManagedServiceStop?.windowsTaskAutoStartRecovery;
   const result = params.result;
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-migrated-"));
@@ -140,7 +145,7 @@ export async function continueMigratedUpdateInFreshProcess(
       TEMP: scratchDir,
     };
     if (run.executorFence) {
-      run.executorFence.assertCurrent();
+      assertCurrent();
       // Compatibility only, never authority. An older installed worker ignores
       // new JSON fields, so refuse before exposing any continuation input.
       const check = await runUtf8CommandWithTimeout([...workerCommand, "--check"], {
@@ -153,7 +158,7 @@ export async function continueMigratedUpdateInFreshProcess(
         killGraceMs: 500,
         maxOutputBytes: 64 * 1024,
       });
-      run.executorFence.assertCurrent();
+      assertCurrent();
       let contract: unknown;
       try {
         contract = JSON.parse(check.stdout);
@@ -264,8 +269,9 @@ export async function continueMigratedUpdateInFreshProcess(
       );
     }
     const retained = await params.packageTransaction
-      ?.complete({ activationVerified: response.result.status === "ok" })
+      ?.complete({ activationVerified: response.result.status === "ok" }, assertCurrent)
       .catch((error: unknown) => {
+        assertCurrent();
         defaultRuntime.error(`Update backup cleanup failed: ${String(error)}`);
       });
     if (retained) {

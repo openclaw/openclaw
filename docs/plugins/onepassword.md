@@ -332,3 +332,4 @@ Policy and validation errors:
 
 - [Secrets management](/gateway/secrets)
 - [1Password](/gateway/1password) — the built-in `op://` secret source, and how the plugin, skill, and MCP options compare
+- [`openclaw secrets`](/cli/secrets) — store, reload, audit, configure, and apply SecretRefs from the CLI

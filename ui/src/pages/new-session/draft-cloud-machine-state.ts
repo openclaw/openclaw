@@ -46,7 +46,7 @@ export class DraftCloudMachineState {
   ): boolean {
     const profile = profiles.find((candidate) => candidate.id === profileId);
     const os = profile?.operatingSystems?.find((candidate) => candidate.id === osId);
-    if (disabled || !profile || !os) {
+    if (disabled || !profile || !os || os.disabledReason) {
       return false;
     }
     const machineClass = this.resolve(profileId);

@@ -21,7 +21,7 @@ The `google-meet` plugin joins explicit Meet URLs on behalf of an OpenClaw agent
 Install the plugin and the native audio dependencies for the Chrome host, then set a realtime provider key. OpenAI is the default transcription provider for `agent` mode; Google Gemini Live is available as the `bidi`-mode voice provider. On macOS:
 
 ```bash
-openclaw plugins install npm:@openclaw/google-meet
+openclaw plugins install @openclaw/google-meet
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
 # only needed when realtime.voiceProvider is "google" for bidi mode
@@ -126,7 +126,7 @@ openclaw googlemeet create --access-type OPEN --transport chrome-node --mode age
 | `TRUSTED`       | Host org's trusted users, invited external users, and dial-in users |
 | `RESTRICTED`    | Invitees only                                                       |
 
-This only applies to API-created rooms, so OAuth must be configured. If you authenticated before this option existed, rerun `openclaw googlemeet auth login --json` after adding the `meetings.space.settings` scope to your OAuth consent screen.
+This only applies to API-created rooms, so OAuth must be configured. If you authorized OpenClaw before access-type control shipped in 2026.5.2, rerun `openclaw googlemeet auth login --json` after adding the `meetings.space.settings` scope to your OAuth consent screen.
 
 If the browser fallback hits a Google login or Meet permission blocker, the tool returns `manualAction: { reason, message }` with the `browser.nodeId`/`browser.targetId`/`browserUrl`. Report that message and stop opening new Meet tabs until the operator finishes the browser step.
 
@@ -246,4 +246,5 @@ resolve here.
 - [Meeting plugins overview](/plugins/meeting-plugins)
 - [Voice call plugin](/plugins/voice-call)
 - [Talk mode](/nodes/talk)
+- [ElevenLabs](/providers/elevenlabs) — the speech and transcription provider used in the Meet config examples
 - [Building plugins](/plugins/building-plugins)

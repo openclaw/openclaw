@@ -281,6 +281,17 @@ function withWaitContext(
   return { ...snapshot, waitOutcome, elapsedMs };
 }
 
+export function isSameGatewayRestartGeneration(
+  previous: GatewayRestartSnapshot,
+  current: GatewayRestartSnapshot,
+): boolean {
+  return (
+    previous.runtime.status === current.runtime.status &&
+    previous.runtime.pid === current.runtime.pid &&
+    previous.gatewayBootId === current.gatewayBootId
+  );
+}
+
 export async function waitForGatewayHealthyRestart(params: {
   service: GatewayService;
   port: number;
@@ -339,7 +350,7 @@ export async function waitForGatewayHealthyRestart(params: {
   let postMigrationDeadlineMs: number | undefined;
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
-  let healthyStreak: { pid: number | undefined; probes: number } | undefined;
+  let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
 
   for (let attempt = 0; ; attempt += 1) {
     params.signal?.throwIfAborted();
@@ -354,10 +365,10 @@ export async function waitForGatewayHealthyRestart(params: {
         (snapshot.runtime.status === "running" &&
           (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
     if (healthy) {
-      if (healthyStreak && healthyStreak.pid === snapshot.runtime.pid) {
+      if (healthyStreak && isSameGatewayRestartGeneration(healthyStreak.snapshot, snapshot)) {
         healthyStreak.probes += 1;
       } else {
-        healthyStreak = { pid: snapshot.runtime.pid, probes: 1 };
+        healthyStreak = { snapshot, probes: 1 };
       }
       if (healthyStreak.probes >= settleProbes) {
         return withWaitContext(snapshot, "healthy", elapsedMs);

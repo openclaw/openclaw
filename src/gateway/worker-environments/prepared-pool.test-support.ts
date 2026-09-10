@@ -118,6 +118,7 @@ export function usePreparedPoolFixture() {
       projectKey?: string;
       preparationKey?: string;
       reserve?: boolean;
+      purpose?: "reserve" | "build";
       runSetupScript?: boolean;
     } = {},
   ) {
@@ -127,13 +128,15 @@ export function usePreparedPoolFixture() {
       profileId: "development",
       provisionOperationId: `provision:${environmentId}`,
       profileSnapshot: profile(options.projectKey, options.preparationKey, options.runSetupScript),
-      preparation: options.reserve
-        ? {
-            key: options.preparationKey ?? PREPARATION_KEY,
-            demandAtMs: nowMs,
-            expiresAtMs: nowMs + IDLE_TIMEOUT_MS,
-          }
-        : undefined,
+      preparation:
+        options.reserve || options.purpose
+          ? {
+              purpose: options.purpose ?? "reserve",
+              key: options.preparationKey ?? PREPARATION_KEY,
+              demandAtMs: nowMs,
+              expiresAtMs: nowMs + IDLE_TIMEOUT_MS,
+            }
+          : undefined,
     });
   }
 

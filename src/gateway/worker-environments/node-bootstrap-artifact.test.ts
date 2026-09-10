@@ -62,6 +62,7 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
   await write(packageRoot, "node-version.mjs", "export const supported = true;");
   await write(packageRoot, "node-sqlite.mjs", "export const probe = true;");
   await write(packageRoot, "node-runtime-update.mjs", "export const update = true;");
+  await write(packageRoot, "node-runtime-recovery.mjs", "export const recovery = true;");
   await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
   await write(
     packageRoot,

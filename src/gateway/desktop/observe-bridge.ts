@@ -172,6 +172,7 @@ export function handleDesktopObserveUpgrade(
     // View-only is enforced here at the RFB message boundary; the UI setting is only UX.
     const observer = deps.registry.attachObserver(entry.sourceKey, {
       control: entry.control,
+      operatorName: entry.requester?.operatorName,
       ownerEpoch: entry.ownerEpoch,
       // Retire the stream and keepalive before the close handshake can wait on a paused peer.
       close: (code, reason) => closeBoth(code, reason, "owner-close"),

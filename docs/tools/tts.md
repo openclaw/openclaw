@@ -215,6 +215,7 @@ keeps the old id and points at the new one.
 - [ElevenLabs provider](/providers/elevenlabs)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
+- [Fish Audio provider](/providers/fish-audio)
 - [Gradium](/providers/gradium)
 - [Inworld provider](/providers/inworld)
 - [Inworld TTS API](https://docs.inworld.ai/tts/tts)

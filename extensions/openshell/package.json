@@ -20,6 +20,7 @@
       "./index.ts"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/openshell-sandbox",
       "npmSpec": "@openclaw/openshell-sandbox",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.5.12-beta.1"

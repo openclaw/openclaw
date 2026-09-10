@@ -127,7 +127,7 @@ The Gateway host still owns the OpenClaw agent and model credentials when Chrome
 Install the meeting plugins you need. Each is enabled by default after installation:
 
 ```bash
-openclaw plugins install npm:@openclaw/google-meet
+openclaw plugins install @openclaw/google-meet
 openclaw plugins install @openclaw/teams-meetings
 openclaw plugins install @openclaw/zoom-meetings
 openclaw gateway restart

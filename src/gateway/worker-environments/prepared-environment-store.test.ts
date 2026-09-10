@@ -52,7 +52,7 @@ describe("prepared environment ownership", () => {
         executionMode: "worker-turn",
         project: { key: PROJECT_KEY, root: "/project", baseCommit: "d".repeat(40) },
       },
-      preparation: { key, demandAtMs: 900, expiresAtMs: 2_000 },
+      preparation: { purpose: "reserve", key, demandAtMs: 900, expiresAtMs: 2_000 },
     } satisfies WorkerEnvironmentIntentInput;
   }
   function reserve(
@@ -125,6 +125,78 @@ describe("prepared environment ownership", () => {
       assertCurrent,
     });
   }
+
+  function build(environmentId = "build-1", key = PREPARATION_KEY, maxTotal = 1) {
+    const input = intent(environmentId, key);
+    return environments.ensurePreparedIntent({
+      intent: { ...input, preparation: { ...input.preparation, purpose: "build" } },
+      projectKey: PROJECT_KEY,
+      target: 0,
+      maxTotal,
+      assertCurrent,
+    });
+  }
+
+  it("admits a build at zero ready target and preserves its purpose on reopen", () => {
+    expect(build()?.preparation?.purpose).toBe("build");
+    expect(
+      environments.isPreparedIntentWithinCapacity({
+        environmentId: "build-1",
+        target: 0,
+        maxTotal: 1,
+      }),
+    ).toBe(true);
+    closeOpenClawStateDatabaseForTest();
+    openStores();
+    expect(environments.get("build-1")?.preparation?.purpose).toBe("build");
+    expect(build("build-2")).toEqual(environments.get("build-1"));
+    expect(environments.list()).toHaveLength(1);
+  });
+
+  it("reuses an existing reserve for a build before checking full capacity", () => {
+    const original = reserve()!;
+    expect(build()).toEqual({
+      ...original,
+      preparation: { ...original.preparation, purpose: "build" },
+    });
+    expect(
+      environments.isPreparedIntentWithinCapacity({
+        environmentId: original.environmentId,
+        target: 0,
+        maxTotal: 1,
+      }),
+    ).toBe(true);
+    expect(environments.list()).toHaveLength(1);
+  });
+
+  it("counts unfinished builds and unresolved teardown against global capacity", () => {
+    const original = build()!;
+    expect(build("disabled", PREPARATION_KEY, 0)).toBeUndefined();
+    expect(build("other-key", "e".repeat(64))).toBeUndefined();
+    environments.requestDestroy({ environmentId: original.environmentId, state: original.state });
+    expect(build("retry")).toBeUndefined();
+    environments.transition({
+      environmentId: original.environmentId,
+      from: "requested",
+      to: "failed",
+    });
+    expect(build("retry")?.environmentId).toBe("retry");
+  });
+
+  it("adds the purpose column to legacy rows without changing their reserve lifecycle", () => {
+    const original = reserve()!;
+    database.db.exec("ALTER TABLE worker_environments DROP COLUMN preparation_purpose");
+    closeOpenClawStateDatabaseForTest();
+    openStores();
+    expect(environments.get(original.environmentId)).toEqual(original);
+    expect(
+      database.db.prepare("SELECT preparation_purpose FROM worker_environments").get(),
+    ).toEqual({ preparation_purpose: null });
+    expect(database.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    closeOpenClawStateDatabaseForTest();
+    openStores();
+    expect(environments.get(original.environmentId)?.preparation?.purpose).toBe("reserve");
+  });
 
   it("assigns once across store instances and retains consumption after placement deletion and reopen", () => {
     ready();

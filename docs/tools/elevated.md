@@ -52,13 +52,13 @@ Send `/elevated` with no argument to see the current level.
   <Step title="Set the level">
     Send a directive-only message to set the session default:
 
-    ```
+    ```text
     /elevated full
     ```
 
     Or use it inline (applies to that message only):
 
-    ```
+    ```text
     /elevated on run the deployment script
     ```
 

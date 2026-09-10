@@ -437,7 +437,7 @@ settings to this backend.
 Custom images used with the OpenClaw filesystem bridge must provide:
 
 - `/bin/sh`
-- `sleep` for the persistent sandbox main process on current OpenShell releases
+- `sleep` for the persistent sandbox main process, when the OpenShell CLI supports detached sandbox creation (`sandbox create --detach`)
 - `python3` for pinned remote filesystem reads and mutations
 - GNU-compatible `stat` (`-c`), `readlink` (`-f`), and `find`
 - standard `mkdir`, `mv`, `rm`, and `rmdir` utilities
@@ -571,5 +571,5 @@ openclaw logs --follow
 
 - [Sandboxing](/gateway/sandboxing) - modes, scopes, and backend comparison
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) - debugging blocked tools
-- [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) - per-agent overrides
+- [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) - per-agent overrides
 - [Sandbox CLI](/cli/sandbox) - `openclaw sandbox` commands

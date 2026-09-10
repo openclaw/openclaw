@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
@@ -24,13 +25,17 @@ import { isJsonObject } from "./protocol.js";
 /** Minimal task-runtime surface needed to mirror native subagent lifecycle. */
 type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
-  "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
+  | "tryCreateRunningTaskRun"
+  | "recordTaskRunProgressByRunId"
+  | "finalizeTaskRunByRunId"
+  | "listTaskRecords"
 >;
 
 /** Stable parent/session context used while mirroring native subagent tasks. */
 type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
+  historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   now?: () => number;
 };
@@ -321,6 +326,11 @@ export class CodexNativeSubagentTaskMirror {
     }
     this.mirrorStateByThreadId.set(threadId, "mirrored");
     const runId = codexNativeSubagentRunId(threadId);
+    // Creation also refreshes existing metadata. Recovery must preserve the original locator,
+    // including its absence on rows created before native history ownership was recorded.
+    const historyOwner = this.params.historyOwner;
+    const stampHistoryOwner =
+      historyOwner && !this.runtime.listTaskRecords().some((task) => task.runId === runId);
     const taskRecord = this.runtime.tryCreateRunningTaskRun({
       sourceId: runId,
       agentId: this.params.agentId,
@@ -333,6 +343,7 @@ export class CodexNativeSubagentTaskMirror {
       startedAt: params.startedAt,
       lastEventAt: this.now(),
       progressSummary: params.progressSummary,
+      ...(stampHistoryOwner ? { detail: { nativeHistory: { ...historyOwner } } } : {}),
     });
     if (!taskRecord) {
       this.mirrorStateByThreadId.set(threadId, "failed");

@@ -62,6 +62,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure } from "../../infra/update-run-record.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-report.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   resolveUpdateInstallSurface,
   runGatewayUpdate,
@@ -516,15 +517,11 @@ export const updateHandlers: GatewayRequestHandlers = {
                 status: "in_progress",
                 startedAtMs: Date.now(),
               }),
-            onStepComplete: (step) =>
-              recordUpdateRunStep(runId, {
-                step: step.name,
-                status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
-                endedAtMs: Date.now(),
-                ...(step.exitCode !== 0
-                  ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-                  : {}),
-              }),
+            onStepComplete: (step) => {
+              for (const entry of updateRunStepsFromResultStep(step)) {
+                recordUpdateRunStep(runId, { ...entry, endedAtMs: Date.now() });
+              }
+            },
           },
           timeoutMs,
           cwd: installSurface.root,
@@ -592,6 +589,9 @@ export const updateHandlers: GatewayRequestHandlers = {
         status: completed ? "completed" : "failed",
         ...(!completed ? { detail: summarizeUpdateStepFailure(step) } : {}),
       });
+      for (const warning of updateRunStepsFromResultStep(step).slice(1)) {
+        recordUpdateRunStep(runId, warning);
+      }
     }
     // A managed orchestrator or the replacement Gateway owns terminal success;
     // refusals and synchronous failures have no later process to finish the run.

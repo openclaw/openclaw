@@ -49,6 +49,7 @@ export type WorkerEnvironmentServiceRecord = {
   desktopAvailable: boolean;
   desktopApps: readonly WorkerDesktopApp["id"][];
   tunnelStatus: WorkerTunnelStatus;
+  preparation?: { purpose: "reserve" | "build"; key: string } | null;
   error?: string;
 };
 
@@ -73,6 +74,10 @@ export type WorkerEnvironmentServiceContract = {
   supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
   listOperatingSystems(profileId: string): Promise<readonly WorkerOperatingSystem[] | undefined>;
+  prepare(
+    request: { profileId: string; projectPath: string },
+    authorize?: () => void,
+  ): Promise<{ environmentId: string; preparationKey: string; reused: boolean }>;
   create(
     profileId: string,
     idempotencyKey: string,

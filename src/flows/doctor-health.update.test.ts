@@ -1,6 +1,16 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
+import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
+import * as temporaryState from "../infra/tmp-openclaw-dir.js";
+import {
+  consumeUpdatePostInstallDoctorResult,
+  createUpdatePostInstallDoctorResultPath,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+} from "../infra/update-doctor-result.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { ExitError } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -16,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   service: vi.fn(),
   packageRoot: vi.fn<() => string | undefined>(),
+  stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -104,7 +115,11 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
 }));
 
 vi.mock("../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig: async () => ({ cfg: mocks.config(), shouldWriteConfig: true }),
+  loadAndMaybeMigrateDoctorConfig: async () => ({
+    cfg: mocks.config(),
+    shouldWriteConfig: true,
+    stateMigrationStepReceipts: mocks.stateMigrationReceipts,
+  }),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
@@ -117,9 +132,17 @@ vi.mock("./doctor-health-contributions.js", () => ({
 }));
 
 describe("runDoctorHealthFlow update outcomes", () => {
-  afterEach(() => vi.unstubAllEnvs());
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Fixture service coordination must not read the operator's temporary database.
+    const control = path.join(dirs.make("doctor-update-coordinator-"), "control");
+    await fs.mkdir(control, { mode: 0o700 });
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     // Exercise only the isolated fixture manager, independent of the host policy.
     vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
     mocks.offerUpdate.mockReset().mockResolvedValue({ updated: false });
@@ -130,7 +153,70 @@ describe("runDoctorHealthFlow update outcomes", () => {
     mocks.service.mockReset();
     mocks.outro.mockClear();
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
+    mocks.stateMigrationReceipts = [];
   });
+
+  it.each([false, true])(
+    "carries migration advisories into update IPC only when Doctor succeeds (refused=%s)",
+    async (refused) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const resultPath = createUpdatePostInstallDoctorResultPath();
+        vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
+        const receipt = (
+          id: string,
+          outcome: "warning" | "refused",
+        ): LegacyStateMigrationStepReceipt => ({
+          id,
+          phase: "final",
+          source: [],
+          target: [],
+          requiredness: "required",
+          reversibility: "checkpoint-required",
+          outcome,
+          changes: [],
+          warnings: [`${id}: run openclaw doctor --fix`],
+        });
+        mocks.stateMigrationReceipts.push(receipt("preflight cleanup", "warning"));
+        const deferred = receipt("deferred cleanup", refused ? "refused" : "warning");
+        const refusal = new DoctorStateMigrationRefusalError([deferred]);
+        mocks.runContributions.mockImplementation(async (ctx) => {
+          ctx.configResult.stateMigrationStepReceipts?.push(deferred);
+          if (refused) {
+            throw refusal;
+          }
+        });
+        const runtime = {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn((code: number) => {
+            throw new ExitError(code);
+          }),
+        };
+
+        try {
+          if (refused) {
+            await expect(runDoctorHealthFlow(runtime, { nonInteractive: true })).rejects.toBe(
+              refusal,
+            );
+          } else {
+            await runDoctorHealthFlow(runtime, { nonInteractive: true });
+          }
+          const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+          expect(result?.status).toBe(refused ? "error" : "ok");
+          expect(result?.warnings).toEqual(
+            refused
+              ? undefined
+              : [
+                  "preflight cleanup: run openclaw doctor --fix",
+                  "deferred cleanup: run openclaw doctor --fix",
+                ],
+          );
+        } finally {
+          await consumeUpdatePostInstallDoctorResult(resultPath);
+        }
+      });
+    },
+  );
 
   it.each([
     "rollback-checkout-dirty",

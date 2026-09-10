@@ -2195,6 +2195,38 @@ describe("update-cli", () => {
     tempDirsToCleanup.clear();
   });
 
+  it.each([false, true])("admits non-TTY updates with an active session (yes=%s)", async (yes) => {
+    setTty(false);
+    setStdoutTty(false);
+    const { beginSessionWorkAdmission, getActiveSessionWorkAdmissionCount } =
+      await import("../sessions/session-lifecycle-admission.js");
+    const admission = await beginSessionWorkAdmission({
+      scope: path.join(resolveStateDir(), "agents", "main", "sessions", "sessions.json"),
+      identities: ["agent:main:ssh-update", "ssh-update-session"],
+      assertAllowed: () => {},
+    });
+    try {
+      mockRunningManagedGateway([
+        process.execPath,
+        path.join(process.cwd(), "dist", "index.js"),
+        "gateway",
+        "run",
+      ]);
+      vi.mocked(runGatewayUpdate).mockImplementation(async () => {
+        expect(getActiveSessionWorkAdmissionCount()).toBe(1);
+        return makeOkUpdateResult();
+      });
+      await invokeUpdateCli(yes ? { yes: true } : {});
+      expect(runGatewayUpdate).toHaveBeenCalledOnce();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(select).not.toHaveBeenCalled();
+      expect(updateFailureActionMocks.runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
+      expect(getActiveSessionWorkAdmissionCount()).toBe(1);
+    } finally {
+      admission.release();
+    }
+  });
+
   it("refuses to stop a service whose effective launcher changed during inspection", async () => {
     mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
     const original = await serviceReadCommand(process.env);
@@ -7835,70 +7867,6 @@ describe("update-cli", () => {
     );
   });
 
-  it.each(["descriptor", "activation"] as const)(
-    "honors durable package %s refusal before live replacement",
-    async (boundary) => {
-      const tempDir = tempDirs.make("openclaw-update-durable-hooks-");
-      const { nodeModules, pkgRoot } = await setupInstalledPackageAtNodeModules(
-        path.join(tempDir, "lib", "node_modules"),
-      );
-      const original = await fs.readFile(path.join(pkgRoot, "package.json"), "utf8");
-      const candidateVersion = "2026.5.14";
-      mockFileBackedPathExists();
-      readPackageVersion.mockImplementation(async (packageRoot: string) => {
-        const manifest = JSON.parse(
-          await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-        ) as { version?: string };
-        return manifest.version ?? null;
-      });
-      mockNpmGlobalCommands(nodeModules, async (argv) => {
-        if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
-          const prefix = requireValue(argv[argv.indexOf("--prefix") + 1], "stage prefix");
-          await writeOpenClawPackageFixture(
-            path.join(prefix, "lib", "node_modules", "openclaw"),
-            candidateVersion,
-            { inventory: true },
-          );
-        }
-        return undefined;
-      });
-      const beforeActivate = vi.fn(async () => {});
-      const assertCurrent = () => {};
-      const persistDescriptor = vi.fn(async () => {
-        if (boundary === "descriptor") {
-          throw new Error("durable descriptor refused");
-        }
-        return { assertCurrent };
-      });
-      const beforeEffect = vi.fn(async () => {
-        throw new Error("durable activation refused");
-      });
-      const { runPackageInstallUpdate } = await import("./update-cli/update-command-package.js");
-      const result = await runPackageInstallUpdate({
-        root: pkgRoot,
-        installKind: "package",
-        tag: candidateVersion,
-        timeoutMs: 30_000,
-        startedAt: Date.now(),
-        progress: {},
-        jsonMode: true,
-        validateCandidate: async () => [],
-        beforeActivate,
-        onTransaction: () => {},
-        recovery: {
-          transactionId: "55341df9-61de-4505-854a-110bdf5878a0",
-          persistDescriptor,
-          beforeEffect,
-        },
-      });
-      expect(result.status).toBe("error");
-      expect(persistDescriptor).toHaveBeenCalledTimes(1);
-      expect(beforeActivate).toHaveBeenCalledTimes(boundary === "activation" ? 1 : 0);
-      expect(beforeEffect).toHaveBeenCalledTimes(boundary === "activation" ? 1 : 0);
-      expect(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")).toBe(original);
-    },
-  );
-
   it("retains the exact package and launchers for explicit rollback after managed Doctor fails", async () => {
     const tempDir = tempDirs.make("openclaw-update-managed-backup-");
     const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
@@ -8014,9 +7982,10 @@ describe("update-cli", () => {
       JSON.parse(await fs.readFile(path.join(retained.backupRoot, "package.json"), "utf8")),
     ).toMatchObject({ version: "2026.4.21" });
     await expect(fs.readFile(packageEntry, "utf8")).resolves.toBe("candidate package entry\n");
-    const rollback = await retained.rollback();
+    const assertCurrent = () => {};
+    const rollback = await retained.rollback(assertCurrent);
     expect(rollback.exitCode).toBe(0);
-    await retained.complete({ activationVerified: false });
+    await retained.complete({ activationVerified: false }, assertCurrent);
     const doctorStep = result.steps.find((step) => step.name === "openclaw doctor");
     expect(doctorStep?.exitCode).toBe(1);
     expect(doctorStep?.advisory).toBeUndefined();
@@ -8108,9 +8077,15 @@ describe("update-cli", () => {
     const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
     expect(jsonOutput?.status).toBe("ok");
     expect(doctorStep?.exitCode).toBe(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE);
+    // Keep the established advisory shape; complete ledger warnings travel on the step.
     expect(doctorStep?.advisory).toEqual({
       kind: "package-post-install-doctor",
       message: expect.stringContaining("recoverable update-time repair warning"),
+    });
+    expect(doctorStep).toMatchObject({
+      warnings: [
+        "deferred configured plugin repair\nRun openclaw doctor --fix to finish deferred repairs.",
+      ],
     });
     expect(doctorStep?.advisory?.message).not.toContain("gateway restart");
     expect(doctorStep?.stderrTail).toContain("doctor deferred configured plugin repair");
@@ -9308,11 +9283,13 @@ describe("update-cli", () => {
           after: { version: "1.0.0", buildId: "candidate-build" },
         }),
       );
+      mockGatewayHealth("1.0.0", "candidate-gateway", "candidate-build");
       restartHealthTestControl.snapshot = {
         runtime: { status: "running", pid: gatewayFixturePid },
         portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
         healthy: fault === "none",
         staleGatewayPids: [],
+        gatewayBootId: "test-gateway-boot",
         gatewayVersion: "1.0.0",
         gatewayBuildId: "candidate-build",
         expectedVersion: "1.0.0",

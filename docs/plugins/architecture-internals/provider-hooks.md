@@ -154,6 +154,9 @@ surfaces recognize them without making them inference auth candidates.
 
 ### Provider example
 
+`example-proxy`, `exchangeToken`, and `fetchExampleProxyUsage` are placeholders
+for your own provider id and vendor API calls, not exported OpenClaw helpers.
+
 ```ts
 api.registerProvider({
   id: "example-proxy",

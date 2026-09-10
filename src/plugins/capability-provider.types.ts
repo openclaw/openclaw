@@ -63,6 +63,8 @@ export type WorkerOperatingSystem = Readonly<{
   id: string;
   label: string;
   default?: boolean;
+  /** Why this advertised target cannot currently be selected, including a repair hint. */
+  disabledReason?: string;
 }>;
 
 /** SSH endpoint material returned by a worker provider after provisioning. */
@@ -282,6 +284,8 @@ export type WorkerProvider = {
     profile: WorkerProfile,
     operationId: string,
     options?: {
+      /** Configured profile id for display; settings and operation id own allocation identity. */
+      profileId?: string;
       /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
       signal?: AbortSignal;
       executionMode?: WorkerExecutionMode;
@@ -293,6 +297,7 @@ export type WorkerProvider = {
       project?: {
         key: string;
         baseCommit: string;
+        label?: string;
         preparation?: {
           key: string;
           cacheKey: string;

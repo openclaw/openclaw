@@ -515,6 +515,9 @@ function composeLocaleNav(locale, englishNav) {
   }
   const overlayPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.navFile);
   if (!fs.existsSync(overlayPath)) {
+    console.warn(
+      `docs-sync-publish: missing navigation overlay ${locale.navFile} for locale ${locale.language}; publishing the English sidebar labels for that locale.`,
+    );
     return cloned;
   }
   return applyLocaleNavLabelOverlay(cloned, readJson(overlayPath));

@@ -199,11 +199,19 @@ beforeEach(async () => {
   run = { runId: createUpdateRun({ trigger: "cli" }, { env: runEnv }).runId, env: runEnv };
   mocks.ports.mockImplementation(async (port) => ({
     port,
-    status: "free",
-    listeners: [],
+    status: process.platform === "linux" && mocks.running ? "busy" : "free",
+    listeners:
+      process.platform === "linux" && mocks.running
+        ? [{ pid: 4242, command: "openclaw-gateway" }]
+        : [],
     hints: [],
   }));
   mocks.call.mockReset();
+  mocks.call.mockImplementation(
+    gatewayHealthResponse({
+      server: { version: VERSION, buildId: "target-build", bootId: "service-boot" },
+    }),
+  );
   mocks.running = true;
   mocks.loaded = true;
   mocks.inLaunchd = false;

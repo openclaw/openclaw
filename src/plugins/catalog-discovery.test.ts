@@ -333,6 +333,41 @@ describe("plugin discovery identity and local join", () => {
     });
   });
 
+  it("keeps official entries ahead of local-only entries in ordinary browse", () => {
+    const official = {
+      ...remote,
+      packageName: "@openclaw/official-memory",
+      displayName: "Official Memory",
+      isOfficial: true,
+      downloads: 10,
+    };
+    const community = { ...remote, downloads: 9_000 };
+    const items = joinClawHubPluginCatalog({
+      remote: [official, community],
+      local: {
+        plugins: [
+          {
+            id: "workspace-memory",
+            name: "Workspace Memory",
+            origin: "workspace",
+            installed: true,
+            enabled: true,
+            state: "enabled",
+          },
+        ],
+        diagnostics: [],
+        mutationAllowed: true,
+      },
+      intent: "all",
+    });
+
+    expect(items.map((item) => item.catalog.name)).toEqual([
+      "Official Memory",
+      "Memory Plus",
+      "Workspace Memory",
+    ]);
+  });
+
   it("filters bundled entries for unified search and keeps them ahead of ClawHub results", () => {
     const local = {
       plugins: [

@@ -86,7 +86,10 @@ Array position is attachment identity. Per-fact `transcribed`, `messageId`, and
 `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, `MediaTypes`,
 `MediaTranscribedIndexes`, `MediaWorkspaceDir`, and `MediaStaged` context fields,
 plus `buildChannelInboundMediaPayload(...)`, remain available only as deprecated
-compatibility. New plugins should not construct or read them.
+compatibility. The compatibility registry deprecated them on 2026-07-24 with a
+`removeAfter` date of 2026-10-01; see the
+[removal timeline](/plugins/sdk-migration/removal-timeline). New plugins should
+not construct or read them.
 
 Bundled/native channels that already receive the injected plugin runtime
 object can call the same helpers under `runtime.channel.inbound.*` instead of

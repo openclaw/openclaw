@@ -243,6 +243,15 @@ Key design choices:
 
 If you see unexpected `cacheWrite` spikes after a config or workspace change, check whether the change lands above or below the cache boundary. Moving volatile content below the boundary (or stabilizing it) usually resolves the issue.
 
+Chat Completions routes without an explicit message-cache breakpoint move the
+bounded Runtime facts line to the first emitted user message. This keeps session
+identifiers behind the system-and-tools prefix on compatible local servers.
+The line stays on that first message during follow-ups. Behavioral instructions,
+including hook additions, permission notices, and Git coauthor guidance, retain
+their system/developer role. Routes with explicit message breakpoints keep their
+existing system layout. Current-turn Runtime Context snapshots still use their
+separate transient carrier; they do not become permanent first-message context.
+
 ## OpenClaw cache-stability guards
 
 - Active exec sessions, subagent state, and media-generation progress travel in compact Runtime Context carriers after the current user message, so changes do not rewrite the system prompt ahead of conversation history. Project Memory facts, channel-specific ACP hints, delegation/orchestration mode, and the current elevated level stay below the system-prompt cache boundary; static recall, safety, and capability guidance stay above it.

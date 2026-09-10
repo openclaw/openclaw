@@ -27,6 +27,10 @@
   justify-self: start;
 }
 
+.plugins-hub-header .hub-tabs--sub wa-tab.hub-tab::part(base) {
+  padding-block: var(--space-2);
+}
+
 .content-header.plugins-hub-header .hub-page-header__title {
   grid-area: title;
 }
@@ -691,16 +695,6 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
 
 .plugins-settings-row__status {
   flex: 0 0 auto;
-}
-
-.plugin-catalog-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding-top: var(--space-3);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 @media (max-width: 1100px) {

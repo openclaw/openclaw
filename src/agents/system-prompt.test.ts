@@ -1272,6 +1272,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
+  it.each([true, false])(
+    "permits authorized SSH updates without bypassing local ownership (gateway=%s)",
+    (gateway) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: gateway ? ["gateway", "exec"] : ["exec"],
+      });
+      expect(prompt).toContain("For the Gateway hosting this session:");
+      expect(prompt).toContain("For a user-requested update on another host");
+      expect(prompt).toContain("verify it is not this Gateway");
+      expect(prompt).toContain("exec/SSH with `openclaw update --yes`");
+      expect(prompt).toContain("normal exec approvals still apply");
+    },
+  );
+
   it("routes explicit updates through gateway without exposing config writes", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1351,6 +1366,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("- openclaw:");
+    expect(prompt).not.toContain("exec/SSH with `openclaw update --yes`");
     expect(prompt).not.toContain("ask `openclaw`");
     expect(prompt).not.toContain("Gateway restart, config");
   });
@@ -2137,7 +2153,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessionUrl=https://gateway.example/control/chat/main");
   });
 
-  it("renders exact session Git co-author trailers once immediately after the Runtime line", () => {
+  it("renders exact session Git co-author trailers once outside relocatable Runtime facts", () => {
     const params = { workspaceDir: "/tmp/openclaw", runtimeInfo: { agentId: "work" } };
     const baseline = buildAgentSystemPrompt(params);
     const prompt = buildAgentSystemPrompt({
@@ -2154,8 +2170,8 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toBe(
       baseline.replace(
-        "Runtime: agent=work\n",
-        "Runtime: agent=work\n" +
+        "## Runtime\n",
+        "## Runtime\n" +
           "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
           "Co-authored-by: ada <20+ada@users.noreply.github.com>\n" +
           "Co-authored-by: grace <10+grace@users.noreply.github.com>\n",

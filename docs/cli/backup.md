@@ -88,6 +88,21 @@ update those settings to their new locations before restarting. See
 [Restore a full archive](/install/backups#restore-a-full-archive) for the full
 disaster-recovery sequence.
 
+## Private update captures
+
+The managed `<stateDir>.update-captures/` root is excluded from ordinary archives,
+SQLite snapshots, Git backups, and support exports. Selecting a containing or
+nested workspace does not override this rule. Selecting a capture file as config
+or as a database backup source refuses the backup. Other states' captures are
+recognized by the exact sibling layout: `<owner>/` beside
+`<owner>.update-captures/`, with an existing owner directory. Canonical path
+aliases receive the same protection. Unrelated similarly named workspace
+directories remain included; a suffix alone does not establish ownership.
+
+Keep captures at their managed location alongside their owner. Moved, renamed,
+or orphaned captures from another state cannot be identified by this rule.
+This exclusion does not create captures or change ordinary backup sanitization.
+
 ## SQLite snapshots
 
 Use `openclaw backup sqlite` when you need a portable artifact for one OpenClaw-owned SQLite database instead of a broad state archive.

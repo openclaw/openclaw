@@ -291,7 +291,10 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     const retireBackup =
       finalResult.status === "ok" || finalResult.recovery?.packageRollbackVerified === true;
     if (params.packageTransaction && !retireBackup) {
-      const retained = await params.packageTransaction.complete({ activationVerified: false });
+      const retained = await params.packageTransaction.complete(
+        { activationVerified: false },
+        assertCurrent,
+      );
       if (retained) {
         const backupPath = params.packageTransaction.backupRoot;
         finalResult.steps = [
@@ -361,8 +364,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     assertCurrent();
     if (retireBackup) {
       await params.packageTransaction
-        ?.complete({ activationVerified: finalResult.status === "ok" })
+        ?.complete({ activationVerified: finalResult.status === "ok" }, assertCurrent)
         .catch((error: unknown) => {
+          assertCurrent();
           defaultRuntime.error(`Update backup cleanup failed: ${formatErrorMessage(error)}`);
         });
     }

@@ -1,30 +1,9 @@
 // This module must run on unsupported Node versions, before importing dist or dependencies.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { nodeRuntimeFailure, SQLITE_CAPABILITY_PROBE } from "./node-sqlite.mjs";
-
-function isUsableNode(nodePath) {
-  if (!existsSync(nodePath)) {
-    return false;
-  }
-  const result = spawnSync(
-    nodePath,
-    [
-      "-e",
-      `const probe = ${SQLITE_CAPABILITY_PROBE}; process.stdout.write(JSON.stringify({ version: process.versions.node, probe }));`,
-    ],
-    { encoding: "utf8", timeout: 10_000, windowsHide: true },
-  );
-  try {
-    const details = JSON.parse(result.stdout);
-    return result.status === 0 && !nodeRuntimeFailure(details.version, details.probe);
-  } catch {
-    return false;
-  }
-}
+import { isUsableNode, resolveRecoveryPath } from "./node-runtime-recovery.mjs";
 
 function canInstallPrivateNode() {
   if (!["x64", "arm64"].includes(process.arch)) {
@@ -56,26 +35,38 @@ function confirmNodeUpdate() {
 }
 
 /** Returns a verified private runtime, or null when recovery was declined/unavailable. */
-export async function resolveUpdatedNodeRuntime(homeDir, { allowInstall = true } = {}) {
-  if (process.env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1") {
+export async function resolveUpdatedNodeRuntime(
+  recoveryRoot,
+  { allowInstall = true, env = process.env } = {},
+) {
+  if (env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1") {
     return null;
   }
-  const prefix = path.join(homeDir, ".openclaw", "tools", "cli-node");
-  const nodeRoot = path.join(prefix, "tools", "node");
+  const privatePaths = { allowMissing: true, trustedRoot: recoveryRoot };
+  const prefix = resolveRecoveryPath(
+    path.join(recoveryRoot, "tools", "cli-node"),
+    undefined,
+    privatePaths,
+  );
+  const nodeRoot =
+    prefix && resolveRecoveryPath(path.join(prefix, "tools", "node"), undefined, privatePaths);
+  if (!prefix || !nodeRoot) {
+    return null;
+  }
   const nodePath =
     process.platform === "win32"
       ? path.join(nodeRoot, "node.exe")
       : path.join(nodeRoot, "bin", "node");
 
   // An earlier explicit opt-in is durable, but an incompatible cache is never trusted.
-  if (isUsableNode(nodePath)) {
+  if (isUsableNode(nodePath, { env, trustedRoot: recoveryRoot })) {
     return nodePath;
   }
   if (
     !allowInstall ||
     !process.stdin.isTTY ||
     !process.stderr.isTTY ||
-    process.env.CI ||
+    env.CI ||
     process.argv.some((arg) => ["--non-interactive", "--json", "--yes"].includes(arg)) ||
     !canInstallPrivateNode()
   ) {
@@ -95,7 +86,7 @@ export async function resolveUpdatedNodeRuntime(homeDir, { allowInstall = true }
     new URL(windows ? "./scripts/install.ps1" : "./scripts/install-cli.sh", import.meta.url),
   );
   const command = windows
-    ? (await import("./scripts/windows-cmd-helpers.mjs")).resolveWindowsPowerShellPath()
+    ? (await import("./scripts/windows-cmd-helpers.mjs")).resolveWindowsPowerShellPath(env)
     : process.platform === "darwin"
       ? "/bin/bash"
       : "bash";
@@ -112,8 +103,8 @@ export async function resolveUpdatedNodeRuntime(homeDir, { allowInstall = true }
         nodeRoot,
       ]
     : [installer, "--node-only", "--prefix", prefix];
-  const result = spawnSync(command, args, { stdio: "inherit" });
-  if (result.status !== 0 || !isUsableNode(nodePath)) {
+  const result = spawnSync(command, args, { stdio: "inherit", env });
+  if (result.status !== 0 || !isUsableNode(nodePath, { env, trustedRoot: recoveryRoot })) {
     process.stderr.write(
       "openclaw: Node.js update failed; install a compatible Node.js manually.\n",
     );

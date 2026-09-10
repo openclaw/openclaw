@@ -657,7 +657,20 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       featureMethods: pluginMethods,
       methodResponses: {
         ...pluginMethodResponses(),
-        "plugins.catalog.browse": { items: uncategorized },
+        "plugins.catalog.browse": {
+          cases: [
+            {
+              match: { intent: "featured", pageSize: 8 },
+              response: { items: discoveryResult.items.slice(0, 2) },
+            },
+            {
+              match: { intent: "trending", pageSize: 8 },
+              response: { items: discoveryResult.items.slice(0, 8) },
+            },
+            { match: { intent: "all", pageSize: 8 }, response: { items: [] } },
+            { match: { intent: "all" }, response: { items: uncategorized } },
+          ],
+        },
       },
     });
 

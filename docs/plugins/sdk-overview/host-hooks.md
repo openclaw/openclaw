@@ -246,7 +246,10 @@ Use the grouped namespaces for new plugin code:
 - `api.lifecycle.registerRuntimeLifecycle(...)`
 
 The equivalent flat methods remain available as deprecated compatibility
-aliases for existing plugins. Do not add new plugin code that calls
+aliases for existing plugins. The compatibility registry deprecated them on
+2026-07-25 with a `removeAfter` date of 2026-10-01; see the
+[removal timeline](/plugins/sdk-migration/removal-timeline). Do not add new
+plugin code that calls
 `api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
 `api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
 `api.registerAgentEventSubscription`, `api.emitAgentEvent`,

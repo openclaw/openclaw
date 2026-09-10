@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import {
   type CrabboxCommandRunner,
@@ -18,11 +19,6 @@ import {
   createCrabboxWorkerDesktopEndpoint,
   createCrabboxWorkerDesktopSetup,
 } from "./crabbox-worker-desktop-setup.js";
-import {
-  createCrabboxVersionResolver,
-  CRABBOX_NON_LINUX_MIN_VERSION,
-  supportsCrabboxNonLinuxTargets,
-} from "./crabbox-worker-doctor-runtime.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
 import { collectCrabboxNodeEnrollmentEvidence } from "./crabbox-worker-node-enrollment-diagnostics.js";
@@ -32,7 +28,6 @@ import {
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
 import {
-  CRABBOX_OS_LABELS,
   CRABBOX_WORKER_PROVIDER_ID,
   nonEmptyString,
   operationLeaseId,
@@ -79,6 +74,12 @@ export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 const CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS =
   4 * CRABBOX_SETUP_TIMEOUT_MS + CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS;
 const LEASE_ID_PATTERN = /^(?:cbx_|tbx_)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+
+function assertCrabboxLeaseId(leaseId: string): void {
+  if (!LEASE_ID_PATTERN.test(leaseId)) {
+    throw new Error("Crabbox lease id is invalid");
+  }
+}
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
@@ -180,25 +181,29 @@ export function createCrabboxWorkerProvider(
       }),
     warn,
   });
-  let defaultBinary: string | undefined;
-  const resolveBinary = (explicit?: string) => {
-    if (explicit) {
-      return explicit;
+  const binaries = new Map<string, string>();
+  let defaultCandidate: string | undefined;
+  const resolveBinary = async (explicit?: string, signal?: AbortSignal): Promise<string> => {
+    signal?.throwIfAborted();
+    const candidate =
+      explicit ??
+      (defaultCandidate ??= resolveCrabboxBinary({
+        isExecutable: dependencies.isExecutable,
+        openclawRoot,
+        pathEnv: dependencies.pathEnv ?? process.env.PATH,
+        platform: dependencies.platform,
+      }));
+    const existing = binaries.get(candidate);
+    if (existing) {
+      return existing;
     }
-    defaultBinary ??= resolveCrabboxBinary({
-      explicit,
-      isExecutable: dependencies.isExecutable,
-      openclawRoot,
-      pathEnv: dependencies.pathEnv ?? process.env.PATH,
-      platform: dependencies.platform,
-    });
-    return defaultBinary;
+    const binary = await ensureManagedCrabboxBinary({ binary: candidate, runCommand, signal });
+    binaries.set(candidate, binary);
+    return binary;
   };
-  const resolveVersion = createCrabboxVersionResolver(runCommand);
   const machineOptions = createCrabboxMachineOptionsResolver({
     resolveBinary,
     runCommand,
-    resolveVersion,
     warn,
   });
   const warmImages = createCrabboxWarmImageManager({ runCommand, runArgs: leaseRunArgs, warn });
@@ -213,16 +218,14 @@ export function createCrabboxWorkerProvider(
     });
     await warmImages.release(context);
   };
-  const resolveLeaseContext = (
+  const resolveLeaseContext = async (
     lease: Parameters<WorkerProvider["inspect"]>[0],
-  ): { context: LeaseHeartbeatContext; profile: CrabboxProfile } => {
+  ): Promise<{ context: LeaseHeartbeatContext; profile: CrabboxProfile }> => {
     const profile = parseCrabboxProfile(lease.profile);
-    if (!LEASE_ID_PATTERN.test(lease.leaseId)) {
-      throw new Error("Crabbox lease id is invalid");
-    }
+    assertCrabboxLeaseId(lease.leaseId);
     return {
       context: {
-        binary: resolveBinary(profile.binary),
+        binary: await resolveBinary(profile.binary),
         heartbeatIntervalMs: profile.heartbeatIntervalMs,
         heartbeatTimeoutMs: profile.heartbeatTimeoutMs,
         id: lease.leaseId,
@@ -265,7 +268,6 @@ export function createCrabboxWorkerProvider(
     const warmupTimeoutMs = parsed.desktop
       ? CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS
       : CRABBOX_WARMUP_TIMEOUT_MS;
-    const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
     const project = parsed.warmImage ? options?.project : undefined;
     if (options?.project?.preparation && (!project || parsed.setupEnv?.length)) {
       throw new WorkerProviderError(
@@ -274,6 +276,11 @@ export function createCrabboxWorkerProvider(
     }
     const preparationSignal =
       signal && project ? AbortSignal.any([signal, project.signal]) : (signal ?? project?.signal);
+    const allocation = await resolveAllocation(profile, operationId);
+    signal?.throwIfAborted();
+    const binary = await resolveBinary(parsed.binary, preparationSignal);
+    preparationSignal?.throwIfAborted();
+    const deadline = Date.now() + resolveCrabboxProvisionBaseTimeoutMs(parsed);
     const setupDeadline =
       deadline +
       countCrabboxProvisionSetupPhases(parsed) * CRABBOX_SETUP_TIMEOUT_MS +
@@ -282,18 +289,6 @@ export function createCrabboxWorkerProvider(
         ? CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
           resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider)
         : 0);
-    const allocation = await resolveAllocation(profile, operationId);
-    signal?.throwIfAborted();
-    const binary = resolveBinary(parsed.binary);
-    if (parsed.target !== "linux") {
-      const version = await resolveVersion(binary);
-      signal?.throwIfAborted();
-      if (version.status === "indeterminate" || !supportsCrabboxNonLinuxTargets(version.version)) {
-        throw new WorkerProviderError(
-          `Crabbox ${CRABBOX_OS_LABELS[parsed.target]} cloud workers require Crabbox ${CRABBOX_NON_LINUX_MIN_VERSION} or newer; ${version.status === "indeterminate" ? version.reason : `found ${version.version}`}. Upgrade ${binary} and restart the Gateway.`,
-        );
-      }
-    }
     const context = { binary, provider: parsed.provider };
     const leaseId = allocation.leaseId;
     if (parsed.desktop && parsed.provider === "hetzner") {
@@ -313,8 +308,9 @@ export function createCrabboxWorkerProvider(
         ...context,
         id: leaseId,
         profile: parsed,
+        profileId: options?.profileId,
         nodeRuntimeIdentity,
-        ...(project ? { projectKey: project.key } : {}),
+        ...(project ? { projectKey: project.key, projectLabel: project.label } : {}),
         ...(project?.preparation ? { preparation: project.preparation } : {}),
         ...(project ? { assertCurrent: project.assertCurrent } : {}),
         signal: preparationSignal,
@@ -581,14 +577,29 @@ export function createCrabboxWorkerProvider(
           assertCurrent();
           // Records have no binary owner: try sorted executables until deletion or all report absent.
           // Crabbox prints `checkpoint absent id=<id>` with exit 0 (internal/cli/checkpoint.go).
+          const resolutions = await Promise.allSettled(
+            context.profiles.map((profile) =>
+              resolveBinary(parseCrabboxProfile(profile).binary, signal),
+            ),
+          );
+          assertCurrent();
+          const resolvedBinaries: string[] = [];
+          const failures: unknown[] = [];
+          for (const resolution of resolutions) {
+            if (resolution.status === "fulfilled") {
+              resolvedBinaries.push(resolution.value);
+            } else {
+              failures.push(resolution.reason);
+              warn(
+                `Crabbox maintenance binary unavailable: ${coerceErrorMessage(resolution.reason)}`,
+              );
+            }
+          }
+          if (failures.length > 0 && resolvedBinaries.length === 0) {
+            throw new AggregateError(failures, "Crabbox maintenance has no supported executable");
+          }
           await warmImages.maintain({
-            binaries: [
-              ...new Set(
-                context.profiles.map((profile) =>
-                  resolveBinary(parseCrabboxProfile(profile).binary),
-                ),
-              ),
-            ],
+            binaries: [...new Set(resolvedBinaries)],
             signal,
             assertCurrent,
           });
@@ -657,7 +668,7 @@ export function createCrabboxWorkerProvider(
       )();
     },
     async inspect(lease): Promise<WorkerLeaseStatus> {
-      const { context } = resolveLeaseContext(lease);
+      const { context } = await resolveLeaseContext(lease);
       const inspected = await inspectWithContext({
         context,
         expectedLeaseId: context.id,
@@ -673,9 +684,10 @@ export function createCrabboxWorkerProvider(
       return { status: "active" };
     },
     async destroy(lease): Promise<void> {
-      const { context, profile } = resolveLeaseContext(lease);
-      // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
-      await heartbeats.stop(context.id);
+      assertCrabboxLeaseId(lease.leaseId);
+      // Stop renewal before binary acquisition can delay or fail teardown.
+      await heartbeats.stop(lease.leaseId);
+      const { context, profile } = await resolveLeaseContext(lease);
       // Lifecycle profiles omit placement overrides. Successful enrollment records
       // the class and OS that own the warm policy and reusable image after restart.
       let captureError: unknown;

@@ -40,6 +40,51 @@ const enSettings = {
     },
   },
   cloudWorkersPage: {
+    snapshots: {
+      title: "Snapshots",
+      viewLabel: "Cloud worker view",
+      unavailable:
+        "Snapshots are available when the Crabbox worker provider is enabled and the Gateway advertises them.",
+      adminRequired: "Administrator access is required to inspect and recover snapshots.",
+      empty: "No snapshots are recorded locally.",
+      profileEmpty: "No snapshots are recorded for this profile.",
+      images: "Images",
+      building: "Building",
+      held: "Held by sessions",
+      attention: "Needs attention",
+      unlabeledProfile: "Unlabeled profile",
+      machineImage: "Machine image",
+      projectImage: "Project image",
+      warmOn: "Warm images on",
+      warmOff: "Warm images off",
+      available: "Available",
+      retiring: "Retiring",
+      retirementPending: "Checkpoint deletion pending",
+      retirementHint:
+        "Checkpoint {checkpoint} is awaiting deletion. Cleanup retries during the next warm-image capture or worker teardown. Inspect openclaw crabbox warm-images --json and resolve provider deletion errors if it remains pending.",
+      scrubbing: "Building: scrubbing",
+      creating: "Building: creating",
+      uncertain: "Paused: uncertain",
+      noImage: "No image",
+      pending: "Pending",
+      created: "Created {age}",
+      lastUsed: "Last used {age}",
+      allocations: "Allocations: {count}",
+      runtime: "Runtime: {digest}",
+      baseCommit: "Commit: {commit}",
+      refresh: "Refresh",
+      recover: "Recover",
+      recoverTitle: "Recover paused capture",
+      recoverMessage:
+        "Clear this capture reservation after manual provider cleanup. Recovery preserves recorded images and allocation choices. It does not stop workers or delete provider artifacts.",
+      acknowledgement: "I stopped the owning capture and worker and reconciled provider artifacts",
+      recovered:
+        "Capture reservation cleared. Restart the Gateway after reconciliation; the next eligible worker can capture again.",
+      recoveryChanged: "The Gateway connection changed. Refresh snapshots and try recovery again.",
+      migration: "Needs migration",
+      migrationHint:
+        "Run openclaw doctor --fix and follow its provider-cleanup recovery instructions before provisioning workers.",
+    },
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
     sectionTitle: "Profiles",
     sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
@@ -48,7 +93,8 @@ const enSettings = {
     editProfile: "Edit profile",
     editAction: "Edit",
     deleteTitle: "Delete cloud worker profile",
-    deleteConfirm: "Delete profile {profile}? New cloud sessions cannot use it after restart.",
+    deleteConfirm:
+      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions cannot use it after restart.",
     advertised: "Advertised",
     restartRequired: "Restart required",
     adminRequired: "Administrator access is required to manage cloud worker profiles.",
@@ -61,6 +107,24 @@ const enSettings = {
     idleFact: "Idle stop: {value}",
     desktopFact: "Desktop: {value}",
     providerList: "View supported backends",
+    advanced: "Advanced",
+    preparedPool: "Prepared pool",
+    preparedPoolHelp:
+      "Maximum unassigned workers across projects and profiles. Leave empty for the default of 4; zero drains unused reserves and stops refill. Reserves incur running-machine charges.",
+    savePool: "Save pool",
+    repositories: "Repositories",
+    repositoriesHelp:
+      "Choose the default cloud worker profile for each repository. Explicit session profile choices take precedence.",
+    repositoriesEmpty: "No repository defaults are configured.",
+    addRepository: "Add repository",
+    editRepository: "Edit repository",
+    saveRepository: "Save repository",
+    repositoryIdentity: "Repository identity",
+    repositoryIdentityHelp:
+      "Enter host/owner/repo or a Git remote URL. Saved identities use lowercase and omit the trailing .git.",
+    repositoryProfile: "Default profile",
+    selectProfile: "Choose a profile",
+    warmImage: { auto: "Auto", on: "On", off: "Off" },
     fields: {
       profileId: "Profile ID",
       profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
@@ -89,6 +153,18 @@ const enSettings = {
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
+      warmImage: "Warm images",
+      warmImageHelp:
+        "Auto enables images for Linux when a machine class is known and no setup environment names are set. Images incur provider snapshot storage charges.",
+      setupEnv: "Setup environment names",
+      setupEnvHelp:
+        "Up to 16 unique POSIX environment variable names, separated by commas or whitespace. Requires a setup command. Values come from the gateway environment.",
+      readyWorkers: "Ready workers",
+      readyWorkersHelp:
+        "Prepares unassigned workers per eligible project after a successful session. Leave empty for one; zero disables reserves. Ready workers incur running-machine charges.",
+      suspendAfter: "Suspend after",
+      suspendAfterHelp:
+        "Reclaim an idle worker after a duration such as 45m or 2h (minimum 1m). Leave empty to keep workers running.",
       actions: "Save profile",
       actionsHelp: "Saving updates the config; the gateway must restart before using it.",
     },
@@ -101,10 +177,25 @@ const enSettings = {
       backend: "Enter a Crabbox backend, such as aws, azure, or hetzner.",
       target:
         "Use an operating system ID of up to 64 characters without surrounding spaces, or choose Provider default.",
+      warmImage: "Warm images require Linux. Choose Linux, Auto, or Off before saving.",
       machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
       binary: "Enter an absolute Crabbox binary path or leave the field empty.",
+      setupEnv:
+        "Enter at most 16 unique POSIX environment variable names. CRABBOX_ENV_ALLOW is reserved.",
+      repository: "Enter a valid repository identity, such as github.com/acme/app.",
+      repositoryExists: "This repository already has a default. Edit its existing mapping.",
+      repositoryMissing:
+        "This repository mapping changed or was removed. Reload the config and try again.",
+      repositoryProfile:
+        "Choose an existing cloud worker profile. Add a profile first if none are configured.",
+      preparedPool: "Enter a non-negative whole number or leave the field empty.",
+      settingsSaveFailed: "These settings were not saved. Reload the config and try again.",
+      setupEnvRequiresSetup: "Enter a setup command or clear the setup environment names.",
+      readyWorkers: "Enter a whole number of zero or more, or leave ready workers empty.",
+      suspendAfter:
+        "Enter a duration of at least 1m, such as 45m or 2h, or leave suspend after empty.",
       saveFailed: "The profile was not saved. Reload the config and try again.",
       deleteFailed: "The profile was not deleted. Reload the config and try again.",
     },

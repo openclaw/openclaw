@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
 import {
@@ -45,6 +46,16 @@ type WorkerProviderIntentPreparationOptions = {
   signal?: AbortSignal;
   setupAuthorized?: boolean;
 };
+
+function projectReplayIdentity(project: unknown): unknown {
+  if (!isRecord(project)) {
+    return project;
+  }
+  // Display metadata can change without changing the admitted preparation.
+  const identity = { ...project };
+  delete identity.label;
+  return identity;
+}
 
 /** Admits one immutable allocation intent before the provider lifecycle can allocate a lease. */
 export function createWorkerProviderIntent(options: WorkerProviderIntentOptions) {
@@ -384,8 +395,8 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           assertPreparedIntentCurrent(profileId, admittedIntent);
           if (
             !isDeepStrictEqual(
-              existing.profileSnapshot.project,
-              admittedIntent.profileSnapshot.project,
+              projectReplayIdentity(existing.profileSnapshot.project),
+              projectReplayIdentity(admittedIntent.profileSnapshot.project),
             )
           ) {
             throw serviceError(

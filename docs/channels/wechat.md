@@ -176,7 +176,7 @@ openclaw gateway restart
 
 - Channel overview: [Chat Channels](/channels)
 - Pairing: [Pairing](/channels/pairing)
-- Channel routing: [Channel Routing](/channels/channel-routing)
+- Channel routing: [Channel routing](/channels/channel-routing)
 - Plugin architecture: [Plugin Architecture](/plugins/architecture)
 - Channel plugin SDK: [Channel Plugin SDK](/plugins/sdk-channel-plugins)
 - External package: [@tencent-weixin/openclaw-weixin](https://www.npmjs.com/package/@tencent-weixin/openclaw-weixin)

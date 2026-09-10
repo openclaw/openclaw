@@ -60,7 +60,7 @@ For a per-agent configuration with several host folders, access modes, and the e
 
 ## Tool policy: which tools exist/are callable
 
-Two layers matter:
+Five layers matter:
 
 - **Tool profile**: `tools.profile` and `agents.entries.*.tools.profile` (base allowlist)
 - **Provider tool profile**: `tools.byProvider[provider].profile` and `agents.entries.*.tools.byProvider[provider].profile`

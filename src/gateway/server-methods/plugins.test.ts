@@ -588,6 +588,7 @@ describe("plugin management Gateway handlers", () => {
       });
       managementMocks.inspect.mockResolvedValue({
         declared: { mcpServers: [], skills: ["Local planning"] },
+        components: { skills: ["Local planning"] },
       });
       catalogMocks.detail.mockRejectedValue(new Error("ClawHub offline"));
 
@@ -835,6 +836,7 @@ describe("plugin management Gateway handlers", () => {
         skills: ["Workboard planning"],
         dangerousConfigFlags: [],
       },
+      components: { skills: ["Workboard planning"] },
       grants: {
         hooks: {
           allowPromptInjection: { effective: false },

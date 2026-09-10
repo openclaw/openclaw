@@ -44,6 +44,8 @@ Select **+** beside the chat composer to open attachments and session capabiliti
 
 These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. The **N session overrides** pill in the composer footer reopens the menu; select its clear action to remove all capability overrides in one click.
 
+When `tools.web.search.enabled` is `false`, **Web search** stays off in Chat and New Session. The disabled control explains the global setting. If a session has an older enable override, selecting the control clears that override while search stays off. An explicit session disable remains saved.
+
 Video files selected in Chat or New Session show a small local frame preview with a play badge beside the filename. The slot keeps its size while loading. If the browser cannot decode the video promptly, the play icon remains. Removing the attachment releases its preview; generating the preview does not upload the video.
 
 In **Connectors**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
@@ -315,8 +317,11 @@ Codex harness. Select a task to read its messages, thinking, and tool calls;
 select **Show earlier** to load older history. Task activity refreshes the view
 while the subagent runs. The generic fallback label is **Subagent**.
 
-The viewer reads history from the runtime that owns it. If that runtime or its
-parent binding is unavailable, the panel shows an error with a retry action.
+The viewer reads history from the runtime that owns it. New native subagent
+tasks retain their original history source when later turns replace the parent's
+native thread. Changing the parent session or account can make that history
+unavailable. If the runtime or its parent binding is unavailable, the panel shows
+an error with a retry action.
 Tasks without readable history retain their prompt and output inspector.
 
 ## Chat message width

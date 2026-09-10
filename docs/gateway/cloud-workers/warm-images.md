@@ -8,7 +8,7 @@ How OpenClaw captures a prepared project and node runtime before enrollment, reu
 
 ## Warm images
 
-Use [Crabbox 0.49.1](https://github.com/openclaw/crabbox/releases/tag/v0.49.1) or newer for coordinator-backed warm images. Older binaries can complete a cold start but reject a later `checkpoint fork --lease-id`; update the binary used by the Gateway before starting the profile. Keep the fixed lease ID: it prevents duplicate allocations when dispatch is retried.
+The Crabbox plugin prepares its [supported CLI](/gateway/config-cloud-workers#crabbox-profile) automatically before warm-image operations. Keep the fixed lease ID: it prevents duplicate allocations when dispatch is retried.
 
 Warm images and project preparation for image capture are Linux only.
 
@@ -56,6 +56,19 @@ A ready-worker hit bypasses provisioning. A foreground miss uses ordinary
 snapshot refresh and may wait for a required capture before enrollment; disabling
 reserves preserves that refresh behavior.
 
+**Build on demand.** Call `environments.prepare` with `{ profileId, projectPath }`
+and `operator.admin` scope to prepare the local Git checkout's `HEAD` without a
+session. The profile must support project preparation. This authorizes the
+committed project setup recipe and returns `{ environmentId, preparationKey,
+reused }`; a matching live, unconsumed build or reserve is reused. An unfinished
+reserve becomes a build without renewing its expiry. A build can finish
+when `readyWorkers` is zero, but admission still requires room under
+`preparedPool.maxTotal`. Once ready, ordinary reserve policy keeps it or retires
+it as surplus on the next pool pass. Its demand starts the normal refill and
+provider idle-timeout window. Track its `preparation: { purpose, key }` in
+`environments.list` or `environments.status`; `environments.destroy` cancels it
+and waits for provider work to settle and cleanup to finish.
+
 Set `cloudWorkers.profiles.<id>.readyWorkers` to change the per-project target and
 `cloudWorkers.preparedPool.maxTotal` to change the shared cap. Zero disables the
 corresponding reserves and drains unused capacity while preserving active
@@ -63,8 +76,8 @@ sessions and image reuse. Preparing workers and workers awaiting confirmed
 cleanup count against the limits. Ready workers incur running-machine charges
 until the provider confirms deletion.
 
-Each reserve expires from the successful activation that created its demand,
-using the provider's existing idle timeout. Refill and Gateway restart do not
+Each reserve expires from the successful activation or explicit build that
+created its demand, using the provider's existing idle timeout. Refill and Gateway restart do not
 extend that window. An already-admitted capture can finish within its provider
 budget after expiry, while its worker remains counted. Expiry blocks subsequent
 enrollment, readiness, and consumption; cleanup follows settled capture custody.
@@ -87,6 +100,40 @@ installation still complete before readiness, but that cold worker cannot
 replace an unrelated image generation. This can reduce snapshot reuse until an
 eligible generation can publish; it does not permit incomplete setup or extend
 an older image's demand window.
+
+### Inspect snapshots in the Control UI
+
+Open **Settings → Connections → Cloud workers → Snapshots** to inspect local
+warm-image ownership, grouped by configured profile. Refresh reloads the list.
+The view shows available images, captures in progress, images held by outstanding
+allocations, and captures or checkpoint deletions that need attention. Pending
+deletions show the checkpoint and retry guidance; a retiring current image is
+labeled **Retiring**, while an available successor keeps its status when only
+an older image awaits cleanup. Group headers prefer recorded
+machine facts and fall back to the configured profile's backend, class, and
+operating system. Missing row details are omitted; unknown profile IDs appear
+under **Unlabeled profile**. Legacy allocations appear under
+**Needs migration** with Doctor recovery guidance.
+
+The Crabbox plugin advertises `crabbox.images.list` and `crabbox.images.recover`;
+both require `operator.admin`. If the listing method is not advertised, the view
+explains that the Crabbox worker provider must be enabled. Listing reads local
+state without contacting the provider and returns an allocation count plus at
+most 20 allocation entries per image.
+
+**Recover** is available only for uncertain captures. Its required checkbox
+acknowledges that the owning capture and worker have stopped and provider
+artifacts have been reconciled, with the same meaning as the CLI's
+`--acknowledge-provider-cleanup`. Follow the cleanup steps below before confirming.
+Recovery clears only the selected reservation; it does not stop a worker or
+delete provider artifacts. A stale capture alone does not permit recovery.
+
+New allocations record optional `profileId`, `backend`, `machineClass`, `os`, and
+`projectLabel` display facts, also included in `openclaw crabbox warm-images --json`.
+`profileId` means the configured profile that most recently allocated from the
+image key; it is overwritten on each allocation and does not change image keys
+or reuse policy. Project labels use the normalized origin repository identity
+`host/owner/repo`, or the project root's basename when origin cannot be resolved.
 
 ### Recover a paused capture
 
