@@ -613,33 +613,27 @@ function normalizeUnion(
     const booleanBranch = remaining.length === 1 ? remaining[0] : undefined;
     const plainBooleanBranch =
       booleanBranch?.type === "boolean" && Object.keys(booleanBranch).length === 1;
-    // A single plain scalar branch (string/number/integer) renders as a text
-    // input — the renderer already handles mixed primitives, and zod still
-    // accepts the literal value on save. Pass it through instead of bailing
-    // to Raw mode (issue #143646: cron.sessionRetention).
+    // A single plain scalar branch renders as a text input (the renderer
+    // handles mixed primitives); pass the union through UNCHANGED so value
+    // coercion keeps recognizing literal sentinels via the original branches
+    // (issue #143646). Other combinations stay in Raw mode.
     const plainScalarBranch =
       remaining.length === 1 &&
       ["string", "number", "integer"].includes(String(booleanBranch?.type)) &&
       Object.keys(booleanBranch ?? {}).length === 1;
-    if (!plainScalarBranch) {
-      if (
-        !plainBooleanBranch ||
-        literals.includes("true") ||
-        literals.includes("false") ||
-        (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
-      ) {
-        return null;
-      }
-      remaining.pop();
-      literals.unshift(true, false);
-    } else {
-      // Pass the union through UNCHANGED: the renderer renders mixed
-      // primitives as a text input, and value coercion reads the original
-      // branches to recognize literal sentinels (typing `false` must stay a
-      // boolean). Replacing the union with its scalar branch here would drop
-      // the literal and turn that edit into the string "false".
+    if (plainScalarBranch) {
       return { schema, unsupportedPaths: [] };
     }
+    if (
+      !plainBooleanBranch ||
+      literals.includes("true") ||
+      literals.includes("false") ||
+      (schema.anyOf === undefined && literals.some((literal) => typeof literal === "boolean"))
+    ) {
+      return null;
+    }
+    remaining.pop();
+    literals.unshift(true, false);
   }
 
   if (literals.length > 0 && remaining.length === 0) {
