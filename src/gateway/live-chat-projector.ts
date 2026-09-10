@@ -37,6 +37,15 @@ export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
         : Math.max(0, scope.boundaryNewlines - retiredAfterPrefix);
     scope.separatorLength = Math.max(0, scope.separatorLength - retiredAfterPrefix);
     scope.prefix = sliceUtf16Safe(scope.prefix, retired);
+    // The scope indexes the shared buffer by character offsets. A surrogate-safe
+    // cut can retire one more unit than the recorded lengths account for, so the
+    // retained buffer is the authority: never keep a prefix the cap did not keep,
+    // or a later offset read lands outside this message and emits foreign bytes.
+    if (!capped.startsWith(scope.prefix)) {
+      scope.prefix = "";
+      scope.boundaryNewlines = 0;
+      scope.separatorLength = 0;
+    }
   }
   return capped;
 }

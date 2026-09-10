@@ -104,13 +104,26 @@ export function mergeAssistantText(
   }
   let text: string;
   if (scope) {
+    // The scope's prefix length and separator length are offsets into the shared
+    // live buffer. The display cap retires that buffer's head, so a stale scope
+    // can outlive the bytes it indexed; reading the item text at those offsets
+    // then lands outside this message and re-materializes dropped bytes in the
+    // user-visible tail. Only trust the offsets while the retained buffer still
+    // carries the recorded prefix, otherwise the buffer IS this item's text.
+    const retainedItemText =
+      scope === previous.scope && previous.text.startsWith(scope.prefix)
+        ? previous.text.slice(scope.prefix.length + scope.separatorLength)
+        : undefined;
+    if (scope === previous.scope && retainedItemText === undefined) {
+      scope.prefix = "";
+      scope.boundaryNewlines = 0;
+      scope.separatorLength = 0;
+    }
     // Inserted padding is not provider text. Keep it out of later item deltas
     // so a matching cumulative snapshot cannot retract a streamed newline.
     const itemText =
       input.text ??
-      (scope === previous.scope
-        ? previous.text.slice(scope.prefix.length + scope.separatorLength)
-        : "") + (input.delta ?? "");
+      (retainedItemText ?? (scope === previous.scope ? previous.text : "")) + (input.delta ?? "");
     const leadingNewlines = itemText.startsWith("\n\n") ? 2 : itemText.startsWith("\n") ? 1 : 0;
     if (!scope.prefix) {
       // Once the display cap retires the prior item, only surviving padding
