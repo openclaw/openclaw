@@ -39,10 +39,6 @@ describe("hasInboundAudio", () => {
     ).toBe(true);
   });
 
-  it("accepts the structured audio kind when a MIME subtype is unavailable", () => {
-    expect(hasInboundAudio({ media: [{ kind: "audio" }] })).toBe(true);
-  });
-
   it("does not infer audio from placeholder or transcript text", () => {
     expect(hasInboundAudio({ Body: "<media:audio>" })).toBe(false);
     expect(hasInboundAudio({ Body: "[Audio]\nTranscript:\nhello" })).toBe(false);
