@@ -1,5 +1,10 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
+} from "../chat-pane.test-support.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -18,7 +23,7 @@ function recordSidebarContent(this: SessionWorkspaceHost, content: SidebarSelect
 function loadedSidebarContent(state: SessionWorkspaceHost): Promise<SidebarContent> {
   return vi.waitFor(() => {
     const content = state.sidebarContent;
-    if (!content || content.kind === "loading") {
+    if (!content || content.kind === "loading" || content.kind === "unavailable") {
       throw new Error("Sidebar content is not loaded");
     }
     return content;
@@ -520,7 +525,7 @@ describe("session workspace artifacts", () => {
       expect(createSessionWorkspaceProps(state).error).toMatch(/InvalidCharacterError|invalid/i),
     );
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
-    expect(state.sidebarContent).toBeNull();
+    expect(state.sidebarContent).toMatchObject({ kind: "unavailable" });
   });
 });
 
@@ -765,7 +770,10 @@ describe("openSessionWorkspaceFile", () => {
       ),
     );
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
-    expect(state.sidebarContent).toBeNull();
+    expect(state.sidebarContent).toEqual({
+      kind: "unavailable",
+      message: "Failed to load screenshots/result.png",
+    });
   });
 
   it("does not render base64 content as text when the preview discriminator disagrees", async () => {
@@ -799,7 +807,37 @@ describe("openSessionWorkspaceFile", () => {
       expect(createSessionWorkspaceProps(state).error).toBe("Failed to load notes.txt"),
     );
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
-    expect(state.sidebarContent).toBeNull();
+    expect(state.sidebarContent).toEqual({
+      kind: "unavailable",
+      message: "Failed to load notes.txt",
+    });
+  });
+
+  it("keeps a rejected file open as an unavailable Review selection", async () => {
+    const handleOpenSidebar = vi.fn(recordSidebarContent);
+    const state: SessionWorkspaceHost = {
+      client: createGatewayBrowserClientFixture(),
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar,
+      hello: gatewayHelloForMethods([]),
+      sessionKey: "agent:main:current",
+      sidebarContent: null,
+      sessions: createSessionCapabilityFixture({
+        getFile: vi.fn().mockRejectedValue(new Error("session file not found")),
+      }),
+    };
+
+    openSessionWorkspaceFile(state, { path: "/outside/workspace/chat.md" });
+
+    await vi.waitFor(() =>
+      expect(state.sidebarContent).toEqual({
+        kind: "unavailable",
+        message: "session file not found",
+      }),
+    );
+    expect(createSessionWorkspaceProps(state).error).toBe("session file not found");
+    expect(handleOpenSidebar).toHaveBeenCalledOnce();
   });
 
   it("opens unsupported session files as metadata without treating bytes as text", async () => {
