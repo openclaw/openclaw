@@ -405,12 +405,6 @@ function refreshPersistedPolicyState(
   };
 }
 
-export async function refreshPersistedInstalledPluginIndex(
-  params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
-): Promise<InstalledPluginIndex> {
-  return refreshPersistedInstalledPluginIndexSync(params);
-}
-
 function resolveRefreshedPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): InstalledPluginIndex {
@@ -439,7 +433,7 @@ function resolveRefreshedPersistedInstalledPluginIndex(
   });
 }
 
-export function refreshPersistedInstalledPluginIndexSync(
+export function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): InstalledPluginIndex {
   const index = resolveRefreshedPersistedInstalledPluginIndex(params);

@@ -25,7 +25,6 @@ import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { stripPendingPluginInstallRecords } from "../plugins/install-record-commit.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../process/gateway-work-admission.js";
 import { resolveUserPath } from "../utils.js";
@@ -60,6 +59,7 @@ import {
 } from "./setup-inference-core.js";
 import {
   forgetSavedSetupCandidate,
+  saveSetupCredential,
   stageProviderAuthCandidate,
   stageProviderAutoCandidate,
   stageSavedAuthCandidate,
@@ -154,16 +154,19 @@ async function stageCodexCandidate(ctx: StageContext): Promise<StagedCandidate |
     const credential = (ctx.deps.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey)({
       allowKeychainPrompt: true,
     });
-    const authProfileId = credential ? "openai:codex-cli-api-key" : undefined;
-    if (credential && authProfileId) {
+    let authProfileId: string | undefined;
+    let authenticatedConfig = config;
+    if (credential) {
       registerSecretValueForRedaction(credential.key);
-      await ctx.beforePersistentEffect();
-      await persistProviderAuthProfilesAfterLogin({
+      const saved = await saveSetupCredential({
+        profile: { profileId: "openai:codex-cli-api-key", credential },
         config,
         agentDir: ctx.agentDir,
-        profiles: [{ profileId: authProfileId, credential }],
+        beforePersistentEffect: () => ctx.beforePersistentEffect("credential"),
       });
       ctx.credentialsSaved = true;
+      authProfileId = saved.profile.profileId;
+      authenticatedConfig = saved.config;
     }
     return {
       modelRef,
@@ -171,11 +174,11 @@ async function stageCodexCandidate(ctx: StageContext): Promise<StagedCandidate |
       ...(authProfileId ? { authProfileId } : {}),
       pendingPluginInstalls: config.plugins?.installs,
       config: {
-        ...config,
+        ...authenticatedConfig,
         plugins: {
-          ...config.plugins,
+          ...authenticatedConfig.plugins,
           entries: {
-            ...config.plugins?.entries,
+            ...authenticatedConfig.plugins?.entries,
             codex: {
               ...entry,
               enabled: true,
@@ -419,7 +422,7 @@ async function activateCandidate(
   const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot;
   const generation =
     staged.pendingPluginInstalls && Object.keys(staged.pendingPluginInstalls).length > 0
-      ? await withPluginLifecycleLease({ signal: params.signal }, () =>
+      ? await withPluginLifecycleLease({ signal: params.signal }, async () =>
           loadSetupInferencePluginGeneration({
             config: candidate,
             workspaceDir: ctx.workspace,

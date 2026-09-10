@@ -1,5 +1,6 @@
 // Setup inference verification owns the shared verify/repair loop used by onboarding imports.
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentDir, setAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
@@ -55,9 +56,41 @@ export async function offerLiveModelVerification(params: {
     let result: Awaited<ReturnType<typeof inference.verifySetupInferenceConfig>>;
     try {
       // SAFETY: Canonical roster migration preserves typed config; this runtime view is never persisted.
-      const config = migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig;
+      let config = migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig;
       const agentId = resolveAmbientOwnerAgentId(config);
-      await candidate.persistAuthProfiles();
+      if (candidate.authProfiles.length > 0) {
+        const { saveSetupCredential, selectSetupCredential } =
+          await import("../system-agent/setup-inference-credentials.js");
+        const { projectSetupInferenceConfig } =
+          await import("../system-agent/setup-model-selection.js");
+        const model = resolveDefaultModelForAgent({ cfg: config, agentId });
+        const modelRef = `${model.provider}/${model.model}`;
+        const profile = selectSetupCredential(candidate.authProfiles, modelRef, config);
+        if (!profile) {
+          throw new Error(`The selected provider did not return credentials for ${modelRef}.`);
+        }
+        const saved = await saveSetupCredential({
+          profile,
+          config: candidate.config,
+          agentDir: params.agentDir ?? resolveAgentDir(config, agentId),
+          persistAuthProfiles: candidate.persistAuthProfiles,
+        });
+        candidate.config = projectSetupInferenceConfig({
+          base: saved.config,
+          prepared: saved.config,
+          modelRef,
+          agentId,
+          profileId: saved.profile.profileId,
+          credential: saved.profile.credential,
+        });
+        setAgentEffectiveModelPrimary(
+          candidate.config,
+          agentId,
+          `${modelRef}@${saved.profile.profileId}`,
+        );
+        candidate.authProfiles = [];
+        config = migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig;
+      }
       result = await withConsoleSubsystemsSuppressed(() =>
         inference.verifySetupInferenceConfig({
           config,

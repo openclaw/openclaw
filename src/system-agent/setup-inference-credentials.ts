@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
@@ -8,10 +9,7 @@ import {
 } from "../agents/execution-auth-binding.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
-import {
-  normalizeAgentModelRefForConfig,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -32,7 +30,6 @@ import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-
 import { resolveProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
@@ -140,13 +137,46 @@ export async function loadProviderAuthMethod(params: {
   });
 }
 
-function selectedProfile(result: ProviderAuthResult, modelRef: string, config: OpenClawConfig) {
+export function selectSetupCredential(
+  profiles: ProviderAuthResult["profiles"],
+  modelRef: string,
+  config: OpenClawConfig,
+) {
   const provider = resolveProviderIdForAuth(parseInferenceRef(modelRef).provider, { config });
-  return result.profiles.find(
+  return profiles.find(
     (profile) =>
       resolveProviderIdForAuth(profile.credential.provider, { config, storedCredential: true }) ===
       provider,
   );
+}
+
+export async function saveSetupCredential(params: {
+  profile: ProviderAuthResult["profiles"][number];
+  config: OpenClawConfig;
+  agentDir: string;
+  beforePersistentEffect?: () => void | Promise<void>;
+  /** Retains the wizard auth owner's selected state directory and cancellation boundary. */
+  persistAuthProfiles?: (profiles: ProviderAuthResult["profiles"]) => Promise<void>;
+}): Promise<{ profile: ProviderAuthResult["profiles"][number]; config: OpenClawConfig }> {
+  const candidate = {
+    ...params.profile,
+    profileId: `${normalizeProviderId(params.profile.credential.provider)}:setup-${randomUUID()}`,
+  };
+  const prepared = applyProviderPluginAuthMethodResultConfig({
+    config: params.config,
+    result: { profiles: [candidate] },
+  });
+  await params.beforePersistentEffect?.();
+  if (params.persistAuthProfiles) {
+    await params.persistAuthProfiles([candidate]);
+    return { profile: candidate, config: prepared };
+  }
+  const profiles = await persistProviderAuthProfilesAfterLogin({
+    profiles: [candidate],
+    config: prepared,
+    agentDir: params.agentDir,
+  });
+  return { profile: profiles[0]!, config: prepared };
 }
 
 async function stagePreparedCandidate(
@@ -179,26 +209,28 @@ async function stagePreparedCandidate(
     ?.normalizeModelId?.({ provider: ref.provider, modelId: ref.model })
     ?.trim();
   const modelRef = normalizedModel ? `${ref.provider}/${normalizedModel}` : resolvedModel;
-  let profile = selectedProfile(params.result, modelRef, params.config);
+  let profile = selectSetupCredential(params.result.profiles, modelRef, params.config);
   if (params.result.profiles.length > 0 && !profile) {
     return {
       error: `${params.provider?.label ?? ref.provider} did not return credentials for "${modelRef}".`,
     };
   }
+  let preparedConfig = params.config;
   if (profile && params.credentialState === "new") {
-    await ctx.beforePersistentEffect("credential");
-    const profiles = await persistProviderAuthProfilesAfterLogin({
-      profiles: [profile],
-      config: params.config,
+    const saved = await saveSetupCredential({
+      profile,
+      config: preparedConfig,
       agentDir: ctx.agentDir,
+      beforePersistentEffect: () => ctx.beforePersistentEffect("credential"),
     });
-    profile = profiles[0]!;
     ctx.credentialsSaved = true;
+    profile = saved.profile;
+    preparedConfig = saved.config;
   }
   const pluginId = params.pluginId ?? params.choice?.pluginId ?? params.provider?.pluginId;
   const projection = {
     base: ctx.cfg,
-    prepared: params.config,
+    prepared: preparedConfig,
     modelRef,
     sourceModelRef: resolvedModel,
     agentId: ctx.routeAgentId,
@@ -302,80 +334,6 @@ export async function stageSavedAuthCandidate(
     pluginId: saved?.candidate.pluginId,
     pendingPluginInstalls: saved?.candidate.pendingPluginInstalls,
   });
-}
-
-async function runProviderManualSecretMethod(
-  ctx: StageContext,
-  choice: ProviderAuthChoiceMetadata,
-  method: ProviderAuthMethod,
-  config: OpenClawConfig,
-  apiKey: string,
-): Promise<{ result: ProviderAuthResult; config: OpenClawConfig }> {
-  const optionKey = choice.optionKey;
-  const runNonInteractive = method.runNonInteractive;
-  if (!optionKey || !choice.cliOption || !runNonInteractive) {
-    throw new Error("Provider does not expose app-guided secret setup.");
-  }
-  let methodError = "";
-  const runtime: RuntimeEnv = {
-    log: () => {},
-    error: (...args) => {
-      methodError = args.map(String).join(" ");
-    },
-    // Provider CLI validation must never terminate the Gateway process.
-    exit: (code) => {
-      throw new Error(methodError || `Provider setup exited with code ${code}.`);
-    },
-  };
-  const providerConfig = structuredClone(config);
-  if (providerConfig.agents?.defaults) {
-    delete providerConfig.agents.defaults.model;
-  }
-  await ctx.beforePersistentEffect("credential");
-  const configured = await runNonInteractive({
-    authChoice: choice.choiceId,
-    config: providerConfig,
-    baseConfig: ctx.cfg,
-    opts: { [optionKey]: apiKey, secretInputMode: "plaintext" },
-    runtime,
-    agentDir: ctx.agentDir,
-    workspaceDir: ctx.workspace,
-    resolveApiKey: async (input) =>
-      typeof input.flagValue === "string" && input.flagValue.trim()
-        ? { key: input.flagValue.trim(), source: "flag" }
-        : null,
-    toApiKeyCredential: ({ provider, resolved, email, metadata }) => ({
-      type: "api_key",
-      provider,
-      key: resolved.key,
-      ...(email ? { email } : {}),
-      ...(metadata ? { metadata } : {}),
-    }),
-  });
-  if (!configured) {
-    throw new Error(methodError || "Provider setup did not produce a configuration.");
-  }
-  const store = loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir);
-  const profiles = Object.entries(store.profiles)
-    .filter(
-      ([, credential]) =>
-        normalizeProviderId(credential.provider) === normalizeProviderId(choice.providerId) &&
-        ((credential.type === "api_key" && credential.key === apiKey) ||
-          (credential.type === "token" && credential.token === apiKey)),
-    )
-    .map(([profileId, credential]) => ({ profileId, credential }));
-  ctx.credentialsSaved = profiles.length > 0;
-  const configuredModel = resolveAgentModelPrimaryValue(configured.agents?.defaults?.model);
-  const defaultModel =
-    configuredModel &&
-    normalizeProviderId(parseInferenceRef(configuredModel).provider) ===
-      normalizeProviderId(choice.providerId)
-      ? configuredModel
-      : method.starterModel;
-  if (profiles.length === 0 || !defaultModel) {
-    throw new Error("Provider setup did not produce credentials and a starter model.");
-  }
-  return { result: { profiles, defaultModel }, config: configured };
 }
 
 export async function stageProviderAutoCandidate(
@@ -484,7 +442,7 @@ export async function stageProviderAuthCandidate(
       profile?.credential.type === "api_key" &&
       profile.credential.key
     ) {
-      profile.secretStorage = { kind: "store", namePrefix: "OPENCLAW_CUSTOM_API_KEY" };
+      profile.secretStorage = { kind: "store", namePrefix: "CUSTOM_API_KEY" };
     }
     if (provider) {
       delete provider.apiKey;
@@ -588,47 +546,40 @@ export async function stageProviderAuthCandidate(
     return { error: unavailable };
   }
   try {
-    let result: ProviderAuthResult;
-    let config: OpenClawConfig;
-    if (interactive || method.kind === "api_key" || method.kind === "token") {
-      if (interactive && !params.prompter) {
-        return { error: "This provider login requires an interactive setup session." };
-      }
-      throwIfSetupInferenceCancelled(params);
-      result = await waitForProviderAuth(
-        runProviderPluginAuthMethodUnpersisted({
-          config: loaded.config,
-          runtime: params.runtime,
-          method,
-          agentDir: ctx.agentDir,
-          workspaceDir: ctx.workspace,
-          prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
-          signal: params.signal,
-          assertCurrent: () => throwIfSetupInferenceCancelled(params),
-          isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
-          ...(!interactive
-            ? {
-                secretInputMode: "plaintext" as const,
-                allowSecretRefPrompt: false,
-                opts: { token: apiKey!, tokenProvider: loaded.provider.id },
-              }
-            : {}),
-        }),
-        params.signal,
-      );
-      throwIfSetupInferenceCancelled(params);
-      config = applyProviderPluginAuthMethodResultConfig({ config: loaded.config, result });
-    } else {
-      const prepared = await runProviderManualSecretMethod(
-        ctx,
-        choice,
-        method,
-        loaded.config,
-        apiKey!,
-      );
-      result = prepared.result;
-      config = prepared.config;
+    if (interactive && !params.prompter) {
+      return { error: "This provider login requires an interactive setup session." };
     }
+    throwIfSetupInferenceCancelled(params);
+    let result = await waitForProviderAuth(
+      runProviderPluginAuthMethodUnpersisted({
+        config: loaded.config,
+        runtime: params.runtime,
+        method,
+        agentDir: ctx.agentDir,
+        workspaceDir: ctx.workspace,
+        prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
+        signal: params.signal,
+        assertCurrent: () => throwIfSetupInferenceCancelled(params),
+        isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
+        ...(!interactive
+          ? {
+              secretInputMode: "plaintext" as const,
+              allowSecretRefPrompt: false,
+              opts: {
+                token: apiKey!,
+                tokenProvider: loaded.provider.id,
+                ...(choice.optionKey ? { [choice.optionKey]: apiKey } : {}),
+                ...(params.modelRef
+                  ? { customModelId: parseInferenceRef(params.modelRef).model }
+                  : {}),
+              },
+            }
+          : {}),
+      }),
+      params.signal,
+    );
+    throwIfSetupInferenceCancelled(params);
+    let config = applyProviderPluginAuthMethodResultConfig({ config: loaded.config, result });
     if (interactive && choice.appGuidedDiscovery === true) {
       const guided = method.appGuidedSetup;
       if (!guided) {

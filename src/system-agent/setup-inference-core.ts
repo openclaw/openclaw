@@ -495,7 +495,7 @@ export function validateSetupInferenceOwnerEvidence(params: {
   return undefined;
 }
 
-export function resolveSetupInferenceCandidateBrandId(
+function resolveSetupInferenceCandidateBrandId(
   candidate: { kind: string; modelRef: string },
   providerId?: string,
 ): string | undefined {

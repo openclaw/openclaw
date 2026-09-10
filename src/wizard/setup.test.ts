@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 // Setup wizard tests cover end-to-end onboarding prompt flows.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -11,6 +12,7 @@ import {
   removeOAuthTestTempRoot,
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { committedConfigFiles } from "../commands/committed-config.test-support.js";
 import { ConfigMutationConflictError } from "../config/config.js";
@@ -19,6 +21,7 @@ import { coerceConfig } from "../config/io.read-helpers.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -250,6 +253,16 @@ function openAiAuthProfile(apiKey: string) {
   };
 }
 
+function expectSavedSetupCredential(config: OpenClawConfig, agentDir: string, key: string): string {
+  const primary = expectDefined(resolveAgentModelPrimaryValue(config.agents?.defaults?.model));
+  const profileId = expectDefined(splitTrailingAuthProfile(primary).profile);
+  expect(profileId).toMatch(/^openai:setup-/);
+  expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toEqual(
+    openAiAuthProfile(key).credential,
+  );
+  return profileId;
+}
+
 function prepareMockAuthProfilesIn(agentDir: string): void {
   prepareAuthChoice.mockImplementation(async (args) => {
     const result = await applyAuthChoice(args);
@@ -368,6 +381,14 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
 
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: resolvePluginSetupProvider,
+  resolvePluginSetupCliBackend: () => undefined,
+  resolvePluginSetupRegistry: () => ({
+    providers: [],
+    cliBackends: [],
+    configMigrations: [],
+    autoEnableProbes: [],
+    diagnostics: [],
+  }),
 }));
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
@@ -3086,10 +3107,8 @@ describe("runSetupWizard", () => {
     applyAuthChoice.mockResolvedValueOnce({
       config: modelConfigWithApiKey("test-cancelled-key"),
     });
-    verifySetupInferenceConfig.mockImplementationOnce(async () => {
-      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-        openAiAuthProfile("test-cancelled-key").credential,
-      );
+    verifySetupInferenceConfig.mockImplementationOnce(async ({ config }) => {
+      expectSavedSetupCredential(config, agentDir, "test-cancelled-key");
       expect(replaceConfigFile).not.toHaveBeenCalled();
       throw new WizardCancelledError("cancelled");
     });
@@ -3115,7 +3134,7 @@ describe("runSetupWizard", () => {
       ).rejects.toThrow("cancelled");
 
       expect(replaceConfigFile).not.toHaveBeenCalled();
-      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
+      expect(Object.values(readAuthProfileStoreForTest(agentDir).profiles)).toContainEqual(
         openAiAuthProfile("test-cancelled-key").credential,
       );
     } finally {
@@ -3140,24 +3159,18 @@ describe("runSetupWizard", () => {
       });
     promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
     verifySetupInferenceConfig
-      .mockImplementationOnce(async () => {
-        expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-          openAiAuthProfile("test-original-key").credential,
-        );
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-original-key");
         expect(replaceConfigFile).not.toHaveBeenCalled();
         return { ok: false, status: "auth", error: "login expired" };
       })
-      .mockImplementationOnce(async () => {
-        expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-          openAiAuthProfile("test-retry-invalid-key").credential,
-        );
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-retry-invalid-key");
         expect(replaceConfigFile).not.toHaveBeenCalled();
         return { ok: false, status: "auth", error: "key rejected" };
       })
-      .mockImplementationOnce(async () => {
-        expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-          openAiAuthProfile("test-retry-still-invalid-key").credential,
-        );
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-retry-still-invalid-key");
         expect(replaceConfigFile).not.toHaveBeenCalled();
         return { ok: false, status: "auth", error: "key still rejected" };
       });
@@ -3181,7 +3194,9 @@ describe("runSetupWizard", () => {
         0,
         "third verification",
       ) as Parameters<VerifySetupInferenceConfig>[0];
-      expect(thirdVerification.config.models?.providers?.openai?.apiKey).toBe(
+      expectSavedSetupCredential(
+        thirdVerification.config,
+        agentDir,
         "test-retry-still-invalid-key",
       );
       const secondRetry = getMockCallArg(
@@ -3201,7 +3216,7 @@ describe("runSetupWizard", () => {
         ),
       ).toBe(false);
       expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-        openAiAuthProfile("test-retry-still-invalid-key").credential,
+        openAiAuthProfile("test-original-key").credential,
       );
     } finally {
       await removeOAuthTestTempRoot(stateDir);
@@ -3221,17 +3236,13 @@ describe("runSetupWizard", () => {
       });
     promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
     verifySetupInferenceConfig
-      .mockImplementationOnce(async () => {
-        expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-          openAiAuthProfile("test-original-key").credential,
-        );
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-original-key");
         expect(replaceConfigFile).not.toHaveBeenCalled();
         return { ok: false, status: "auth", error: "login expired" };
       })
-      .mockImplementationOnce(async () => {
-        expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-          openAiAuthProfile("test-retry-valid-key").credential,
-        );
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-retry-valid-key");
         expect(replaceConfigFile).not.toHaveBeenCalled();
         return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 300 };
       });
@@ -3250,16 +3261,11 @@ describe("runSetupWizard", () => {
         0,
         "retry verification",
       ) as Parameters<VerifySetupInferenceConfig>[0];
-      expect(retryVerification.config.models?.providers?.openai?.apiKey).toBe(
+      expectSavedSetupCredential(retryVerification.config, agentDir, "test-retry-valid-key");
+      expectSavedSetupCredential(
+        expectDefined(persistedWizardConfigs().at(-1)),
+        agentDir,
         "test-retry-valid-key",
-      );
-      expect(
-        persistedWizardConfigs().some(
-          (config) => config.models?.providers?.openai?.apiKey === "test-retry-valid-key",
-        ),
-      ).toBe(true);
-      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-        openAiAuthProfile("test-retry-valid-key").credential,
       );
     } finally {
       await removeOAuthTestTempRoot(stateDir);
@@ -3281,24 +3287,18 @@ describe("runSetupWizard", () => {
       .mockResolvedValueOnce("demo-provider")
       .mockResolvedValueOnce("__keep-current");
     verifySetupInferenceConfig
-      .mockImplementationOnce(async () => {
-        expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-          openAiAuthProfile("test-original-key").credential,
-        );
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-original-key");
         expect(replaceConfigFile).not.toHaveBeenCalled();
         return { ok: false, status: "auth", error: "login expired" };
       })
-      .mockImplementationOnce(async () => {
-        expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-          openAiAuthProfile("test-kept-retry-key").credential,
-        );
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-kept-retry-key");
         expect(replaceConfigFile).not.toHaveBeenCalled();
         return { ok: false, status: "timeout", error: "request timed out" };
       })
-      .mockImplementationOnce(async () => {
-        expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-          openAiAuthProfile("test-kept-retry-key").credential,
-        );
+      .mockImplementationOnce(async ({ config }) => {
+        expectSavedSetupCredential(config, agentDir, "test-kept-retry-key");
         expect(replaceConfigFile).not.toHaveBeenCalled();
         return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 300 };
       });
@@ -3317,15 +3317,21 @@ describe("runSetupWizard", () => {
         0,
         "final verification",
       ) as Parameters<VerifySetupInferenceConfig>[0];
-      expect(finalVerification.config.models?.providers?.openai?.apiKey).toBe(
+      const selected = expectSavedSetupCredential(
+        finalVerification.config,
+        agentDir,
         "test-kept-retry-key",
       );
-      expect(persistedWizardConfigs().at(-1)?.models?.providers?.openai?.apiKey).toBe(
+      expectSavedSetupCredential(
+        expectDefined(persistedWizardConfigs().at(-1)),
+        agentDir,
         "test-kept-retry-key",
       );
-      expect(readAuthProfileStoreForTest(agentDir).profiles["openai:default"]).toEqual(
-        openAiAuthProfile("test-kept-retry-key").credential,
-      );
+      const priorVerification = expectDefined(verifySetupInferenceConfig.mock.calls[1]?.[0]);
+      expect(
+        expectSavedSetupCredential(priorVerification.config, agentDir, "test-kept-retry-key"),
+      ).toBe(selected);
+      expect(Object.keys(readAuthProfileStoreForTest(agentDir).profiles)).toHaveLength(2);
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }

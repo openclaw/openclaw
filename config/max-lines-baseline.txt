@@ -780,7 +780,6 @@ src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
 src/state/openclaw-state-db.test.ts
 src/status/status-message.ts
-src/system-agent/setup-inference.test.ts
 src/system-agent/verified-inference.ts
 src/tasks/task-executor.test.ts
 src/tasks/task-flow-registry.ts

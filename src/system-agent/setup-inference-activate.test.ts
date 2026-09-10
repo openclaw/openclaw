@@ -15,6 +15,7 @@ import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
 import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
@@ -214,13 +215,13 @@ describe("setup activation credentials and configuration", () => {
     {
       name: "matching-last",
       matching: true,
-      expectedProfileIds: ["openai:fixture"],
+      expectedCredentials: [credential],
       expectedTurns: 1,
     },
-    { name: "missing-match", matching: false, expectedProfileIds: [], expectedTurns: 0 },
+    { name: "missing-match", matching: false, expectedCredentials: [], expectedTurns: 0 },
   ])(
     "saves only the selected provider credential ($name)",
-    async ({ matching, expectedProfileIds, expectedTurns }) => {
+    async ({ matching, expectedCredentials, expectedTurns }) => {
       const unrelated = {
         profileId: "anthropic:unrelated",
         credential: {
@@ -233,9 +234,9 @@ describe("setup activation credentials and configuration", () => {
         profiles: matching ? [unrelated, { profileId: "openai:fixture", credential }] : [unrelated],
       });
       setup.run.mockImplementation(async (params) => {
-        expect(loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir).profiles).toEqual({
-          "openai:fixture": credential,
-        });
+        expect(
+          Object.values(loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir).profiles),
+        ).toEqual([credential]);
         return setup.reply(params);
       });
 
@@ -243,8 +244,8 @@ describe("setup activation credentials and configuration", () => {
 
       expect(result, await setup.diagnostics(result)).toMatchObject({ ok: matching });
       expect(
-        Object.keys(loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir).profiles),
-      ).toEqual(expectedProfileIds);
+        Object.values(loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir).profiles),
+      ).toEqual(expectedCredentials);
       expect(setup.run).toHaveBeenCalledTimes(expectedTurns);
       if (!matching) {
         expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
@@ -306,6 +307,61 @@ describe("setup activation credentials and configuration", () => {
     expect(setup.login).toHaveBeenCalledOnce();
     expect(setup.run).toHaveBeenCalledTimes(2);
     expect(setup.readProfile()?.[1]).toEqual(credential);
+  });
+
+  it("keeps a working configured credential when a replacement is rejected", async () => {
+    const setup = await fixture();
+    const originalProfileId = "openai:fixture";
+    const originalCredential = { ...credential, key: "working-original-key" };
+    const configured: OpenClawConfig = {
+      ...setup.config,
+      agents: {
+        ...setup.config.agents,
+        defaults: {
+          ...setup.config.agents?.defaults,
+          model: { primary: `${modelRef}@${originalProfileId}` },
+        },
+      },
+      auth: { profiles: { [originalProfileId]: { provider: "openai", mode: "api_key" } } },
+    };
+    await persistProviderAuthProfilesAfterLogin({
+      config: configured,
+      agentDir: setup.agentDir,
+      profiles: [{ profileId: originalProfileId, credential: originalCredential }],
+    });
+    const before = `${JSON.stringify(configured)}\n`;
+    await fs.writeFile(setup.configPath, before);
+    clearConfigCache();
+    setup.run.mockRejectedValueOnce(new Error("401 invalid_api_key: replacement rejected"));
+
+    const result = await setup.activate();
+
+    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: false });
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
+    const store = loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir);
+    expect(store.profiles[originalProfileId]).toEqual(originalCredential);
+    expect(setup.readProfile()?.[1]).toEqual(credential);
+    expect(setup.readProfile()?.[0]).not.toBe(originalProfileId);
+    const snapshot = await readConfigFileSnapshot();
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(
+      snapshot.runtimeConfig ?? snapshot.config,
+    );
+    expect(route?.authProfileId).toBe(originalProfileId);
+    if (!route) {
+      throw new Error("The original configured route disappeared after replacement rejection");
+    }
+    const auth = await resolveApiKeyForProviderCore({
+      provider: route.provider,
+      cfg: route.runConfig,
+      agentDir: route.agentDir,
+      profileId: route.authProfileId,
+      lockedProfile: true,
+      modelId: route.model,
+      modelApi: "openai-responses",
+      secretSentinels: false,
+    });
+    expect(auth.apiKey).toBe("working-original-key");
+    expect(setup.run).toHaveBeenCalledOnce();
   });
 
   it("preserves an unrelated config edit when selecting the verified model", async () => {

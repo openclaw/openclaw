@@ -363,7 +363,7 @@ export function loadSetupInferencePluginGeneration(params: {
   });
 }
 
-export async function revalidateSetupInferenceOwner(params: {
+async function revalidateSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
   ownerPluginIds?: readonly string[];

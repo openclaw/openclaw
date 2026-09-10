@@ -47,6 +47,7 @@ async function listSavedSetupInferenceCandidates(params: {
   workspace: string;
   choices: readonly ProviderAuthChoiceMetadata[];
   deps: DetectSetupInferenceDeps;
+  signal: AbortSignal;
 }): Promise<SetupInferenceCandidate[]> {
   const { currentSavedCandidate, loadProviderAuthMethod } =
     await import("./setup-inference-credentials.js");
@@ -54,6 +55,7 @@ async function listSavedSetupInferenceCandidates(params: {
   const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const candidates: SetupInferenceCandidate[] = [];
   for (const [profileId, credential] of Object.entries(store.profiles)) {
+    params.signal.throwIfAborted();
     const saved = currentSavedCandidate(agentDir, profileId, credential);
     if (!saved && params.cfg.auth?.profiles?.[profileId]) {
       continue;
@@ -63,6 +65,7 @@ async function listSavedSetupInferenceCandidates(params: {
     let modelRef = saved?.candidate.modelRef;
     if (!modelRef && choice) {
       const loaded = await loadProviderAuthMethod({ ...params, choice });
+      params.signal.throwIfAborted();
       if (!("error" in loaded)) {
         modelRef = loaded.method.starterModel;
       }
@@ -199,10 +202,52 @@ export async function detectSetupInference(
   deps: DetectSetupInferenceDeps = {},
   agentId?: string,
 ): Promise<SetupInferenceDetection> {
-  const { cfg, targetAgentId, authChoices, manual } = await prepareSetupInferenceOptions(
-    deps,
-    agentId,
-  );
+  const prepared = await prepareSetupInferenceOptions(deps, agentId);
+  let partial: SetupInferenceDetection = {
+    ...prepared.manual,
+    candidates: [],
+    unavailableCandidates: [],
+    recommendedInstalls: listRecommendedToolInstalls(),
+  };
+  const controller = new AbortController();
+  // Preserve the 10s discovery deadline introduced in #110625.
+  // This bounds asynchronous discovery; synchronous plugin loading shares the event loop.
+  const timeoutMs = 10_000;
+  return await new Promise<SetupInferenceDetection>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      controller.abort(new Error("Setup inference discovery timed out"));
+      setupInferenceLog.warn(
+        `Setup inference detection timed out after ${timeoutMs}ms; returning partial detection.`,
+      );
+      resolve(partial);
+    }, timeoutMs);
+    void discoverSetupInference(prepared, deps, controller.signal, (detection) => {
+      partial = detection;
+      deps.onPartial?.(detection);
+    }).then(
+      (detection) => {
+        clearTimeout(timer);
+        resolve(detection);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function discoverSetupInference(
+  {
+    cfg,
+    targetAgentId,
+    authChoices,
+    manual,
+  }: Awaited<ReturnType<typeof prepareSetupInferenceOptions>>,
+  deps: DetectSetupInferenceDeps,
+  signal: AbortSignal,
+  onPartial: (detection: SetupInferenceDetection) => void,
+): Promise<SetupInferenceDetection> {
   const { workspace } = manual;
   const savedCandidates = await listSavedSetupInferenceCandidates({
     cfg,
@@ -210,21 +255,25 @@ export async function detectSetupInference(
     workspace,
     choices: authChoices,
     deps,
+    signal,
   });
+  signal.throwIfAborted();
   const partial: SetupInferenceDetection = {
     ...manual,
     candidates: savedCandidates,
     unavailableCandidates: [],
     recommendedInstalls: listRecommendedToolInstalls(),
   };
-  deps.onPartial?.(partial);
+  onPartial(partial);
   const detect =
     deps.detectInferenceBackends ??
     (await import("../commands/onboard-inference.js")).detectInferenceBackends;
   const detected = await detect({ config: cfg, agentId: targetAgentId });
+  signal.throwIfAborted();
   const unavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const probe = deps.probeLocalCommand ?? (await import("./probes.js")).probeLocalCommand;
   const [pi, opencode] = await Promise.all([probe("pi"), probe("opencode")]);
+  signal.throwIfAborted();
   if (pi.found && !pi.timedOut) {
     unavailableCandidates.push({
       id: "pi-cli",
@@ -270,6 +319,13 @@ export async function detectSetupInference(
     ),
   );
   candidates.push(...savedCandidates);
+  onPartial({
+    ...partial,
+    candidates: [...candidates],
+    unavailableCandidates,
+    ...(configuredModel ? { configuredModel } : {}),
+    setupComplete: Boolean(configuredModel),
+  });
   const discoveryChoices = authChoices.filter(
     (choice) =>
       choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),
@@ -278,14 +334,16 @@ export async function detectSetupInference(
     const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
     // Runtime metadata must be resolved with consent under this lease, not reused
     // from option preparation before awaited CLI probes could permit a replacement.
-    const discovery = await withPluginLifecycleLease({}, async () => {
+    const discovery = await withPluginLifecycleLease({ signal }, async () => {
       let discoveryConfig = cfg;
       const enabledChoices: ProviderAuthChoiceMetadata[] = [];
       for (const choice of discoveryChoices) {
+        signal.throwIfAborted();
         // Keep unaccepted choices visible, but do not import their runtime during discovery.
         const enabled = await enablePluginWithCapabilityConsent(cfg, choice.pluginId, {
           workspaceDir: workspace,
         });
+        signal.throwIfAborted();
         if (!enabled.enabled) {
           continue;
         }
@@ -309,6 +367,7 @@ export async function detectSetupInference(
         : [];
       return { discoveryConfig, enabledChoices, providers };
     });
+    signal.throwIfAborted();
     const discovered = await Promise.all(
       discovery.enabledChoices.map(async (choice): Promise<SetupInferenceCandidate | null> => {
         const provider = discovery.providers.find(
@@ -325,7 +384,9 @@ export async function detectSetupInference(
             config: discovery.discoveryConfig,
             env: process.env,
             workspaceDir: workspace,
+            signal,
           });
+          signal.throwIfAborted();
           if (!candidate) {
             return null;
           }

@@ -42,7 +42,7 @@ describe("post-core plugin persistence cancellation", () => {
           await repair;
         }
       });
-      expect(await readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
         cancelled ? previous : next,
       );
     });
@@ -98,7 +98,7 @@ describe("post-core plugin persistence cancellation", () => {
         },
       });
       await expect(repair).rejects.toBe(refusal);
-      expect(await readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({});
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({});
     });
   });
 
