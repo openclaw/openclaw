@@ -294,9 +294,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const wizard = page.locator('openclaw-modal-dialog[label="Install Matrix"]');
       await wizard.getByRole("button", { name: "Install Matrix", exact: true }).click();
       await gateway.waitForRequest("gateway.restart.request");
-      await gateway.setGatewayBootId("plugins-install-cancel-configuring");
-      await gateway.setOnline(false);
-      await gateway.setOnline(true);
+      await reconnectMockGateway(page, gateway, "plugins-install-cancel-configuring");
 
       await expect
         .poll(() => wizard.locator(".plugin-install-wizard").getAttribute("data-stage"), {
@@ -450,9 +448,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.resolveDeferred("gateway.restart.request", { ok: true, status: "deferred" });
       await page.clock.runFor(0);
       await page.clock.resume();
-      await gateway.setGatewayBootId("plugins-stalled-restart-recovered");
-      await gateway.setOnline(false);
-      await gateway.setOnline(true);
+      await reconnectMockGateway(page, gateway, "plugins-stalled-restart-recovered");
       await expect
         .poll(() => wizard.locator(".plugin-install-wizard").getAttribute("data-stage"), {
           timeout: 5_000,
